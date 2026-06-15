@@ -1,0 +1,2 @@
+include src/vfhe/include/*.h
+include src/vfhe/c_src/*.c
