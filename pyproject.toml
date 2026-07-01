@@ -1,32 +1,66 @@
 [build-system]
-requires = ["setuptools>=61.0.0", "wheel"]
+requires = [
+    "setuptools>=61.0.0",
+    "wheel",
+    "cffi>=1.15",
+    "grpcio-tools~=1.81.0",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "vfhe"
-version = "0.1.0"
-description = "A medium-sized Python library with C extensions."
+version = "0.0.0"
+description = "A library for verifiable fully homomorphic encryption."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 authors = [
-    { name = "Antonio Guimaraes", email = "antonio.guimaraes@imdea.org" }
+    { name = "Daniele Cozzo", email = "daniele.cozzo@imdea.org" },
+    { name = "Antonio Guimaraes", email = "antonio.guimaraes@imdea.org" },
+    { name = "Dario Fiore", email = "dario.fiore@imdea.org" },
+    { name = "Alin-Petru Rosu", email = "alin-petru.rosu@imdea.org" }
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: C",
     "Programming Language :: Python :: 3",
-    "Operating System :: POSIX :: Linux",
-    "Operating System :: MacOS :: MacOS X",
-    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security :: Cryptography",
 ]
-dependencies = []
+dependencies = [
+    "cffi>=1.15",
+    "protobuf>=6.33,<7",
+]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
+    "setuptools",
+    "cffi>=1.15",
+    "grpcio-tools~=1.81.0",
+    "protobuf>=6.33,<7",
     "pytest>=7.0",
     "build",
-    "twine"
+    "ruff",
+    "clang-format",
 ]
+
+[tool.ruff]
+cache-dir = ".cache/ruff"
+
+[tool.ruff.lint]
+select = ["I"]
+
+[tool.pytest.ini_options]
+testpaths = ["modules/*/python/test"]
+python_files = ["*.py"]
+addopts = "--import-mode=importlib"
+cache_dir = ".cache/pytest"

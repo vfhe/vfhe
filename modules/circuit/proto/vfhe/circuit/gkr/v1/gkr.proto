@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package vfhe.circuit.gkr.v1;
+
+message Circuit {
+  uint32 num_inputs = 1;
+
+  repeated Layer layers = 2;
+
+  string field_modulus = 3;
+}
+
+message Layer {
+  repeated Gate gates = 1;
+}
+
+enum GateType {
+  GATE_TYPE_UNSPECIFIED = 0;
+  GATE_TYPE_ADD = 1;
+  GATE_TYPE_MUL = 2;
+}
+
+message Gate {
+  GateType type = 1;
+  uint32 left = 2;
+  uint32 right = 3;
+}

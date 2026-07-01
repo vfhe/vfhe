@@ -1,0 +1,18 @@
+{
+  "extraPaths": [
+    ".generated",
+    "scripts",
+    "modules/arith/python/src",
+    "modules/circuit/python/src",
+    "modules/compiler/python/src",
+    "modules/crypto/python/src",
+    "modules/fhe/python/src",
+    "modules/mlwe/python/src",
+    "modules/piop/python/src",
+    "modules/polycom/python/src",
+    "modules/snark/python/src",
+    "modules/vfhe/python/src"
+  ],
+  "stubPath": "stubs",
+  "typeCheckingMode": "basic"
+}
