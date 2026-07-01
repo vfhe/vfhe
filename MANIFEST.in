@@ -1,2 +1,4 @@
-include src/vfhe/include/*.h
-include src/vfhe/c_src/*.c
+recursive-include modules *.c *.h *.S *.cdef *.proto
+include native/build_ffi.py
+include scripts/gen_proto.py
+prune modules/*/python/test
