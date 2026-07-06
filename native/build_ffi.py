@@ -1,5 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
-import platform
+"""Build the single CFFI native extension (``_vfhe_native``).
+
+Compiles every module's C/asm sources plus vendored BLAKE3 into one LTO'd
+extension, and #includes each module's umbrella header as the preamble so the C
+compiler sees the true definitions. The set of sources, include dirs, and
+portable-baseline defines comes from ``native/discovery.py`` (shared with the C
+test runner). ``VFHE_SIMD=1`` opts x86 into the AVX-512 fast paths; the default
+is a portable baseline that runs everywhere.
+
+Imported by setup.py (``cffi_modules``) for wheel builds and runnable directly
+for the dev build into ``.generated/``.
+"""
+
+import os
 import shutil
 import sys
 import tempfile
@@ -9,6 +22,9 @@ from cffi import FFI
 
 ROOT = Path(__file__).resolve().parent.parent
 MODULES = ROOT / "modules"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import discovery  # noqa: E402  (co-located; ships in the sdist)
 
 
 def _enable_asm_sources() -> None:
@@ -32,71 +48,74 @@ def _enable_asm_sources() -> None:
 _enable_asm_sources()
 
 
-_ARCH_ALIASES = (
-    {"x86_64", "amd64", "x86-64", "x64"},
-    {"aarch64", "arm64"},
-)
-
-
-def _arch_aliases() -> "set[str]":
-    machine = platform.machine().lower()
-    for group in _ARCH_ALIASES:
-        if machine in group:
-            return group
-    return {machine}
-
-
-def _arch_ok(path: Path, aliases: "set[str]") -> bool:
-    parts = [p.lower() for p in path.parts]
-    for i, seg in enumerate(parts[:-1]):
-        if seg == "arch":
-            return parts[i + 1] in aliases
-    return True
-
-
-def header_to_cdef(text: str) -> str:
-    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
-
-
 def build_ffi(absolute: bool) -> "FFI":
     ffi = FFI()
     sources: list[str] = []
     include_dirs: list[str] = []
     preamble_headers: list[Path] = []
-    aliases = _arch_aliases()
+    aliases = discovery.host_arch_aliases()
 
     def rel(p: Path) -> str:
         return str(p if absolute else p.relative_to(ROOT))
 
-    # Sorted order matters: shared typedefs must be cdef'd before their users.
+    # Umbrella headers become the preamble (#included so the compiler sees the
+    # true definitions); sources and include dirs come from shared discovery.
     for c_dir in sorted(MODULES.glob("*/c")):
-        headers = sorted((c_dir / "include").glob("*.h"))
-        cdefs = sorted((c_dir / "cdef").glob("*.cdef"))
-        if cdefs:  # explicit cdef wins (header need not be cffi-clean)
-            for cdef in cdefs:
-                ffi.cdef(cdef.read_text())
-        else:  # header-direct
-            for header in headers:
-                ffi.cdef(header_to_cdef(header.read_text()))
-        preamble_headers += headers
+        preamble_headers += sorted((c_dir / "include").glob("*.h"))
+    for src in discovery.module_sources(MODULES, aliases):
+        sources.append(rel(src))
+    for inc in discovery.module_include_dirs(MODULES):
+        include_dirs.append(rel(inc))
 
-        src_dir = c_dir / "src"
-        for pattern in ("*.c", "*.S"):
-            for src in sorted(src_dir.rglob(pattern)):
-                if _arch_ok(src, aliases):
-                    sources.append(rel(src))
+    # Python-facing ABI: each Python-facing module declares its surface in an
+    # explicit hand-written cdef under python/cdef/. C-internal modules (no
+    # python/) have none -- they contribute compiled code but no Python symbols.
+    # Sorted so shared typedefs are cdef'd before their users.
+    for cdef in sorted(MODULES.glob("*/python/cdef/*.cdef")):
+        ffi.cdef(cdef.read_text())
 
-        # Public headers, plus any dir under src that holds headers (vendored libs).
-        inc = c_dir / "include"
-        if inc.is_dir():
-            include_dirs.append(rel(inc))
-        for header in src_dir.rglob("*.h"):
-            include_dirs.append(rel(header.parent))
+    # Vendored BLAKE3 (git submodule): compiled directly, no CMake. The portable
+    # core + runtime dispatcher are always needed; SIMD kernels are added below
+    # only for the opt-in fast build. (rng/arith call BLAKE3 internally.)
+    blake3 = discovery.blake3_dir(ROOT)
+    sources += [rel(s) for s in discovery.blake3_sources(ROOT)]
+    include_dirs.append(rel(blake3))
+
+    is_x86 = discovery.is_x86_host()
 
     if sys.platform == "win32":
-        compile_args, link_args = ["/O2", "/GL"], ["/LTCG"]
+        compile_args, link_args, libraries = ["/O2", "/GL"], ["/LTCG"], []
     else:
-        compile_args, link_args = ["-O3", "-flto", "-std=c11"], ["-flto"]
+        compile_args, link_args, libraries = (
+            ["-O3", "-flto", "-std=c11"],
+            ["-flto"],
+            ["m"],
+        )
+
+    # Opt-in fast paths (x86 only): VFHE_SIMD=1 turns on the arith AVX-512 IFMA
+    # engine + AES-NI rng and BLAKE3's SIMD kernels. Caveats: this yields an
+    # AVX-512-only binary (won't run on older CPUs), and it flips mp_vector_t to a
+    # 512-bit lane -- so the MP entries in arith.cdef would need regenerating for
+    # the Python bindings. Default is the portable baseline that runs everywhere.
+    # UNVERIFIED on non-x86 dev machines.
+    if is_x86 and os.environ.get("VFHE_SIMD") == "1":
+        define_macros: "list[tuple[str, str | None]]" = []  # drop PORTABLE_BUILD
+        compile_args += [
+            "-mavx512f",
+            "-mavx512ifma",
+            "-mavx512dq",
+            "-mavx512vl",
+            "-mavx2",
+            "-maes",
+        ]
+        # BLAKE3 SIMD via pre-assembled .S (no per-file ISA flags; runtime dispatch).
+        sources += [
+            rel(blake3 / f"blake3_{x}_x86-64_unix.S")
+            for x in ("sse2", "sse41", "avx2", "avx512")
+        ]
+    else:
+        # Portable baseline: force the engine's scalar paths, disable BLAKE3 SIMD.
+        define_macros = discovery.portable_macros(is_x86)
 
     ffi.set_source(
         "_vfhe_native",
@@ -104,6 +123,8 @@ def build_ffi(absolute: bool) -> "FFI":
         "\n".join(f'#include "{h.name}"' for h in preamble_headers),
         sources=sorted(set(sources)),
         include_dirs=sorted(set(include_dirs)),
+        define_macros=define_macros,
+        libraries=libraries,
         extra_compile_args=compile_args,
         extra_link_args=link_args,
     )

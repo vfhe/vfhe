@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          # Vulnerability gate only. License policy (deny-licenses) was removed:
+          # it is deprecated in v5 and only produced "unknown license" noise for
+          # GitHub Actions (no license metadata) and the permissive Python deps.
+          fail-on-severity: moderate

@@ -9,6 +9,16 @@ SCRIPTS = HERE / "scripts"
 MODULES_DIR = HERE / "modules"
 GENERATED = HERE / ".generated"
 
+# Vendored native deps live in git submodules. BLAKE3's C sources are compiled
+# into the extension, so a non-recursive clone (or an sdist built without the
+# submodule checked out) leaves external/blake3 empty and the build fails deep
+# in the compiler. Fail early with a clear message instead.
+if not (HERE / "external" / "blake3" / "c" / "blake3.c").exists():
+    raise SystemExit(
+        "external/blake3 is empty (BLAKE3 submodule not checked out).\n"
+        "Run:  git submodule update --init --recursive"
+    )
+
 package_dir: dict[str, str] = {}
 packages: list[str] = []
 

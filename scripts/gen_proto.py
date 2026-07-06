@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+"""Generate the Python protobuf bindings from every module's ``proto/`` tree.
+
+Compiles each ``modules/*/proto/**/*.proto`` into ``.generated/_vfhe_proto/``,
+mirroring the protobuf package path, and makes each output dir an importable
+package. Run standalone (``python scripts/gen_proto.py``) or via
+``generate_all()``, which setup.py calls at build time so wheels/sdists carry
+the bindings.
+"""
 
 from pathlib import Path
 

@@ -1,11 +1,20 @@
 {
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    ".venv",
+    "build",
+    "dist",
+    "external",
+    "vfhe.egg-info"
+  ],
   "extraPaths": [
     ".generated",
     "scripts",
+    "native",
     "modules/arith/python/src",
     "modules/circuit/python/src",
     "modules/compiler/python/src",
-    "modules/crypto/python/src",
     "modules/fhe/python/src",
     "modules/mlwe/python/src",
     "modules/piop/python/src",

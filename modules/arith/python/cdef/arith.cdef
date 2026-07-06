@@ -1,0 +1,108 @@
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the arith engine.
+//
+// This is a strict, hand-curated subset of the C API (include/arith/*.h):
+// every handle is opaque and all state is read through accessor functions
+// (poly_mask / poly_domain / poly_limb_data / mp_scalar_digit / ...), so the
+// ABI is identical for portable and AVX-512 builds. The single exception is
+// mp_polynomial, whose layout (uint64_t digit rows) is build-independent and
+// is exposed for cheap bulk reads.
+//
+// Fallible operations return an int status: 0 = OK, negative = error (see
+// arith/error.h; mirrored by vfhe.arith.errors on the Python side).
+
+typedef enum { VFHE_COEFF = 0, VFHE_EVAL = 1 } vfhe_domain;
+
+typedef struct ring_ctx *ring_t;
+typedef struct rns_poly *rns_poly_t;
+typedef struct baseconv_plan *baseconv_plan_t;
+typedef struct mp_scalar *mp_scalar_t;
+typedef uint64_t mp_vector_t;
+
+typedef struct mp_polynomial {
+  uint64_t **coeffs;
+  uint64_t N, d;
+} *mp_polynomial_t;
+
+// --- ring: pool management ---------------------------------------------------
+ring_t ring_new(const uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l);
+int ring_extend(ring_t r, const uint64_t *primes, uint64_t count);
+const uint64_t *ring_twist(const ring_t r, uint64_t i);
+
+// --- poly: lifecycle + state -------------------------------------------------
+rns_poly_t poly_new(const ring_t ring, uint64_t mask);
+void poly_free(void *p);
+void poly_copy(rns_poly_t out, const rns_poly_t in);
+bool poly_eq(const rns_poly_t a, const rns_poly_t b);
+uint64_t poly_mask(const rns_poly_t p);
+int poly_domain(const rns_poly_t p);
+void poly_assume_domain(rns_poly_t p, vfhe_domain domain);
+uint64_t *poly_limb_data(const rns_poly_t p, uint64_t idx);
+
+// --- poly: domain conversion + loading ----------------------------------------
+int poly_to_eval(rns_poly_t out, const rns_poly_t in);
+int poly_to_coeff(rns_poly_t out, const rns_poly_t in);
+int poly_from_int_array(rns_poly_t out, const uint64_t *in);
+int poly_from_residues(rns_poly_t out, uint64_t *const *in);
+
+// --- poly: arithmetic ----------------------------------------------------------
+int poly_add(rns_poly_t out, const rns_poly_t a, const rns_poly_t b);
+int poly_sub(rns_poly_t out, const rns_poly_t a, const rns_poly_t b);
+void poly_negate(rns_poly_t out, const rns_poly_t a);
+void poly_scale(rns_poly_t out, const rns_poly_t a, uint64_t s);
+void poly_scale_vec(rns_poly_t out, const rns_poly_t a, const uint64_t *s);
+int poly_add_scalar(rns_poly_t out, const rns_poly_t a, uint64_t c);
+int poly_mul(rns_poly_t out, const rns_poly_t a, const rns_poly_t b);
+int poly_mul_into(rns_poly_t out, const rns_poly_t a);
+int poly_inverse(rns_poly_t out, const rns_poly_t in);
+
+// --- poly: sampling --------------------------------------------------------------
+void poly_sample_uniform(rns_poly_t p, vfhe_domain domain);
+void poly_sample_gaussian(rns_poly_t p, double sigma);
+
+// --- poly: Galois / slots ----------------------------------------------------------
+int poly_permute(rns_poly_t out, const rns_poly_t in, uint64_t gen);
+int poly_broadcast_slot(rns_poly_t out, const rns_poly_t in, uint64_t slot_idx);
+int poly_rotate_slots(rns_poly_t out, const rns_poly_t in, uint64_t rot);
+int poly_copy_slot(rns_poly_t out, uint64_t dst, const rns_poly_t in, uint64_t src);
+
+// --- poly: digest -------------------------------------------------------------------
+void poly_digest(uint64_t *out, const rns_poly_t p);
+uint64_t *poly_digest_alloc(const rns_poly_t p);
+
+// --- tower: base conversion / rescaling / lifting -------------------------------------
+baseconv_plan_t baseconv_plan_new(const ring_t ring, uint64_t in_mask, uint64_t out_mask);
+void baseconv_plan_free(baseconv_plan_t plan);
+int poly_base_convert(rns_poly_t out, const rns_poly_t in, const baseconv_plan_t plan);
+int poly_div_floor(rns_poly_t p, uint64_t divide_mask);
+int poly_div_round(rns_poly_t p, uint64_t divide_mask);
+int poly_div_floor_last(rns_poly_t p);
+int poly_div_round_last(rns_poly_t p);
+int poly_mod_reduce(rns_poly_t out, const rns_poly_t in);
+int poly_lift_residue(rns_poly_t out, const rns_poly_t in, uint64_t src_limb);
+int poly_scaled_lift(rns_poly_t out, const rns_poly_t in, const uint64_t *delta);
+
+// --- cfft: CKKS-style encoding ----------------------------------------------------------
+double **cfft_load_twiddles_fwd(const double *rous_real, const double *rous_imag, uint64_t size);
+double **cfft_load_twiddles_inv(const double *rous_real, const double *rous_imag, uint64_t size);
+void cfft_forward(double *x, double *const *ws, uint64_t n);
+void cfft_inverse(double *x, double *const *ws, uint64_t n);
+void cfft_bit_reverse(double *v, uint64_t N, uint32_t prec);
+void cfft_scale(double *v, double scale, uint64_t N);
+int cfft_round_to_poly(rns_poly_t out, const double *in);
+void cfft_ifft_scale_round_batch(void **rows_in, void **outs, uint64_t count, uint64_t n_complex,
+                                 uint32_t log_prec, double *const *ws_inv, double delta,
+                                 uint64_t n_threads);
+
+// --- mp: multi-precision bridge ------------------------------------------------------------
+int mp_vector_size(void);
+mp_polynomial_t mp_polynomial_new(uint64_t N, uint64_t d);
+void mp_polynomial_free(mp_polynomial_t p);
+mp_scalar_t mp_scalar_load(const uint64_t *in, uint64_t d);
+void mp_scalar_free(mp_scalar_t s);
+uint64_t mp_scalar_digit_count(const mp_scalar_t s);
+uint64_t mp_scalar_digit(const mp_scalar_t s, uint64_t i);
+mp_vector_t *mp_vector_load(uint64_t in);
+int mp_polynomial_from_poly(mp_polynomial_t out, const rns_poly_t in, const mp_scalar_t *PW,
+                            const mp_scalar_t q, const mp_vector_t *m, uint64_t k);
+int mp_polynomial_to_poly(rns_poly_t out, const mp_polynomial_t in);

@@ -1,6 +1,7 @@
 [build-system]
 requires = [
-    "setuptools>=61.0.0",
+    "setuptools>=64",
+    "setuptools-scm>=8",
     "wheel",
     "cffi>=1.15",
     "grpcio-tools~=1.81.0",
@@ -9,11 +10,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vfhe"
-version = "0.0.0"
+dynamic = ["version"]
 description = "A library for verifiable fully homomorphic encryption."
 readme = "README.md"
-requires-python = ">=3.9"
-license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+license = "Apache-2.0"
 authors = [
     { name = "Daniele Cozzo", email = "daniele.cozzo@imdea.org" },
     { name = "Antonio Guimaraes", email = "antonio.guimaraes@imdea.org" },
@@ -24,12 +25,10 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: C",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -39,7 +38,12 @@ classifiers = [
 dependencies = [
     "cffi>=1.15",
     "protobuf>=6.33,<7",
+    "mpmath>=1.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/vfhe/vfhe"
+Repository = "https://github.com/vfhe/vfhe"
 
 [dependency-groups]
 dev = [
@@ -48,10 +52,18 @@ dev = [
     "grpcio-tools~=1.81.0",
     "protobuf>=6.33,<7",
     "pytest>=7.0",
+    "pytest-cov",
+    # Runtime dep needed by the CKKS encoding tests (the dev workflow builds the
+    # extension in place rather than pip-installing, so runtime deps are listed here).
+    "mpmath>=1.3",
     "build",
     "ruff",
+    "pyright",
     "clang-format",
 ]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
 
 [tool.ruff]
 cache-dir = ".cache/ruff"
@@ -64,3 +76,16 @@ testpaths = ["modules/*/python/test"]
 python_files = ["*.py"]
 addopts = "--import-mode=importlib"
 cache_dir = ".cache/pytest"
+
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-* cp313-*"
+skip = "pp* *-musllinux* *_i686"
+build-frontend = "build"
+test-command = "python {project}/scripts/smoke_import.py"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+environment-pass = ["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VFHE"]
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
