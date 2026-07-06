@@ -58,7 +58,7 @@ def main() -> int:
                 rt.CC,
                 *tflags,
                 *SIMD_FLAGS,
-                "-std=c11",
+                "-std=gnu11",
                 "-c",
                 *rt.ALL_INCLUDES,
                 str(src),
