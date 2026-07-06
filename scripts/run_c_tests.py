@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+"""Compile and run every module's Unity C test suite.
+
+Discovers each ``modules/*/c/test/*.c`` and builds it against the full portable
+engine (all module kernels + vendored BLAKE3), using the shared
+``native/discovery.py`` so the test build never drifts from the packaged CFFI
+build. Honours ``VFHE_SANITIZE`` (ASan/UBSan flags) and ``CC``. Pass module
+names as arguments to restrict the run (e.g. ``run_c_tests.py arith base``).
+"""
 
 import os
-import platform
 import subprocess
 import sys
 import tempfile
@@ -13,36 +20,42 @@ MODULES_DIR = ROOT / "modules"
 UNITY_DIR = ROOT / "external" / "unity" / "src"
 CC = os.environ.get("CC", "cc")
 
-_ARCH_ALIASES = ({"x86_64", "amd64", "x86-64", "x64"}, {"aarch64", "arm64"})
+sys.path.insert(0, str(ROOT / "native"))
+import discovery  # noqa: E402  (needs ROOT on sys.path first)
 
+# Optional sanitizers: VFHE_SANITIZE="address,undefined" (or "thread", ...) turns
+# on the matching -fsanitize instrumentation with no-recover semantics so the
+# first diagnostic aborts the run with a non-zero exit. Used by the nightly CI.
+_SANITIZE = os.environ.get("VFHE_SANITIZE", "").strip()
+SANITIZE_FLAGS: "list[str]" = (
+    [
+        f"-fsanitize={_SANITIZE}",
+        "-fno-sanitize-recover=all",
+        "-fno-omit-frame-pointer",
+        "-g",
+        "-O1",
+    ]
+    if _SANITIZE
+    else []
+)
 
-def _arch_aliases() -> "set[str]":
-    machine = platform.machine().lower()
-    for group in _ARCH_ALIASES:
-        if machine in group:
-            return group
-    return {machine}
+_ALIASES = discovery.host_arch_aliases()
+BLAKE3_DIR = discovery.blake3_dir(ROOT)
 
+# Same engine the packaged build compiles, linked into every test binary.
+ALL_KERNELS = discovery.module_sources(
+    MODULES_DIR, _ALIASES
+) + discovery.blake3_sources(ROOT)
 
-def _arch_ok(path: Path, aliases: "set[str]") -> bool:
-    """False only if ``path`` lives under an ``arch/<other-arch>/`` directory."""
-    parts = [p.lower() for p in path.parts]
-    for i, seg in enumerate(parts[:-1]):
-        if seg == "arch":
-            return parts[i + 1] in aliases
-    return True
+# Portable baseline (scalar engine + BLAKE3 SIMD off) so the tests build everywhere.
+PORTABLE_DEFS = discovery.macros_as_cli(
+    discovery.portable_macros(discovery.is_x86_host())
+)
 
-
-_ALIASES = _arch_aliases()
-ALL_KERNELS = [
-    p
-    for pattern in ("*.c", "*.S")
-    for p in sorted(MODULES_DIR.glob(f"*/c/src/**/{pattern}"))
-    if _arch_ok(p, _ALIASES)
+ALL_INCLUDES = [f"-I{d}" for d in discovery.module_include_dirs(MODULES_DIR)] + [
+    f"-I{UNITY_DIR}",
+    f"-I{BLAKE3_DIR}",
 ]
-_INCLUDE_DIRS = {d for d in MODULES_DIR.glob("*/c/include")}
-_INCLUDE_DIRS |= {h.parent for h in MODULES_DIR.glob("*/c/src/**/*.h")}
-ALL_INCLUDES = [f"-I{d}" for d in sorted(_INCLUDE_DIRS)] + [f"-I{UNITY_DIR}"]
 UNITY_SRC = UNITY_DIR / "unity.c"
 
 
@@ -59,10 +72,13 @@ def run_module(mod_path: Path, workdir: Path) -> bool:
             "-Wall",
             "-Wextra",
             "-std=c11",
+            *SANITIZE_FLAGS,
+            *PORTABLE_DEFS,
             *ALL_INCLUDES,
             str(test),
             str(UNITY_SRC),
             *map(str, ALL_KERNELS),
+            "-lm",
             "-o",
             str(binary),
         ]

@@ -9,6 +9,12 @@ dist/
 .generated/
 .cache/
 
+# coverage artifacts (pytest --cov)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 .venv/
 .vscode/
 .idea/

@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: libFuzzer (arith load/transform)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Build + run fuzz targets
+        run: python scripts/build_fuzzers.py --run --time 120
+      - name: Upload crashers (if any)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crashers
+          path: |
+            crash-*
+            .cache/fuzz/*_corpus
