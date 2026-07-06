@@ -42,7 +42,7 @@ def build(target: Path, out_dir: Path) -> "Path | None":
         f"-fsanitize={FUZZ_SANITIZE}",
         "-fno-sanitize-recover=all",
         "-fno-omit-frame-pointer",
-        "-std=c11",
+        "-std=gnu11",
         "-DVFHE_RNG_TESTING",
         *rt.PORTABLE_DEFS,
         *rt.ALL_INCLUDES,

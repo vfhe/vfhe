@@ -87,7 +87,7 @@ def build_ffi(absolute: bool) -> "FFI":
         compile_args, link_args, libraries = ["/O2", "/GL"], ["/LTCG"], []
     else:
         compile_args, link_args, libraries = (
-            ["-O3", "-flto", "-std=c11"],
+            ["-O3", "-flto", "-std=gnu11"],
             ["-flto"],
             ["m"],
         )

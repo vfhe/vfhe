@@ -71,7 +71,7 @@ def run_module(mod_path: Path, workdir: Path) -> bool:
             CC,
             "-Wall",
             "-Wextra",
-            "-std=c11",
+            "-std=gnu11",
             *SANITIZE_FLAGS,
             *PORTABLE_DEFS,
             *ALL_INCLUDES,
