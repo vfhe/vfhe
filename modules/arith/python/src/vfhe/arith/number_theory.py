@@ -1,34 +1,17 @@
-# SPDX-License-Identifier: Apache-2.0
-"""Pure-Python number theory used for prime generation and CRT reconstruction.
-
-The C engine has its own primality/CRT machinery; these run in Python where
-arbitrary-precision integers are needed (prime schedules, big-int
-reconstruction) and the native path buys nothing.
-"""
+import random
 
 
-def is_prime(n: int) -> bool:
-    """Deterministic Miller-Rabin primality test, exact for n < 2^64.
-
-    Uses the standard staged base sets, so no candidate below 2^64 is
-    misclassified.
-
-    Args:
-        n: candidate integer.
-
-    Returns:
-        True iff ``n`` is prime.
-    """
+def is_prime(n):
     if n < 2:
         return False
-    # Check small primes.
+    # Check small primes
     for p in [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]:
         if n == p:
             return True
         if n % p == 0:
             return False
 
-    # Deterministic bases for Miller-Rabin up to 2^64.
+    # Deterministic bases for Miller-Rabin up to 2^64
     if n < 1373653:
         bases = [2, 3]
     elif n < 9080191:
@@ -65,16 +48,7 @@ def is_prime(n: int) -> bool:
     return True
 
 
-def crt(values: list[int], moduli: list[int]) -> int:
-    """Chinese-remainder reconstruction.
-
-    Args:
-        values: residues, one per modulus.
-        moduli: pairwise-coprime moduli.
-
-    Returns:
-        The unique integer in ``[0, prod(moduli))`` congruent to each residue.
-    """
+def crt(values, moduli):
     if len(moduli) == 1:
         return values[0] % moduli[0]
     N = 1

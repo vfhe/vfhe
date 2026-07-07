@@ -19,7 +19,7 @@ from pathlib import Path
 # Spelling variants per architecture; index 0 is the x86-64 group.
 ARCH_ALIASES = ({"x86_64", "amd64", "x86-64", "x64"}, {"aarch64", "arm64"})
 
-# Vendored BLAKE3 portable core (rng/arith call it): always compiled in.
+# Vendored BLAKE3 portable core (misc/arith call it): always compiled in.
 BLAKE3_BASENAMES = ("blake3.c", "blake3_dispatch.c", "blake3_portable.c")
 
 

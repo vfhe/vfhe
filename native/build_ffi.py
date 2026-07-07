@@ -5,8 +5,9 @@ Compiles every module's C/asm sources plus vendored BLAKE3 into one LTO'd
 extension, and #includes each module's umbrella header as the preamble so the C
 compiler sees the true definitions. The set of sources, include dirs, and
 portable-baseline defines comes from ``native/discovery.py`` (shared with the C
-test runner). ``VFHE_SIMD=1`` opts x86 into the AVX-512 fast paths; the default
-is a portable baseline that runs everywhere.
+test runner). Source builds auto-tune to the host CPU (AVX-512 IFMA when
+present); wheel builds set ``VFHE_PORTABLE=1`` to force the portable baseline
+that runs everywhere.
 
 Imported by setup.py (``cffi_modules``) for wheel builds and runnable directly
 for the dev build into ``.generated/``.
@@ -14,6 +15,7 @@ for the dev build into ``.generated/``.
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -48,6 +50,31 @@ def _enable_asm_sources() -> None:
 _enable_asm_sources()
 
 
+def _host_has_avx512ifma() -> bool:
+    """True if ``-march=native`` enables AVX-512 IFMA on *this* machine.
+
+    Asks the *same* compiler the extension will be built with what the native CPU
+    supports -- the engine's SIMD kernels are guarded by ``__AVX512IFMA__``, so
+    this matches exactly what a tuned build would light up. Any failure (no
+    compiler, ``-march=native`` unsupported, non-zero exit) falls back to
+    portable, so the check can only ever *under*-tune, never mis-tune.
+    """
+    import shlex
+    import sysconfig
+
+    # Resolve the compiler exactly as distutils/cffi will for the real build:
+    # $CC if set, else the compiler this Python was built with, else `cc`. Keep
+    # any base flags it carries (e.g. a wrapper's --target=) so the probe and the
+    # build see the same target.
+    cc = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
+    argv = [*shlex.split(cc), "-march=native", "-dM", "-E", "-x", "c", os.devnull]
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    except Exception:
+        return False
+    return out.returncode == 0 and "__AVX512IFMA__" in out.stdout
+
+
 def build_ffi(absolute: bool) -> "FFI":
     ffi = FFI()
     sources: list[str] = []
@@ -76,15 +103,25 @@ def build_ffi(absolute: bool) -> "FFI":
 
     # Vendored BLAKE3 (git submodule): compiled directly, no CMake. The portable
     # core + runtime dispatcher are always needed; SIMD kernels are added below
-    # only for the opt-in fast build. (rng/arith call BLAKE3 internally.)
+    # only for the opt-in fast build. (misc/arith call BLAKE3 internally.)
     blake3 = discovery.blake3_dir(ROOT)
     sources += [rel(s) for s in discovery.blake3_sources(ROOT)]
     include_dirs.append(rel(blake3))
 
     is_x86 = discovery.is_x86_host()
 
+    # VFHE_COVERAGE=1 instruments the C for gcov (used by the CI coverage job):
+    # -O0 + --coverage, no LTO (which strips gcov data). Always portable.
+    coverage = os.environ.get("VFHE_COVERAGE") == "1"
+
     if sys.platform == "win32":
         compile_args, link_args, libraries = ["/O2", "/GL"], ["/LTCG"], []
+    elif coverage:
+        compile_args, link_args, libraries = (
+            ["-O0", "-g", "-std=gnu11", "--coverage"],
+            ["--coverage"],
+            ["m"],
+        )
     else:
         compile_args, link_args, libraries = (
             ["-O3", "-flto", "-std=gnu11"],
@@ -92,30 +129,52 @@ def build_ffi(absolute: bool) -> "FFI":
             ["m"],
         )
 
-    # Opt-in fast paths (x86 only): VFHE_SIMD=1 turns on the arith AVX-512 IFMA
-    # engine + AES-NI rng and BLAKE3's SIMD kernels. Caveats: this yields an
-    # AVX-512-only binary (won't run on older CPUs), and it flips mp_vector_t to a
-    # 512-bit lane -- so the MP entries in arith.cdef would need regenerating for
-    # the Python bindings. Default is the portable baseline that runs everywhere.
-    # UNVERIFIED on non-x86 dev machines.
-    if is_x86 and os.environ.get("VFHE_SIMD") == "1":
-        define_macros: "list[tuple[str, str | None]]" = []  # drop PORTABLE_BUILD
-        compile_args += [
-            "-mavx512f",
-            "-mavx512ifma",
-            "-mavx512dq",
-            "-mavx512vl",
-            "-mavx2",
-            "-maes",
-        ]
-        # BLAKE3 SIMD via pre-assembled .S (no per-file ISA flags; runtime dispatch).
+    # Portable vs. CPU-tuned selection.
+    #
+    # vfhe ships as an sdist only, so the DEFAULT build -- pip compiling on the
+    # target machine -- auto-tunes to THIS CPU: on x86 with AVX-512 IFMA it drops
+    # PORTABLE_BUILD to light up the SIMD kernels + AES-NI and adds -march=native;
+    # otherwise it builds the portable engine (and says why). VFHE_PORTABLE=1 is
+    # the manual escape hatch (build here, run elsewhere) and skips detection.
+    # The tuned path uses -march=native + BLAKE3's *_x86-64_unix.S kernels, so it
+    # is POSIX-x86 only; everything else (Windows, non-x86) stays portable.
+    force_portable = os.environ.get("VFHE_PORTABLE") == "1" or coverage
+    tune = (
+        (not force_portable)
+        and is_x86
+        and sys.platform != "win32"
+        and _host_has_avx512ifma()
+    )
+
+    define_macros: "list[tuple[str, str | None]]"
+    if tune:
+        define_macros = []  # drop PORTABLE_BUILD -> activate the SIMD-guarded paths
+        compile_args += ["-march=native", "-funroll-all-loops"]
+        # BLAKE3 SIMD via pre-assembled .S (runtime dispatch).
         sources += [
             rel(blake3 / f"blake3_{x}_x86-64_unix.S")
             for x in ("sse2", "sse41", "avx2", "avx512")
         ]
+        print(
+            "vfhe: CPU-tuned build (-march=native, AVX-512 IFMA detected).",
+            file=sys.stderr,
+        )
     else:
-        # Portable baseline: force the engine's scalar paths, disable BLAKE3 SIMD.
+        # Portable baseline: scalar engine, BLAKE3 SIMD off. Runs everywhere.
         define_macros = discovery.portable_macros(is_x86)
+        if force_portable:
+            pass  # deliberate portable/wheel build -- stay quiet
+        elif is_x86:
+            print(
+                "vfhe: this x86 CPU lacks AVX-512 IFMA; building the PORTABLE "
+                "(slower) engine.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "vfhe: non-x86 platform; building the PORTABLE engine.",
+                file=sys.stderr,
+            )
 
     ffi.set_source(
         "_vfhe_native",
@@ -142,9 +201,21 @@ if __name__ == "__main__":
     # on the module wrappers.
     out = ROOT / ".generated"
     out.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory() as tmp:
-        built = Path(build_ffi(absolute=True).compile(tmpdir=tmp, verbose=True))
+    if os.environ.get("VFHE_COVERAGE") == "1":
+        # Keep the objects (.gcno) so gcov's .gcda land beside them when the test
+        # run exercises the extension; gcovr reads them from here afterwards.
+        cov = out / "cov-build"
+        cov.mkdir(exist_ok=True)
+        built = Path(build_ffi(absolute=True).compile(tmpdir=str(cov), verbose=True))
         dest = out / built.name
-        dest.unlink(missing_ok=True)  # replace any stale extension from a prior build
+        dest.unlink(missing_ok=True)
         shutil.copy2(built, dest)
+    else:
+        # Dev build: compile in a throwaway temp dir, then keep only the finished
+        # extension in the gitignored .generated/ folder.
+        with tempfile.TemporaryDirectory() as tmp:
+            built = Path(build_ffi(absolute=True).compile(tmpdir=tmp, verbose=True))
+            dest = out / built.name
+            dest.unlink(missing_ok=True)  # replace any stale ext from a prior build
+            shutil.copy2(built, dest)
     print(f"native lib -> {dest.relative_to(ROOT)}")

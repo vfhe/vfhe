@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the fhe engine. CKKS and CGGI16 reuse the arith + mlwe
+// surfaces; only GP25's sparse-amortized-bootstrap kernels (fhe/c/src/gp25.c,
+// prototyped in mlwe.h) need declaring here. Handles/handle-matrices are passed
+// as `void *` (cffi converts any pointer or array cdata).
+
+void gp25_RGSW_monomial_mul(void *p0, uint64_t in_N, void *e, uint64_t r_prec, void *ksk, uint64_t ell, uint64_t special_primes);
+void gp25_RGSW_monomial_mul_mt(void *p0, uint64_t in_N, void *e, uint64_t r_prec, void *ksk, uint64_t ell, uint64_t special_primes, uint64_t num_threads);
+void gp25_sub_a_mt(void *p0, uint64_t in_N, uint64_t *a, void *s_sign, uint64_t ell, uint64_t special_primes, uint64_t N, uint64_t num_threads);

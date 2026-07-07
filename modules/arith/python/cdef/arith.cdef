@@ -1,108 +1,105 @@
 // SPDX-License-Identifier: Apache-2.0
-// Python-facing ABI of the arith engine.
-//
-// This is a strict, hand-curated subset of the C API (include/arith/*.h):
-// every handle is opaque and all state is read through accessor functions
-// (poly_mask / poly_domain / poly_limb_data / mp_scalar_digit / ...), so the
-// ABI is identical for portable and AVX-512 builds. The single exception is
-// mp_polynomial, whose layout (uint64_t digit rows) is build-independent and
-// is exposed for cheap bulk reads.
-//
-// Fallible operations return an int status: 0 = OK, negative = error (see
-// arith/error.h; mirrored by vfhe.arith.errors on the Python side).
+// Python-facing ABI of the arith engine (ported from the original ctypes
+// prototypes). Handles are passed as `void *` (as the old ctypes code did);
+// the structs below are cdef'd only so Python can cast a handle and read
+// fields (rns_mask, coeffs, l, ...). Layout is filled by cffi from arith.h.
+// (Portable ABI: mp_vector_t is uint64_t.)
 
-typedef enum { VFHE_COEFF = 0, VFHE_EVAL = 1 } vfhe_domain;
+typedef struct _NTT_proc *NTT_proc;
 
-typedef struct ring_ctx *ring_t;
-typedef struct rns_poly *rns_poly_t;
-typedef struct baseconv_plan *baseconv_plan_t;
-typedef struct mp_scalar *mp_scalar_t;
-typedef uint64_t mp_vector_t;
+typedef struct _incNTT {
+  NTT_proc *ntt;
+  uint64_t split_degree;
+  uint64_t **w;
+  uint64_t N;
+  uint64_t l;
+} *incNTT;
 
-typedef struct mp_polynomial {
+typedef struct _RNS_Polynomial {
   uint64_t **coeffs;
-  uint64_t N, d;
-} *mp_polynomial_t;
+  incNTT ntt;
+  uint64_t rns_mask;
+  uint64_t allocated_l;
+} *RNS_Polynomial;
 
-// --- ring: pool management ---------------------------------------------------
-ring_t ring_new(const uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l);
-int ring_extend(ring_t r, const uint64_t *primes, uint64_t count);
-const uint64_t *ring_twist(const ring_t r, uint64_t i);
+// --- misc ---
+void *safe_aligned_malloc(uint64_t size);
 
-// --- poly: lifecycle + state -------------------------------------------------
-rns_poly_t poly_new(const ring_t ring, uint64_t mask);
-void poly_free(void *p);
-void poly_copy(rns_poly_t out, const rns_poly_t in);
-bool poly_eq(const rns_poly_t a, const rns_poly_t b);
-uint64_t poly_mask(const rns_poly_t p);
-int poly_domain(const rns_poly_t p);
-void poly_assume_domain(rns_poly_t p, vfhe_domain domain);
-uint64_t *poly_limb_data(const rns_poly_t p, uint64_t idx);
+// --- ntt / base conversion ---
+void *new_incomplete_ntt_list(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t count);
+void incNTT_extend_with_primes(void *ntt, uint64_t *new_primes, uint64_t count);
+uint64_t **incNTT_get_rou_matrix(void *ntt);
+void *init_base_conversion_params(void *ntt, uint64_t in_mask, uint64_t out_mask);
+void free_base_conversion_params(void *params);
 
-// --- poly: domain conversion + loading ----------------------------------------
-int poly_to_eval(rns_poly_t out, const rns_poly_t in);
-int poly_to_coeff(rns_poly_t out, const rns_poly_t in);
-int poly_from_int_array(rns_poly_t out, const uint64_t *in);
-int poly_from_residues(rns_poly_t out, uint64_t *const *in);
+// --- polynomial lifecycle / io ---
+void *polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, void *ntt);
+void polynomial_copy_RNS_polynomial(void *out, void *in);
+void free_RNS_polynomial(void *p);
+void int_array_to_RNS(void *out, uint64_t *in);
+void array_to_RNS(void *out, uint64_t **in);
 
-// --- poly: arithmetic ----------------------------------------------------------
-int poly_add(rns_poly_t out, const rns_poly_t a, const rns_poly_t b);
-int poly_sub(rns_poly_t out, const rns_poly_t a, const rns_poly_t b);
-void poly_negate(rns_poly_t out, const rns_poly_t a);
-void poly_scale(rns_poly_t out, const rns_poly_t a, uint64_t s);
-void poly_scale_vec(rns_poly_t out, const rns_poly_t a, const uint64_t *s);
-int poly_add_scalar(rns_poly_t out, const rns_poly_t a, uint64_t c);
-int poly_mul(rns_poly_t out, const rns_poly_t a, const rns_poly_t b);
-int poly_mul_into(rns_poly_t out, const rns_poly_t a);
-int poly_inverse(rns_poly_t out, const rns_poly_t in);
+// --- sampling ---
+void polynomial_gen_random_RNSc_polynomial(void *out);
+void polynomial_gen_gaussian_RNSc_polynomial(void *out, double sigma);
 
-// --- poly: sampling --------------------------------------------------------------
-void poly_sample_uniform(rns_poly_t p, vfhe_domain domain);
-void poly_sample_gaussian(rns_poly_t p, double sigma);
+// --- arithmetic ---
+void polynomial_mul_RNS_polynomial(void *out, void *in1, void *in2);
+void polynomial_multo_RNS_polynomial(void *out, void *in);
+void polynomial_sub_RNS_polynomial(void *out, void *in1, void *in2);
+void polynomial_sub_RNSc_polynomial(void *out, void *in1, void *in2);
+void polynomial_add_RNSc_polynomial(void *out, void *in1, void *in2);
+void polynomial_add_RNS_polynomial(void *out, void *in1, void *in2);
+void polynomial_scale_RNSc_polynomial(void *out, void *in1, uint64_t scale);
+void polynomial_scale_RNS_polynomial_RNS(void *out, void *in1, uint64_t *scale);
+void polynomial_RNSc_negate(void *out, void *in);
+void polynomial_RNSc_add_integer(void *out, void *in1, uint64_t in2);
+void polynomial_RNS_add_integer(void *out, void *in1, uint64_t in2);
 
-// --- poly: Galois / slots ----------------------------------------------------------
-int poly_permute(rns_poly_t out, const rns_poly_t in, uint64_t gen);
-int poly_broadcast_slot(rns_poly_t out, const rns_poly_t in, uint64_t slot_idx);
-int poly_rotate_slots(rns_poly_t out, const rns_poly_t in, uint64_t rot);
-int poly_copy_slot(rns_poly_t out, uint64_t dst, const rns_poly_t in, uint64_t src);
+// --- automorphism / domain conversion ---
+void polynomial_RNSc_permute(void *out, void *in, uint64_t gen);
+void polynomial_RNSc_to_RNS(void *out, void *in);
+void polynomial_RNS_to_RNSc(void *out, void *in);
 
-// --- poly: digest -------------------------------------------------------------------
-void poly_digest(uint64_t *out, const rns_poly_t p);
-uint64_t *poly_digest_alloc(const rns_poly_t p);
+// --- tower ---
+void polynomial_base_conversion_RNSc(void *out, void *in, void *params);
+void polynomial_RNSc_mod_reduce(void *out, void *in);
+void polynomial_RNSc_mod_reduce_lifted(void *out, void *in, uint64_t idx);
+void polynomial_round_division_RNSc_wo_free(void *out, uint64_t divide_mask);
+void polynomial_floor_division_RNSc_wo_free(void *out, uint64_t divide_mask);
+void polynomial_RNSc_scaled_lift(void *out, void *in, uint64_t *delta);
 
-// --- tower: base conversion / rescaling / lifting -------------------------------------
-baseconv_plan_t baseconv_plan_new(const ring_t ring, uint64_t in_mask, uint64_t out_mask);
-void baseconv_plan_free(baseconv_plan_t plan);
-int poly_base_convert(rns_poly_t out, const rns_poly_t in, const baseconv_plan_t plan);
-int poly_div_floor(rns_poly_t p, uint64_t divide_mask);
-int poly_div_round(rns_poly_t p, uint64_t divide_mask);
-int poly_div_floor_last(rns_poly_t p);
-int poly_div_round_last(rns_poly_t p);
-int poly_mod_reduce(rns_poly_t out, const rns_poly_t in);
-int poly_lift_residue(rns_poly_t out, const rns_poly_t in, uint64_t src_limb);
-int poly_scaled_lift(rns_poly_t out, const rns_poly_t in, const uint64_t *delta);
+// --- slots / inverse / eq ---
+int polynomial_RNS_inverse(void *out, void *in);
+bool polynomial_eq(void *a, void *b);
+void polynomial_RNS_broadcast_slot(void *out, void *in, uint64_t slot_idx);
+void polynomial_RNS_rotate_slot(void *out, void *in, uint64_t rot);
+void polynomial_RNS_copy_slot(void *out, uint64_t dst, void *in, uint64_t src);
 
-// --- cfft: CKKS-style encoding ----------------------------------------------------------
-double **cfft_load_twiddles_fwd(const double *rous_real, const double *rous_imag, uint64_t size);
-double **cfft_load_twiddles_inv(const double *rous_real, const double *rous_imag, uint64_t size);
-void cfft_forward(double *x, double *const *ws, uint64_t n);
-void cfft_inverse(double *x, double *const *ws, uint64_t n);
-void cfft_bit_reverse(double *v, uint64_t N, uint32_t prec);
-void cfft_scale(double *v, double scale, uint64_t N);
-int cfft_round_to_poly(rns_poly_t out, const double *in);
-void cfft_ifft_scale_round_batch(void **rows_in, void **outs, uint64_t count, uint64_t n_complex,
-                                 uint32_t log_prec, double *const *ws_inv, double delta,
-                                 uint64_t n_threads);
+// --- hashing ---
+void polynomial_RNS_get_hash(uint64_t *out, void *p);
+uint64_t *polynomial_RNS_get_hash_p(void *p);
 
-// --- mp: multi-precision bridge ------------------------------------------------------------
-int mp_vector_size(void);
-mp_polynomial_t mp_polynomial_new(uint64_t N, uint64_t d);
-void mp_polynomial_free(mp_polynomial_t p);
-mp_scalar_t mp_scalar_load(const uint64_t *in, uint64_t d);
-void mp_scalar_free(mp_scalar_t s);
-uint64_t mp_scalar_digit_count(const mp_scalar_t s);
-uint64_t mp_scalar_digit(const mp_scalar_t s, uint64_t i);
-mp_vector_t *mp_vector_load(uint64_t in);
-int mp_polynomial_from_poly(mp_polynomial_t out, const rns_poly_t in, const mp_scalar_t *PW,
-                            const mp_scalar_t q, const mp_vector_t *m, uint64_t k);
-int mp_polynomial_to_poly(rns_poly_t out, const mp_polynomial_t in);
+// --- complex (CKKS encoding) ---
+void *load_rous_CT(double *rous_real, double *rous_imag, uint64_t size);
+void *load_rous_GS(double *rous_real, double *rous_imag, uint64_t size);
+void CT_NR(double *x, void *ws, uint64_t n);
+void GS_RN(double *x, void *ws, uint64_t n);
+void bit_reverse_array(double *v, uint64_t N, uint32_t prec);
+void complex_poly_scale_double(double *v, double scale, uint64_t N);
+void complex_poly_round_to_RNS(void *out, double *in, uint64_t N);
+void complex_polys_ifft_scale_round_to_RNS_batch(void **rows_in, void **outs_rns, uint64_t count,
+                                                 uint64_t n_complex, uint32_t log_prec, void *gs_ws,
+                                                 double temp_delta);
+
+// --- multiprecision (portable ABI: mp_vector_t is uint64_t) ---
+typedef struct _MPScalar { uint64_t *digits; uint64_t d; } *MPScalar;
+typedef struct _MPPolynomial { uint64_t **coeffs; uint64_t N; uint64_t d; } *MPPolynomial;
+int get_mp_vector_size(void);
+void mp_scale(void *out, void *in, void *m);
+void mp_sub(void *out, void *a, void *b);
+void *mp_load(uint64_t *in, uint64_t d);
+uint64_t *load_m512(uint64_t in);
+void *new_mp_polynomial(uint64_t N, uint64_t d);
+void mp_polynomial_from_RNS(void *out, void *in, void **PW, void *q, uint64_t *m, uint64_t k);
+void mp_polynomial_to_RNSc(void *out, void *in);

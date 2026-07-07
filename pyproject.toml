@@ -53,6 +53,7 @@ dev = [
     "protobuf>=6.33,<7",
     "pytest>=7.0",
     "pytest-cov",
+    "gcovr",  # C coverage (gcov) for the CI coverage-c job
     # Runtime dep needed by the CKKS encoding tests (the dev workflow builds the
     # extension in place rather than pip-installing, so runtime deps are listed here).
     "mpmath>=1.3",
@@ -76,16 +77,6 @@ testpaths = ["modules/*/python/test"]
 python_files = ["*.py"]
 addopts = "--import-mode=importlib"
 cache_dir = ".cache/pytest"
-
-[tool.cibuildwheel]
-build = "cp310-* cp311-* cp312-* cp313-*"
-skip = "*-musllinux* *_i686"
-build-frontend = "build"
-test-command = "python {project}/scripts/smoke_import.py"
-
-[tool.cibuildwheel.linux]
-archs = ["x86_64"]
-environment-pass = ["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VFHE"]
-
-[tool.cibuildwheel.macos]
-archs = ["arm64"]
+markers = [
+    "complete: heavy/thorough test (FHE bootstraps); runs only with --complete",
+]

@@ -9,10 +9,15 @@ dist/
 .generated/
 .cache/
 
-# coverage artifacts (pytest --cov)
+# coverage artifacts (pytest --cov + gcovr)
 .coverage
 .coverage.*
 coverage.xml
+coverage-python.xml
+coverage-c.xml
+coverage-c.txt
+*.gcda
+*.gcno
 htmlcov/
 
 .venv/

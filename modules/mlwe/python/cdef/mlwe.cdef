@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the (M)LWE engine (ported from the original ctypes
+// prototypes). Handles are passed as `void *` as the old ctypes code did;
+// the structs below are cdef'd only so Python can cast a handle and read
+// fields. Layout is verified by cffi against mlwe.h. RNS_Polynomial / incNTT
+// come from arith.cdef (parsed first).
+
+typedef struct _IntPolynomial *IntPolynomial;
+
+typedef struct _LWE_Key {
+  uint64_t **s;
+  uint64_t n;
+  uint64_t l;
+  incNTT ntt;
+  double sigma;
+} *LWE_Key;
+
+typedef struct _LWE {
+  uint64_t **a;
+  uint64_t *b;
+  uint64_t n;
+  uint64_t l;
+  incNTT ntt;
+} *LWE;
+
+typedef struct _RNS_MLWE {
+  RNS_Polynomial *a;
+  RNS_Polynomial b;
+  uint64_t r;
+} *RNS_MLWE;
+
+typedef struct _RNS_MLWE_Key {
+  IntPolynomial *s;
+  RNS_Polynomial *s_RNS;
+  uint64_t N;
+  uint64_t l;
+  uint64_t r;
+  double sigma;
+} *RNS_MLWE_Key;
+
+// --- lwe ---
+void *lwe_alloc_key(uint64_t n, uint64_t l, void *ntt);
+void *lwe_alloc_sample(uint64_t n, uint64_t l, void *ntt);
+void free_lwe_sample(void *c);
+void *lwe_new_key(uint64_t n, uint64_t l, void *ntt, double sec_sigma, double err_sigma);
+void *lwe_new_sparse_ternary_key(uint64_t n, uint64_t l, void *ntt, uint64_t h, double err_sigma);
+void lwe_sample(void *c, uint64_t *m, void *key);
+void *lwe_new_sample(uint64_t *m, void *key);
+void *lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t l, void *ntt);
+void lwe_phase(uint64_t *out, void *c, void *key);
+void lwe_subto(void *out, void *in);
+
+// --- mlwe (rns) ---
+void *mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l, void *ntt, double sigma);
+void *mlwe_new_RNS_gaussian_key(uint64_t N, uint64_t r, uint64_t l, double key_sigma, void *ntt, double sigma);
+void *mlwe_alloc_RNS_sample(uint64_t N, uint64_t r, uint64_t mask, void *ntt);
+void *mlwe_alloc_RNS_sample_array(uint64_t size, uint64_t N, uint64_t r, uint64_t mask, void *ntt);
+void *mlwe_create_copy_array(void *in, uint64_t size);
+void free_mlwe_RNS_sample(void *p);
+void free_mlwe_RNS_key(void *key);
+
+void mlwe_RNSc_sample(void *out, void *key, void *m);
+void mlwe_RNS_phase(void *out, void *in, void *key);
+void mlwe_RNSc_to_RNS(void *out, void *in);
+void mlwe_RNS_to_RNSc(void *out, void *in);
+void mlwe_copy_RNS_sample(void *out, void *in);
+void mlwe_RNS_trivial_sample_of_zero(void *out);
+void *mlwe_new_RNSc_sample_of_zero(void *key);
+void *mlwe_new_RNS_sample_of_zero(void *key);
+void *mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask, void *ntt);
+
+void mlwe_RNS_mul_addto_by_poly(void *out, void *in, void *poly);
+void mlwe_RNS_mul_subto_by_poly(void *out, void *in, void *poly);
+void mlwe_RNS_mul_by_poly(void *out, void *in, void *poly);
+void mlwe_scale_RNS_mlwe_RNS(void *c, uint64_t *scale);
+void mlwe_add_RNSc_sample(void *out, void *in1, void *in2);
+void mlwe_sub_RNSc_sample(void *out, void *in1, void *in2);
+void mlwe_RNSc_mul_by_xai(void *out, void *in, uint64_t a);
+void mlwe_RNSc_mul_by_xai_minus1(void *out, void *in, uint64_t a);
+void mlwe_add_RNSc_polynomial(void *out, void *in1, void *in2);
+void mlwe_sub_RNSc_polynomial(void *out, void *in1, void *in2);
+void mlwe_RNS_add_polynomial(void *out, void *in1, void *in2);
+void mlwe_RNS_sub_polynomial(void *out, void *in1, void *in2);
+void mlwe_round_division_RNSc(void *out, uint64_t divide_mask);
+
+void *mlwe_extract_LWE(void *in, uint64_t idx);
+void mlwe_full_packing_keyswitch(void *out, void *in, uint64_t size, void *ksk, uint64_t lvl);
+void mlwe_full_packing_keyswitch_scaled(void *vec, uint64_t ell, void *ksks, uint64_t lvl);
+void mlwe_RNSc_GHS_hybrid_keyswitch(void *out, void *in, void *ksk, uint64_t lvl);
+void mlwe_automorphism_RNSc_GHS(void *out, void *in, uint64_t gen, void *ksk, uint64_t lvl);
+void mlwe_partial_trace(void *out, void *in, uint64_t *gens, void *ksks, uint64_t size, uint64_t lvl);
+void mlwe_trace(void *out, void *in, void *ksks, uint64_t lvl);
+void mlwe_discrete_convolution(void *out, void *in1, void *in2);
+void mlwe_multiply(void *out, void *in1, void *in2, void *ksk);
+
+// --- mgsw ---
+void mgsw_external_product(void *out, void *mgsw, void *in, uint64_t ell, uint64_t special_primes);
+void mgsw_CMUX(void *out, void *in1, void *in2, void *mgsw, uint64_t ell, uint64_t special_primes);
+void mgsw_NCMUX(void *out, void *in1, void *in2, void *mgsw, void *ksk, uint64_t ell, uint64_t special_primes);

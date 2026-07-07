@@ -15,5 +15,5 @@ Layered GKR arithmetic-circuit representation and its polynomial export.
 The arith dependency is imported lazily inside the two packing functions, so
 the circuit representation itself stays usable without the native extension.
 The dense-MLE export is exponential in layer bit-widths by nature; sparse
-representations for production-size circuits can be added behind the same
-API when `vfhe.piop` lands.
+representations for production-size circuits can be added behind the same API
+(the multilinear-extension machinery lives in `vfhe.piop`).
