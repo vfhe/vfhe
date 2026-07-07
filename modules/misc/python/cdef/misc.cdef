@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the misc module: build/CPU introspection used by the
+// runtime "you could be faster" hint (see misc/libvfhe.py). The rest of misc is
+// internal engine support with no Python symbols.
+
+int vfhe_build_is_portable(void);
+int vfhe_cpu_has_avx512ifma(void);
+
+// libc free, to release safe_aligned_malloc'd (posix_memalign, 64B) buffers that
+// Python owns and hands to the AVX-512 kernels. (safe_aligned_malloc: arith.cdef)
+void free(void *ptr);

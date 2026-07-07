@@ -6,7 +6,7 @@ Discovers each ``modules/*/c/test/*.c`` and builds it against the full portable
 engine (all module kernels + vendored BLAKE3), using the shared
 ``native/discovery.py`` so the test build never drifts from the packaged CFFI
 build. Honours ``VFHE_SANITIZE`` (ASan/UBSan flags) and ``CC``. Pass module
-names as arguments to restrict the run (e.g. ``run_c_tests.py arith base``).
+names as arguments to restrict the run (e.g. ``run_c_tests.py arith misc``).
 """
 
 import os
@@ -67,6 +67,10 @@ def run_module(mod_path: Path, workdir: Path) -> bool:
     ok = True
     for test in tests:
         binary = workdir / f"{mod_path.name}_{test.stem}"
+        # Link the Unity framework only for suites that use it; plain assert/main
+        # tests provide their own main() and would otherwise fail to resolve
+        # Unity's setUp/tearDown.
+        uses_unity = "unity.h" in test.read_text()
         compile_cmd = [
             CC,
             "-Wall",
@@ -76,7 +80,7 @@ def run_module(mod_path: Path, workdir: Path) -> bool:
             *PORTABLE_DEFS,
             *ALL_INCLUDES,
             str(test),
-            str(UNITY_SRC),
+            *([str(UNITY_SRC)] if uses_unity else []),
             *map(str, ALL_KERNELS),
             "-lm",
             "-o",

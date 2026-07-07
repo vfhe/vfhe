@@ -13,6 +13,7 @@
     "scripts",
     "native",
     "modules/arith/python/src",
+    "modules/misc/python/src",
     "modules/circuit/python/src",
     "modules/compiler/python/src",
     "modules/fhe/python/src",

@@ -1,197 +1,330 @@
-# SPDX-License-Identifier: Apache-2.0
-"""RNS polynomials over the native engine.
-
-A :class:`Polynomial` wraps an opaque native ``rns_poly_t`` handle. Both
-pieces of per-polynomial state -- the active-limb *mask* and the
-representation *domain* (:class:`Domain`) -- live in C and are read through
-accessors, so Python never shadows engine state. Operations convert
-representation lazily (multiplication moves operands to EVAL, tower
-operations to COEFF), and native status codes surface as the exceptions in
-:mod:`vfhe.arith.errors`.
-"""
-
 from __future__ import annotations
+
+import math
+
+from vfhe.misc.libvfhe import ffi, lib
+
+from .ntt import NTT_processor_instance
+from .number_theory import crt, is_prime
+
+next_power_of_2 = lambda x: 1 << int(math.ceil(math.log2(x)))
+
+
+class Ring:
+    def __init__(
+        self,
+        N,
+        mod_size=None,
+        split_degree=None,
+        primes=None,
+        mask=None,
+        prime_size: "int | list[int]" = 49,
+        exceptional_set_size=128,
+    ) -> None:
+        assert (
+            (mod_size is not None)
+            or (type(prime_size) is list)
+            or (primes is not None)
+            or (mask is not None)
+        ), "must provide mod_size, prime_size, primes, or mask"
+
+        if mask is not None:
+            assert primes is not None, "must provide primes when mask is given"
+            temp_split_degree = split_degree
+            if not temp_split_degree:
+                smallest_in_pool = min(math.ceil(math.log2(p)) for p in primes)
+                temp_split_degree = next_power_of_2(
+                    exceptional_set_size / smallest_in_pool
+                )
+
+            key = (N, temp_split_degree)
+            prime_map = NTT_processor_instance.prime_to_index[key]
+            active_primes = [p for p in primes if ((mask >> prime_map[p]) & 1)]
+            prime_size = [math.ceil(math.log2(p)) for p in active_primes]
+            primes = active_primes
+
+        if primes is not None and prime_size is None:
+            prime_size = [math.ceil(math.log2(i)) for i in primes]
+
+        if isinstance(prime_size, list):
+            self.ell = len(prime_size)
+            self.prime_size = prime_size
+            self.smallest_prime = min(prime_size)
+        else:
+            self.ell = math.ceil(mod_size / prime_size)  # type: ignore
+            self.prime_size = [prime_size] * self.ell
+            self.smallest_prime = prime_size
+
+        if not split_degree:
+            split_degree = next_power_of_2(exceptional_set_size / self.smallest_prime)  # type: ignore
+        self.split_degree = split_degree
+        self.N = N
+        self.byte_size = self.N * self.ell * 8
+        self.lib = lib
+
+        if primes:
+            assert len(primes) >= self.ell, (
+                "not enough primes for quotient ring for size 2^%d" % mod_size
+            )
+            self.primes = primes[: self.ell]
+        else:
+            self.primes = self.gen_primes()
+
+        self.q_l = math.prod(self.primes)
+
+        self.bit_size = math.ceil(math.log2(self.q_l))
+
+        self.prime_indices = NTT_processor_instance.register_ring_primes(
+            self.primes, self.N, self.split_degree
+        )
+        self.NTT = NTT_processor_instance.incNTTs[(self.N, self.split_degree)]
+        self.mask = sum(1 << idx for idx in self.prime_indices)
+
+    def _ntt_l(self):
+        return ffi.cast("incNTT", self.NTT).l
+
+    def get_rou_matrix(self):
+        w = self.lib.incNTT_get_rou_matrix(self.NTT)
+        row_len = self.N // self.split_degree
+        rou_matrix = []
+        for idx in self.prime_indices:
+            rou_matrix.append([w[idx][k] for k in range(row_len)])
+        return rou_matrix
+
+    def quotient_ring(self, mod_size=None, ell=None, mask=None):
+        assert (mod_size is not None) ^ (ell is not None) ^ (mask is not None), (
+            "must provide mod_size, ell, or mask"
+        )
+        if mod_size is not None:
+            res = Ring(self.N, mod_size, self.split_degree, primes=self.primes)
+        elif ell is not None:
+            res = Ring(
+                self.N,
+                prime_size=self.prime_size[:ell],
+                split_degree=self.split_degree,
+                primes=self.primes,
+            )
+        else:
+            res = Ring(
+                self.N, mask=mask, split_degree=self.split_degree, primes=self.primes
+            )
+        return res
+
+    def is_quotient_ring(self, parent: Ring):
+        return parent.mask & self.mask == self.mask
+
+    def modulus_ratio(self, other_ring: Ring, return_pointer: bool = False):
+        assert other_ring.is_quotient_ring(self), (
+            "other_ring must be a quotient ring of this ring"
+        )
+
+        scaling_mask = self.mask & ~other_ring.mask
+        delta_big_int = math.prod(
+            [
+                self.primes[i]
+                for i, idx in enumerate(self.prime_indices)
+                if (scaling_mask >> idx) & 1
+            ]
+        )
+        if return_pointer:
+            ntt_len = self._ntt_l()
+            delta_arr = [0] * ntt_len
+            for k, idx in enumerate(self.prime_indices):
+                delta_arr[idx] = delta_big_int % self.primes[k]
+            return ffi.new("uint64_t[]", delta_arr)
+        return delta_big_int
+
+    def intersec(self, other: Ring):
+        if self == other:
+            return self
+        if self.ell > other.ell:
+            assert other.is_quotient_ring(self)
+            return other
+        assert self.is_quotient_ring(other)
+        return self
+
+    # generates the RNS primes of size prime_size
+    @staticmethod
+    def gen_prime(rou_order, prime_size, exclude_list=[]):
+        a = ((2**prime_size - 1) // rou_order) | 1
+        a -= 2
+        while True:
+            candidate = a * rou_order + 1
+            if candidate not in exclude_list and is_prime(candidate):
+                return candidate
+            a -= 2
+
+    def gen_primes(self):
+        primes = []
+        for p_size in self.prime_size:
+            primes.append(
+                Ring.gen_prime(
+                    2 * self.N // self.split_degree, p_size, exclude_list=primes
+                )
+            )
+        return primes
+
+    # in this file used to test against the definition of Ring, used in other files when efficiency is not required
+
+    def alloc_polynomial(self):
+        return self.lib.polynomial_new_RNS_polynomial(self.N, self.mask, self.NTT)
+
+    def scalar_array(self, value):
+        ntt_len = self._ntt_l()
+        scale_arr = [0] * ntt_len
+        if isinstance(value, int):
+            for k, idx in enumerate(self.prime_indices):
+                scale_arr[idx] = value % self.primes[k]
+        else:
+            vals = list(value)
+            assert len(vals) == self.ell, f"expected {self.ell} values, got {len(vals)}"
+            for k, idx in enumerate(self.prime_indices):
+                scale_arr[idx] = vals[k]
+        return ffi.new("uint64_t[]", scale_arr)
+
+    def random_element(self, ntt=True):
+        return Polynomial(self).sample_uniform(ntt)
+
+    def random_gaussian_element(self, sigma, ntt=True):
+        return Polynomial(self).sample_gaussian(sigma, ntt)
+
+    def random_exceptional(self, size="minimal", ntt=True):
+        return Polynomial(self).sample_exceptional(size, ntt)
+
 
 from enum import Enum
 
-from _vfhe_native import ffi, lib
-
-from .errors import check
-from .number_theory import crt
-from .registry import RingRegistry
-from .ring import Ring
-
-
-class Domain(Enum):
-    """Representation domain of a polynomial (mirrors ``vfhe_domain``)."""
-
-    COEFF = 0  #: coefficient form
-    EVAL = 1  #: evaluation (NTT) form
+repr = Enum("Polynomial Representation", ["empty", "ntt", "coeff"])
 
 
 class Polynomial:
-    """An element of a :class:`~vfhe.arith.ring.Ring`.
-
-    Wraps the native handle ``self.obj``. The current representation is the
-    :attr:`domain` property (read from C); arithmetic operators accept other
-    polynomials, plain ints (scalar ops), or per-level int lists, and
-    interoperate by duck typing with higher-level ring elements (e.g. RLWE
-    ciphertexts) implementing the reflected operators.
-    """
-
-    def __init__(self, ring: Ring) -> None:
+    def __init__(self, ring: Ring, repr=repr.empty) -> None:
         self.ring = ring
         self.obj = ring.alloc_polynomial()
-
-    def __del__(self) -> None:
-        try:
-            lib.poly_free(self.obj)
-        except Exception:
-            pass  # interpreter shutdown
-
-    # --- state ------------------------------------------------------------------
+        self.repr = repr
 
     @property
-    def rns_mask(self) -> int:
-        """Active-limb mask (read from the native handle)."""
-        return lib.poly_mask(self.obj)
+    def rns_mask(self):
+        return ffi.cast("RNS_Polynomial", self.obj).rns_mask
 
-    @property
-    def domain(self) -> Domain:
-        """Current representation domain (read from the native handle)."""
-        return Domain(lib.poly_domain(self.obj))
-
-    def to_eval(self) -> None:
-        """Convert to evaluation (NTT) form in place. No-op if already there."""
-        check(lib.poly_to_eval(self.obj, self.obj))
-
-    def to_coeff(self) -> None:
-        """Convert to coefficient form in place. No-op if already there."""
-        check(lib.poly_to_coeff(self.obj, self.obj))
-
-    def to_domain(self, domain: Domain) -> None:
-        """Convert to the given :class:`Domain` in place."""
-        if domain == Domain.EVAL:
-            self.to_eval()
-        else:
-            self.to_coeff()
-
-    # --- loading ------------------------------------------------------------------
-
-    def from_array(self, array: list) -> Polynomial:
-        """Load signed integer coefficients (zero-padded to N); ends in EVAL."""
+    def from_array(self, array: list):
         array = list(array) + ([0] * (self.ring.N - len(array)))
-        check(lib.poly_from_int_array(self.obj, ffi.new("uint64_t[]", array)))
+        # int_array_to_RNS reads the buffer as int64_t; wrap signed values into
+        # their two's-complement uint64 form.
+        array = [x & 0xFFFFFFFFFFFFFFFF for x in array]
+        self.ring.lib.int_array_to_RNS(self.obj, ffi.new("uint64_t[]", array))
+        self.repr = repr.ntt
         return self
 
-    def from_bigint_array(self, array: list) -> Polynomial:
-        """Load arbitrary-precision coefficients by reducing per prime; ends in EVAL."""
-        matrix = ffi.new("uint64_t*[]", self.ring.pool_size)
-        rows = []  # keep the row buffers alive across the (copying) C call
+    def from_bigint_array(self, array: list):
+        ntt_len = self.ring._ntt_l()
+        rows = [ffi.NULL] * ntt_len
+        keep = []  # keep row buffers alive across the (copying) C call
         for k, idx in enumerate(self.ring.prime_indices):
             p = self.ring.primes[k]
             row = ffi.new("uint64_t[]", [v % p for v in array])
-            rows.append(row)
-            matrix[idx] = row
-        check(lib.poly_from_residues(self.obj, matrix))
+            keep.append(row)
+            rows[idx] = row
+        matrix = ffi.new("uint64_t*[]", rows)
+        self.ring.lib.array_to_RNS(self.obj, matrix)
+        self.repr = repr.ntt
         return self
 
-    # --- in-place cores (operators build fresh outputs and delegate here) ---------
+    def fast_inverse(self):
+        assert self.ring.split_degree == 1, "fast_inverse requires split_degree=1"
+        assert self.repr == repr.ntt, "fast_inverse requires NTT representation"
+        out = Polynomial(self.ring)
+        rc = self.ring.lib.polynomial_RNS_inverse(out.obj, self.obj)
+        if rc == -1:
+            raise AssertionError("polynomial_RNS_inverse: split_degree != 1")
+        if rc == -2:
+            raise ValueError("polynomial_RNS_inverse: zero slot is not invertible")
+        if rc != 0:
+            raise RuntimeError(f"polynomial_RNS_inverse failed with code {rc}")
+        out.repr = repr.ntt
+        return out
 
-    def multiply(self, in1: Polynomial, in2: Polynomial) -> None:
-        """self = in1 * in2 (both operands must be in EVAL form)."""
-        check(lib.poly_mul(self.obj, in1.obj, in2.obj))
+    def __del__(self) -> None:
+        try:
+            self.ring.lib.free_RNS_polynomial(self.obj)
+        except Exception:
+            pass  # interpreter shutdown
 
-    def add(self, in1: Polynomial, in2: Polynomial) -> None:
-        """self = in1 + in2 (operands in matching domains)."""
-        check(lib.poly_add(self.obj, in1.obj, in2.obj))
+    # def from_int(self, i:int) -> Polynomial:
+    def multiply(self, in1, in2):
+        assert in1.repr == in2.repr == repr.ntt
+        self.ring.lib.polynomial_mul_RNS_polynomial(self.obj, in1.obj, in2.obj)
+        self.repr = in1.repr
 
-    def sub(self, in1: Polynomial, in2: Polynomial) -> None:
-        """self = in1 - in2 (operands in matching domains)."""
-        check(lib.poly_sub(self.obj, in1.obj, in2.obj))
-
-    def negate(self, in1: Polynomial | None = None) -> None:
-        """self = -in1 (defaults to negating in place)."""
+    def negate(self, in1=None):
         if not in1:
             in1 = self
-        lib.poly_negate(self.obj, in1.obj)
+        self.ring.lib.polynomial_RNSc_negate(self.obj, in1.obj)
+        self.repr = in1.repr
 
-    # --- sampling -------------------------------------------------------------------
+    def sub(self, in1, in2):
+        assert in1.repr == in2.repr
+        if in1.repr == repr.ntt:
+            self.ring.lib.polynomial_sub_RNS_polynomial(self.obj, in1.obj, in2.obj)
+        else:
+            self.ring.lib.polynomial_sub_RNSc_polynomial(self.obj, in1.obj, in2.obj)
+        self.repr = in1.repr
 
-    def sample_uniform(self, ntt=True) -> Polynomial:
-        """Fill with uniform residues, tagged EVAL (default) or COEFF."""
-        lib.poly_sample_uniform(
-            self.obj, Domain.EVAL.value if ntt else Domain.COEFF.value
-        )
+    def add(self, in1, in2):
+        assert in1.repr == in2.repr
+        if in1.repr == repr.ntt:
+            self.ring.lib.polynomial_add_RNS_polynomial(self.obj, in1.obj, in2.obj)
+        else:
+            self.ring.lib.polynomial_add_RNSc_polynomial(self.obj, in1.obj, in2.obj)
+        self.repr = in1.repr
+
+    def automorphism(self, gen):
+        assert gen < self.ring.N * 2
+        res = Polynomial(self.ring)
+        self.to_coeff()
+        self.ring.lib.polynomial_RNSc_permute(res.obj, self.obj, gen)
+        res.repr = repr.coeff
+        return res
+
+    def to_NTT(self):
+        if self.repr == repr.ntt:
+            return
+        self.ring.lib.polynomial_RNSc_to_RNS(self.obj, self.obj)
+        self.repr = repr.ntt
+
+    def to_coeff(self):
+        if self.repr == repr.coeff:
+            return
+        self.ring.lib.polynomial_RNS_to_RNSc(self.obj, self.obj)
+        self.repr = repr.coeff
+
+    def to_repr(self, repr):
+        if repr == repr.ntt:
+            self.to_NTT()
+        if repr == repr.coeff:
+            self.to_coeff()
+
+    def sample_uniform(self, ntt=True):
+        self.ring.lib.polynomial_gen_random_RNSc_polynomial(self.obj)
+        self.repr = repr.ntt if ntt else repr.coeff
         return self
 
-    def sample_gaussian(self, sigma, ntt=True) -> Polynomial:
-        """Sample a Gaussian element (COEFF), optionally transforming to EVAL."""
-        lib.poly_sample_gaussian(self.obj, sigma)
+    def sample_gaussian(self, sigma, ntt=True):
+        self.ring.lib.polynomial_gen_gaussian_RNSc_polynomial(self.obj, sigma)
+        self.repr = repr.coeff
         if ntt:
-            self.to_eval()
+            self.to_NTT()
         return self
 
-    def sample_exceptional(self, size="minimal", ntt=True) -> Polynomial:
-        """Sample from the exceptional set: one uniform value per limb, in
-        every evaluation slot."""
-        lib.poly_sample_uniform(self.obj, Domain.EVAL.value)
-        check(lib.poly_broadcast_slot(self.obj, self.obj, 0))
+    def sample_exceptional(self, size="minimal", ntt=True):
+        self.ring.lib.polynomial_gen_random_RNSc_polynomial(self.obj)
+        self.ring.lib.polynomial_RNS_broadcast_slot(self.obj, self.obj, 0)
+        self.repr = repr.ntt
         if not ntt:
             self.to_coeff()
         return self
 
-    # --- ring maps ---------------------------------------------------------------------
-
-    def automorphism(self, gen: int) -> Polynomial:
-        """Apply the Galois automorphism ``X -> X^gen`` (returns COEFF form)."""
-        assert gen < self.ring.N * 2
-        res = Polynomial(self.ring)
-        self.to_coeff()
-        check(lib.poly_permute(res.obj, self.obj, gen))
-        return res
-
-    def fast_inverse(self) -> Polynomial:
-        """Slot-wise inverse via batched inversion (EVAL, split_degree == 1).
-
-        Raises:
-            NotInvertibleError: if any evaluation slot is zero.
-            UnsupportedError: if the ring has ``split_degree != 1``.
-        """
-        self.to_eval()
-        out = Polynomial(self.ring)
-        check(lib.poly_inverse(out.obj, self.obj))
-        return out
-
-    # --- evaluation-slot operations ------------------------------------------------
-
-    def rotate_slots(self, rot: int) -> Polynomial:
-        """Cyclically rotate the evaluation slots of each block left by ``rot``."""
-        self.to_eval()
-        out = Polynomial(self.ring)
-        check(lib.poly_rotate_slots(out.obj, self.obj, rot))
-        return out
-
-    def copy_slot(self, dst: int, src: int) -> Polynomial:
-        """Copy slot ``src`` over slot ``dst`` (within each block), in a copy."""
-        self.to_eval()
-        out = self.copy()
-        check(lib.poly_copy_slot(out.obj, dst, self.obj, src))
-        return out
-
-    def broadcast_slot(self, slot_idx: int) -> Polynomial:
-        """Broadcast slot ``slot_idx`` of each block to the whole block."""
-        self.to_eval()
-        out = Polynomial(self.ring)
-        check(lib.poly_broadcast_slot(out.obj, self.obj, slot_idx))
-        return out
-
-    # --- tower operations -----------------------------------------------------------------
-
-    def base_extend(
-        self, ring: Ring | None = None, out: Polynomial | None = None
-    ) -> Polynomial:
-        """Extend to a larger ring's limb set (fast base extension)."""
+    def base_extend(self, ring: Ring | None = None, out: Polynomial | None = None):
         if out is None and ring is not None:
             out_ = Polynomial(ring)
         elif type(out) is Polynomial:
@@ -200,130 +333,144 @@ class Polynomial:
         return self.lift_to(out=out_)
 
     def lift_to(
-        self, ring: Ring | None = None, out: Polynomial | None = None, plan=None
-    ) -> Polynomial:
-        """Base-convert into ``ring``/``out`` using a (cached) conversion plan."""
+        self, ring: Ring | None = None, out: Polynomial | None = None, params=None
+    ):
         self.to_coeff()
         if out is None and ring is not None:
             out_ = Polynomial(ring)
         elif type(out) is Polynomial:
             out_: Polynomial = out
-        if plan is None:
-            plan = RingRegistry().get_conversion_plan(
+        if params is None:
+            params = NTT_processor_instance.get_conversion_params(
                 self.ring.N, self.ring.split_degree, self.rns_mask, out_.rns_mask
             )
-        check(lib.poly_base_convert(out_.obj, self.obj, plan))
+        self.ring.lib.polynomial_base_conversion_RNSc(out_.obj, self.obj, params)
+        out_.repr = repr.coeff
         return out_
 
     def mod_reduce(
         self, ring: Ring | None = None, out: Polynomial | None = None
     ) -> Polynomial:
-        """Project onto a smaller ring's limb set (natural ring hom)."""
         self.to_coeff()
         assert out is not None or ring is not None, "Must provide ring or out"
         if out is None:
-            assert ring is not None
-            out_ = Polynomial(ring)
+            out_ = Polynomial(ring)  # type: ignore
         else:
             out_: Polynomial = out
         assert out_.ring.is_quotient_ring(self.ring), "Not a quotient ring"
-        check(lib.poly_mod_reduce(out_.obj, self.obj))
+        self.ring.lib.polynomial_RNSc_mod_reduce(out_.obj, self.obj)
+        out_.repr = repr.coeff
         return out_
 
-    def floor_division(self, ring: Ring) -> Polynomial:
-        """In-place floor division by the primes dropped when moving to ``ring``."""
+    # floor division, in-place
+    def floor_division(self, ring: Ring):
         assert ring.ell < self.ring.ell, "new ring is not smaller than the current one"
         assert ring.is_quotient_ring(self.ring), (
             "Not a quotient ring or contiguous RNS-component subset"
         )
         self.to_coeff()
         divide_mask = self.rns_mask & ~ring.mask
-        check(lib.poly_div_floor(self.obj, divide_mask))
+        self.ring.lib.polynomial_floor_division_RNSc_wo_free(self.obj, divide_mask)
         self.ring = ring
         return self
 
-    def round_division(self, ring: Ring) -> Polynomial:
-        """In-place rounding division by the primes dropped moving to ``ring``."""
+    # round division, in-place
+    def round_division(self, ring: Ring):
         assert ring.ell < self.ring.ell, "new ring is not smaller than the current one"
         assert ring.is_quotient_ring(self.ring), (
             "Not a quotient ring or contiguous RNS-component subset"
         )
         self.to_coeff()
         divide_mask = self.rns_mask & ~ring.mask
-        check(lib.poly_div_round(self.obj, divide_mask))
+        self.ring.lib.polynomial_round_division_RNSc_wo_free(self.obj, divide_mask)
         self.ring = ring
         return self
 
     def scaled_lift(self, ring: Ring, delta=None) -> Polynomial:
-        """Lift to a larger ring scaled by the modulus ratio (optionally with
-        precomputed per-slot factors ``delta``)."""
+        """Lifts the polynomial to a larger ring and scales it by the delta factor."""
         self.to_coeff()
         out = Polynomial(ring)
-        check(
-            lib.poly_scaled_lift(
-                out.obj, self.obj, delta if delta is not None else ffi.NULL
-            )
+        self.ring.lib.polynomial_RNSc_scaled_lift(
+            out.obj, self.obj, delta if delta is not None else ffi.NULL
         )
+        out.repr = repr.coeff
         return out
 
-    # --- hashing --------------------------------------------------------------------------
+    def __eq__(self, value) -> bool:
+        if type(value) is int:
+            self.to_coeff()
+            return all([all([value == i[0]] + [j == 0 for j in i[1:]]) for i in self])
+        elif type(value) is list:
+            self.to_coeff()
+            s_list = list(self)
+            return all(
+                [
+                    all([value[i] == s_list[i][0]] + [j == 0 for j in s_list[i][1:]])
+                    for i in range(self.ring.ell)
+                ]
+            )
+        else:
+            self.to_repr(value.repr)
+            return bool(self.ring.lib.polynomial_eq(self.obj, value.obj))
 
-    def get_hash(self) -> list[int]:
-        """BLAKE3 digest (4 words) of the canonical (EVAL) representation."""
-        self.to_eval()
-        result = ffi.new("uint64_t[4]")
-        lib.poly_digest(result, self.obj)
-        return list(result)
+    def __repr__(self) -> str:
+        return str(list(self))
 
     def get_hash_pointer(self):
-        """Digest as a C-owned ``uint64_t[4]`` pointer (caller-side lifetime)."""
-        self.to_eval()
-        return lib.poly_digest_alloc(self.obj)
+        self.to_NTT()
+        return self.ring.lib.polynomial_RNS_get_hash_p(self.obj)
+
+    def get_hash(self):
+        self.to_NTT()
+        result = ffi.new("uint64_t[4]")
+        self.ring.lib.polynomial_RNS_get_hash(result, self.obj)
+        return [result[i] for i in range(4)]
 
     def __hash__(self):
         raise TypeError(
-            "not a Python hashable object; call polynomial.get_hash() for a cryptographic hash"
+            "not a Python hashable object. Call polynomial.get_hash() for cryptographic hash"
         )
 
-    # --- data access -------------------------------------------------------------------------
+    # for compatibility with list, not an efficient iterator
+    def __iter__(self):
+        self.to_coeff()
+        out = self.get_coeff_matrix(repr=repr.coeff)
+        return iter(out)
 
-    def get_coeff_matrix(self, domain: Domain = Domain.COEFF) -> list[list[int]]:
-        """Residue matrix (``ell`` x ``N``) in natural coefficient order.
-
-        Converts to ``domain`` first; undoes the engine's split-block layout.
-        """
-        self.to_domain(domain)
-        mod_mask = self.ring.split_degree - 1
-        poly_size = self.ring.N // self.ring.split_degree
-        out = []
+    def get_coeff_matrix(self, repr=repr.coeff):
+        if self.repr != repr:
+            self.to_repr(repr)
+        p = ffi.cast("RNS_Polynomial", self.obj)
+        values = []
         for idx in self.ring.prime_indices:
-            row = lib.poly_limb_data(self.obj, idx)
-            c = [row[k] for k in range(self.ring.N)]
+            row = p.coeffs[idx]
+            values.append([row[k] for k in range(self.ring.N)])
+        modMask = self.ring.split_degree - 1
+        poly_size = self.ring.N // self.ring.split_degree
+        c = values
+        out = []
+        for i in range(self.ring.ell):
             out_i = [0] * self.ring.N
             for j in range(self.ring.N):
-                out_i[j] = c[(j & mod_mask) * poly_size + j // self.ring.split_degree]
-            out.append(out_i)
+                out_i[j] = c[i][(j & modMask) * poly_size + j // self.ring.split_degree]
+            out += [out_i]
         return out
 
-    def from_coeff_matrix(self, matrix, domain: Domain = Domain.COEFF) -> Polynomial:
-        """Load a residue matrix written in natural coefficient order.
-
-        The caller asserts the data's representation via ``domain`` (this is
-        the expert path around the engine's domain tracking).
-        """
-        mod_mask = self.ring.split_degree - 1
+    def from_coeff_matrix(self, matrix, repr=repr.coeff):
+        p = ffi.cast("RNS_Polynomial", self.obj)
+        modMask = self.ring.split_degree - 1
         poly_size = self.ring.N // self.ring.split_degree
         for k, idx in enumerate(self.ring.prime_indices):
-            row = lib.poly_limb_data(self.obj, idx)
+            row = p.coeffs[idx]
             for j in range(self.ring.N):
-                row[(j & mod_mask) * poly_size + j // self.ring.split_degree] = int(
+                row[(j & modMask) * poly_size + j // self.ring.split_degree] = int(
                     matrix[k][j]
                 )
-        lib.poly_assume_domain(self.obj, domain.value)
+        self.repr = repr
         return self
 
+    # returns the list of coefficients of a Polynomial element
     def get_polynomial(self, signed: bool = False) -> list:
-        """Reconstruct the integer coefficients via CRT (optionally signed)."""
         self.to_coeff()
         rns = list(self)
         if self.ring.ell == 1:
@@ -335,15 +482,21 @@ class Polynomial:
             ]
         if not signed:
             return unsigned_res
-        return [
-            min(i, -(self.ring.q_l - i), key=lambda x: abs(x)) for i in unsigned_res
-        ]
+        else:
+            return [
+                min(i, -(self.ring.q_l - i), key=lambda x: abs(x)) for i in unsigned_res
+            ]
+
+    def copy(self) -> Polynomial:
+        res = Polynomial(self.ring)
+        self.ring.lib.polynomial_copy_RNS_polynomial(res.obj, self.obj)
+        res.repr = self.repr
+        return res
 
     def decompose(self, base, small=False):
-        """Digit-decompose the CRT-reconstructed coefficients in ``2^base``."""
         res = []
         lst = self.get_polynomial()
-        for _ in range(self.ring.bit_size // base):
+        for j in range(self.ring.bit_size // base):
             dec = []
             for i in range(len(lst)):
                 dec.append(lst[i] & ((1 << base) - 1))
@@ -351,158 +504,134 @@ class Polynomial:
             res.append(Polynomial(self.ring).from_array(dec))
         return res
 
-    def copy(self) -> Polynomial:
-        """Deep copy (same ring, same mask/domain/data)."""
+    def __mod__(self, value: int):
+        self.to_coeff()
         res = Polynomial(self.ring)
-        lib.poly_copy(res.obj, self.obj)
+        value_idx = self.ring.primes.index(value)
+        self.ring.lib.polynomial_RNSc_mod_reduce_lifted(res.obj, self.obj, value_idx)
         return res
 
     def __copy__(self) -> Polynomial:
         return self.copy()
 
-    def __iter__(self):
-        """Iterate residue rows (converts to COEFF; not an efficient path)."""
+    def __itruediv__(self, value) -> Polynomial:
         self.to_coeff()
-        return iter(self.get_coeff_matrix(domain=Domain.COEFF))
-
-    def __repr__(self) -> str:
-        return str(list(self))
-
-    # --- operators ---------------------------------------------------------------------------
-
-    def __eq__(self, value: object) -> bool:
-        if isinstance(value, int):
-            self.to_coeff()
-            return all([all([value == i[0]] + [j == 0 for j in i[1:]]) for i in self])
-        elif isinstance(value, list):
-            self.to_coeff()
-            s_list = list(self)
-            return all(
-                [
-                    all([value[i] == s_list[i][0]] + [j == 0 for j in s_list[i][1:]])
-                    for i in range(self.ring.ell)
-                ]
-            )
-        assert isinstance(value, Polynomial)
-        self.to_domain(value.domain)
-        return bool(lib.poly_eq(self.obj, value.obj))
+        value_idx = self.ring.primes.index(value)
+        self.ring.lib.polynomial_round_division_RNSc_wo_free(self.obj, 1 << value_idx)
+        return self
 
     def __mul__(self, other) -> Polynomial:
         if type(other) is Polynomial:
-            self.to_eval()
-            other.to_eval()
+            self.to_NTT()
+            other.to_NTT()
             res = Polynomial(self.ring.intersec(other.ring))
             res.multiply(self, other)
         elif type(other) is int:
             if other == 0:
-                return 0  # type: ignore[return-value]  # scalar 0 annihilates to int 0
+                return 0  # type: ignore
             if other == 1:
                 return self.copy()
             res = Polynomial(self.ring)
-            lib.poly_scale(res.obj, self.obj, other)
+            self.ring.lib.polynomial_scale_RNSc_polynomial(res.obj, self.obj, other)
+            res.repr = self.repr
         elif type(other) is list:
             res = Polynomial(self.ring)
             assert len(other) == self.ring.ell
-            lib.poly_scale_vec(res.obj, self.obj, self.ring.scalar_array(other))
+            self.ring.lib.polynomial_scale_RNS_polynomial_RNS(
+                res.obj, self.obj, self.ring.scalar_array(other)
+            )
+            res.repr = self.repr
         else:
-            raise TypeError(f"cannot multiply Polynomial by {type(other)}")
+            print(type(other))
+            assert False, "not implemented"
         return res
 
-    def __rmul__(self, other) -> Polynomial:
+    def __rmul__(self, other):
         return self.__mul__(other)
 
-    def __imul__(self, other) -> Polynomial:
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __rsub__(self, other):
+        return (-self) + other
+
+    def __imul__(self, other):
         if type(other) is Polynomial:
-            self.to_eval()
-            other.to_eval()
-            check(lib.poly_mul_into(self.obj, other.obj))
+            self.to_NTT()
+            other.to_NTT()
+            self.ring.lib.polynomial_multo_RNS_polynomial(self.obj, other.obj)
         elif type(other) is int:
             if other == 0:
-                return 0  # type: ignore[return-value]  # scalar 0 annihilates to int 0
+                return 0
             if other == 1:
                 return self
             assert other < 2**self.ring.smallest_prime  # large scaling not implemented
-            lib.poly_scale(self.obj, self.obj, other)
+            self.ring.lib.polynomial_scale_RNSc_polynomial(self.obj, self.obj, other)
         else:
-            raise TypeError(f"cannot multiply Polynomial by {type(other)}")
+            print(type(other))
+            assert False  # not implemented
         return self
 
-    def __add__(self, other) -> Polynomial:
+    def __add__(self, other):
         if type(other) is int:
             if other == 0:
                 return self.copy()
-            res = Polynomial(self.ring)
-            check(lib.poly_add_scalar(res.obj, self.obj, other))
-            return res
-        if self.domain != other.domain:
-            self.to_eval()
-            other.to_eval()
+            else:
+                res = Polynomial(self.ring)
+                if self.repr == repr.coeff:
+                    self.ring.lib.polynomial_RNSc_add_integer(res.obj, self.obj, other)
+                else:
+                    self.ring.lib.polynomial_RNS_add_integer(res.obj, self.obj, other)
+                res.repr = self.repr
+                return res
+        if self.repr != other.repr:
+            self.to_NTT()
+            other.to_NTT()
         res = Polynomial(self.ring.intersec(other.ring))
         res.add(self, other)
         return res
 
-    def __radd__(self, other) -> Polynomial:
-        return self.__add__(other)
-
-    def __iadd__(self, other) -> Polynomial:
+    def __iadd__(self, other):
         if type(other) is int:
             if other == 0:
                 return self
-            check(lib.poly_add_scalar(self.obj, self.obj, other))
-            return self
-        if self.domain != other.domain:
-            self.to_eval()
-            other.to_eval()
+            else:
+                assert False  # not implemented
+        if self.repr != other.repr:
+            self.to_NTT()
+            other.to_NTT()
         if type(other) is Polynomial:
             self.add(self, other)
             return self
-        # Duck-typed higher-level element (e.g. RLWE): delegate to it.
-        return other + self
+        else:  # assume it's rlwe
+            return other + self
 
-    def __sub__(self, other) -> Polynomial:
-        if type(other) is int:
-            if other == 0:
-                return self.copy()
-            return self.__add__(-other)
-        if self.domain != other.domain:
-            self.to_eval()
-            other.to_eval()
-        res = Polynomial(self.ring.intersec(other.ring))
-        res.sub(self, other)
-        return res
-
-    def __rsub__(self, other) -> Polynomial:
-        return (-self) + other
-
-    def __isub__(self, other) -> Polynomial:
+    def __isub__(self, other):
         if type(other) is int:
             if other == 0:
                 return self
-            return self.__iadd__(-other)
-        if self.domain != other.domain:
-            self.to_eval()
-            other.to_eval()
+            else:
+                assert False  # not implemented
+        if self.repr != other.repr:
+            self.to_NTT()
+            other.to_NTT()
         self.sub(self, other)
         return self
 
-    def __neg__(self) -> Polynomial:
+    def __neg__(self):
         res = Polynomial(self.ring)
         res.negate(self)
         return res
 
-    def __mod__(self, value: int) -> Polynomial:
-        """Lift the residue of prime ``value`` into all limbs (COEFF result)."""
-        self.to_coeff()
-        res = Polynomial(self.ring)
-        value_idx = self.ring.primes.index(value)
-        check(
-            lib.poly_lift_residue(res.obj, self.obj, self.ring.prime_indices[value_idx])
-        )
+    def __sub__(self, other):
+        if type(other) is int:
+            if other == 0:
+                return self.copy()
+            else:
+                assert False  # not implemented
+        if self.repr != other.repr:
+            self.to_NTT()
+            other.to_NTT()
+        res = Polynomial(self.ring.intersec(other.ring))
+        res.sub(self, other)
         return res
-
-    def __itruediv__(self, value) -> Polynomial:
-        """In-place rounding division by a single limb prime ``value``."""
-        self.to_coeff()
-        value_idx = self.ring.primes.index(value)
-        check(lib.poly_div_round(self.obj, 1 << self.ring.prime_indices[value_idx]))
-        return self

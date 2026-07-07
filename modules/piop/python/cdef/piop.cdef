@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the piop engine: dense multilinear-extension kernels
+// (piop/c/src/mle.c, prototyped in piop/c/include/mle.h). Polynomial handles
+// and handle-arrays are passed as `void *` (cffi converts any pointer/array).
+
+void mle_dense_poly_add(void *out, void *in1, void *in2, uint64_t size);
+void mle_dense_poly_sub(void *out, void *in1, void *in2, uint64_t size);
+void mle_dense_poly_scale(void *out, void *in, void *scale, uint64_t size);
+void mle_dense_poly_scale_scalar(void *out, void *in, uint64_t scale, uint64_t size);
+void mle_dense_poly_evaluate(void *out, void *in, void *a, uint64_t num_vars, uint64_t eval_var_idx);
+void mle_dense_poly_evaluate_scalar(void *out, void *in, uint64_t a, uint64_t num_vars, uint64_t eval_var_idx);

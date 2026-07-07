@@ -30,6 +30,7 @@ SIMD_FLAGS = [
     "-mavx512vl",
     "-mavx2",
     "-maes",
+    "-mrdrnd",
 ]
 
 # Only the module sources we own -- vendored BLAKE3 has its own SIMD story.

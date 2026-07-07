@@ -14,6 +14,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Minimum coverage the `coverage` job enforces. Intentionally low for now --
+# raise them over time. Override without editing this file via repository
+# Actions variables (Settings -> Secrets and variables -> Actions -> Variables):
+# COV_MIN_PY / COV_MIN_C_LINE / COV_MIN_C_BRANCH.
+env:
+  COV_MIN_PY: ${{ vars.COV_MIN_PY || '50' }}
+  COV_MIN_C_LINE: ${{ vars.COV_MIN_C_LINE || '40' }}
+  COV_MIN_C_BRANCH: ${{ vars.COV_MIN_C_BRANCH || '35' }}
+
 jobs:
   lint:
     name: Lint (Python + C)
@@ -37,8 +46,9 @@ jobs:
           find modules \( -name '*.c' -o -name '*.h' \) -print0 \
             | xargs -0 clang-format --dry-run --Werror
 
-  test:
-    name: Test ${{ matrix.os }} / py${{ matrix.python }}
+  # Fast tests gate the heavy ones: the complete suite only runs if this passes.
+  test-fast:
+    name: Fast tests ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -58,8 +68,86 @@ jobs:
         run: make build
       - name: C unit tests (Unity)
         run: python scripts/run_c_tests.py
-      - name: Python tests (coverage in logs)
-        run: pytest -q --cov=vfhe --cov-report=term-missing
+      - name: Python fast tests
+        run: pytest -q
+
+  # Slower end-to-end suite (FHE bootstraps); runs only after the fast gate.
+  test-complete:
+    name: Complete tests ${{ matrix.os }} / py${{ matrix.python }}
+    needs: [test-fast]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade "pip>=25.1"
+      - run: pip install --group dev
+      - name: Build the native extension (+ proto bindings)
+        run: make build
+      - name: Complete suite (heavy end-to-end bootstraps)
+        run: pytest -q --complete -m complete
+
+  # Coverage for BOTH languages from a single run (no external service, no
+  # token): the gcov-instrumented extension is exercised by the COMPLETE Python
+  # suite (incl. the FHE bootstraps, so the deep GP25/CGGI kernels are counted),
+  # yielding Python coverage (coverage.py) and C coverage (.gcda -> gcovr) at
+  # once. -O0 + gcov makes this slow (a few minutes) -- deliberately thorough, to
+  # gate merges. Results are gated against the COV_MIN_* floors, summarised in
+  # the run, and uploaded as artifacts.
+  coverage:
+    name: Coverage (Python + C)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade "pip>=25.1"
+      - run: pip install --group dev
+      - name: Build the C instrumented for gcov
+        run: VFHE_COVERAGE=1 make build
+      - name: Run the complete suite (Python coverage + exercises the instrumented C)
+        run: pytest -q --complete --cov=vfhe --cov-report=xml:coverage-python.xml
+      - name: Collect C coverage
+        run: >
+          gcovr --root . --filter 'modules/.*/c/src/'
+          --xml coverage-c.xml --txt coverage-c.txt .generated/cov-build
+      - name: Coverage summary
+        if: always()
+        run: |
+          {
+            echo "## Coverage";
+            echo "### Python (floor ${COV_MIN_PY}%)";
+            echo '```'; python -m coverage report 2>/dev/null || true; echo '```';
+            echo "### C (floor: line ${COV_MIN_C_LINE}%, branch ${COV_MIN_C_BRANCH}%)";
+            echo '```'; cat coverage-c.txt 2>/dev/null || true; echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            coverage-python.xml
+            coverage-c.xml
+            coverage-c.txt
+      - name: Enforce coverage floors
+        run: |
+          python -m coverage report --fail-under="$COV_MIN_PY"
+          gcovr --root . --filter 'modules/.*/c/src/' \
+            --fail-under-line "$COV_MIN_C_LINE" \
+            --fail-under-branch "$COV_MIN_C_BRANCH" \
+            .generated/cov-build
 
   simd-compile:
     name: x86 AVX-512 compile-check
@@ -73,8 +161,11 @@ jobs:
           python-version: "3.12"
       - run: PYTHONPATH=scripts python scripts/check_simd_build.py
 
+  # The package is published as an sdist only (no wheels): every install compiles
+  # from source and tunes to the target CPU. Here we build the sdist, install it
+  # (which compiles), and run the end-to-end smoke test against it.
   package-smoke:
-    name: Build sdist + wheel + import
+    name: Build sdist + install from source
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -83,21 +174,39 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Build distributions
+      - name: Build sdist
         run: |
           python -m pip install --upgrade "pip>=25.1" build twine
-          python -m build
+          python -m build --sdist
       - name: Check metadata
         run: twine check dist/*
-      - name: Verify BLAKE3 sources shipped inside the sdist
+      - name: Verify the C + BLAKE3 sources shipped inside the sdist
         run: |
           tar tzf dist/*.tar.gz | grep -q 'external/blake3/c/blake3.c' \
             || { echo "::error::sdist is missing BLAKE3 sources"; exit 1; }
-      - name: Install the built wheel and smoke-test it
+          tar tzf dist/*.tar.gz | grep -q 'modules/arith/c/src/ntt.c' \
+            || { echo "::error::sdist is missing the module C sources"; exit 1; }
+      - name: Install from the sdist (compiles) and smoke-test it
         run: |
-          python -m pip install dist/*.whl
-          cd /tmp && python "$GITHUB_WORKSPACE/scripts/smoke_import.py"
+          python -m pip install dist/*.tar.gz
+          cd /tmp && python "$GITHUB_WORKSPACE/scripts/smoke.py"
       - uses: actions/upload-artifact@v7
         with:
-          name: dist-smoke
-          path: dist/*
+          name: sdist
+          path: dist/*.tar.gz
+
+  # Single aggregate gate: green only if every job above succeeded. Make THIS the
+  # one required status check in branch protection -- then the matrix (OS × Python)
+  # can change without editing the protection rule. `if: always()` so it runs even
+  # when a dependency fails, and it reports failure in that case.
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs: [lint, test-fast, test-complete, coverage, simd-compile, package-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All CI jobs must have succeeded
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::One or more CI jobs did not succeed: ${{ join(needs.*.result, ', ') }}"
+          exit 1
