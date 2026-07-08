@@ -15,11 +15,23 @@ description = "A library for verifiable fully homomorphic encryption."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+# `authors` is names-only on purpose: PEP 621 routes name+email entries into the
+# structured `Author-email` field, of which PyPI's web UI renders only the FIRST
+# entry. Name-only entries populate the plain `Author` field, which PyPI shows
+# verbatim -- so all four authors appear. The same people are mirrored into
+# `maintainers` WITH emails, so every contact address is preserved (and shown in
+# PyPI's "Maintainers" section).
 authors = [
+    { name = "Daniele Cozzo" },
+    { name = "Antonio Guimaraes" },
+    { name = "Dario Fiore" },
+    { name = "Alin-Petru Rosu" },
+]
+maintainers = [
     { name = "Daniele Cozzo", email = "daniele.cozzo@imdea.org" },
     { name = "Antonio Guimaraes", email = "antonio.guimaraes@imdea.org" },
     { name = "Dario Fiore", email = "dario.fiore@imdea.org" },
-    { name = "Alin-Petru Rosu", email = "alin-petru.rosu@imdea.org" }
+    { name = "Alin-Petru Rosu", email = "alin-petru.rosu@imdea.org" },
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -54,6 +66,7 @@ dev = [
     "pytest>=7.0",
     "pytest-cov",
     "gcovr",  # C coverage (gcov) for the CI coverage-c job
+    "genbadge[coverage]",  # renders the coverage SVG badges in the CI coverage job
     # Runtime dep needed by the CKKS encoding tests (the dev workflow builds the
     # extension in place rather than pip-installing, so runtime deps are listed here).
     "mpmath>=1.3",

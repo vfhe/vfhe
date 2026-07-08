@@ -6,6 +6,11 @@
 int vfhe_build_is_portable(void);
 int vfhe_cpu_has_avx512ifma(void);
 
+// Test-only: pin the PRNG to a reproducible stream so the probabilistic FHE
+// bootstrap tests (test_sab, test_functional_bootstrap) are deterministic.
+void vfhe_prng_set_deterministic_seed(uint64_t seed);
+void vfhe_prng_clear_deterministic_seed(void);
+
 // libc free, to release safe_aligned_malloc'd (posix_memalign, 64B) buffers that
 // Python owns and hands to the AVX-512 kernels. (safe_aligned_malloc: arith.cdef)
 void free(void *ptr);
