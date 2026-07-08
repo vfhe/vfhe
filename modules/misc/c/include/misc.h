@@ -37,6 +37,11 @@ extern "C"
     int vfhe_build_is_portable(void);  // 1 if compiled with PORTABLE_BUILD
     int vfhe_cpu_has_avx512ifma(void); // 1 if THIS CPU supports AVX-512 IFMA
 
+    // Test-only: pin the PRNG to a reproducible stream so probabilistic FHE
+    // tests are deterministic. Production uses hardware entropy (never calls these).
+    void vfhe_prng_set_deterministic_seed(uint64_t seed);
+    void vfhe_prng_clear_deterministic_seed(void);
+
 #ifdef __cplusplus
 }
 #endif

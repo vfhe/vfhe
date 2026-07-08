@@ -1,0 +1,26 @@
+{
+  "title": "vfhe: a library for verifiable fully homomorphic encryption",
+  "description": "A library for verifiable fully homomorphic encryption (FHE): C compute kernels exposed to Python through a single CFFI extension.",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "Apache-2.0",
+  "creators": [
+    { "name": "Cozzo, Daniele", "affiliation": "IMDEA Software Institute" },
+    { "name": "Guimarães, Antonio", "affiliation": "IMDEA Software Institute" },
+    { "name": "Fiore, Dario", "affiliation": "IMDEA Software Institute" },
+    { "name": "Roșu, Alin-Petru", "affiliation": "IMDEA Software Institute" }
+  ],
+  "keywords": [
+    "fully homomorphic encryption",
+    "verifiable computation",
+    "FHE",
+    "cryptography"
+  ],
+  "related_identifiers": [
+    {
+      "relation": "isSupplementTo",
+      "scheme": "url",
+      "identifier": "https://github.com/vfhe/vfhe"
+    }
+  ]
+}

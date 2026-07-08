@@ -1,0 +1,45 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below (and the archived release DOI where relevant)."
+title: vfhe
+abstract: "A library for verifiable fully homomorphic encryption (vFHE)."
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/vfhe/vfhe"
+url: "https://github.com/vfhe/vfhe"
+keywords:
+  - fully homomorphic encryption
+  - verifiable computation
+  - FHE
+  - cryptography
+authors:
+  - family-names: Cozzo
+    given-names: Daniele
+    affiliation: "IMDEA Software Institute"
+    orcid: "https://orcid.org/0000-0001-5110-6639"
+  - family-names: Guimarães
+    given-names: Antonio
+    affiliation: "IMDEA Software Institute"
+  - family-names: Fiore
+    given-names: Dario
+    affiliation: "IMDEA Software Institute"
+  - family-names: Roșu
+    given-names: Alin-Petru
+    affiliation: "IMDEA Software Institute"
+    orcid: "https://orcid.org/0009-0005-8537-7265"
+
+# When a paper exists, uncomment and fill this in to have tools cite it instead:
+# preferred-citation:
+#   type: article  # or: conference-paper
+#   title: "Title of the accompanying paper"
+#   year: 2026
+#   doi: "10.XXXX/XXXXXXX"
+#   journal: "Venue / journal"  # or use collection-title for proceedings
+#   authors:
+#     - family-names: Cozzo
+#       given-names: Daniele
+#     - family-names: Guimarães
+#       given-names: Antonio
+#     - family-names: Fiore
+#       given-names: Dario
+#     - family-names: Roșu
+#       given-names: Alin-Petru

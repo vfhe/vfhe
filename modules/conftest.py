@@ -40,6 +40,24 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_complete)
 
 
+@pytest.fixture
+def deterministic_prng():
+    """Pin the C PRNG to a fixed seed for reproducible probabilistic tests.
+
+    The heavy FHE-bootstrap tests assert exact decryption over keys/noise drawn
+    from the hardware-seeded C PRNG, which carries a small but nonzero
+    decryption-failure probability -> intermittent CI failures. A test that
+    takes this fixture calls it with a seed to make its run reproducible; the
+    seed is discarded afterwards so every other test keeps using hardware
+    entropy. Yields the seeding callable.
+    """
+    from vfhe.misc.libvfhe import lib
+
+    lib.vfhe_prng_clear_deterministic_seed()  # start from a known (hardware) state
+    yield lib.vfhe_prng_set_deterministic_seed
+    lib.vfhe_prng_clear_deterministic_seed()
+
+
 @pytest.fixture(autouse=True)
 def _reset_ntt_registry():
     """Give every test a clean NTT prime pool.

@@ -2,28 +2,37 @@
 name: Release
 
 on:
-  push:
-    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
   workflow_dispatch:
     inputs:
+      target:
+        description: "Publish target"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
       version:
-        description: "Version to build and publish to PyPI (e.g. 0.0.1)"
-        required: true
+        description: "RC version for testpypi (e.g. 0.0.1rc0). Ignored for pypi (taken from the tag)."
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 env:
-  SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VFHE: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
+  SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VFHE: ${{ inputs.target == 'pypi' && github.ref_name || inputs.version }}
 
-# vfhe ships as an sdist only -- no wheels. Every install compiles from source
-# and tunes to the target CPU (see native/build_ffi.py); the release therefore
-# builds and publishes just the source distribution.
 jobs:
   sdist:
     name: Build sdist
     runs-on: ubuntu-latest
     steps:
+      - name: Validate inputs
+        run: |
+          if [ "${{ inputs.target }}" = "testpypi" ] && [ -z "${{ inputs.version }}" ]; then
+            echo "::error::target=testpypi needs a 'version' input (e.g. 0.0.1rc0)."; exit 1
+          fi
+          if [ "${{ inputs.target }}" = "pypi" ] && [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::error::target=pypi must be run from a version tag (Use workflow from -> the tag)."; exit 1
+          fi
       - uses: actions/checkout@v7
         with:
           submodules: recursive
@@ -61,9 +70,9 @@ jobs:
           path: vfhe-sbom.json
 
   publish-testpypi:
-    name: Publish to TestPyPI (auto on tag)
+    name: Publish RC to TestPyPI
     needs: [sdist, sbom]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: inputs.target == 'testpypi'
     runs-on: ubuntu-latest
     environment:
       name: testpypi
@@ -87,9 +96,9 @@ jobs:
           skip-existing: true
 
   publish-pypi:
-    name: Publish to PyPI (manual) + GitHub Release
+    name: Publish release to PyPI (manual, from tag) + GitHub Release
     needs: [sdist, sbom]
-    if: github.event_name == 'workflow_dispatch'
+    if: inputs.target == 'pypi'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -115,7 +124,7 @@ jobs:
       - name: Create GitHub Release with the artifacts + SBOM
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.version }}
+          tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           files: |
             dist/*

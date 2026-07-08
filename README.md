@@ -1,5 +1,13 @@
 # vfhe
 
+[![PyPI](https://img.shields.io/pypi/v/vfhe)](https://pypi.org/project/vfhe/)
+[![Python versions](https://img.shields.io/pypi/pyversions/vfhe)](https://pypi.org/project/vfhe/)
+[![CI](https://github.com/vfhe/vfhe/actions/workflows/ci.yml/badge.svg)](https://github.com/vfhe/vfhe/actions/workflows/ci.yml)
+[![python coverage](https://raw.githubusercontent.com/vfhe/vfhe/badges/coverage-python.svg)](https://github.com/vfhe/vfhe/actions/workflows/ci.yml)
+[![c coverage](https://raw.githubusercontent.com/vfhe/vfhe/badges/coverage-c.svg)](https://github.com/vfhe/vfhe/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/vfhe/vfhe/badge)](https://securityscorecards.dev/viewer/?uri=github.com/vfhe/vfhe)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Verifiable Fully Homomorphic Encryption library — C compute kernels exposed to
 Python through a single CFFI extension.
 
@@ -178,8 +186,8 @@ the resulting `.gcda`. `-O0` + gcov makes it slow (a few minutes) — deliberate
 to gate merges. It renders a summary on the run page, uploads the reports as
 artifacts, and **fails if either drops below a floor**. The floors are
 intentionally low for now and set by the `COV_MIN_PY` / `COV_MIN_C_LINE` /
-`COV_MIN_C_BRANCH` workflow env vars (override per-repo via Actions *Variables* —
-no code edit).
+`COV_MIN_C_BRANCH` values in the workflow's `env:` block — raise them there as
+coverage improves.
 
 Extra, deeper checks:
 
@@ -314,3 +322,19 @@ future hand-written per-arch kernels.
 Because a source build is `-march=native`, it targets **this** machine — never
 copy one to a different CPU; set `VFHE_PORTABLE=1` if you must build somewhere
 other than where it will run.
+
+---
+
+## Citation
+
+If you use vfhe in academic work, please cite the software using
+[`CITATION.cff`](CITATION.cff) — GitHub renders a **"Cite this repository"**
+button from it — and the archived release DOI where relevant. (When a paper is
+published, we'll add it as the preferred citation.)
+
+Once a release is archived on [Zenodo](https://zenodo.org) (enable the
+GitHub↔Zenodo integration, then cut a GitHub release), add the DOI badge here:
+
+```markdown
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
+```
