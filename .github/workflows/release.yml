@@ -10,7 +10,7 @@ on:
         options: [testpypi, pypi]
         default: testpypi
       version:
-        description: "RC version for testpypi (e.g. 0.0.1rc0). Ignored for pypi (taken from the tag)."
+        description: "RC version for testpypi (e.g. 0.0.1rc1). Ignored for pypi (taken from the tag)."
         required: false
         default: ""
 
@@ -28,7 +28,7 @@ jobs:
       - name: Validate inputs
         run: |
           if [ "${{ inputs.target }}" = "testpypi" ] && [ -z "${{ inputs.version }}" ]; then
-            echo "::error::target=testpypi needs a 'version' input (e.g. 0.0.1rc0)."; exit 1
+            echo "::error::target=testpypi needs a 'version' input (e.g. 0.0.1rc1)."; exit 1
           fi
           if [ "${{ inputs.target }}" = "pypi" ] && [ "${{ github.ref_type }}" != "tag" ]; then
             echo "::error::target=pypi must be run from a version tag (Use workflow from -> the tag)."; exit 1

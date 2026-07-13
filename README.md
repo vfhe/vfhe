@@ -10,6 +10,9 @@
 
 The VFHE library — A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques.
 
+> [!WARNING]
+This is a pre-release version of the library and is subject to breaking changes.
+
 ---
 
 ## Modules
