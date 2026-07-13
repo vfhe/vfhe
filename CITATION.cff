@@ -1,15 +1,17 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below (and the archived release DOI where relevant)."
 title: vfhe
-abstract: "A library for verifiable fully homomorphic encryption (vFHE)."
+abstract: "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques."
 type: software
 license: Apache-2.0
 repository-code: "https://github.com/vfhe/vfhe"
 url: "https://github.com/vfhe/vfhe"
 keywords:
+  - zero knowledge proofs
   - fully homomorphic encryption
   - verifiable computation
   - FHE
+  - ZKP
   - cryptography
 authors:
   - family-names: Cozzo

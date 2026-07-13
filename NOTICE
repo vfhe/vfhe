@@ -1,5 +1,5 @@
-vfhe — Verifiable Fully Homomorphic Encryption
-Copyright the vfhe authors.
+The VFHE library
+Copyright the VFHE authors.
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
 This product bundles third-party software, vendored as git submodules under

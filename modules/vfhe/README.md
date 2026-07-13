@@ -1,3 +1,3 @@
 # vfhe.vfhe
 
-Top-level assembly that ties the modules into verifiable FHE (the package root).
+Top-level assembly that ties the modules into VFHE (the package root).
