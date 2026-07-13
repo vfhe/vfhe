@@ -8,8 +8,7 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/vfhe/vfhe/badge)](https://securityscorecards.dev/viewer/?uri=github.com/vfhe/vfhe)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Verifiable Fully Homomorphic Encryption library — C compute kernels exposed to
-Python through a single CFFI extension.
+The VFHE library — A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques.
 
 ---
 
@@ -22,11 +21,11 @@ modules, no Python symbols).
 
 | Module | Kind | What it provides |
 |---|---|---|
-| `arith` | Python-facing | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: incomplete NTT, `Ring`/`Polynomial`, CKKS complex encoding, multiprecision, number theory |
+| `arith` | Python-facing | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: incomplete NTTs, complex FFTs, general multiprecision, and basic number theory procedures |
 | `misc` | Python-facing | The native handle (`ffi`/`lib`/`libvfhe`) plus the internal C utilities: BLAKE3-seeded PRNG, AES-CTR RNG, aligned allocation, mod-switching helpers |
-| `mlwe` | Python-facing | LWE / Module-LWE and MGSW: key generation, encryption, key-switching, automorphisms, external product |
+| `mlwe` | Python-facing | LWE / Module-LWE and MGSW: key generation, encryption, key-switching, arithmetic, and ring morphisms |
 | `fhe` | Python-facing | Schemes on top of `mlwe`: CKKS (encode/encrypt/rescale/rotate/multiply), CGGI16 functional bootstrap, GP25 sparse-amortized bootstrap |
-| `piop` | Python-facing | Multilinear extensions (dense/sparse/`ML_Polynomial`) and the IOP prover/verifier scaffolding |
+| `piop` | Python-facing | Sketch of IOP prover/verifier framework (currently under development) |
 | `circuit` | Python-facing | Layered GKR arithmetic circuits (protobuf wire format) and their polynomial export to `arith` |
 | `compiler`, `polycom`, `snark`, `vfhe` | placeholder | reserved for the compiler frontend, polynomial commitments, the SNARK layer, and the top-level assembly |
 

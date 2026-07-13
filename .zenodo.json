@@ -1,6 +1,6 @@
 {
-  "title": "vfhe: a library for verifiable fully homomorphic encryption",
-  "description": "A library for verifiable fully homomorphic encryption (FHE): C compute kernels exposed to Python through a single CFFI extension.",
+  "title": "The VFHE library",
+  "description": "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques.",
   "upload_type": "software",
   "access_right": "open",
   "license": "Apache-2.0",
@@ -11,9 +11,11 @@
     { "name": "Roșu, Alin-Petru", "affiliation": "IMDEA Software Institute" }
   ],
   "keywords": [
+    "zero knowledge proofs",
     "fully homomorphic encryption",
     "verifiable computation",
     "FHE",
+    "ZKP",
     "cryptography"
   ],
   "related_identifiers": [

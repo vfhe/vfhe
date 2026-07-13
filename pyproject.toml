@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vfhe"
 dynamic = ["version"]
-description = "A library for verifiable fully homomorphic encryption."
+description = "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
