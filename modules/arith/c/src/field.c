@@ -13,17 +13,15 @@ static int poly_deg(const uint64_t *p, int n)
     return -1;
 }
 
-static void poly_set_zero(uint64_t *p, uint64_t n)
-{
-    memset(p, 0, n * sizeof(uint64_t));
-}
+static void poly_set_zero(uint64_t *p, uint64_t n) { memset(p, 0, n * sizeof(uint64_t)); }
 
 static void poly_copy(uint64_t *dest, const uint64_t *src, uint64_t n)
 {
     memcpy(dest, src, n * sizeof(uint64_t));
 }
 
-static int poly_divrem(uint64_t *q, uint64_t *r, const uint64_t *f, const uint64_t *g, uint64_t n, NTT_proc proc)
+static int poly_divrem(uint64_t *q, uint64_t *r, const uint64_t *f, const uint64_t *g, uint64_t n,
+                       NTT_proc proc)
 {
     uint64_t p = proc->q;
     poly_set_zero(q, n);
@@ -108,7 +106,8 @@ void field_ext_neg(uint64_t *c, const uint64_t *a, uint64_t d, uint64_t q)
     }
 }
 
-void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t w, NTT_proc proc)
+void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t w,
+                   NTT_proc proc)
 {
     uint64_t mod = proc->q;
     uint64_t *tmp = (uint64_t *)malloc((2 * d - 1) * sizeof(uint64_t));
@@ -136,7 +135,8 @@ void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d
     free(tmp);
 }
 
-void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_t exp_hi, uint64_t d, uint64_t w, NTT_proc proc)
+void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_t exp_hi,
+                   uint64_t d, uint64_t w, NTT_proc proc)
 {
     __uint128_t exp = ((__uint128_t)exp_hi << 64) | exp_lo;
     uint64_t *b = (uint64_t *)malloc(d * sizeof(uint64_t));
@@ -164,7 +164,8 @@ void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_
     free(tmp);
 }
 
-static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t w, NTT_proc proc)
+static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *b, uint64_t d,
+                              uint64_t w, NTT_proc proc)
 {
     uint64_t q = proc->q;
     uint64_t *tmp = (uint64_t *)malloc((2 * d + 1) * sizeof(uint64_t));
@@ -181,7 +182,8 @@ static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *
 
     for (uint64_t i = 2 * d; i >= d; i--)
     {
-        if (tmp[i] == 0) continue;
+        if (tmp[i] == 0)
+            continue;
         uint64_t folded = mul_modq(tmp[i], w, proc);
         tmp[i - d] = add_modq(tmp[i - d], folded, q);
     }
@@ -297,7 +299,8 @@ int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, NTT
     return status;
 }
 
-void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len, uint64_t d, uint64_t mod)
+void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len, uint64_t d,
+                                 uint64_t mod)
 {
     blake3_hasher hasher;
     blake3_hasher_init_derive_key(&hasher, "field_sample_element");
@@ -346,8 +349,10 @@ int field_ext_is_equal(const uint64_t *a, const uint64_t *b, uint64_t d)
 
 static uint64_t inverse_mod_eea_generic(uint64_t a, uint64_t m)
 {
-    int64_t t = 0;   int64_t newt = 1;
-    int64_t r = m;   int64_t newr = a;
+    int64_t t = 0;
+    int64_t newt = 1;
+    int64_t r = m;
+    int64_t newr = a;
 
     while (newr != 0)
     {
@@ -361,14 +366,16 @@ static uint64_t inverse_mod_eea_generic(uint64_t a, uint64_t m)
         newr = temp_r;
     }
 
-    if (r > 1) return 0; // not invertible
-    if (t < 0) t = t + m;
+    if (r > 1)
+        return 0; // not invertible
+    if (t < 0)
+        t = t + m;
     return (uint64_t)t;
 }
 
-void field_base_conversion(uint64_t *out, const uint64_t *in,
-                           uint64_t source_component, uint64_t target_component,
-                           uint64_t d, uint64_t poly_size, const uint64_t *w_i, NTT_proc proc)
+void field_base_conversion(uint64_t *out, const uint64_t *in, uint64_t source_component,
+                           uint64_t target_component, uint64_t d, uint64_t poly_size,
+                           const uint64_t *w_i, NTT_proc proc)
 {
     uint64_t q = proc->q;
     if (source_component == target_component)

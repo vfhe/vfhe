@@ -1,5 +1,6 @@
-import pytest
 import random
+
+import pytest
 from vfhe.arith import Field, FieldElement
 
 PRIME = (1 << 61) - 1
