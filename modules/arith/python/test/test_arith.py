@@ -9,7 +9,14 @@ slot inversion, the CKKS complex FFT roundtrip, and the multiprecision bridge.
 import random
 
 import pytest
-from vfhe.arith import ComplexPolynomial, ComplexRing, Multiprecision, Polynomial, Ring, repr
+from vfhe.arith import (
+    ComplexPolynomial,
+    ComplexRing,
+    Multiprecision,
+    Polynomial,
+    Ring,
+    repr,
+)
 
 N = 16
 rng = random.Random(0xC0FFEE)
