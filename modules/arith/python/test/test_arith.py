@@ -9,7 +9,7 @@ slot inversion, the CKKS complex FFT roundtrip, and the multiprecision bridge.
 import random
 
 import pytest
-from vfhe.arith import ComplexPolynomial, ComplexRing, Multiprecision, Polynomial, Ring
+from vfhe.arith import ComplexPolynomial, ComplexRing, Multiprecision, Polynomial, Ring, repr
 
 N = 16
 rng = random.Random(0xC0FFEE)
@@ -99,6 +99,44 @@ def test_fast_inverse():
     assert coeffs[0] == 1 and all(c == 0 for c in coeffs[1:])
 
 
+def test_fast_inverse_test_vectors():
+    r = Ring(N, prime_size=[30], split_degree=1)
+    q = r.primes[0]
+    # Specific test vector of slots: [1, 2, 3, ..., N]
+    slots = list(range(1, N + 1))
+    a = Polynomial(r)
+    a.from_coeff_matrix([slots], repr=repr.ntt)
+
+    inv = a.fast_inverse()
+    inv_slots = inv.get_coeff_matrix(repr=repr.ntt)[0]
+
+    # Verify that inv_slots are the modular inverses of slots
+    for x, y in zip(slots, inv_slots):
+        assert (x * y) % q == 1
+
+
+def test_fast_inverse_zero_slot():
+    r = Ring(N, prime_size=[30], split_degree=1)
+    a = Polynomial(r)
+    # Put a zero in one of the slots (e.g. index 5)
+    slots = [i + 1 for i in range(N)]
+    slots[5] = 0
+    a.from_coeff_matrix([slots], repr=repr.ntt)
+
+    with pytest.raises(ValueError, match="zero slot is not invertible"):
+        a.fast_inverse()
+
+
+def test_fast_inverse_multi_prime():
+    r = Ring(N, prime_size=[30, 30, 30], split_degree=1)
+    a = r.random_element()
+    inv = a.fast_inverse()
+    one = a * inv
+    one.to_coeff()
+    coeffs = one.get_polynomial()
+    assert coeffs[0] == 1 and all(c == 0 for c in coeffs[1:])
+
+
 def test_complex_fft_roundtrip():
     cN = 8
     cring = ComplexRing(cN)
@@ -134,3 +172,14 @@ def test_multiprecision_from_rns():
     crt = mp.compute_crt_consts(r.primes)
     a_mp = mp.from_polynomial(a, crt)
     assert mp.poly_to_list(a_mp) == a.get_polynomial()
+
+
+@pytest.mark.parametrize("split_degree", [2, 4, 8])
+def test_fast_inverse_generic(split_degree):
+    r = Ring(128, prime_size=[30], split_degree=split_degree)
+    a = r.random_element()
+    inv = a.fast_inverse()
+    one = a * inv
+    one.to_coeff()
+    coeffs = one.get_polynomial()
+    assert coeffs[0] == 1 and all(c == 0 for c in coeffs[1:])

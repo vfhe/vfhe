@@ -10,7 +10,7 @@ uint64_t modq(unsigned __int128 x, NTT_proc proc)
         if (x <= 0xFFFFFFFFFFFFFFFFULL)
         {
             uint64_t x64 = (uint64_t)x;
-            uint64_t q_hat = (uint64_t)(((unsigned __int128)x64 * proc->m) >> 64);
+            uint64_t q_hat = (uint64_t)(((unsigned __int128)x64 * proc->m) >> proc->k);
             uint64_t res = x64 - q_hat * proc->q;
             if (res >= proc->q)
                 res -= proc->q;
