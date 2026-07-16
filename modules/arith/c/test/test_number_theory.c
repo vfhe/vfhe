@@ -45,6 +45,17 @@ void test_nth_root_of_unity(void)
     TEST_ASSERT_EQUAL_UINT64(q - 1, res); /* root^8 == -1 (mod q) */
 }
 
+void test_inverse_mod_eea(void)
+{
+    const uint64_t p = 1073739937; /* prime modulus */
+    for (uint64_t a = 1; a < 1000; a++)
+    {
+        uint64_t inv = inverse_mod_eea(a, p);
+        uint64_t prod = (uint64_t)(((unsigned __int128)inv * a) % p);
+        TEST_ASSERT_EQUAL_UINT64(1, prod);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -52,5 +63,6 @@ int main(void)
     RUN_TEST(test_next_special_prime_primitive);
     RUN_TEST(test_next_special_prime_nonprimitive);
     RUN_TEST(test_nth_root_of_unity);
+    RUN_TEST(test_inverse_mod_eea);
     return UNITY_END();
 }

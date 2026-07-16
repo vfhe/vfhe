@@ -15,10 +15,95 @@ uint64_t power_mod(uint64_t base, uint64_t exp, uint64_t mod)
     return res;
 }
 
+// Extended-Euclidean modular inverse (adapted from mersenneforum / uecm_modinv_64).
+// Requires 0 < a < p and gcd(a, p) == 1. p must be odd.
+uint64_t inverse_mod_eea(uint64_t a, uint64_t p)
+{
+    uint64_t ps1, ps2, parity, dividend, divisor, rem, q, t;
+
+    q = 1;
+    rem = a;
+    dividend = p;
+    divisor = a;
+    ps1 = 1;
+    ps2 = 0;
+    parity = 0;
+
+    while (divisor > 1)
+    {
+        rem = dividend - divisor;
+        t = rem - divisor;
+        if (rem >= divisor)
+        {
+            q += ps1;
+            rem = t;
+            t -= divisor;
+            if (rem >= divisor)
+            {
+                q += ps1;
+                rem = t;
+                t -= divisor;
+                if (rem >= divisor)
+                {
+                    q += ps1;
+                    rem = t;
+                    t -= divisor;
+                    if (rem >= divisor)
+                    {
+                        q += ps1;
+                        rem = t;
+                        t -= divisor;
+                        if (rem >= divisor)
+                        {
+                            q += ps1;
+                            rem = t;
+                            t -= divisor;
+                            if (rem >= divisor)
+                            {
+                                q += ps1;
+                                rem = t;
+                                t -= divisor;
+                                if (rem >= divisor)
+                                {
+                                    q += ps1;
+                                    rem = t;
+                                    t -= divisor;
+                                    if (rem >= divisor)
+                                    {
+                                        q += ps1;
+                                        rem = t;
+                                        if (rem >= divisor)
+                                        {
+                                            q = dividend / divisor;
+                                            rem = dividend % divisor;
+                                            q *= ps1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        q += ps2;
+        parity = ~parity;
+        dividend = divisor;
+        divisor = rem;
+        ps2 = ps1;
+        ps1 = q;
+    }
+
+    return (parity == 0) ? ps1 : p - ps1;
+}
+
 uint64_t inverse_mod(uint64_t a, uint64_t m)
 {
-    // Assuming m is prime (Fermat's Little Theorem)
-    return power_mod(a, m - 2, m);
+    a %= m;
+    if (a == 0)
+        return 0;
+    return inverse_mod_eea(a, m);
 }
 
 bool is_prime(uint64_t n)

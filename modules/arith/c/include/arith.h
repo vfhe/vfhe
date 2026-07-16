@@ -151,9 +151,25 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
 
     uint64_t power_mod(uint64_t base, uint64_t exp, uint64_t mod);
     uint64_t inverse_mod(uint64_t a, uint64_t m);
+    uint64_t inverse_mod_eea(uint64_t a, uint64_t p);
     bool is_prime(uint64_t n);
     uint64_t generate_Nth_root_of_unity(uint64_t q, uint64_t n);
     uint64_t next_special_prime(uint64_t x, uint64_t n, bool primitive);
+
+    // field arithmetic
+    NTT_proc field_new_proc(uint64_t q);
+    void field_ext_add(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q);
+    void field_ext_sub(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q);
+    void field_ext_neg(uint64_t *c, const uint64_t *a, uint64_t d, uint64_t q);
+    void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t w, NTT_proc proc);
+    void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_t exp_hi, uint64_t d, uint64_t w, NTT_proc proc);
+    int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, NTT_proc proc);
+    void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len, uint64_t d, uint64_t mod);
+    void field_hash_element(uint8_t *out, const uint64_t *a, uint64_t d);
+    int field_ext_is_equal(const uint64_t *a, const uint64_t *b, uint64_t d);
+    void field_base_conversion(uint64_t *out, const uint64_t *in,
+                               uint64_t source_component, uint64_t target_component,
+                               uint64_t d, uint64_t poly_size, const uint64_t *w_i, NTT_proc proc);
 
     // complex polynomial
     double **load_rous_CT(double *rous_real, double *rous_imag, uint64_t size);

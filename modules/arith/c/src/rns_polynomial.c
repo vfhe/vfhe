@@ -1298,93 +1298,92 @@ void polynomial_RNS_copy_slot(RNS_Polynomial out, uint64_t dst, RNS_Polynomial i
     }
 }
 
-// Extended-Euclidean modular inverse (adapted from mersenneforum / uecm_modinv_64).
-// Requires 0 < a < p and gcd(a, p) == 1. p must be odd.
-static inline uint64_t modinv_ext_euclid_64(uint64_t a, uint64_t p)
+int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
 {
-    uint64_t ps1, ps2, parity, dividend, divisor, rem, q, t;
+    const uint64_t N = in->ntt->N;
+    const uint64_t d = in->ntt->split_degree;
+    const uint64_t poly_size = N / d;
+    out->rns_mask = in->rns_mask;
+    assert(out->ntt->N == N);
 
-    q = 1;
-    rem = a;
-    dividend = p;
-    divisor = a;
-    ps1 = 1;
-    ps2 = 0;
-    parity = 0;
+    uint64_t *prefix = (uint64_t *)safe_aligned_malloc(poly_size * d * sizeof(uint64_t));
+    uint64_t *B = (uint64_t *)safe_aligned_malloc(poly_size * d * sizeof(uint64_t));
+    uint64_t *T = (uint64_t *)safe_aligned_malloc(d * sizeof(uint64_t));
+    uint64_t *tmp_field = (uint64_t *)safe_aligned_malloc(d * sizeof(uint64_t));
 
-    while (divisor > 1)
+    int status = 0;
+
+    for (size_t i = 0; i < in->ntt->l; i++)
     {
-        rem = dividend - divisor;
-        t = rem - divisor;
-        if (rem >= divisor)
+        if (in->rns_mask & (1ULL << i))
         {
-            q += ps1;
-            rem = t;
-            t -= divisor;
-            if (rem >= divisor)
+            const uint64_t q = in->ntt->ntt[i]->q;
+            NTT_proc proc = in->ntt->ntt[i];
+            const uint64_t *w_i = in->ntt->w[i];
+            uint64_t w0 = w_i[0];
+
+            for (size_t s = 0; s < poly_size; s++)
             {
-                q += ps1;
-                rem = t;
-                t -= divisor;
-                if (rem >= divisor)
+                uint64_t A_s[d];
+                for (size_t j = 0; j < d; j++)
                 {
-                    q += ps1;
-                    rem = t;
-                    t -= divisor;
-                    if (rem >= divisor)
-                    {
-                        q += ps1;
-                        rem = t;
-                        t -= divisor;
-                        if (rem >= divisor)
-                        {
-                            q += ps1;
-                            rem = t;
-                            t -= divisor;
-                            if (rem >= divisor)
-                            {
-                                q += ps1;
-                                rem = t;
-                                t -= divisor;
-                                if (rem >= divisor)
-                                {
-                                    q += ps1;
-                                    rem = t;
-                                    t -= divisor;
-                                    if (rem >= divisor)
-                                    {
-                                        q += ps1;
-                                        rem = t;
-                                        if (rem >= divisor)
-                                        {
-                                            q = dividend / divisor;
-                                            rem = dividend % divisor;
-                                            q *= ps1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    A_s[j] = in->coeffs[i][j * poly_size + s];
                 }
+                field_base_conversion(&B[s * d], A_s, s, 0, d, poly_size, w_i, proc);
+            }
+
+            for (size_t j = 0; j < d; j++)
+            {
+                prefix[j] = B[j];
+            }
+            for (size_t s = 1; s < poly_size; s++)
+            {
+                field_ext_mul(&prefix[s * d], &prefix[(s - 1) * d], &B[s * d], d, w0, proc);
+            }
+
+            if (!field_ext_inv(T, &prefix[(poly_size - 1) * d], d, w0, proc))
+            {
+                status = -2;
+                break;
+            }
+
+            for (size_t s = poly_size - 1; s > 0; s--)
+            {
+                uint64_t O_s[d];
+                field_ext_mul(O_s, T, &prefix[(s - 1) * d], d, w0, proc);
+
+                uint64_t A_inv_s[d];
+                field_base_conversion(A_inv_s, O_s, 0, s, d, poly_size, w_i, proc);
+                for (size_t j = 0; j < d; j++)
+                {
+                    out->coeffs[i][j * poly_size + s] = A_inv_s[j];
+                }
+
+                field_ext_mul(tmp_field, T, &B[s * d], d, w0, proc);
+                memcpy(T, tmp_field, d * sizeof(uint64_t));
+            }
+
+            uint64_t A_inv_0[d];
+            field_base_conversion(A_inv_0, T, 0, 0, d, poly_size, w_i, proc);
+            for (size_t j = 0; j < d; j++)
+            {
+                out->coeffs[i][j * poly_size + 0] = A_inv_0[j];
             }
         }
-
-        q += ps2;
-        parity = ~parity;
-        dividend = divisor;
-        divisor = rem;
-        ps2 = ps1;
-        ps1 = q;
     }
 
-    return (parity == 0) ? ps1 : p - ps1;
+    free(prefix);
+    free(B);
+    free(T);
+    free(tmp_field);
+
+    return status;
 }
 
 int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in)
 {
     if (in->ntt->split_degree != 1)
-        return -1;
+        return polynomial_RNS_inverse_generic(out, in);
     const uint64_t N = in->ntt->N;
     out->rns_mask = in->rns_mask;
     assert(out->ntt->N == N);
@@ -1415,7 +1414,7 @@ int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in)
                 prefix[k] = mul_modq(prefix[k - 1], a[k], proc);
             }
 
-            uint64_t t = modinv_ext_euclid_64(prefix[N - 1], q);
+            uint64_t t = inverse_mod(prefix[N - 1], q);
 
             uint64_t *o = out->coeffs[i];
             for (size_t k = N - 1; k > 0; k--)

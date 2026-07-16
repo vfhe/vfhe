@@ -231,12 +231,11 @@ class Polynomial:
         return self
 
     def fast_inverse(self):
-        assert self.ring.split_degree == 1, "fast_inverse requires split_degree=1"
         assert self.repr == repr.ntt, "fast_inverse requires NTT representation"
         out = Polynomial(self.ring)
         rc = self.ring.lib.polynomial_RNS_inverse(out.obj, self.obj)
         if rc == -1:
-            raise AssertionError("polynomial_RNS_inverse: split_degree != 1")
+            raise AssertionError("polynomial_RNS_inverse: invalid ring parameters")
         if rc == -2:
             raise ValueError("polynomial_RNS_inverse: zero slot is not invertible")
         if rc != 0:
