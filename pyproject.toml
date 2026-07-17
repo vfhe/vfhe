@@ -53,6 +53,9 @@ dependencies = [
     "mpmath>=1.3",
 ]
 
+[project.scripts]
+vfhe_create_headers = "vfhe.misc.dynamic_extensions:cli_main"
+
 [project.urls]
 Homepage = "https://github.com/vfhe/vfhe"
 Repository = "https://github.com/vfhe/vfhe"
