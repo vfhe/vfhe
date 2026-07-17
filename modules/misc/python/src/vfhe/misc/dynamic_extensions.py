@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-import os
-import sys
-import shutil
-import tempfile
-import platform
-import logging
-import subprocess
 import hashlib
+import logging
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
+
 from cffi import FFI
 
 # Set up a logger
@@ -50,14 +51,18 @@ def find_vfhe_root() -> Path:
     # 2. Check parents of the current file (__file__)
     current = Path(__file__).resolve().parent
     for _ in range(10):
-        if (current / "modules").is_dir() and (current / "native" / "discovery.py").exists():
+        if (current / "modules").is_dir() and (
+            current / "native" / "discovery.py"
+        ).exists():
             return current
         current = current.parent
 
     # 3. Check parents of the current working directory (e.g. running CLI from within repo)
     current = Path(os.getcwd()).resolve()
     for _ in range(10):
-        if (current / "modules").is_dir() and (current / "native" / "discovery.py").exists():
+        if (current / "modules").is_dir() and (
+            current / "native" / "discovery.py"
+        ).exists():
             return current
         current = current.parent
 
@@ -88,6 +93,7 @@ def _enable_asm_sources() -> None:
 
     # Patch every loaded distutils module class and module-level variables
     import sys
+
     for name, module in list(sys.modules.items()):
         if ("distutils" in name or "setuptools" in name) and module:
             for k, obj in list(vars(module).items()):
@@ -101,7 +107,10 @@ def _enable_asm_sources() -> None:
                 if isinstance(obj, type) and hasattr(obj, "_make_out_path_exts"):
                     if not getattr(obj, "_make_out_path_exts_patched", False):
                         orig_method = getattr(obj, "_make_out_path_exts")
-                        def patched_method(cls, output_dir, strip_dir, src_name, extensions):
+
+                        def patched_method(
+                            cls, output_dir, strip_dir, src_name, extensions
+                        ):
                             if extensions is not None:
                                 if isinstance(extensions, dict):
                                     if ".S" not in extensions:
@@ -113,7 +122,10 @@ def _enable_asm_sources() -> None:
                                         extensions.append(".S")
                                     if ".s" not in extensions:
                                         extensions.append(".s")
-                            return orig_method(output_dir, strip_dir, src_name, extensions)
+                            return orig_method(
+                                output_dir, strip_dir, src_name, extensions
+                            )
+
                         setattr(obj, "_make_out_path_exts_patched", True)
                         setattr(obj, "_make_out_path_exts", classmethod(patched_method))
 
@@ -232,6 +244,7 @@ def get_added_files():
 def update_cffi_references(new_ffi, new_lib):
     """Update all global ffi and lib references in imported vfhe modules."""
     import sys
+
     libvfhe_mod = sys.modules["vfhe.misc.libvfhe"]
 
     old_ffi = getattr(libvfhe_mod, "ffi")
@@ -259,6 +272,7 @@ def update_cffi_references(new_ffi, new_lib):
 def reinit_libvfhe(new_ffi, new_lib):
     """Update the fundamental libvfhe singleton."""
     from .libvfhe import libvfhe
+
     libvfhe.lib = new_lib
     libvfhe.ffi = new_ffi
 
@@ -267,9 +281,13 @@ def reinit_libvfhe(new_ffi, new_lib):
 def reinit_ntt(new_ffi, new_lib):
     """Update NTT processor instance and flush conversion cache."""
     try:
-        from vfhe.arith.ntt import NTT_Processor
         import vfhe.arith.ntt as ntt_mod
-        if hasattr(ntt_mod, "NTT_processor_instance") and ntt_mod.NTT_processor_instance:
+        from vfhe.arith.ntt import NTT_Processor
+
+        if (
+            hasattr(ntt_mod, "NTT_processor_instance")
+            and ntt_mod.NTT_processor_instance
+        ):
             ntt_mod.NTT_processor_instance.cleanup()
         ntt_mod.NTT_processor_instance = NTT_Processor()
     except Exception as e:
@@ -280,8 +298,9 @@ def reinit_ntt(new_ffi, new_lib):
 def reinit_lwe(new_ffi, new_lib):
     """Re-initialize LWE library prototypes."""
     try:
-        from vfhe.mlwe.lwe import LibLWE
         import vfhe.mlwe.lwe as lwe_mod
+        from vfhe.mlwe.lwe import LibLWE
+
         lwe_mod.lib_lwe = LibLWE()
     except Exception as e:
         logger.warning(f"Could not re-initialize lib_lwe: {e}")
@@ -291,8 +310,9 @@ def reinit_lwe(new_ffi, new_lib):
 def reinit_rlwe(new_ffi, new_lib):
     """Re-initialize MLWE library prototypes."""
     try:
-        from vfhe.mlwe.mlwe import LibMLWE
         import vfhe.mlwe.mlwe as mlwe_mod
+        from vfhe.mlwe.mlwe import LibMLWE
+
         mlwe_mod.lib_rlwe = LibMLWE()
     except Exception as e:
         logger.warning(f"Could not re-initialize lib_rlwe: {e}")
@@ -449,7 +469,9 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
         compiled_file = ffi.compile(tmpdir=build_temp, verbose=True)
 
         if not compiled_file or not os.path.exists(compiled_file):
-            raise RuntimeError("Compilation succeeded but no shared library was found in the build output.")
+            raise RuntimeError(
+                "Compilation succeeded but no shared library was found in the build output."
+            )
 
         dest_path = os.path.join(output_dir, os.path.basename(compiled_file))
         shutil.copy2(compiled_file, dest_path)
@@ -473,7 +495,9 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
     for reinitializer in REINITIALIZATION_REGISTRY:
         reinitializer(new_ffi, new_lib)
 
-    logger.info("Successfully reloaded custom C library and updated all registered package singletons.")
+    logger.info(
+        "Successfully reloaded custom C library and updated all registered package singletons."
+    )
     return dest_path
 
 
@@ -504,7 +528,9 @@ def create_headers(target_dir=None):
 
     # Write the vfhe.h file containing absolute includes
     with open(vfhe_h_path, "w") as f:
-        f.write("/* Automatically generated vfhe.h wrapper for compiling extensions */\n")
+        f.write(
+            "/* Automatically generated vfhe.h wrapper for compiling extensions */\n"
+        )
         f.write("#ifndef VFHE_H_WRAPPER\n")
         f.write("#define VFHE_H_WRAPPER\n\n")
         for h in headers:
