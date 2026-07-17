@@ -36,14 +36,34 @@ def register_reinitializer(func):
 
 def find_vfhe_root() -> Path:
     """Find the root directory of the vfhe project containing 'modules' and 'native/discovery.py'."""
+    # 1. Check environment variable override
+    env_dir = os.environ.get("VFHE_SOURCE_DIR")
+    if env_dir:
+        path = Path(env_dir).resolve()
+        if (path / "modules").is_dir() and (path / "native" / "discovery.py").exists():
+            return path
+        raise RuntimeError(
+            f"VFHE_SOURCE_DIR environment variable is set to {env_dir}, "
+            "but it does not contain 'modules' and 'native/discovery.py'."
+        )
+
+    # 2. Check parents of the current file (__file__)
     current = Path(__file__).resolve().parent
     for _ in range(10):
         if (current / "modules").is_dir() and (current / "native" / "discovery.py").exists():
             return current
         current = current.parent
+
+    # 3. Check parents of the current working directory (e.g. running CLI from within repo)
+    current = Path(os.getcwd()).resolve()
+    for _ in range(10):
+        if (current / "modules").is_dir() and (current / "native" / "discovery.py").exists():
+            return current
+        current = current.parent
+
     raise RuntimeError(
         "vfhe root directory containing 'modules' and 'native/discovery.py' not found. "
-        "Please ensure the vfhe source files are available."
+        "Please ensure the vfhe source files are available or set the VFHE_SOURCE_DIR environment variable."
     )
 
 
