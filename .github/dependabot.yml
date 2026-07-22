@@ -29,3 +29,11 @@ updates:
         update-types: ["minor", "patch"]
     commit-message:
       prefix: "deps"
+
+  # Keeps the pinned base-builder digest tracking its moving v1 tag.
+  - package-ecosystem: docker
+    directory: "/.clusterfuzzlite"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"

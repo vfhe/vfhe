@@ -256,7 +256,8 @@ workflow):
   `0.0.2rc1`). Run it from any branch.
 - **PyPI**: push a bare-semver tag (e.g. `0.1.0`, *no* leading `v`), then run
   the workflow **from that tag** with `target: pypi`. The version comes from the
-  tag, and a GitHub Release with the sdist and SBOM is created alongside.
+  tag, and a GitHub Release with the sdist, SBOM, and build provenance is
+  created alongside.
 
 Both use **Trusted Publishing** (OIDC, no API tokens) with PEP 740 attestations.
 One-time setup before the first release: create the `vfhe` project + a Trusted

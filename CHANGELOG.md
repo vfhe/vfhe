@@ -11,6 +11,8 @@ versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-07-22
+
 ### Added
 
 - `AUTHORS.md`, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and this
@@ -23,6 +25,9 @@ versions may contain breaking changes.
   changed code (build under `.clusterfuzzlite/`), with `make fuzz-local` for
   short local runs.
 - Python 3.14 support: tested in CI and declared in the classifiers.
+- Releases attach a CycloneDX SBOM and Sigstore build provenance to the GitHub
+  Release (verifiable with `gh attestation verify`) and publish to PyPI via
+  Trusted Publishing.
 
 ### Changed
 
@@ -31,9 +36,9 @@ versions may contain breaking changes.
   runnable developer tools.
 - The development guide moved from the README to `docs/DEVELOPMENT.md`; the
   README now targets users and renders cleanly on PyPI.
-- CI reworked end to end: staged test pipeline, SHA-pinned actions, hardened
-  permissions, and an sdist completeness check derived from the build's own
-  source discovery.
+- CI reworked end to end: parallel required checks behind a single `CI OK`
+  gate, SHA-pinned actions, hardened permissions, and an sdist
+  install-and-smoke check in a clean environment.
 
 ### Fixed
 
@@ -52,5 +57,6 @@ versions may contain breaking changes.
   bootstrapping (`fhe`), layered GKR circuits (`circuit`), and an AVX-512 or
   portable native engine.
 
-[Unreleased]: https://github.com/vfhe/vfhe/compare/0.0.1...HEAD
+[Unreleased]: https://github.com/vfhe/vfhe/compare/0.0.2...HEAD
+[0.0.2]: https://github.com/vfhe/vfhe/compare/0.0.1...0.0.2
 [0.0.1]: https://github.com/vfhe/vfhe/releases/tag/0.0.1
