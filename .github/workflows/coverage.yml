@@ -66,7 +66,8 @@ jobs:
             coverage-python.json
             coverage-c-html/
             coverage-c.json
-          if-no-files-found: error
+          # warn, not error: on a failed run, upload whichever reports exist.
+          if-no-files-found: warn
           retention-days: 3
 
       - name: Render the summary

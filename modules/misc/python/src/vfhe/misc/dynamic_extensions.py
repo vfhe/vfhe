@@ -255,7 +255,15 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
         sys.path.pop(0)
 
     # The same recipe the packaged build uses, plus the user's custom files.
-    plan = discovery.native_build_plan(root, host_has_avx512ifma)
+    # The custom module must match the loaded engine's mode: a tuned module in
+    # a portable process (or vice versa) mixes incompatible kernels and
+    # crashes.
+    from .libvfhe import lib as loaded_lib
+
+    def cpu_supports_tuning() -> bool:
+        return not loaded_lib.vfhe_build_is_portable() and host_has_avx512ifma()
+
+    plan = discovery.native_build_plan(root, cpu_supports_tuning)
     compile_args = (
         plan.compile_args if extra_compile_args is None else list(extra_compile_args)
     )
