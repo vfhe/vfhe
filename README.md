@@ -1,7 +1,7 @@
 # vfhe
 
 [![PyPI](https://img.shields.io/pypi/v/vfhe)](https://pypi.org/project/vfhe/)
-[![Python versions](https://img.shields.io/pypi/pyversions/vfhe)](https://pypi.org/project/vfhe/)
+[![Python versions](https://img.shields.io/badge/python-3.10--3.14-blue)](https://pypi.org/project/vfhe/)
 [![CI](https://github.com/vfhe/vfhe/actions/workflows/ci.yml/badge.svg)](https://github.com/vfhe/vfhe/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/vfhe/vfhe/badge)](https://securityscorecards.dev/viewer/?uri=github.com/vfhe/vfhe)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/vfhe/vfhe/blob/main/LICENSE)
@@ -48,7 +48,7 @@ so no submodules are required.
 > the CPU detection and the compile, in lockstep:
 >
 > ```bash
-> CC=gcc-14 pip install VFHE
+> CC=gcc-14 pip install vfhe
 > ```
 
 > **Forcing a portable build.** If you build in one place and run in another
