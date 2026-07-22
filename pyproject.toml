@@ -1,7 +1,7 @@
 [build-system]
 requires = [
     "setuptools>=77",  # >=77: PEP 639 plain-string `license = "Apache-2.0"`
-    "setuptools-scm>=8",
+    "setuptools-scm>=10.2.1",
     "cffi>=2.1.0",
     "grpcio-tools~=1.81.0",
 ]
