@@ -4,10 +4,10 @@
 The GKR protocol reasons about a layered circuit through multilinear
 extensions (MLEs) of three families of functions per layer ``l``:
 
-* ``W_l(x)``      -- the wire values of layer ``l`` (given a concrete input),
-* ``add_l(z,x,y)`` -- 1 iff gate ``z`` of layer ``l`` is an ADD gate wired to
+* ``W_l(x)``     : the wire values of layer ``l`` (given a concrete input),
+* ``add_l(z,x,y)``: 1 iff gate ``z`` of layer ``l`` is an ADD gate wired to
   outputs ``x`` and ``y`` of the previous layer,
-* ``mul_l(z,x,y)`` -- likewise for MUL gates.
+* ``mul_l(z,x,y)``: likewise for MUL gates.
 
 This module computes the *evaluation tables* of those functions over the
 boolean hypercube (dense 0/1 or field-value vectors, padded to powers of
@@ -29,7 +29,7 @@ Conventions
 * ``circuit.field_modulus`` (decimal string) reduces wire values when set;
   otherwise evaluation is over the integers.
 
-Note: a wiring table has ``2^(s_out + 2*s_in)`` entries -- exponential in the
+Note: a wiring table has ``2^(s_out + 2*s_in)`` entries; exponential in the
 layer widths' bit sizes. That is inherent to the dense-MLE representation;
 the sparse representations used by production GKR provers can be added
 behind the same API later.
@@ -96,19 +96,19 @@ def evaluate(circuit: "gkr.Circuit", inputs: list[int]) -> list[list[int]]:
     mod = _modulus(circuit)
 
     values = [list(inputs) if mod is None else [v % mod for v in inputs]]
-    for l, layer in enumerate(circuit.layers):
+    for layer_idx, layer in enumerate(circuit.layers):
         prev = values[-1]
         out: list[int] = []
         for g, gate in enumerate(layer.gates):
             if gate.left >= len(prev) or gate.right >= len(prev):
-                raise ValueError(f"layer {l} gate {g}: wire index out of range")
+                raise ValueError(f"layer {layer_idx} gate {g}: wire index out of range")
             a, b = prev[gate.left], prev[gate.right]
             if gate.type == gkr.GATE_TYPE_ADD:
                 v = a + b
             elif gate.type == gkr.GATE_TYPE_MUL:
                 v = a * b
             else:
-                raise ValueError(f"layer {l} gate {g}: unspecified gate type")
+                raise ValueError(f"layer {layer_idx} gate {g}: unspecified gate type")
             out.append(v % mod if mod is not None else v)
         values.append(out)
     return values

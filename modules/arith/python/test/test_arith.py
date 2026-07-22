@@ -96,7 +96,6 @@ def test_fast_inverse():
     one = a * inv
     one.to_coeff()
     # a * a^-1 == 1 in every eval slot -> constant polynomial 1
-    got = one
     a.to_NTT()
     # in NTT/eval domain all slots are 1; check the product equals the all-ones poly
     prod_ntt = a * inv

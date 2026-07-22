@@ -1,36 +1,46 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+# Scores the repository's supply-chain posture (OpenSSF Scorecard). Runs on a
+# schedule because the checks change without the code changing.
 name: Scorecard
 
 on:
+  # Re-scores when branch protection changes; it feeds the Branch-Protection check.
   branch_protection_rule:
   schedule:
     - cron: "0 5 * * 1"
   push:
     branches: [main]
 
+# read-all, not contents:read: Scorecard inspects branch protection, workflow
+# configuration, and other repository settings.
 permissions: read-all
 
 jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       security-events: write
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
-      - uses: ossf/scorecard-action@v2.4.0
+      - name: Run the Scorecard analysis
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
         with:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
-      - uses: actions/upload-artifact@v7
+      - name: Upload the raw results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: scorecard-results
           path: results.sarif
-          retention-days: 7
-      - uses: github/codeql-action/upload-sarif@v4
+          retention-days: 5
+      - name: Send the results to code scanning
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         with:
           sarif_file: results.sarif

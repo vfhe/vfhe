@@ -25,7 +25,7 @@ void aes_prng(uint8_t *output, uint64_t outlen, const uint8_t *input, uint64_t i
 // is set (vfhe_prng_set_deterministic_seed), generate_rnd_seed yields a
 // reproducible, non-repeating stream via splitmix64 instead of hardware
 // entropy. Production never calls the setters, so it keeps using RDRAND /
-// /dev/urandom. Not thread-safe -- intended for single-threaded test use.
+// /dev/urandom. Not thread-safe; intended for single-threaded test use.
 static int det_active = 0;
 static uint64_t det_state = 0;
 

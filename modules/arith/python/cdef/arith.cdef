@@ -120,5 +120,3 @@ void field_base_conversion(uint64_t *out, const uint64_t *in,
                            uint64_t d, uint64_t poly_size, const uint64_t *w_i, void *proc);
 void ntt_free_proc(void *proc);
 uint64_t inverse_mod_eea(uint64_t a, uint64_t p);
-
-

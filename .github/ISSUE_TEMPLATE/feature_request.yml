@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Feature request
+description: Propose an addition or change.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        For substantial changes, please open an issue before implementation, as
+        described in
+        [CONTRIBUTING](https://github.com/vfhe/vfhe/blob/main/CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do that VFHE currently cannot.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How vfhe should support it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, and why they fall short.

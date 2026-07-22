@@ -1,10 +1,10 @@
 # ── Commit message guide (50/72 rule) ──────────────────────────────
 # Subject: imperative, <= 50 chars, capitalized, no trailing period.
-# |<---------- 50 chars: aim to stop near here ---->|
+# |<-------------- 50-character limit ------------->|
 #
 
 # Body (optional): wrap at 72 chars. Explain *what* and *why*, not how.
-# |<---------------------- 72 chars: wrap before here ----------------->|
+# |<------------------------- 72-character limit ---------------------->|
 #
 # Lines starting with '#' are stripped. This guide is a recommendation,
 # not a rule the tooling enforces. Enable it once with:

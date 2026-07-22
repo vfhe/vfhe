@@ -1,21 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+# Blocks a pull request that introduces a dependency with a known vulnerability.
+# Dependabot covers the other direction, updating what is already here.
 name: Dependency Review
 
 on:
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   review:
+    name: Dependency review
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/dependency-review-action@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          # Vulnerability gate only. License policy (deny-licenses) was removed:
-          # it is deprecated in v5 and only produced "unknown license" noise for
-          # GitHub Actions (no license metadata) and the permissive Python deps.
-          fail-on-severity: moderate
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0

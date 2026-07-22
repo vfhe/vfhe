@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The counterpart to SHA-pinned actions: a pinned SHA never advances on its own,
+# so Dependabot rewrites the SHA and its `# vN` comment together.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    # "/" covers only .github/workflows and a root action.yml; the glob covers
+    # the composite actions.
+    directories:
+      - "/"
+      - "/.github/actions/*"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      dev:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"

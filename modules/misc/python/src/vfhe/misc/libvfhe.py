@@ -2,7 +2,7 @@
 """cffi handle to the native library.
 
 The C sources are compiled into the single ``_vfhe_native`` CFFI extension
-(see native/build_ffi.py); this module re-exports its ``ffi`` / ``lib`` plus a
+(see packaging/build_ffi.py); this module re-exports its ``ffi`` / ``lib`` plus a
 ``libvfhe`` singleton that the wrappers use as ``libvfhe.lib``.
 """
 

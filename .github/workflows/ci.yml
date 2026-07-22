@@ -1,4 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+#   lint ───────────────────────────────────────────────────────────────┐
+#   check-simd-build ───────────────────────────────────────────────────┤
+#   fuzz-changed-code ──────────────────────────────────────────────────┼─→ ci-ok
+#   test-sdist ─────────────────────────────────────────────────────────┤
+#   test-c ─→ test-python ──────────────────────────────────────────────┘
 name: CI
 
 on:
@@ -11,247 +17,177 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
-# Minimum coverage the `coverage` job enforces. Intentionally low for now --
-# raise them over time by editing these values.
-env:
-  COV_MIN_PY: "50"
-  COV_MIN_C_LINE: "40"
-  COV_MIN_C_BRANCH: "35"
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel stale PR runs; keep main's, they are the per-commit record.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
-    name: Lint (Python + C)
+    name: Lint (Python and C)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          python-version: "3.12"
-      - run: python -m pip install --upgrade "pip>=25.1"
-      - run: pip install --group dev
-      - run: make proto
-      - name: ruff (lint + format check)
+          submodules: recursive
+          persist-credentials: false
+      - uses: ./.github/actions/setup-vfhe
+        with:
+          build: proto
+      - name: Run ruff (lint and format check)
         run: |
-          ruff check modules native scripts setup.py
-          ruff format --check modules native scripts setup.py
-      - name: pyright
+          ruff check modules packaging scripts smoke .clusterfuzzlite .github setup.py
+          ruff format --check modules packaging scripts smoke .clusterfuzzlite .github setup.py
+      - name: Run pyright
         run: pyright
-      - name: clang-format (Allman, pinned via dev deps)
+      - name: Run clang-format
         run: |
           find modules \( -name '*.c' -o -name '*.h' \) -print0 \
             | xargs -0 clang-format --dry-run --Werror
 
-  # Fast tests gate the heavy ones: the complete suite only runs if this passes.
-  test-fast:
-    name: Fast tests ${{ matrix.os }} / py${{ matrix.python }}
+  # Object-only compile of the AVX-512 / AES-NI kernels; no other job compiles
+  # them, and no runner can execute them. Nothing is built or kept: the compile
+  # outcome is the check.
+  check-simd-build:
+    name: SIMD compile check (x86 AVX-512)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: ./.github/actions/setup-vfhe
+        with:
+          build: none
+      # --require: fail instead of skip on hosts that cannot target x86.
+      - name: Compile-check the SIMD kernels
+        run: python scripts/check_simd_build.py --require
+
+  # Fuzzes only the code this change touches (ClusterFuzzLite, own container;
+  # needs no setup-vfhe). The long batch runs stay in cflite-batch.yml.
+  fuzz-changed-code:
+    name: Fuzz the changed code
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: read-all
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Build the fuzzers
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: c
+      - name: Run the fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 300
+          mode: code-change
+          output-sarif: true
+
+  # Test the C kernels before the Python wrappers that call them.
+  # Compiles its own C: needs no extension build and no Python matrix.
+  test-c:
+    name: C tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           submodules: recursive
-      - uses: actions/setup-python@v6
+          persist-credentials: false
+      - uses: ./.github/actions/setup-vfhe
         with:
-          python-version: ${{ matrix.python }}
-      - run: python -m pip install --upgrade "pip>=25.1"
-      - run: pip install --group dev
-      - name: Build the native extension (+ proto bindings)
-        run: make build
-      - name: C unit tests (Unity)
+          build: none
+      - name: Run the C unit tests
         run: python scripts/run_c_tests.py
-      - name: Python fast tests
-        run: pytest -q
 
-  # Slower end-to-end suite (FHE bootstraps); runs only after the fast gate.
-  test-complete:
-    name: Complete tests ${{ matrix.os }} / py${{ matrix.python }}
-    needs: [test-fast]
+  # One job for the whole suite: --complete runs the fast subset plus the
+  # heavy @complete bootstraps.
+  test-python:
+    name: Python tests (${{ matrix.os }}, py${{ matrix.python }})
+    needs: [test-c]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.10", "3.11", "3.12", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           submodules: recursive
-      - uses: actions/setup-python@v6
+          persist-credentials: false
+      - uses: ./.github/actions/setup-vfhe
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install --upgrade "pip>=25.1"
-      - run: pip install --group dev
-      - name: Build the native extension (+ proto bindings)
-        run: make build
-      - name: Complete suite (heavy end-to-end bootstraps)
-        run: pytest -q --complete -m complete
+      - name: Run the complete Python tests
+        run: pytest -q --complete
 
-  # Coverage for BOTH languages from a single run (no external service, no
-  # token): the gcov-instrumented extension is exercised by the COMPLETE Python
-  # suite (incl. the FHE bootstraps, so the deep GP25/CGGI kernels are counted),
-  # yielding Python coverage (coverage.py) and C coverage (.gcda -> gcovr) at
-  # once. -O0 + gcov makes this slow (a few minutes) -- deliberately thorough, to
-  # gate merges. Results are gated against the COV_MIN_* floors, summarised in
-  # the run, and uploaded as artifacts.
-  coverage:
-    name: Coverage (Python + C)
+  test-sdist:
+    name: Sdist build and install from source
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # push rendered badges to the `badges` branch (main only)
-      pull-requests: write # post/update the coverage comment on the PR
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           submodules: recursive
-      - uses: actions/setup-python@v6
+          persist-credentials: false
+      - uses: ./.github/actions/setup-vfhe
         with:
-          python-version: "3.12"
-      - run: python -m pip install --upgrade "pip>=25.1"
-      - run: pip install --group dev
-      - name: Build the C instrumented for gcov
-        run: VFHE_COVERAGE=1 make build
-      - name: Run the complete suite (Python coverage + exercises the instrumented C)
-        run: pytest -q --complete --cov=vfhe --cov-report=xml:coverage-python.xml
-      - name: Collect C coverage
-        run: >
-          gcovr --root . --filter 'modules/.*/c/src/'
-          --xml coverage-c.xml --txt coverage-c.txt .generated/cov-build
-      - name: Coverage summary
-        if: always()
-        run: |
-          {
-            echo "<!-- vfhe-coverage -->";
-            echo "## Coverage";
-            echo "### Python (floor ${COV_MIN_PY}%)";
-            echo '```'; python -m coverage report 2>/dev/null || true; echo '```';
-            echo "### C (floor: line ${COV_MIN_C_LINE}%, branch ${COV_MIN_C_BRANCH}%)";
-            echo '```'; cat coverage-c.txt 2>/dev/null || true; echo '```';
-          } | tee coverage-summary.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Comment coverage on the PR
-        if: always() && github.event_name == 'pull_request'
-        continue-on-error: true
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const body = fs.readFileSync('coverage-summary.md', 'utf8');
-            const marker = '<!-- vfhe-coverage -->';
-            const { owner, repo } = context.repo;
-            const issue_number = context.issue.number;
-            const { data: comments } = await github.rest.issues.listComments({
-              owner, repo, issue_number, per_page: 100,
-            });
-            const existing = comments.find((c) => c.body && c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
-            }
-      - name: Upload coverage reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage
-          path: |
-            coverage-python.xml
-            coverage-c.xml
-            coverage-c.txt
-      - name: Render coverage badges (SVG)
-        if: always()
-        run: |
-          mkdir -p .badges
-          genbadge coverage -i coverage-python.xml -o .badges/coverage-python.svg -n "python coverage"
-          genbadge coverage -i coverage-c.xml     -o .badges/coverage-c.svg      -n "c coverage"
-      - name: Enforce coverage floors
-        run: |
-          python -m coverage report --fail-under="$COV_MIN_PY"
-          gcovr --root . --filter 'modules/.*/c/src/' \
-            --fail-under-line "$COV_MIN_C_LINE" \
-            --fail-under-branch "$COV_MIN_C_BRANCH" \
-            .generated/cov-build
-      # Publish the badges to an orphan `badges` branch so the README can link
-      # them at a stable raw URL. Only on pushes to main (never on PRs, which may
-      # come from forks and must not get write access), and only once the floors
-      # above pass -- so the badge always reflects a green main.
-      - name: Publish coverage badges to the `badges` branch
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        # Cosmetic: never fail the coverage job (and thus main's CI) if the badge
-        # push hiccups -- the floors above are what actually gate.
-        continue-on-error: true
-        run: |
-          cd .badges
-          git init -q -b badges
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add coverage-python.svg coverage-c.svg
-          git commit -q -m "coverage badges @ ${GITHUB_SHA::7}"
-          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" badges
-
-  simd-compile:
-    name: x86 AVX-512 compile-check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - run: PYTHONPATH=scripts python scripts/check_simd_build.py
-
-  # The package is published as an sdist only (no wheels): every install compiles
-  # from source and tunes to the target CPU. Here we build the sdist, install it
-  # (which compiles), and run the end-to-end smoke test against it.
-  package-smoke:
-    name: Build sdist + install from source
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Build sdist
-        run: |
-          python -m pip install --upgrade "pip>=25.1" build twine
-          python -m build --sdist
-      - name: Check metadata
-        run: twine check dist/*
-      - name: Verify the C + BLAKE3 sources shipped inside the sdist
-        run: |
-          tar tzf dist/*.tar.gz | grep -q 'external/blake3/c/blake3.c' \
-            || { echo "::error::sdist is missing BLAKE3 sources"; exit 1; }
-          tar tzf dist/*.tar.gz | grep -q 'modules/arith/c/src/ntt.c' \
-            || { echo "::error::sdist is missing the module C sources"; exit 1; }
-      - name: Install from the sdist (compiles) and smoke-test it
-        run: |
-          python -m pip install dist/*.tar.gz
-          cd /tmp && python "$GITHUB_WORKSPACE/scripts/smoke.py"
-      - uses: actions/upload-artifact@v7
+          build: none
+      - name: Build the sdist
+        run: python -m build --sdist
+      # --strict: treat warnings as errors; PyPI rejects them at upload.
+      - name: Check the package metadata
+        run: twine check --strict dist/*.tar.gz
+      # Same checks as `make smoke`: scratch venv install, then smoke/*.py against it.
+      # The install compiles every build input, so it also proves the sdist is complete.
+      - name: Install the sdist into a clean venv (compiles)
+        run: python scripts/check_install.py dist/*.tar.gz
+      - name: Run the smoke tests against the install
+        run: python scripts/run_smoke_tests.py --python .cache/install/venv/bin/python
+      - name: Upload the sdist
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sdist
           path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 2 # reproducible on demand; no need to store longer
 
-  # Single aggregate gate: green only if every job above succeeded. Make THIS the
-  # one required status check in branch protection -- then the matrix (OS × Python)
-  # can change without editing the protection rule. `if: always()` so it runs even
-  # when a dependency fails, and it reports failure in that case.
+  # Point branch protection at this job alone; the job list below stays editable.
   ci-ok:
     name: CI OK
+    # always(): report when a dependency fails, instead of hanging the required check.
     if: always()
-    needs: [lint, test-fast, test-complete, coverage, simd-compile, package-smoke]
+    needs:
+      [
+        lint,
+        check-simd-build,
+        fuzz-changed-code,
+        test-c,
+        test-python,
+        test-sdist,
+      ]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: All CI jobs must have succeeded
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+      # Count skipped as failure: jobs after a failure are skipped, not failed.
+      - name: Assert every CI job succeeded
+        if: >-
+          ${{ contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled')
+          || contains(needs.*.result, 'skipped') }}
+        env:
+          RESULTS: ${{ join(needs.*.result, ', ') }}
         run: |
-          echo "::error::One or more CI jobs did not succeed: ${{ join(needs.*.result, ', ') }}"
+          echo "::error::One or more CI jobs did not succeed: $RESULTS"
           exit 1

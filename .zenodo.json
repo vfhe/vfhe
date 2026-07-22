@@ -1,14 +1,48 @@
 {
-  "title": "The VFHE library",
+  "title": "vfhe",
   "description": "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques.",
   "upload_type": "software",
   "access_right": "open",
   "license": "Apache-2.0",
   "creators": [
-    { "name": "Cozzo, Daniele", "affiliation": "IMDEA Software Institute" },
-    { "name": "Guimarães, Antonio", "affiliation": "IMDEA Software Institute" },
-    { "name": "Fiore, Dario", "affiliation": "IMDEA Software Institute" },
-    { "name": "Roșu, Alin-Petru", "affiliation": "IMDEA Software Institute" }
+    {
+      "name": "Cascudo, Ignacio",
+      "affiliation": "IMDEA Software Institute",
+      "orcid": "0000-0001-5520-5386"
+    },
+    {
+      "name": "Costache, Anamaria",
+      "affiliation": "École Polytechnique",
+      "orcid": "0000-0001-8793-6116"
+    },
+    {
+      "name": "Cozzo, Daniele",
+      "affiliation": "IMDEA Software Institute",
+      "orcid": "0000-0001-5289-3769"
+    },
+    { "name": "Dubois, Adrien", "affiliation": "ENS Lyon" },
+    {
+      "name": "Fiore, Dario",
+      "affiliation": "IMDEA Software Institute",
+      "orcid": "0000-0001-7274-6600"
+    },
+    {
+      "name": "Guimarães, Antonio",
+      "affiliation": "IMDEA Software Institute",
+      "orcid": "0000-0001-5110-6639"
+    },
+    { "name": "Köstler, Robin", "affiliation": "University of Luxembourg" },
+    { "name": "Osadnik, Michał", "affiliation": "Aalto University" },
+    {
+      "name": "Roșu, Alin-Petru",
+      "affiliation": "IMDEA Software Institute",
+      "orcid": "0009-0005-8537-7265"
+    },
+    {
+      "name": "Soria-Vazquez, Eduardo",
+      "affiliation": "Technology Innovation Institute",
+      "orcid": "0000-0002-4882-0230"
+    }
   ],
   "keywords": [
     "zero knowledge proofs",

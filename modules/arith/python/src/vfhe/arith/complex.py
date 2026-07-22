@@ -7,7 +7,7 @@ from vfhe.misc.libvfhe import ffi, lib
 from .polynomial import Polynomial, Ring, repr
 
 # The AVX-512 complex FFT casts these buffers to __m512d and uses aligned loads,
-# so they must be 64-byte aligned -- more than cffi's default. Back them with the
+# so they must be 64-byte aligned; more than cffi's default. Back them with the
 # engine's posix_memalign allocator (freed via libc free on GC).
 _aligned64 = ffi.new_allocator(
     alloc=lambda size: lib.safe_aligned_malloc(size),
@@ -74,7 +74,9 @@ class ComplexRing:
     @staticmethod
     # special RoUs for CKKS
     def gen_special_rous(rou, N):
-        brev = lambda x, size: int(bin(x)[2:].rjust(size, "0")[::-1], 2)
+        def brev(x, size):
+            return int(bin(x)[2:].rjust(size, "0")[::-1], 2)
+
         result = [1] * N
         for k in range(int(log2(N)) - 1, 0, -1):
             for i in range(2 ** (k - 1)):
@@ -90,7 +92,10 @@ class ComplexRing:
 
         mp.mp.prec = 100  # type: ignore
         rou = mp.exp(2 * mp.pi * 1j / (2 * mp.mpf(N)))
-        brev = lambda x, size: int(bin(x)[2:].rjust(size, "0")[::-1], 2)
+
+        def brev(x, size):
+            return int(bin(x)[2:].rjust(size, "0")[::-1], 2)
+
         result = [1] * N
         for k in range(int(log2(N)) - 1, 0, -1):
             for i in range(2 ** (k - 1)):

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/vfhe/vfhe/security/advisories/new
+    about: Private reporting for security issues; do not open a public issue.
+  - name: Ask a question
+    url: https://vfhe.zulipchat.com
+    about: Questions and discussion happen on the VFHE Zulip.

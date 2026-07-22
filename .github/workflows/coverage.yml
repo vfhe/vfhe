@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Measures Python and C coverage from one gcov-instrumented run, writes the
+# summary to the job summary page, and keeps one updated comment on pull
+# requests. Informational: nothing here blocks a merge.
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel stale PR runs; keep main's, they are the per-commit record.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  coverage:
+    name: Coverage (Python and C)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write # the coverage comment
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: ./.github/actions/setup-vfhe
+        with:
+          build: coverage
+
+      - name: Run the complete suite under coverage
+        run: >-
+          pytest -q --complete --cov=vfhe
+          --cov-report=json:coverage-python.json
+          --cov-report=html:coverage-python-html
+
+      # threshold 0 disables gcovr's suspicious-hits check: it rejects counts over
+      # 2^32 as gcov bug gcc#68080, but our hot kernels legitimately exceed it, so
+      # it only ever fires falsely. Do not use --gcov-ignore-parse-errors instead:
+      # it rewrites the offending hits to 0.
+      - name: Collect C coverage
+        run: |
+          mkdir -p coverage-c-html
+          gcovr --root . --filter 'modules/.*/c/src/' \
+            --gcov-suspicious-hits-threshold 0 \
+            --json-summary coverage-c.json \
+            --html-details coverage-c-html/index.html .generated/cov-build
+
+      - name: Render the summary
+        run: |
+          python .github/render_coverage.py coverage-python.json coverage-c.json \
+            .github/coverage-comment.md > coverage-summary.md
+          cat coverage-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment the summary on the pull request
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: coverage
+          path: coverage-summary.md
+
+      - name: Upload the coverage reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage
+          path: |
+            coverage-python-html/
+            coverage-python.json
+            coverage-c-html/
+            coverage-c.json
+          if-no-files-found: error
+          retention-days: 3

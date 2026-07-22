@@ -7,7 +7,6 @@ Encode/decode, encrypt/decrypt, slot rotation, and ciphertext multiplication
 
 import secrets
 
-import pytest
 from vfhe.arith import Ring
 from vfhe.fhe import CKKS_Scheme
 
