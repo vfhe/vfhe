@@ -78,7 +78,7 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
           # Transport between jobs only; the GitHub Release keeps the artifacts.
-          retention-days: 2
+          retention-days: 7
 
   # Not the setup-vfhe composite, deliberately: the SBOM must describe the
   # package's runtime environment, and the composite would pull the dev group in.
@@ -106,7 +106,7 @@ jobs:
           path: vfhe-sbom.json
           if-no-files-found: error
           # Transport between jobs only; the GitHub Release keeps the artifacts.
-          retention-days: 2
+          retention-days: 7
 
   publish-testpypi:
     name: Publish RC to TestPyPI

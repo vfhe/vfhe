@@ -9,7 +9,17 @@ from vfhe.misc import dynamic_extensions, libvfhe
 pytestmark = pytest.mark.complete
 
 
-def test_dynamic_extensions_flow():
+@pytest.fixture
+def restore_native_lib():
+    """Undo the hot swap: later tests must run against _vfhe_native."""
+    orig_ffi, orig_lib = libvfhe.ffi, libvfhe.lib
+    yield
+    dynamic_extensions.update_cffi_references(orig_ffi, orig_lib)
+    for reinitializer in dynamic_extensions.REINITIALIZATION_REGISTRY:
+        reinitializer(orig_ffi, orig_lib)
+
+
+def test_dynamic_extensions_flow(restore_native_lib):
     # 1. Create a temporary directory for our user C extension files
     with tempfile.TemporaryDirectory() as user_dir:
         # Create a target directory for vfhe.h

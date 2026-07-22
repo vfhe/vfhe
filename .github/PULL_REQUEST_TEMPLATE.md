@@ -1,6 +1,4 @@
-## Summary
-
-<!-- One or two sentences. Link the issue if one exists: Closes #NNN -->
+<!-- One or two sentences of summary. Link the issue if one exists: Closes #NNN -->
 
 ## Checklist
 
