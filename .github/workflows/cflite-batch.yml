@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Continuous fuzzing on main: builds the harnesses via .clusterfuzzlite and
-# fuzzes for an hour, pruning and persisting the corpus between runs. Replaces
-# the DIY nightly job; the same libFuzzer engine, managed by ClusterFuzzLite.
+# fuzzes for an hour, pruning and persisting the corpus between runs.
 name: CFLite Batch
 
 on:

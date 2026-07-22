@@ -39,12 +39,17 @@ versions may contain breaking changes.
 - CI reworked end to end: parallel required checks behind a single `CI OK`
   gate, SHA-pinned actions, hardened permissions, and an sdist
   install-and-smoke check in a clean environment.
+- Minimum requirements raised: `cffi` 2.1 (runtime) and `setuptools-scm` 10.2
+  (build).
 
 ### Fixed
 
 - `ntt_new_proc` could loop forever searching for a primitive root of unity with
   certain prime and ring-size combinations; the search is now deterministic and
   always terminates.
+- A module compiled at runtime by `vfhe.misc.dynamic_extensions` auto-tuned
+  independently of the loaded engine, so a portable process could load AVX-512
+  kernels and crash; the custom build now inherits the loaded engine's mode.
 
 ## [0.0.1] - 2026-07-08
 
