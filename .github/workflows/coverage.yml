@@ -54,20 +54,9 @@ jobs:
             --json-summary coverage-c.json \
             --html-details coverage-c-html/index.html .generated/cov-build
 
-      - name: Render the summary
-        run: |
-          python .github/render_coverage.py coverage-python.json coverage-c.json \
-            .github/coverage-comment.md > coverage-summary.md
-          cat coverage-summary.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Comment the summary on the pull request
-        if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
-        with:
-          header: coverage
-          path: coverage-summary.md
-
+      # Uploaded before rendering so the summary can link the artifact.
       - name: Upload the coverage reports
+        id: artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -79,3 +68,18 @@ jobs:
             coverage-c.json
           if-no-files-found: error
           retention-days: 3
+
+      - name: Render the summary
+        env:
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          python .github/render_coverage.py coverage-python.json coverage-c.json \
+            .github/coverage-comment.md "$ARTIFACT_URL" > coverage-summary.md
+          cat coverage-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment the summary on the pull request
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: coverage
+          path: coverage-summary.md

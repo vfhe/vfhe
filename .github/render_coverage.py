@@ -4,7 +4,7 @@
 
 Usage:
     python .github/render_coverage.py coverage-python.json coverage-c.json \
-        .github/coverage-comment.md
+        .github/coverage-comment.md <artifact-url>
 """
 
 import json
@@ -32,6 +32,7 @@ def main() -> int:
             ),
             c_lines=_cell(c_totals["line_covered"], c_totals["line_total"]),
             c_branches=_cell(c_totals["branch_covered"], c_totals["branch_total"]),
+            artifact_url=sys.argv[4],
         ),
         end="",
     )
