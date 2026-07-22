@@ -47,7 +47,7 @@ classifiers = [
 dependencies = [
     "cffi>=1.15",
     "protobuf>=6.33,<7",
-    "mpmath>=1.3",
+    "mpmath>=1.4.1",
 ]
 
 [project.scripts]
@@ -64,13 +64,13 @@ dev = [
     "cffi>=1.15",
     "grpcio-tools~=1.81.0",
     "protobuf>=6.33,<7",
-    "pytest>=7.0",
+    "pytest>=9.1.1",
     "pytest-cov",
     "gcovr",  # C coverage (gcov) in the CI coverage job
     "twine",  # `twine check --strict` on the sdist metadata in CI
     "build",
     # Runtime dep; listed here because dev builds run in place, not pip-installed.
-    "mpmath>=1.3",
+    "mpmath>=1.4.1",
     # Pinned: an unpinned formatter bump reformats the tree and fails CI on an
     # unrelated PR. The pre-commit hooks run these same pins.
     "ruff==0.15.22",
