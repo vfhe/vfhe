@@ -73,8 +73,8 @@ dev = [
     "mpmath>=1.4.1",
     # Pinned: an unpinned formatter bump reformats the tree and fails CI on an
     # unrelated PR. The pre-commit hooks run these same pins.
-    "ruff==0.15.20",
-    "clang-format==22.1.5",
+    "ruff==0.15.22",
+    "clang-format==22.1.8",
     "pre-commit",
     "pyright",
 ]
