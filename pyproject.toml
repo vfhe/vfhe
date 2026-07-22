@@ -59,6 +59,8 @@ Repository = "https://github.com/vfhe/vfhe"
 Issues = "https://github.com/vfhe/vfhe/issues"
 
 [dependency-groups]
+# Pinned so the release SBOM is deterministic; Dependabot bumps it.
+sbom = ["cyclonedx-bom==7.3.0"]
 dev = [
     "setuptools",
     "cffi>=2.1.0",

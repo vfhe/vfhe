@@ -94,12 +94,15 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.14"
-      - name: Install the package and CycloneDX
+      - name: Install the package into a clean venv
         run: |
-          python -m pip install --upgrade "pip>=25.1"
-          python -m pip install . cyclonedx-bom
-      - name: Generate SBOM from the installed environment
-        run: cyclonedx-py environment --output-format JSON --output-file vfhe-sbom.json
+          python -m venv package-env
+          package-env/bin/pip install .
+      - name: Generate SBOM from the package environment
+        run: |
+          python -m pip install --group sbom
+          cyclonedx-py environment package-env/bin/python \
+            --output-reproducible --output-format JSON --output-file vfhe-sbom.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom
