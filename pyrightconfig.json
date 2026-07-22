@@ -1,5 +1,6 @@
 {
   "exclude": [
+    "**/.*",
     "**/node_modules",
     "**/__pycache__",
     ".venv",
@@ -11,18 +12,16 @@
   "extraPaths": [
     ".generated",
     "scripts",
-    "native",
+    "smoke",
+    "packaging",
     "modules/arith/python/src",
     "modules/misc/python/src",
     "modules/circuit/python/src",
-    "modules/compiler/python/src",
     "modules/fhe/python/src",
     "modules/mlwe/python/src",
-    "modules/piop/python/src",
-    "modules/polycom/python/src",
-    "modules/snark/python/src",
-    "modules/vfhe/python/src"
+    "modules/piop/python/src"
   ],
-  "stubPath": "stubs",
-  "typeCheckingMode": "basic"
+  "stubPath": "packaging/typings",
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.10"
 }

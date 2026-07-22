@@ -134,12 +134,21 @@ void ntt_GS_RN_portable(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_p
 
 NTT_proc ntt_new_proc(uint64_t n, uint64_t q)
 {
-    uint64_t root_of_unity = 2;
-    while (power_mod(root_of_unity, n, q) != q - 1)
+    // Deterministic search for a primitive 2n-th root of unity: raise successive
+    // candidates g = 2, 3, 4, ... to the (q-1)/2n power and keep the first whose
+    // n-th power is -1 (i.e. whose order is exactly 2n). At least half of the
+    // residues qualify, so this terminates quickly, and it always terminates,
+    // unlike a self-feeding LCG, which can settle into a cycle of non-primitive
+    // candidates and spin forever.
+    uint64_t root_of_unity = 0;
+    for (uint64_t g = 2; g < q; g++)
     {
-        // Basic pseudo-random fallback since _rdrand64_step is not portable
-        root_of_unity = (root_of_unity * 31337 + 12345) % q;
-        root_of_unity = power_mod(root_of_unity, (q - 1) / (2 * n), q);
+        uint64_t candidate = power_mod(g, (q - 1) / (2 * n), q);
+        if (power_mod(candidate, n, q) == q - 1)
+        {
+            root_of_unity = candidate;
+            break;
+        }
     }
     uint64_t inv_root_of_unity = inverse_mod(root_of_unity, q);
     uint64_t k = 64;

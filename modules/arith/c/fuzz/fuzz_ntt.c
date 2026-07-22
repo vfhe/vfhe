@@ -10,8 +10,7 @@
  *   1. forward-then-inverse NTT is the identity;
  *   2. none of the exercised kernels read/write out of bounds (ASan/UBSan).
  *
- * Deterministic per input (no RNG), so a saved crash reproduces exactly. Built
- * by scripts/build_fuzzers.py with -fsanitize=fuzzer,address,undefined.
+ * Deterministic per input (no RNG), so a saved crash reproduces exactly.
  */
 #include <stdint.h>
 #include <stdlib.h>

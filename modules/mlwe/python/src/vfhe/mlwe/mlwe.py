@@ -470,7 +470,7 @@ class MLWE:
 
     def get_a_digit(self, j: int, i: int) -> Polynomial:
         res = Polynomial(self.ring)
-        # polynomial_RNSc_mod_reduce(out, in) -- reduces to the base RNS limb.
+        # polynomial_RNSc_mod_reduce(out, in); reduces to the base RNS limb.
         lib_rlwe.lib.polynomial_RNSc_mod_reduce(res.obj, self.obj_a_i(j))
         res.repr = repr.coeff
         return res
@@ -519,7 +519,7 @@ class MLWE:
         return other
 
     def __add__(self, other):
-        if type(other) == int:
+        if type(other) is int:
             if other == 0:
                 return self.copy()
             else:
@@ -530,12 +530,12 @@ class MLWE:
         res = MLWE(self.scheme, lvl=self.lvl)
         if isinstance(other, MLWE):
             res.add_MLWE(self, other)
-        if type(other) == Polynomial:
+        if type(other) is Polynomial:
             res.add_poly(self, other)
         return res
 
     def __iadd__(self, other):
-        if type(other) == int:
+        if type(other) is int:
             if other == 0:
                 return self
             else:
@@ -545,12 +545,12 @@ class MLWE:
             other.to_NTT()
         if isinstance(other, MLWE):
             self.add_MLWE(self, other)
-        if type(other) == Polynomial:
+        if type(other) is Polynomial:
             self.add_poly(self, other)
         return self
 
     def __sub__(self, other) -> MLWE:
-        if type(other) == int:
+        if type(other) is int:
             if other == 0:
                 return self.copy()
             else:
@@ -561,12 +561,12 @@ class MLWE:
         res = MLWE(self.scheme, lvl=self.lvl)
         if isinstance(other, MLWE):
             res.sub_MLWE(self, other)
-        if type(other) == Polynomial:
+        if type(other) is Polynomial:
             res.sub_poly(self, other)
         return res
 
     def __isub__(self, other):
-        if type(other) == int:
+        if type(other) is int:
             if other == 0:
                 return self
             else:
@@ -576,7 +576,7 @@ class MLWE:
             other.to_NTT()
         if isinstance(other, MLWE):
             self.sub_MLWE(self, other)
-        if type(other) == Polynomial:
+        if type(other) is Polynomial:
             self.sub_poly(self, other)
         return self
 

@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
-import shutil
-import sys
 import tempfile
 
 import pytest
 from vfhe.misc import dynamic_extensions, libvfhe
+
+# Compiles and reloads a live C extension; heavy enough for the complete tier.
+pytestmark = pytest.mark.complete
 
 
 def test_dynamic_extensions_flow():

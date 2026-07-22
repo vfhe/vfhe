@@ -11,36 +11,36 @@ external/. Each retains its own copyright and license.
             used here under Apache-2.0.
             See external/blake3/LICENSE_A2, LICENSE_A2LLVM, LICENSE_CC0.
   Usage:    the c/ sources are compiled into the native extension
-            (_vfhe_native) and shipped in released sdists/wheels. Internal
-            only — never exposed on the Python API.
+            (_vfhe_native) and shipped in released sdists. Internal
+            only; never exposed on the Python API.
 
 - Unity  (C unit-testing framework)
   Upstream: https://github.com/ThrowTheSwitch/Unity
   License:  MIT. See external/unity/LICENSE.txt.
   Usage:    test-only. Compiles the C unit tests during development; NOT
-            distributed in released sdists or wheels.
+            distributed in released sdists.
 
 This product additionally contains code adapted or ported (not vendored) from
-the projects below. Unlike the submodules above, this code was integrated -- in
-places function by function -- into larger source files of the arith and rng
+the projects below. Unlike the submodules above, this code was integrated, in
+places function by function, into larger source files of the arith and misc
 modules, so it has no separate directory. Both projects are Apache-2.0 licensed,
 matching this project's license.
 
 - MOSFHET  (FHE library)
   Upstream: https://github.com/antoniocgj/MOSFHET
   License:  Apache-2.0 (see upstream LICENSE).
-  Usage:    modules/rng/c/src/aes_ctr.c is a near-verbatim adaptation of its
+  Usage:    modules/misc/c/src/aes_rng.c is a near-verbatim adaptation of its
             AES-NI counter-mode PRNG. Beyond that, further routines
             (number-theoretic transform, modular arithmetic, and sampling
             helpers) were ported and adapted into larger files across
-            modules/arith and modules/rng. Compiled into the native extension.
+            modules/arith and modules/misc. Compiled into the native extension.
 
 - Intel HEXL  (homomorphic-encryption acceleration library)
   Upstream: https://github.com/intel/hexl
   License:  Apache-2.0 (see upstream LICENSE).
   Usage:    the AVX-512 modular-arithmetic and NTT fast paths adapt HEXL's
-            approach -- IFMA / AVX-512 Barrett reduction (52-bit hi/lo madd52
-            products) and lazy-reduction butterflies -- integrated into
-            modules/arith/c/src/zq/zq_avx512_*.c and
-            modules/arith/c/src/ntt/ntt_avx512_*.{c,inc}. Compiled into the
-            native extension on AVX-512 builds.
+            approach: IFMA / AVX-512 Barrett reduction (52-bit hi/lo madd52
+            products) and lazy-reduction butterflies, integrated into the
+            width-specialised kernels modules/arith/c/src/mod{32,50,64}.c and
+            ntt{32,50,64}.c. Compiled into the native extension on AVX-512
+            builds.

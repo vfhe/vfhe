@@ -1,45 +1,53 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+# Static analysis for Python and C. The C build is manual so the tracer observes
+# the real compilation.
 name: CodeQL
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+  # Catches newly published queries against unchanged code.
   schedule:
     - cron: "0 4 * * 1"
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel stale PR runs; keep main's, they are the per-commit record.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   analyze:
-    name: Analyze (${{ matrix.language }})
+    name: CodeQL analysis (${{ matrix.language }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       security-events: write
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Python needs no build; C must be compiled so CodeQL can trace it.
           - language: python
             build-mode: none
           - language: c-cpp
             build-mode: manual
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           submodules: recursive
-      - uses: github/codeql-action/init@v4
+          persist-credentials: false
+      - uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-      - name: Build the native extension (manual build mode)
+      # Must run between init and analyze so the tracer observes the compiler.
+      - uses: ./.github/actions/setup-vfhe
         if: matrix.build-mode == 'manual'
-        run: |
-          python -m pip install --upgrade "pip>=25.1"
-          pip install --group dev
-          make build
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         with:
           category: "/language:${{ matrix.language }}"

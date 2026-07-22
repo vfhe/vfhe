@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Bug report
+description: Report a defect in VFHE.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Do not report security issues here; use the
+        [security policy](https://github.com/vfhe/vfhe/blob/main/SECURITY.md)
+        instead.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 0.0.1, or a commit hash for a source build
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.14"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and compiler
+      placeholder: Ubuntu 24.04, gcc 14 / macOS 15, Apple clang 16
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Native engine
+      description: Printed at build time; AVX-512 requires an x86 CPU with IFMA.
+      options: [portable, AVX-512, not sure]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the smallest snippet or parameters that reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or traceback
+      render: shell

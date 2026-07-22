@@ -262,12 +262,19 @@ void ntt_free_precompute(__m512i **ws, __m512i **w_precon, uint64_t n)
 
 NTT_proc ntt_new_proc(uint64_t n, uint64_t q)
 {
-    uint64_t root_of_unity = 2;
-    while (power_mod(root_of_unity, n, q) != q - 1)
+    // Deterministic search for a primitive 2n-th root of unity, identical to the
+    // portable kernel's so both builds agree on the transform basis. Raise
+    // successive candidates g = 2, 3, 4, ... to the (q-1)/2n power and keep the
+    // first whose n-th power is -1 (order exactly 2n).
+    uint64_t root_of_unity = 0;
+    for (uint64_t g = 2; g < q; g++)
     {
-        _rdrand64_step((unsigned long long *)&root_of_unity);
-        root_of_unity %= q;
-        root_of_unity = power_mod(root_of_unity, (q - 1) / (2 * n), q);
+        uint64_t candidate = power_mod(g, (q - 1) / (2 * n), q);
+        if (power_mod(candidate, n, q) == q - 1)
+        {
+            root_of_unity = candidate;
+            break;
+        }
     }
     uint64_t inv_root_of_unity = inverse_mod(root_of_unity, q);
 

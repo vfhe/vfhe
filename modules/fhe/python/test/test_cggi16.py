@@ -23,10 +23,10 @@ def test_functional_bootstrap(deterministic_prng):
     # decrypt cleanly).
     deterministic_prng(0xB007C0DE)
     random.seed(0xB007C0DE)
-    in_N = out_N = 256
+    out_N = 256
     msg_prec = 5
     Rq = Ring(out_N, prime_size=[50, 50, 50], split_degree=1)
-    Rp = Rq.quotient_ring(ell=1)
+    _Rp = Rq.quotient_ring(ell=1)
     in_ring = Rq.quotient_ring(ell=2)
     in_scheme = MLWE_Scheme(in_ring, special_primes=0, module_rank=1)
     out_scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=1, max_lvl=1)

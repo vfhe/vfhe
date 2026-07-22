@@ -1,8 +1,7 @@
 [build-system]
 requires = [
-    "setuptools>=64",
+    "setuptools>=77",  # >=77: PEP 639 plain-string `license = "Apache-2.0"`
     "setuptools-scm>=8",
-    "wheel",
     "cffi>=1.15",
     "grpcio-tools~=1.81.0",
 ]
@@ -15,24 +14,21 @@ description = "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorph
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-# `authors` is names-only on purpose: PEP 621 routes name+email entries into the
-# structured `Author-email` field, of which PyPI's web UI renders only the FIRST
-# entry. Name-only entries populate the plain `Author` field, which PyPI shows
-# verbatim -- so all four authors appear. The same people are mirrored into
-# `maintainers` WITH emails, so every contact address is preserved (and shown in
-# PyPI's "Maintainers" section).
+# Names only: PyPI renders just the first name+email pair, but shows the plain
+# Author field in full. Surname-sorted; affiliations and contacts in AUTHORS.md.
 authors = [
+    { name = "Ignacio Cascudo" },
+    { name = "Anamaria Costache" },
     { name = "Daniele Cozzo" },
-    { name = "Antonio Guimaraes" },
+    { name = "Adrien Dubois" },
     { name = "Dario Fiore" },
+    { name = "Antonio Guimaraes" },
+    { name = "Robin Kostler" },
+    { name = "Michal Osadnik" },
     { name = "Alin-Petru Rosu" },
+    { name = "Eduardo Soria-Vazquez" },
 ]
-maintainers = [
-    { name = "Daniele Cozzo", email = "daniele.cozzo@imdea.org" },
-    { name = "Antonio Guimaraes", email = "antonio.guimaraes@imdea.org" },
-    { name = "Dario Fiore", email = "dario.fiore@imdea.org" },
-    { name = "Alin-Petru Rosu", email = "alin-petru.rosu@imdea.org" },
-]
+maintainers = [{ name = "The VFHE Maintainers", email = "maintainers@vfhe.ai" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -45,6 +41,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Security :: Cryptography",
 ]
 dependencies = [
@@ -59,6 +56,7 @@ vfhe_create_headers = "vfhe.misc.dynamic_extensions:cli_main"
 [project.urls]
 Homepage = "https://github.com/vfhe/vfhe"
 Repository = "https://github.com/vfhe/vfhe"
+Issues = "https://github.com/vfhe/vfhe/issues"
 
 [dependency-groups]
 dev = [
@@ -68,15 +66,17 @@ dev = [
     "protobuf>=6.33,<7",
     "pytest>=7.0",
     "pytest-cov",
-    "gcovr",  # C coverage (gcov) for the CI coverage-c job
-    "genbadge[coverage]",  # renders the coverage SVG badges in the CI coverage job
-    # Runtime dep needed by the CKKS encoding tests (the dev workflow builds the
-    # extension in place rather than pip-installing, so runtime deps are listed here).
-    "mpmath>=1.3",
+    "gcovr",  # C coverage (gcov) in the CI coverage job
+    "twine",  # `twine check --strict` on the sdist metadata in CI
     "build",
-    "ruff",
+    # Runtime dep; listed here because dev builds run in place, not pip-installed.
+    "mpmath>=1.3",
+    # Pinned: an unpinned formatter bump reformats the tree and fails CI on an
+    # unrelated PR. The pre-commit hooks run these same pins.
+    "ruff==0.15.20",
+    "clang-format==22.1.5",
+    "pre-commit",
     "pyright",
-    "clang-format",
 ]
 
 [tool.setuptools_scm]
@@ -86,11 +86,25 @@ fallback_version = "0.0.0"
 cache-dir = ".cache/ruff"
 
 [tool.ruff.lint]
-select = ["I"]
+# Not `select`: that would replace the E4/E7/E9/F defaults and turn pyflakes off.
+extend-select = ["I"]
+
+# Configured here, not in CI flags: a local `pytest --cov=vfhe` measures
+# exactly what CI measures.
+[tool.coverage.run]
+branch = true # match the branch coverage already gated on the C side
+source = ["vfhe"]
+# Runtime C recompilation and its build helpers; exercised only at build time
+# and by the @complete test, which the coverage job does not run.
+omit = [
+    "*/vfhe/misc/dynamic_extensions.py",
+    "*/vfhe/misc/_native_compiler.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["modules/*/python/test"]
-python_files = ["*.py"]
+# importlib mode: the per-module test dirs are not packages, so same-named test
+# files in two modules would collide under the default import mode.
 addopts = "--import-mode=importlib"
 cache_dir = ".cache/pytest"
 markers = [

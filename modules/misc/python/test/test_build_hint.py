@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """The runtime "you could be faster" hint fires exactly when a portable build
-runs on a CPU that supports AVX-512 IFMA -- and never otherwise."""
+runs on a CPU that supports AVX-512 IFMA; and never otherwise."""
 
 import warnings
 

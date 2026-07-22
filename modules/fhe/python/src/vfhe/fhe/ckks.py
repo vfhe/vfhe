@@ -112,11 +112,11 @@ class CKKS_Scheme(MLWE_Scheme):
 
     def rescale(self, ciphertext: CKKS_Ciphertext) -> CKKS_Ciphertext:
         """Divides (round_division) the ciphertext by the last active prime, and recomputes delta."""
-        l = ciphertext.ell
-        assert l >= 2, "Cannot rescale a ciphertext with level less than 2"
+        ell = ciphertext.ell
+        assert ell >= 2, "Cannot rescale a ciphertext with level less than 2"
 
-        last_prime_val = self.ring.primes[l - 1]
-        target_ring = self.ring.quotient_ring(ell=l - 1)
+        last_prime_val = self.ring.primes[ell - 1]
+        target_ring = self.ring.quotient_ring(ell=ell - 1)
 
         ciphertext.round_division(target_ring)
         ciphertext.delta = ciphertext.delta / last_prime_val

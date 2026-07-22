@@ -2,14 +2,14 @@
 import hashlib
 import logging
 import os
-import platform
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from cffi import FFI
+
+from ._native_compiler import enable_asm_sources, host_has_avx512ifma
 
 # Set up a logger
 logger = logging.getLogger("vfhe.dynamic_extensions")
@@ -36,23 +36,25 @@ def register_reinitializer(func):
 
 
 def find_vfhe_root() -> Path:
-    """Find the root directory of the vfhe project containing 'modules' and 'native/discovery.py'."""
+    """Find the root directory of the vfhe project containing 'modules' and 'packaging/discovery.py'."""
     # 1. Check environment variable override
     env_dir = os.environ.get("VFHE_SOURCE_DIR")
     if env_dir:
         path = Path(env_dir).resolve()
-        if (path / "modules").is_dir() and (path / "native" / "discovery.py").exists():
+        if (path / "modules").is_dir() and (
+            path / "packaging" / "discovery.py"
+        ).exists():
             return path
         raise RuntimeError(
             f"VFHE_SOURCE_DIR environment variable is set to {env_dir}, "
-            "but it does not contain 'modules' and 'native/discovery.py'."
+            "but it does not contain 'modules' and 'packaging/discovery.py'."
         )
 
     # 2. Check parents of the current file (__file__)
     current = Path(__file__).resolve().parent
     for _ in range(10):
         if (current / "modules").is_dir() and (
-            current / "native" / "discovery.py"
+            current / "packaging" / "discovery.py"
         ).exists():
             return current
         current = current.parent
@@ -61,93 +63,15 @@ def find_vfhe_root() -> Path:
     current = Path(os.getcwd()).resolve()
     for _ in range(10):
         if (current / "modules").is_dir() and (
-            current / "native" / "discovery.py"
+            current / "packaging" / "discovery.py"
         ).exists():
             return current
         current = current.parent
 
     raise RuntimeError(
-        "vfhe root directory containing 'modules' and 'native/discovery.py' not found. "
+        "vfhe root directory containing 'modules' and 'packaging/discovery.py' not found. "
         "Please ensure the vfhe source files are available or set the VFHE_SOURCE_DIR environment variable."
     )
-
-
-def _enable_asm_sources() -> None:
-    """Register .S and .s files to be compiled using the compiler."""
-    # First, import the standard modules to ensure they are loaded
-    modnames = (
-        "distutils.ccompiler",
-        "distutils.unixccompiler",
-        "distutils.compilers.C.base",
-        "distutils.compilers.C.unix",
-        "setuptools._distutils.ccompiler",
-        "setuptools._distutils.unixccompiler",
-        "setuptools._distutils.compilers.C.base",
-        "setuptools._distutils.compilers.C.unix",
-    )
-    for modname in modnames:
-        try:
-            __import__(modname, fromlist=["*"])
-        except Exception:
-            pass
-
-    # Patch every loaded distutils module class and module-level variables
-    import sys
-
-    for name, module in list(sys.modules.items()):
-        if ("distutils" in name or "setuptools" in name) and module:
-            for k, obj in list(vars(module).items()):
-                if isinstance(obj, type) and hasattr(obj, "src_extensions"):
-                    exts = obj.src_extensions
-                    if isinstance(exts, list):
-                        for e in (".S", ".s"):
-                            if e not in exts:
-                                exts.append(e)
-                # Monkey-patch _make_out_path_exts if present on classes
-                if isinstance(obj, type) and hasattr(obj, "_make_out_path_exts"):
-                    if not getattr(obj, "_make_out_path_exts_patched", False):
-                        orig_method = getattr(obj, "_make_out_path_exts")
-
-                        def patched_method(
-                            cls, output_dir, strip_dir, src_name, extensions
-                        ):
-                            if extensions is not None:
-                                if isinstance(extensions, dict):
-                                    if ".S" not in extensions:
-                                        extensions[".S"] = ".o"
-                                    if ".s" not in extensions:
-                                        extensions[".s"] = ".o"
-                                elif isinstance(extensions, list):
-                                    if ".S" not in extensions:
-                                        extensions.append(".S")
-                                    if ".s" not in extensions:
-                                        extensions.append(".s")
-                            return orig_method(
-                                output_dir, strip_dir, src_name, extensions
-                            )
-
-                        setattr(obj, "_make_out_path_exts_patched", True)
-                        setattr(obj, "_make_out_path_exts", classmethod(patched_method))
-
-            exts = getattr(module, "src_extensions", None)
-            if isinstance(exts, list):
-                for e in (".S", ".s"):
-                    if e not in exts:
-                        exts.append(e)
-
-
-def _host_has_avx512ifma() -> bool:
-    """True if -march=native enables AVX-512 IFMA on this machine."""
-    import shlex
-    import sysconfig
-
-    cc = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
-    argv = [*shlex.split(cc), "-march=native", "-dM", "-E", "-x", "c", os.devnull]
-    try:
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=30)
-    except Exception:
-        return False
-    return out.returncode == 0 and "__AVX512IFMA__" in out.stdout
 
 
 def add_c_file(path: str):
@@ -324,89 +248,22 @@ def reinit_rlwe(new_ffi, new_lib):
 def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
     """Compiles the library together with the added extensions and updates the loaded library."""
     root = find_vfhe_root()
-    sys.path.insert(0, str(root / "native"))
+    sys.path.insert(0, str(root / "packaging"))
     try:
         import discovery
     finally:
         sys.path.pop(0)
 
-    modules_dir = root / "modules"
-    aliases = discovery.host_arch_aliases()
-
-    # Locate default headers, sources, and include directories
-    preamble_headers = []
-    for c_dir in sorted(modules_dir.glob("*/c")):
-        preamble_headers += sorted((c_dir / "include").glob("*.h"))
-
-    vfhe_sources = [str(src) for src in discovery.module_sources(modules_dir, aliases)]
-    vfhe_include_dirs = [str(inc) for inc in discovery.module_include_dirs(modules_dir)]
-
-    # Add vendored BLAKE3
-    blake3 = discovery.blake3_dir(root)
-    vfhe_sources += [str(s) for s in discovery.blake3_sources(root)]
-    vfhe_include_dirs.append(str(blake3))
-
-    is_x86 = discovery.is_x86_host()
-    coverage = os.environ.get("VFHE_COVERAGE") == "1"
-    force_portable = os.environ.get("VFHE_PORTABLE") == "1" or coverage
-    tune = (
-        (not force_portable)
-        and is_x86
-        and sys.platform != "win32"
-        and _host_has_avx512ifma()
+    # The same recipe the packaged build uses, plus the user's custom files.
+    plan = discovery.native_build_plan(root, host_has_avx512ifma)
+    compile_args = (
+        plan.compile_args if extra_compile_args is None else list(extra_compile_args)
     )
+    link_args = plan.link_args if extra_link_args is None else list(extra_link_args)
 
-    # Establish compile arguments, link arguments, macros, and libraries
-    if extra_compile_args is None:
-        if sys.platform == "win32":
-            compile_args = ["/O2", "/GL"]
-        elif coverage:
-            compile_args = ["-O0", "-g", "-std=gnu11", "--coverage"]
-        else:
-            compile_args = [
-                "-O3",
-                "-flto",
-                "-std=gnu11",
-                "-Wall",
-                "-Wno-unused-function",
-                "-Wno-unused-result",
-                "-Wno-sign-compare",
-                "-Wno-write-strings",
-            ]
-            if tune:
-                compile_args += ["-march=native", "-funroll-all-loops"]
-    else:
-        compile_args = list(extra_compile_args)
-
-    if extra_link_args is None:
-        if sys.platform == "win32":
-            link_args = ["/LTCG"]
-        elif coverage:
-            link_args = ["--coverage"]
-        else:
-            link_args = ["-flto"]
-    else:
-        link_args = list(extra_link_args)
-
-    if sys.platform == "win32":
-        libraries = []
-    else:
-        libraries = ["m"]
-
-    # Select defines and extra sources
-    if tune:
-        define_macros = []
-        vfhe_sources += [
-            str(blake3 / f"blake3_{x}_x86-64_unix.S")
-            for x in ("sse2", "sse41", "avx2", "avx512")
-        ]
-    else:
-        define_macros = discovery.portable_macros(is_x86)
-
-    # Combine with custom sources
-    all_sources = sorted(set(vfhe_sources + _custom_c_files))
+    all_sources = sorted({*map(str, plan.sources), *_custom_c_files})
     custom_include_dirs = {os.path.dirname(f) for f in _custom_c_files}
-    all_include_dirs = sorted(set(vfhe_include_dirs + list(custom_include_dirs)))
+    all_include_dirs = sorted({*map(str, plan.include_dirs), *custom_include_dirs})
 
     # Determine dynamic module name using a hash of custom files
     hasher = hashlib.sha256()
@@ -428,7 +285,7 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
     ffi = FFI()
 
     # Read default cdef files
-    for cdef in sorted(modules_dir.glob("*/python/cdef/*.cdef")):
+    for cdef in plan.cdef_files:
         ffi.cdef(cdef.read_text())
 
     # Read custom cdef files
@@ -442,7 +299,7 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
         ffi.cdef(custom_cdef_content)
 
     # Build the C source preamble
-    preamble = "\n".join(f'#include "{h.name}"' for h in preamble_headers)
+    preamble = "\n".join(f'#include "{h.name}"' for h in plan.preamble_headers)
     if custom_cdef_content:
         preamble += "\n\n/* Custom declarations */\n" + custom_cdef_content
 
@@ -451,8 +308,8 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
         preamble,
         sources=all_sources,
         include_dirs=all_include_dirs,
-        define_macros=define_macros,
-        libraries=libraries,
+        define_macros=plan.define_macros,
+        libraries=plan.libraries,
         extra_compile_args=compile_args,
         extra_link_args=link_args,
     )
@@ -462,7 +319,7 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
         output_dir = os.path.expanduser("~/.cache/vfhe")
     os.makedirs(output_dir, exist_ok=True)
 
-    _enable_asm_sources()
+    enable_asm_sources()
 
     with tempfile.TemporaryDirectory() as build_temp:
         logger.info(f"Compiling custom library '{module_name}'...")

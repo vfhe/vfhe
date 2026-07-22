@@ -1,23 +1,22 @@
 recursive-include modules *.c *.h *.inc *.S *.cdef *.proto
-include native/build_ffi.py
-include native/discovery.py
-include scripts/gen_proto.py
+include packaging/build_ffi.py
+include packaging/discovery.py
+include packaging/generate_protos.py
 prune modules/*/python/test
 
-# setuptools-scm's file finder otherwise sweeps every git-tracked tree -- both
-# submodules in full, plus CI/dev dirs -- into the sdist. Drop them here, then
-# re-add only the BLAKE3 sources the build actually needs.
+# setuptools-scm's file finder sweeps every git-tracked tree into the sdist;
+# drop these, then re-add only the BLAKE3 sources the build needs.
 prune external/unity
 prune external/blake3
-prune old-ci
 prune .github
 
-# Vendored BLAKE3 (git submodule): its C sources are compiled into the native
-# extension, so they MUST ship inside the sdist. This works only when the
-# submodule is checked out at sdist-build time (CI: checkout submodules: recursive).
-# Unity is intentionally NOT included -- it is test-only, never shipped.
+# BLAKE3's C sources are compiled into the extension, so they must ship in the
+# sdist; the submodule has to be checked out at build time. Unity stays out: it
+# is test-only.
 include external/blake3/c/*.c
 include external/blake3/c/*.h
 include external/blake3/c/*.S
 include external/blake3/LICENSE_A2 external/blake3/LICENSE_A2LLVM external/blake3/LICENSE_CC0
 include NOTICE
+include AUTHORS.md
+include CHANGELOG.md

@@ -4,7 +4,7 @@ from math import ceil, log2, prod
 
 from vfhe.misc.libvfhe import ffi, lib
 
-from .polynomial import Polynomial, Ring
+from .polynomial import Polynomial
 
 
 class Multiprecision:

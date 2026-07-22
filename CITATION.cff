@@ -13,35 +13,43 @@ keywords:
   - FHE
   - ZKP
   - cryptography
+# Sorted alphabetically by surname, following mathematical tradition:
+# https://www.ams.org/profession/leaders/culture/JointResearchandItsPublicationfinal.pdf
 authors:
+  - family-names: Cascudo
+    given-names: Ignacio
+    affiliation: "IMDEA Software Institute"
+    orcid: "https://orcid.org/0000-0001-5520-5386"
+  - family-names: Costache
+    given-names: Anamaria
+    affiliation: "École Polytechnique"
+    orcid: "https://orcid.org/0000-0001-8793-6116"
   - family-names: Cozzo
     given-names: Daniele
     affiliation: "IMDEA Software Institute"
-    orcid: "https://orcid.org/0000-0001-5110-6639"
-  - family-names: Guimarães
-    given-names: Antonio
-    affiliation: "IMDEA Software Institute"
+    orcid: "https://orcid.org/0000-0001-5289-3769"
+  - family-names: Dubois
+    given-names: Adrien
+    affiliation: "ENS Lyon"
   - family-names: Fiore
     given-names: Dario
     affiliation: "IMDEA Software Institute"
+    orcid: "https://orcid.org/0000-0001-7274-6600"
+  - family-names: Guimarães
+    given-names: Antonio
+    affiliation: "IMDEA Software Institute"
+    orcid: "https://orcid.org/0000-0001-5110-6639"
+  - family-names: Köstler
+    given-names: Robin
+    affiliation: "University of Luxembourg"
+  - family-names: Osadnik
+    given-names: Michał
+    affiliation: "Aalto University"
   - family-names: Roșu
     given-names: Alin-Petru
     affiliation: "IMDEA Software Institute"
     orcid: "https://orcid.org/0009-0005-8537-7265"
-
-# When a paper exists, uncomment and fill this in to have tools cite it instead:
-# preferred-citation:
-#   type: article  # or: conference-paper
-#   title: "Title of the accompanying paper"
-#   year: 2026
-#   doi: "10.XXXX/XXXXXXX"
-#   journal: "Venue / journal"  # or use collection-title for proceedings
-#   authors:
-#     - family-names: Cozzo
-#       given-names: Daniele
-#     - family-names: Guimarães
-#       given-names: Antonio
-#     - family-names: Fiore
-#       given-names: Dario
-#     - family-names: Roșu
-#       given-names: Alin-Petru
+  - family-names: Soria-Vazquez
+    given-names: Eduardo
+    affiliation: "Technology Innovation Institute"
+    orcid: "https://orcid.org/0000-0002-4882-0230"

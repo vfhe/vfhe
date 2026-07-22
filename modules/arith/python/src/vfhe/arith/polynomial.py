@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import math
+from enum import Enum
 
 from vfhe.misc.libvfhe import ffi, lib
 
 from .ntt import NTT_processor_instance
 from .number_theory import crt, is_prime
 
-next_power_of_2 = lambda x: 1 << int(math.ceil(math.log2(x)))
+
+def next_power_of_2(x):
+    return 1 << int(math.ceil(math.log2(x)))
 
 
 class Ring:
@@ -191,8 +194,6 @@ class Ring:
     def random_exceptional(self, size="minimal", ntt=True):
         return Polynomial(self).sample_exceptional(size, ntt)
 
-
-from enum import Enum
 
 repr = Enum("Polynomial Representation", ["empty", "ntt", "coeff"])
 

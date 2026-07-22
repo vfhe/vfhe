@@ -33,7 +33,7 @@ extern "C"
     void *safe_malloc(size_t size);
     void *safe_aligned_malloc(size_t size);
 
-    // Build/CPU introspection -- powers the runtime "you could be faster" hint.
+    // Build/CPU introspection; powers the runtime "you could be faster" hint.
     int vfhe_build_is_portable(void);  // 1 if compiled with PORTABLE_BUILD
     int vfhe_cpu_has_avx512ifma(void); // 1 if THIS CPU supports AVX-512 IFMA
 
