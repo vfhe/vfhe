@@ -2,7 +2,7 @@
 requires = [
     "setuptools>=77",  # >=77: PEP 639 plain-string `license = "Apache-2.0"`
     "setuptools-scm>=8",
-    "cffi>=1.15",
+    "cffi>=2.1.0",
     "grpcio-tools~=1.81.0",
 ]
 build-backend = "setuptools.build_meta"
@@ -45,7 +45,7 @@ classifiers = [
     "Topic :: Security :: Cryptography",
 ]
 dependencies = [
-    "cffi>=1.15",
+    "cffi>=2.1.0",
     "protobuf>=6.33,<7",
     "mpmath>=1.4.1",
 ]
@@ -61,7 +61,7 @@ Issues = "https://github.com/vfhe/vfhe/issues"
 [dependency-groups]
 dev = [
     "setuptools",
-    "cffi>=1.15",
+    "cffi>=2.1.0",
     "grpcio-tools~=1.81.0",
     "protobuf>=6.33,<7",
     "pytest>=9.1.1",
