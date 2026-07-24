@@ -137,7 +137,21 @@ def main() -> int:
         sde64 = ensure_sde()
         if sde64 is None:
             return 1
-        wrapper = [str(sde64), SDE_CHIP, "--"]
+        # -no-follow-child: subprocesses (the compilers dynamic_extensions
+        # spawns) run natively; SDE's follow-execve breaks them, and only the
+        # loading process needs emulation. Compiled modules dlopen back into
+        # it, so they still run emulated.
+        wrapper = [str(sde64), SDE_CHIP, "-no-follow-child", "--"]
+        # Detaching from those subprocesses needs a ptrace SDE's helper is
+        # only allowed when Yama is off (CI sets this; the C suite is fine
+        # either way).
+        yama = Path("/proc/sys/kernel/yama/ptrace_scope")
+        if yama.exists() and yama.read_text().strip() != "0":
+            log(
+                "[tuned] kernel.yama.ptrace_scope is enabled: tests that "
+                "spawn compilers may fail under SDE. Fix: "
+                "sudo sysctl -w kernel.yama.ptrace_scope=0"
+            )
 
     how = " ".join(wrapper) or "natively"
     log(f"[tuned] C tests, {how}")

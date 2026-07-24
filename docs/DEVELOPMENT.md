@@ -236,6 +236,10 @@ checkout (or an sdist install) needs nothing pre-generated.
 auto-fixable lint, imports included) and `clang-format` for C (style in `.clang-format`). Run it before
 committing.
 
+**Commits must be signed off** (`git commit -s`): CI enforces the
+[DCO](https://developercertificate.org) on every pull-request commit; see
+[CONTRIBUTING.md](../CONTRIBUTING.md#sign-off-dco) for what the sign-off asserts.
+
 **Commit messages** follow the 50/72 convention (subject <= 50 chars, body wrapped
 at 72) as a *recommendation, not enforced*. Opt into the editor guide once:
 

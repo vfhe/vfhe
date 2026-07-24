@@ -87,7 +87,21 @@ the template once:
 git config commit.template .gitmessage
 ```
 
-This is a recommendation; no tooling enforces it.
+This style is a recommendation; no tooling enforces it. The sign-off below
+**is** enforced.
+
+### Sign-off (DCO)
+
+Every commit must be signed off (`git commit -s`), certifying the
+[Developer Certificate of Origin](https://developercertificate.org): that you
+have the right to submit the code under Apache-2.0. Use your real name and the
+commit author email; CI rejects unsigned commits. To fix a series:
+`git rebase --signoff <base>` and force-push.
+
+If you wrote the contribution as part of employment or a funded project, the
+rights may belong to your employer or funder; by signing off you assert you
+are authorised to contribute it. When unsure, check your institution's IP
+policy first.
 
 ## Adding a module
 

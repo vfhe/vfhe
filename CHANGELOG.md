@@ -24,6 +24,9 @@ versions may contain breaking changes.
   hosts without AVX-512 IFMA; a test knob for emulator runs, not an install
   option.
 - Failed workflow runs notify the project Zulip (`notify-zulip.yml`).
+- Commits must carry the Developer Certificate of Origin sign-off
+  (`git commit -s`), enforced by CI on every pull request and locally by a
+  commit-msg pre-commit hook.
 - CI tests the baseline engine explicitly (`VFHE_PORTABLE=1`, no silent
   auto-tuning on capable runners) and on one more platform: arm64 Linux
   (`ubuntu-24.04-arm`). Pre-wired arm-tuned jobs no-op until an arm engine
