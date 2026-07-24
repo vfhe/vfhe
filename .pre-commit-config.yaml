@@ -1,7 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
+# commit-msg included so the DCO hook installs with a plain `pre-commit install`.
+default_install_hook_types: [pre-commit, commit-msg]
+
 repos:
   - repo: local
     hooks:
+      - id: dco-signoff
+        name: DCO sign-off (git commit -s)
+        entry: "Signed-off-by:"
+        language: pygrep
+        args: [--negate]
+        stages: [commit-msg]
+
       - id: ruff-check
         name: ruff check
         entry: ruff check --fix

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 #   lint ───────────────────────────────────────────────────────────────┐
+#   dco ────────────────────────────────────────────────────────────────┤
 #   check-simd-build ───────────────────────────────────────────────────┤
 #   test-sde ───────────────────────────────────────────────────────────┤
 #   test-sde-python ────────────────────────────────────────────────────┼─→ ci-ok
@@ -47,6 +48,41 @@ jobs:
         run: |
           find modules \( -name '*.c' -o -name '*.h' \) -print0 \
             | xargs -0 clang-format --dry-run --Werror
+
+  # Every PR commit must carry its author's Signed-off-by (the DCO,
+  # developercertificate.org); bot commits are exempt. On push there is no
+  # commit range to police, so the job passes vacuously (ci-ok counts
+  # skipped jobs as failures, so it must not skip).
+  dco:
+    name: DCO sign-off check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require Signed-off-by on every commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ]; then
+            echo "not a pull request; nothing to check"
+            exit 0
+          fi
+          failed=0
+          for sha in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
+            author=$(git show -s --format='%an <%ae>' "$sha")
+            case "$author" in *"[bot]"*) continue ;; esac
+            if ! git show -s --format=%B "$sha" | grep -qF "Signed-off-by: $author"; then
+              echo "::error::commit ${sha:0:10} lacks 'Signed-off-by: $author'." \
+                "Sign with 'git commit -s'; fix the series with" \
+                "'git rebase --signoff' and force-push."
+              failed=1
+            fi
+          done
+          exit $failed
 
   # Object-only compile of the AVX-512 / AES-NI kernels; nothing is built or
   # kept, the compile outcome is the check. On macOS this cross-compiles with
@@ -112,6 +148,10 @@ jobs:
       - uses: ./.github/actions/setup-vfhe
         with:
           build: none
+      # Yama (ptrace_scope=1) blocks SDE's helper from detaching from the
+      # compiler subprocesses the dynamic-extensions test spawns.
+      - name: Let SDE manage subprocesses
+        run: sudo sysctl -w kernel.yama.ptrace_scope=0
       - name: Run the Python suite on the tuned engine under SDE
         env:
           SUITE: ${{ matrix.suite }}
@@ -255,6 +295,7 @@ jobs:
     needs:
       [
         lint,
+        dco,
         check-simd-build,
         test-sde,
         test-sde-python,
