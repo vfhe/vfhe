@@ -19,8 +19,25 @@ X86_ALIASES = {"x86_64", "amd64", "x86-64", "x64"}
 ARM_ALIASES = {"aarch64", "arm64"}
 ARCH_ALIASES = (X86_ALIASES, ARM_ALIASES)
 
+# Architectures with a hand-tuned engine. Extending this (with the kernels)
+# activates the pre-wired CI jobs for that architecture.
+TUNED_ARCHES = X86_ALIASES
+
 # Vendored BLAKE3 portable core (misc/arith call it): always compiled in.
 BLAKE3_BASENAMES = ("blake3.c", "blake3_dispatch.c", "blake3_portable.c")
+
+# x86 ISA flags of the tuned engine; they define the macros the kernels guard
+# on (__AVX512IFMA__ & co), so passing them on any x86-64 host selects the
+# same code -march=native selects on IFMA hardware.
+TUNED_SIMD_FLAGS = [
+    "-mavx512f",
+    "-mavx512ifma",
+    "-mavx512dq",
+    "-mavx512vl",
+    "-mavx2",
+    "-maes",
+    "-mrdrnd",
+]
 
 
 def host_arch_aliases() -> set[str]:
@@ -35,6 +52,11 @@ def host_arch_aliases() -> set[str]:
 def is_x86_host() -> bool:
     """True on x86-64 hosts (selects the BLAKE3 x86 SIMD-disable defines)."""
     return platform.machine().lower() in X86_ALIASES
+
+
+def host_has_tuned_engine() -> bool:
+    """True when this repo carries a tuned engine for the host architecture."""
+    return platform.machine().lower() in TUNED_ARCHES
 
 
 def arch_ok(path: Path, aliases: set[str]) -> bool:
@@ -72,6 +94,14 @@ def blake3_sources(root: Path) -> list[Path]:
     """The always-compiled BLAKE3 core (portable code + runtime dispatcher)."""
     d = blake3_dir(root)
     return [d / s for s in BLAKE3_BASENAMES]
+
+
+def blake3_simd_asm(root: Path) -> list[Path]:
+    """BLAKE3's pre-assembled x86-64 SIMD kernels (tuned builds only)."""
+    d = blake3_dir(root)
+    return [
+        d / f"blake3_{x}_x86-64_unix.S" for x in ("sse2", "sse41", "avx2", "avx512")
+    ]
 
 
 # --- Vendored dependencies ---------------------------------------------------
@@ -185,6 +215,10 @@ def native_build_plan(
     VFHE_PORTABLE=1 forces portable (build here, run elsewhere).
     VFHE_COVERAGE=1 compiles -O0 --coverage for gcov, without LTO (it strips
     gcov data); always portable.
+    VFHE_TUNED=1 forces the tuned engine with explicit ISA flags instead of
+    -march=native, for running under an emulator (Intel SDE) on x86-64 hosts
+    that lack AVX-512 IFMA. The result crashes on such hosts outside the
+    emulator.
     """
     modules_dir = root / "modules"
 
@@ -203,7 +237,12 @@ def native_build_plan(
     is_x86 = is_x86_host()
     coverage = os.environ.get("VFHE_COVERAGE") == "1"
     force_portable = os.environ.get("VFHE_PORTABLE") == "1" or coverage
-    tuned = (
+    force_tuned = os.environ.get("VFHE_TUNED") == "1"
+    if force_tuned and force_portable:
+        raise RuntimeError("VFHE_TUNED=1 conflicts with VFHE_PORTABLE/VFHE_COVERAGE")
+    if force_tuned and (not is_x86 or sys.platform == "win32"):
+        raise RuntimeError("VFHE_TUNED=1 needs a POSIX x86-64 build host")
+    tuned = force_tuned or (
         (not force_portable)
         and is_x86
         and sys.platform != "win32"
@@ -228,13 +267,18 @@ def native_build_plan(
     define_macros: list[tuple[str, str | None]]
     if tuned:
         define_macros = []  # drop PORTABLE_BUILD -> activate the SIMD-guarded paths
-        compile_args += ["-march=native", "-funroll-all-loops"]
+        # Forced: explicit ISA flags, since -march=native on a non-IFMA host
+        # would not enable them.
+        arch = TUNED_SIMD_FLAGS if force_tuned else ["-march=native"]
+        compile_args += [*arch, "-funroll-all-loops"]
         # BLAKE3 SIMD via pre-assembled .S (runtime dispatch).
-        sources += [
-            blake3_dir(root) / f"blake3_{x}_x86-64_unix.S"
-            for x in ("sse2", "sse41", "avx2", "avx512")
-        ]
-        note = "CPU-tuned build (-march=native, AVX-512 IFMA detected)."
+        sources += blake3_simd_asm(root)
+        note = (
+            "tuned build forced (VFHE_TUNED=1); needs AVX-512 IFMA hardware "
+            "or an emulator (Intel SDE) to run."
+            if force_tuned
+            else "CPU-tuned build (-march=native, AVX-512 IFMA detected)."
+        )
     else:
         # Portable baseline: scalar engine, BLAKE3 SIMD off. Runs everywhere.
         define_macros = portable_macros(is_x86)

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Compile and run every modules/*/c/test/*.c against the full portable engine.
+"""Compile and run every modules/*/c/test/*.c against the full engine.
 
-Build inputs come from packaging/discovery.py so tests cannot drift from the
-packaged build. Honours CC and VFHE_SANITIZE (e.g. "address,undefined").
+Portable engine by default; --tuned builds the AVX-512 one instead, whose
+binaries need IFMA hardware or --wrapper (an emulator prefix such as
+"sde64 -icl --") to run. Build inputs come from packaging/discovery.py so
+tests cannot drift from the packaged build. Honours CC and VFHE_SANITIZE
+(e.g. "address,undefined").
 
 Usage:
     python scripts/run_c_tests.py [arith misc ...]   # default: all modules
@@ -11,6 +14,7 @@ Usage:
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -28,7 +32,13 @@ if checks := os.environ.get("VFHE_SANITIZE", "").strip():
     SANITIZE_FLAGS = discovery.sanitizer_flags(checks)
 
 
-def run_module(module_dir: Path, workdir: Path) -> bool:
+def run_module(
+    module_dir: Path,
+    workdir: Path,
+    engine_flags: list[str],
+    extra_sources: list[Path],
+    wrapper: list[str],
+) -> bool:
     """Compile and run one module's C test suites; True when all pass."""
     all_passed = True
     for test in sorted((module_dir / "c" / "test").rglob("*.c")):
@@ -43,11 +53,12 @@ def run_module(module_dir: Path, workdir: Path) -> bool:
                 "-Wextra",
                 "-std=gnu11",
                 *SANITIZE_FLAGS,
-                *CTX.define_flags,
+                *engine_flags,
                 *CTX.include_flags,
                 str(test),
                 *([str(UNITY_SRC)] if uses_unity else []),
                 *map(str, CTX.kernels),
+                *map(str, extra_sources),
                 *LINK_MATH,
                 "-o",
                 str(binary),
@@ -59,7 +70,9 @@ def run_module(module_dir: Path, workdir: Path) -> bool:
             error(f"compile failed: {test.relative_to(ROOT)}\n{compiled.stderr}")
             all_passed = False
             continue
-        test_run = subprocess.run([str(binary)], capture_output=True, text=True)
+        test_run = subprocess.run(
+            [*wrapper, str(binary)], capture_output=True, text=True
+        )
         sys.stdout.write(test_run.stdout)  # Unity's report is the product
         if test_run.returncode != 0:
             error(
@@ -73,7 +86,28 @@ def run_module(module_dir: Path, workdir: Path) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("modules", nargs="*", help="module names to run (default: all)")
+    parser.add_argument(
+        "--tuned",
+        action="store_true",
+        help="build the AVX-512 engine (x86-64 only; run needs IFMA or --wrapper)",
+    )
+    parser.add_argument(
+        "--wrapper",
+        default="",
+        help="command prefix to run each test binary, e.g. 'sde64 -icl --'",
+    )
     args = parser.parse_args()
+
+    if args.tuned and not discovery.is_x86_host():
+        error("--tuned needs an x86-64 host")
+        return 2
+    if args.tuned:
+        engine_flags = discovery.TUNED_SIMD_FLAGS
+        extra_sources = discovery.blake3_simd_asm(ROOT)
+    else:
+        engine_flags = CTX.define_flags
+        extra_sources = []
+    wrapper = shlex.split(args.wrapper)
 
     if not UNITY_SRC.exists():
         error(
@@ -94,7 +128,9 @@ def main() -> int:
     all_passed = True
     with tempfile.TemporaryDirectory() as workdir:
         for module_dir in module_dirs:
-            all_passed &= run_module(module_dir, Path(workdir))
+            all_passed &= run_module(
+                module_dir, Path(workdir), engine_flags, extra_sources, wrapper
+            )
 
     print("\nC tests:", "PASSED" if all_passed else "FAILED")
     return 0 if all_passed else 1

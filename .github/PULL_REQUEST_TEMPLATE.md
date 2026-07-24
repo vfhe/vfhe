@@ -1,4 +1,3 @@
-<!-- One or two sentences of summary. Link the issue if one exists: Closes #NNN -->
 
 ## Checklist
 

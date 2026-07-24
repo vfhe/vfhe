@@ -6,7 +6,7 @@ SOURCES = modules packaging scripts smoke .clusterfuzzlite .github setup.py
 # Never write .pyc anywhere during the dev loop (no __pycache__ in the source).
 export PYTHONDONTWRITEBYTECODE := 1
 
-.PHONY: deps format proto build test test-fast fuzz-local sdist smoke clean
+.PHONY: deps format proto build test test-fast test-tuned fuzz-local sdist smoke clean
 
 deps:     ## install the dev dependency group + git hooks (not the package; needs pip >= 25.1)
 	$(PYTHON) -m pip install --group dev
@@ -30,6 +30,9 @@ test: build   ## build, then C tests + the complete Python suite (incl. heavy bo
 test-fast: build  ## build, then C tests + the fast Python suite (default; skips @complete)
 	$(PYTHON) scripts/run_c_tests.py
 	$(PYTHON) -m pytest
+
+test-tuned:  ## C tests + fast Python suite on this arch's optimised engine (x86-64: native IFMA or Intel SDE on Linux)
+	$(PYTHON) scripts/run_tuned_tests.py
 
 fuzz-local:  ## build the c/fuzz harnesses with local clang and fuzz each for 60s
 	$(PYTHON) scripts/run_c_fuzz_tests_local.py

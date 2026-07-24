@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include <arith.h>
+#include <misc.h> /* safe_aligned_malloc: the SIMD kernels need 64-byte-aligned buffers */
 
 #include "unity.h"
 
@@ -18,9 +19,9 @@ void tearDown(void) {}
 static void roundtrip(uint64_t n, uint64_t q)
 {
     NTT_proc proc = ntt_new_proc(n, q);
-    uint64_t *in = malloc(n * sizeof(uint64_t));
-    uint64_t *fwd = malloc(n * sizeof(uint64_t));
-    uint64_t *back = malloc(n * sizeof(uint64_t));
+    uint64_t *in = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *fwd = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *back = safe_aligned_malloc(n * sizeof(uint64_t));
     for (uint64_t i = 0; i < n; i++)
         in[i] = (0x123456789ABCDEFULL + i) % q;
     ntt_forward(fwd, in, proc);
@@ -58,13 +59,14 @@ void test_ntt_negacyclic_convolution(void)
             const uint64_t q = next_special_prime(1ULL << bits[bi], n, true);
             NTT_proc proc = ntt_new_proc(n, q);
 
-            uint64_t *a = malloc(n * sizeof(uint64_t));
-            uint64_t *b = malloc(n * sizeof(uint64_t));
-            uint64_t *ref = calloc(n, sizeof(uint64_t));
-            uint64_t *na = malloc(n * sizeof(uint64_t));
-            uint64_t *nb = malloc(n * sizeof(uint64_t));
-            uint64_t *nr = malloc(n * sizeof(uint64_t));
-            uint64_t *res = malloc(n * sizeof(uint64_t));
+            uint64_t *a = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *b = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *ref = safe_aligned_malloc(n * sizeof(uint64_t));
+            memset(ref, 0, n * sizeof(uint64_t));
+            uint64_t *na = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *nb = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *nr = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *res = safe_aligned_malloc(n * sizeof(uint64_t));
 
             for (uint64_t i = 0; i < n; i++)
             {

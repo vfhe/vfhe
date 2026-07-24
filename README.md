@@ -4,7 +4,9 @@
 [![Python versions](https://img.shields.io/badge/python-3.10--3.14-blue)](https://pypi.org/project/vfhe/)
 [![CI](https://github.com/vfhe/vfhe/actions/workflows/ci.yml/badge.svg)](https://github.com/vfhe/vfhe/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/vfhe/vfhe/badge)](https://securityscorecards.dev/viewer/?uri=github.com/vfhe/vfhe)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13712/badge)](https://www.bestpractices.dev/projects/13712)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/vfhe/vfhe/blob/main/LICENSE)
+[![Zulip](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://vfhe.zulipchat.com)
 
 The VFHE library: a library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques.
 
@@ -59,6 +61,31 @@ so no submodules are required.
 > *does* support AVX-512 IFMA, VFHE prints a one-time hint to rebuild tuned
 > (silence it with the usual `warnings` filters).
 
+### Verifying a release
+
+Each release is signed with Sigstore build provenance. To verify the sdist came
+from this repository's release workflow (needs the [GitHub CLI](https://cli.github.com)):
+
+```bash
+pip download --no-deps --no-binary :all: vfhe==<version>   # fetch the sdist
+gh attestation verify vfhe-<version>.tar.gz --repo vfhe/vfhe
+```
+
+Expected output confirms the attestation and shows the signer identity: the
+`.github/workflows/release.yml` workflow of `vfhe/vfhe`, issued by GitHub
+Actions' OIDC (`https://token.actions.githubusercontent.com`). A mismatch, or
+no attestation, means the artifact is not a genuine release. PyPI also records
+these attestations at `https://pypi.org/project/vfhe/#files`.
+
+---
+
+## Usage
+
+A walkthrough of encrypted computation with CKKS is in
+[`docs/USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md);
+[`smoke/ckks.py`](https://github.com/vfhe/vfhe/blob/main/smoke/ckks.py) is its
+runnable, CI-verified form.
+
 ---
 
 ## Development
@@ -66,6 +93,10 @@ so no submodules are required.
 The development guide, covering the repository layout, the build system, testing,
 coverage, and CI, is in
 [`docs/DEVELOPMENT.md`](https://github.com/vfhe/vfhe/blob/main/docs/DEVELOPMENT.md).
+The AVX-512 engine is tested without AVX-512 hardware: `make test-tuned` runs
+the suites on it, natively on IFMA machines and under the
+[Intel Software Development Emulator](https://www.intel.com/content/www/us/en/download/684897/intel-software-development-emulator.html)
+elsewhere (x86-64 Linux; CI runs it on every pull request).
 Contribution expectations are in
 [`CONTRIBUTING.md`](https://github.com/vfhe/vfhe/blob/main/CONTRIBUTING.md).
 
