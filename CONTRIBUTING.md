@@ -55,13 +55,17 @@ passes.
 
 ### About coverage
 
-Coverage is reported on every pull request by `github-code-quality[bot]`, which
-compares your branch against `main`. **It does not block a merge**; treat it as
-information for the reviewer.
+Coverage is reported on every pull request as a comment with per-line HTML
+reports in the run's `coverage` artifact. **It does not block a merge**; treat
+it as information for the reviewer.
 
-Still, if you add code, add tests for it. When something genuinely cannot be
-tested (unreachable defensive branches, allocation-failure paths,
-platform-specific fallbacks), mark it so the report is not misleading:
+**Testing policy.** Any change that adds or alters functionality MUST add or
+update automated tests covering it — a new kernel, a new Python API, a bug fix
+(which gets a test that fails before it and passes after), or a behavioural
+change. Pure refactors, docs, and CI changes are exempt. Reviewers hold pull
+requests to this. When something genuinely cannot be tested (unreachable
+defensive branches, allocation-failure paths, platform-specific fallbacks),
+mark it so the report is not misleading:
 
 ```python
 if impossible_state:  # pragma: no cover

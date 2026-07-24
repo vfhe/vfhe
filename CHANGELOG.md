@@ -11,6 +11,31 @@ versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- The AVX-512 engine is now executed, not just compile-checked: `make
+  test-tuned` (`scripts/run_tuned_tests.py`) runs the C tests and the fast or
+  complete Python suite on this architecture's optimised engine — natively on
+  AVX-512 IFMA hardware, under the Intel Software Development Emulator
+  anywhere else on x86-64 Linux, and an error on architectures with no
+  optimised engine yet. CI runs all three tiers on every pull request, always
+  emulated (`--emulate`) for one deterministic path.
+- `VFHE_TUNED=1` forces the tuned engine with explicit ISA flags on x86-64
+  hosts without AVX-512 IFMA; a test knob for emulator runs, not an install
+  option.
+- Failed workflow runs notify the project Zulip (`notify-zulip.yml`).
+- CI tests the baseline engine explicitly (`VFHE_PORTABLE=1`, no silent
+  auto-tuning on capable runners) and on one more platform: arm64 Linux
+  (`ubuntu-24.04-arm`). Pre-wired arm-tuned jobs no-op until an arm engine
+  lands (`discovery.TUNED_ARCHES`), then run it natively on both arm
+  runners.
+
+### Fixed
+
+- The arith C tests fed plain `malloc` buffers to SIMD kernels that require
+  64-byte alignment (`safe_aligned_malloc`); crashed the tuned engine, found
+  by its first emulated run.
+
 ## [0.0.2] - 2026-07-22
 
 ### Added

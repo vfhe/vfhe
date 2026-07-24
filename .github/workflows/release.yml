@@ -148,6 +148,9 @@ jobs:
       id-token: write # Trusted Publishing
       attestations: write # sign the sdist provenance
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Download the sdist
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -157,6 +160,17 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: sbom
+      - name: Extract the changelog section for the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v tag="$TAG" \
+            '$0 ~ "^## \\["tag"\\]" {found=1; next}
+             /^## \[/ || /^\[.*\]: / {found=0} found' \
+            CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          grep "^\[$TAG\]: " CHANGELOG.md \
+            | sed 's/^\[[^]]*\]: /**Full Changelog**: /' >> release-notes.md
       # Verifiable with: gh attestation verify <sdist> --repo <owner>/<repo>
       - name: Attest the sdist build provenance
         id: attest
@@ -168,11 +182,9 @@ jobs:
       - name: Create the GitHub Release with artifacts, SBOM, and provenance
         env:
           GH_TOKEN: ${{ github.token }}
-          # GH_REPO: gh's documented way to target a repo without a checkout.
-          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: |
           cp "$BUNDLE" provenance.intoto.jsonl
           gh release create "$TAG" dist/*.tar.gz vfhe-sbom.json provenance.intoto.jsonl \
-            --generate-notes --verify-tag
+            --notes-file release-notes.md --verify-tag

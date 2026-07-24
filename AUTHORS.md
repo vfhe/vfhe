@@ -18,6 +18,25 @@ Authors are sorted alphabetically by surname, following
 | Alin-Petru Roșu | IMDEA Software Institute | <alin-petru.rosu@imdea.org> |
 | Eduardo Soria-Vazquez | Technology Innovation Institute | <eduardo.soria-vazquez@tii.ae> |
 
+## Maintainers
+
+Maintainers hold access to the sensitive project resources: the GitHub
+organization, the PyPI project, and the release pipeline. They review and
+merge contributions, cut releases, and handle security reports
+([SECURITY.md](SECURITY.md)). Authors not listed here contribute research and
+code through the same review process as external contributors.
+
+| Maintainer | GitHub |
+|---|---|
+| Antonio Guimarães | [@antoniocgj](https://github.com/antoniocgj) |
+| Alin-Petru Roșu | [@rosualinpetru](https://github.com/rosualinpetru) |
+
+Escalated permissions (merge rights, and access to the GitHub organization,
+the PyPI project, or the release pipeline) are granted only after review and
+approval by the existing maintainers, and only to contributors with an
+established, identifiable track record on the project. Access is scoped to what
+the role requires and revoked when no longer needed.
+
 ## Contact
 
 For questions about the library, reach the maintainers at

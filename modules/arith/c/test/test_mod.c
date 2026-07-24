@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 #include <arith.h>
+#include <misc.h> /* safe_aligned_malloc: the SIMD kernels need 64-byte-aligned buffers */
 
 #include "unity.h"
 
@@ -90,10 +91,10 @@ static void check_ops(uint64_t q_bits)
     const uint64_t q = next_special_prime(1ULL << q_bits, n, true);
     NTT_proc proc = ntt_new_proc(n, q);
 
-    uint64_t *in1 = malloc(n * sizeof(uint64_t));
-    uint64_t *in2 = malloc(n * sizeof(uint64_t));
-    uint64_t *out = malloc(n * sizeof(uint64_t));
-    uint64_t *ref = malloc(n * sizeof(uint64_t));
+    uint64_t *in1 = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *in2 = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *out = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *ref = safe_aligned_malloc(n * sizeof(uint64_t));
     for (uint64_t i = 0; i < n; i++)
     {
         in1[i] = (0x123456789ABCDEFULL ^ (i * 0x1337BEEFULL)) % q;
@@ -136,7 +137,7 @@ static void check_ops(uint64_t q_bits)
     ref_negate(ref, in1, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
-    uint64_t *large = malloc(n * sizeof(uint64_t));
+    uint64_t *large = safe_aligned_malloc(n * sizeof(uint64_t));
     for (uint64_t i = 0; i < n; i++)
         large[i] = 0xFFFFFFFFFFFFFFFFULL ^ (i * 0x12345678ULL);
     mod_eltwise_reduce(out, large, n, proc);
@@ -144,7 +145,7 @@ static void check_ops(uint64_t q_bits)
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
     free(large);
 
-    int64_t *sig = malloc(n * sizeof(int64_t));
+    int64_t *sig = safe_aligned_malloc(n * sizeof(int64_t));
     for (uint64_t i = 0; i < n; i++)
     {
         if (i == 0)
@@ -163,7 +164,8 @@ static void check_ops(uint64_t q_bits)
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
     free(sig);
 
-    uint64_t *hi = malloc(n * sizeof(uint64_t)), *lo = malloc(n * sizeof(uint64_t));
+    uint64_t *hi = safe_aligned_malloc(n * sizeof(uint64_t)),
+             *lo = safe_aligned_malloc(n * sizeof(uint64_t));
     for (uint64_t i = 0; i < n; i++)
     {
         hi[i] = 0xAAAAAAAAAAAAAAAAULL ^ (i * 0x11111111ULL);

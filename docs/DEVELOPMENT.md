@@ -29,6 +29,7 @@ scripts/_common.py                 shared script plumbing: repo root, discovery 
 scripts/run_c_tests.py             compiles + runs the C tests (VFHE_SANITIZE=...)
 scripts/run_c_fuzz_tests_local.py  builds + briefly fuzzes the c/fuzz harnesses locally (make fuzz-local)
 scripts/check_simd_build.py        compile-checks the x86 AVX-512 engine paths
+scripts/run_tuned_tests.py         tests this arch's optimised engine (x86-64: native IFMA or Intel SDE)
 scripts/check_install.py           installs the sdist into a scratch venv, proves it compiles
 scripts/run_smoke_tests.py         runs smoke/*.py with a given interpreter
 smoke/ckks.py                      smoke test: self-verifying end-to-end CKKS computation
@@ -180,7 +181,30 @@ VFHE_SANITIZE=address,undefined python scripts/run_c_tests.py   # ASan + UBSan
 make fuzz-local                                                 # fuzz each c/fuzz harness for 60s (needs a clang with libFuzzer)
 make smoke                                                      # sdist -> scratch venv install -> smoke tests
 python scripts/check_simd_build.py                              # compile-check the SIMD engine paths (--require to fail, not skip)
+make test-tuned                                                 # C tests + fast suite on this arch's optimised engine (x86-64: IFMA or SDE)
 ```
+
+**The optimised engines.** The library has one engine per architecture rail:
+the portable baseline (every platform), the x86 AVX-512 tuned engine, and, in
+the future, an arm-tuned one. Each rail is tested deterministically: the
+`test-c`/`test-python` matrix pins the baseline (`VFHE_PORTABLE=1`, so a
+runner that happens to have IFMA cannot silently switch engines), and
+`make test-tuned` (`scripts/run_tuned_tests.py`) runs *this* architecture's
+optimised engine — on any other architecture it errors. On x86-64 it builds
+with explicit ISA flags (`VFHE_TUNED=1`) and runs natively when the CPU has
+real AVX-512 IFMA; otherwise it runs under the
+[Intel Software Development Emulator](https://www.intel.com/content/www/us/en/download/684897/intel-software-development-emulator.html)
+posing as an Ice Lake CPU (`sde64 -icl`), downloaded (sha256-pinned) into
+`.cache/sde/` on first use — **Linux only**, since SDE instruments real x86
+processes and cannot itself run under Rosetta or QEMU. `--suite
+c|fast|complete` picks the depth; emulation costs 10-50x, so budget minutes
+for `c`, tens of minutes for `fast`, hours for `complete`. CI runs the x86
+rail on every PR under SDE (`--emulate`, one deterministic path across the
+mixed runner fleet): `test-sde` for the `c` tier, `test-sde-python` for
+`fast` and `complete`. On arm64 no tuned kernels exist yet: the pre-wired
+`test-tuned-arm` jobs (`--if-supported`) no-op until
+`discovery.TUNED_ARCHES` declares arm64, then run the suites natively on
+`macos-latest`/`ubuntu-24.04-arm` — NEON is baseline arm64, no emulator.
 
 libFuzzer harnesses live in `modules/<mod>/c/fuzz/`. Two ways to run them:
 `make fuzz-local` (`scripts/run_c_fuzz_tests_local.py`) builds each with local
@@ -235,6 +259,24 @@ and the vendored BLAKE3 C sources (so no submodule is needed to build it). Proto
 bindings are regenerated during the build. Publishing is handled by the release
 workflow in section 6.
 
+### Dependencies
+
+How dependencies are selected, obtained, and tracked:
+
+- **Selection**: the runtime surface is deliberately small (`cffi`,
+  `protobuf`, `mpmath`); anything else must earn its place in review. Version
+  floors state the oldest supported release and are only raised when a newer
+  feature is required.
+- **Obtaining**: Python dependencies are declared in `pyproject.toml`
+  (runtime, build, and PEP 735 dev/sbom groups) and resolved from PyPI by pip
+  at build time. Native third-party code (BLAKE3, Unity) is vendored as
+  git submodules pinned to exact commits; provenance is recorded in `NOTICE`.
+- **Tracking**: Dependabot watches all ecosystems weekly (GitHub Actions by
+  commit SHA, pip, the fuzzing container by image digest);
+  `dependency-review.yml` blocks pull requests that introduce known-vulnerable
+  dependencies, and each release ships a CycloneDX SBOM of the resolved
+  runtime environment.
+
 ---
 
 ## 6. Continuous integration & releases
@@ -243,10 +285,11 @@ Workflows live in `.github/workflows/` (POSIX only: Linux and macOS):
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push / PR | the merge gate, five parallel tracks: lint (ruff, pyright, clang-format); the SIMD compile check (which no other job compiles); ClusterFuzzLite fuzzing of the changed code (5 min); sdist build + clean-venv install + smoke tests; and C tests followed by the complete Python suite on Linux and macOS x py3.10-3.14 |
+| `ci.yml` | push / PR | the merge gate, eight parallel tracks: lint (ruff, pyright, clang-format); the SIMD compile check (which no other job compiles) with both toolchains, gcc on Linux and Apple clang cross-compiling on macOS; the C tests then the fast and complete Python suites on the tuned AVX-512 engine under Intel SDE (Linux; SDE has no macOS build); the pre-wired arm-tuned jobs (no-ops until `discovery.TUNED_ARCHES` declares arm64); ClusterFuzzLite fuzzing of the changed code (5 min); sdist build + clean-venv install + smoke tests; and C tests followed by the complete Python suite, baseline engine pinned, on Linux (x86-64 and arm64) and macOS x py3.10-3.14 |
 | `coverage.yml` | push to `main` / PR / manual | C and Python coverage from one gcov-instrumented run; job summary + PR comment; informational, blocks nothing |
 | `cflite-batch.yml` | nightly / manual | ClusterFuzzLite batch fuzzing of the `c/fuzz/*` harnesses (1h, managed corpus) |
 | `codeql.yml`, `scorecard.yml`, `dependency-review.yml` | push / PR / schedule | static analysis and supply-chain hygiene (incl. OpenSSF Scorecard) |
+| `notify-zulip.yml` | any workflow fails | posts the failed run's link to the project Zulip (`verifhe-ci` > `failures`) |
 | `release.yml` | see below | build the sdist and SBOM, then publish |
 
 **Releases** are manual, one workflow, two targets (Actions > Release > Run
@@ -304,6 +347,10 @@ which globs the module src dirs; no per-module edits.
 - **Forced portable** (`VFHE_PORTABLE=1`) compiles the baseline (`PORTABLE_BUILD`,
   scalar paths, BLAKE3 portable core) and skips detection, for building in one
   place to run on another (Docker/build farms). `VFHE_COVERAGE=1` also implies it.
+- **Forced tuned** (`VFHE_TUNED=1`) compiles the AVX-512 engine with explicit
+  ISA flags instead of `-march=native`, so it builds on x86-64 hosts without
+  IFMA. The result runs only on IFMA hardware or under an emulator
+  (`make test-tuned`); it is a test knob, not an install option.
 
 `c/src` is scanned **recursively** and compiles both C and hand-written assembly
 (`.S`), so vendored trees drop straight in; sources under `c/src/arch/<name>/`

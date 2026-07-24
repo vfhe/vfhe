@@ -23,16 +23,6 @@ from _common import ROOT, compiler, discovery, error, log
 CC = compiler("cc")
 INCLUDE_FLAGS = discovery.tool_build_context(ROOT).include_flags
 
-SIMD_FLAGS = [
-    "-mavx512f",
-    "-mavx512ifma",
-    "-mavx512dq",
-    "-mavx512vl",
-    "-mavx2",
-    "-maes",
-    "-mrdrnd",
-]
-
 # Only the module sources we own (vendored BLAKE3 has its own SIMD story),
 # selected for x86: that is the architecture being compiled, not the host's.
 MODULE_SOURCES = discovery.module_sources(ROOT / "modules", discovery.X86_ALIASES)
@@ -80,7 +70,7 @@ def main() -> int:
                 [
                     CC,
                     *cross_flags,
-                    *SIMD_FLAGS,
+                    *discovery.TUNED_SIMD_FLAGS,
                     "-std=gnu11",
                     "-c",
                     *INCLUDE_FLAGS,
