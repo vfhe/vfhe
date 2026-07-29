@@ -3,7 +3,7 @@ requires = [
     "setuptools>=77",  # >=77: PEP 639 plain-string `license = "Apache-2.0"`
     "setuptools-scm>=10.2.1",
     "cffi>=2.1.0",
-    "grpcio-tools~=1.81.0",
+    "grpcio-tools>=1.81,<1.84",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -46,7 +46,7 @@ classifiers = [
 ]
 dependencies = [
     "cffi>=2.1.0",
-    "protobuf>=6.33,<7",
+    "protobuf>=6.33,<8",
     "mpmath>=1.4.1",
 ]
 
@@ -64,8 +64,8 @@ sbom = ["cyclonedx-bom==7.3.0"]
 dev = [
     "setuptools",
     "cffi>=2.1.0",
-    "grpcio-tools~=1.81.0",
-    "protobuf>=6.33,<7",
+    "grpcio-tools>=1.81,<1.84",
+    "protobuf>=6.33,<8",
     "pytest>=9.1.1",
     "pytest-cov",
     "gcovr",  # C coverage (gcov) in the CI coverage job
