@@ -60,7 +60,7 @@ Issues = "https://github.com/vfhe/vfhe/issues"
 
 [dependency-groups]
 # Pinned so the release SBOM is deterministic; Dependabot bumps it.
-sbom = ["cyclonedx-bom==7.3.0"]
+sbom = ["cyclonedx-bom==7.3.1"]
 dev = [
     "setuptools",
     "cffi>=2.1.0",
@@ -75,7 +75,7 @@ dev = [
     "mpmath>=1.4.1",
     # Pinned: an unpinned formatter bump reformats the tree and fails CI on an
     # unrelated PR. The pre-commit hooks run these same pins.
-    "ruff==0.15.22",
+    "ruff==0.16.0",
     "clang-format==22.1.8",
     "pre-commit",
     "pyright",
