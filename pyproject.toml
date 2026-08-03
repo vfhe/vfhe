@@ -88,8 +88,11 @@ fallback_version = "0.0.0"
 cache-dir = ".cache/ruff"
 
 [tool.ruff.lint]
-# Not `select`: that would replace the E4/E7/E9/F defaults and turn pyflakes off.
-extend-select = ["I"]
+# Explicit, not `extend-select`: ruff 0.16 grew its defaults from 59 rules to
+# 413, so inheriting them lets a version bump rewrite unrelated code. This is
+# the former default set (pycodestyle + pyflakes) plus import sorting;
+# widening it is a deliberate change of its own.
+select = ["E4", "E7", "E9", "F", "I"]
 
 # Configured here, not in CI flags: a local `pytest --cov=vfhe` measures
 # exactly what CI measures.
