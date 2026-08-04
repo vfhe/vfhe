@@ -7,6 +7,7 @@ Encode/decode, encrypt/decrypt, slot rotation, and ciphertext multiplication
 
 import secrets
 
+import pytest
 from vfhe.arith import Ring
 from vfhe.fhe import CKKS_Scheme
 
@@ -42,27 +43,54 @@ def test_encrypt_decrypt():
     assert all(abs(v - dv) < 0.05 for v, dv in zip(values, dec))
 
 
-def test_rotation():
+@pytest.mark.parametrize("k", [1, 3, 7])
+def test_rotation(k):
+    # Rotation is an automorphism followed by a GHS hybrid key-switch, so it
+    # needs special primes (special_primes=1) to keep the noise decodable.
     scheme = CKKS_Scheme(
         Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
     )
     key = scheme.key_gen_sparse(N // 8, 3.2)
     values = rand_values(N // 2)
     ct = scheme.encrypt(scheme.encode(values), key)
-    k = 1
     ksk = scheme.gen_rotation_key(key, k)
     dec_rot = scheme.decode(scheme.decrypt(scheme.rotate(ct, k, ksk), key))
     M = N // 2
     assert all(abs(dec_rot[i] - values[(i + k) % M]) < 0.05 for i in range(M))
 
 
-def test_ciphertext_multiplication():
+def test_keyswitch_ghs():
+    # Direct GHS key switching: re-encrypt a ciphertext under a fresh key. Unlike
+    # the MLWE-level test, CKKS decode does not strip noise, so this only works
+    # with the special-prime (GHS) hybrid key-switch.
     scheme = CKKS_Scheme(
-        Ring(N, 300, split_degree=1), scaling_factor=2**49, special_primes=0
+        Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
+    )
+    key_in = scheme.key_gen_sparse(N // 8, 3.2)
+    key_out = scheme.key_gen_sparse(N // 8, 3.2)
+    values = rand_values(N // 2)
+    ct = scheme.encrypt(scheme.encode(values), key_in)
+
+    ksk = scheme.gen_ksk(key_out, key_in)
+    ct_switched = scheme.keyswitch(ct, ksk)
+
+    dec = scheme.decode(scheme.decrypt(ct_switched, key_out))
+    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec))
+
+
+@pytest.mark.parametrize("special_primes", [0, 1])
+def test_ciphertext_multiplication(special_primes):
+    # Relinearization is a GHS hybrid key-switch. BV (special_primes=0) also
+    # works here because the CKKS product is immediately rescaled, which divides
+    # out the relinearization noise.
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=1),
+        scaling_factor=2**49,
+        special_primes=special_primes,
     )
     key = scheme.key_gen_sparse(N // 8, 3.2)
     s_0 = key.poly[0]
-    scheme.rlk = scheme.gen_ksk(key, [-(s_0 * s_0)])
+    scheme.rlk = scheme.gen_rlk(key, [-(s_0 * s_0)])
 
     v1 = [complex(0.5, 0.5) if i == 0 else 0 for i in range(N // 2)]
     v2 = [complex(0.4, -0.4) if i == 0 else 0 for i in range(N // 2)]

@@ -565,22 +565,32 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE **ksk,
     }
     out->b->rns_mask = extended_mask;
 
-    // compute -a_i^T * ksk_i
+    // compute -a_i^T * ksk_i. A NULL ksk[i] marks a component that keeps the
+    // target key (e.g. the linear part during relinearization); it is copied
+    // through below instead of being key-switched.
     mlwe_RNS_trivial_sample_of_zero((RNS_MLWE)out);
     for (size_t i = 0; i < in->r; i++)
     {
-        gadget_mul_subto_polynomial((RNS_MLWE)out, ksk[i], in->a[i]);
-    }
-    // convert to RNSc
-    mlwe_RNS_to_RNSc(out, (RNS_MLWE)out);
-    // rescale to in's ring
-    if (divide_mask > 0)
-    {
-        for (size_t j = 0; j < in->r; j++)
+        if (ksk[i] != NULL)
         {
-            polynomial_round_division_RNSc_wo_free(out->a[j], divide_mask);
+            gadget_mul_subto_polynomial((RNS_MLWE)out, ksk[i], in->a[i]);
         }
-        polynomial_round_division_RNSc_wo_free(out->b, divide_mask);
+    }
+    // convert to RNSc and rescale to in's ring
+    mlwe_RNS_to_RNSc(out, (RNS_MLWE)out);
+    mlwe_round_division_RNSc(out, divide_mask);
+
+    // Fold in the components that keep the target key. These stay in the base
+    // ring, so they are added *after* the rescale (never divided out). The k-th
+    // pass-through a-component lands in out->a[k]; in->b always passes through.
+    size_t keep_idx = 0;
+    for (size_t i = 0; i < in->r; i++)
+    {
+        if (ksk[i] == NULL)
+        {
+            polynomial_add_RNSc_polynomial(out->a[keep_idx], out->a[keep_idx], in->a[i]);
+            keep_idx++;
+        }
     }
     polynomial_add_RNSc_polynomial(out->b, out->b, in->b);
 }
@@ -677,24 +687,47 @@ void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE **ksk)
     uint64_t mask = in1->b->rns_mask;
     incNTT ntt = in1->b->ntt;
 
-    RNS_Polynomial *O = polynomial_new_RNS_polynomial_array(2 * r + 1, N, mask, ntt);
-    mlwe_discrete_convolution(O, in1, in2);
-
-    for (size_t j = 0; j < r; j++)
+    // The discrete convolution produces a rank-2r ciphertext: 2r "a" components
+    // O[0..2r-1] plus the constant term O[2r]. Lay it out over an MLWE so the
+    // components map to a-slots and b directly.
+    if (ksk == NULL)
     {
-        polynomial_copy_RNS_polynomial(out->a[j], O[j + r]);
+        // No relinearization key: hand back the extended (rank-2r) product.
+        assert(out->r == 2 * r);
+        RNS_Polynomial *conv = (RNS_Polynomial *)malloc((2 * r + 1) * sizeof(RNS_Polynomial));
+        for (size_t j = 0; j < 2 * r; j++)
+        {
+            conv[j] = out->a[j];
+        }
+        conv[2 * r] = out->b;
+        mlwe_discrete_convolution(conv, in1, in2);
+        free(conv);
+        return;
     }
-    polynomial_copy_RNS_polynomial(out->b, O[2 * r]);
 
-    RNSc_Polynomial tmp_coeff = (RNSc_Polynomial)polynomial_new_RNS_polynomial(N, mask, ntt);
-    for (size_t i = 0; i < r; i++)
+    // Relinearize down to rank r by reusing the GHS hybrid key-switch. The rlk
+    // carries a real key-switch key for each of the r quadratic components
+    // (O[0..r-1]) and NULL for each of the r linear components (O[r..2r-1]),
+    // which keep the target key and are copied through by the key-switch.
+    assert(out->r == r);
+    RNS_MLWE ext = mlwe_alloc_RNS_sample(N, 2 * r, mask, ntt);
+    RNS_Polynomial *conv = (RNS_Polynomial *)malloc((2 * r + 1) * sizeof(RNS_Polynomial));
+    for (size_t j = 0; j < 2 * r; j++)
     {
-        polynomial_RNS_to_RNSc(tmp_coeff, O[i]);
-        gadget_mul_subto_polynomial(out, ksk[i], tmp_coeff);
+        conv[j] = ext->a[j];
     }
+    conv[2 * r] = ext->b;
+    mlwe_discrete_convolution(conv, in1, in2);
+    free(conv);
 
-    free_RNS_polynomial(tmp_coeff);
-    free_RNS_polynomial_array(2 * r + 1, O);
+    RNSc_MLWE ext_c = mlwe_alloc_RNSc_sample(N, 2 * r, mask, ntt);
+    mlwe_RNS_to_RNSc(ext_c, ext);
+    mlwe_RNSc_GHS_hybrid_keyswitch((RNSc_MLWE)out, ext_c, ksk, 0);
+    // Restore the NTT representation callers expect from a product.
+    mlwe_RNSc_to_RNS(out, (RNSc_MLWE)out);
+
+    free_mlwe_RNS_sample(ext);
+    free_mlwe_RNS_sample(ext_c);
 }
 
 void mlwe_round_division_RNSc(RNSc_MLWE out, uint64_t divide_mask)
