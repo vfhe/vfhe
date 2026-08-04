@@ -87,10 +87,14 @@ class MLWE_Scheme:
             crt_h += 1
         return MLWE_Key(key, sigma_err, self)
 
-    def gen_ksk_for_level(
-        self, key_out: MLWE_Key, key_in: MLWE_Key | list[Polynomial], lvl: int
-    ):
-        key_poly = key_in if isinstance(key_in, list) else key_in.poly
+    def _gen_ksk_components(
+        self, key_out: MLWE_Key, key_poly: list[Polynomial], lvl: int
+    ) -> list[list["MLWE"]]:
+        """Sample the gadget ciphertexts for one key-switch key per key poly.
+
+        Returns the raw component lists (before wrapping in an ``MLWE_Set``) so
+        callers such as relinearization can interleave NULL pass-through slots.
+        """
         assert self == key_out.scheme, "Scheme mismatch"
         assert lvl is not None, "Level must be specified"
         result = []
@@ -115,7 +119,42 @@ class MLWE_Scheme:
                 self.sample(poly_j * scaling_factor, key_out_special, out=out)
                 result_i.append(out)
             result.append(result_i)
-        return MLWE_Set(result)
+        return result
+
+    def gen_ksk_for_level(
+        self, key_out: MLWE_Key, key_in: MLWE_Key | list[Polynomial], lvl: int
+    ):
+        key_poly = key_in if isinstance(key_in, list) else key_in.poly
+        return MLWE_Set(self._gen_ksk_components(key_out, key_poly, lvl))
+
+    def gen_rlk_for_level(
+        self, key_out: MLWE_Key, quad_polys: list[Polynomial], lvl: int
+    ):
+        # One real key-switch key per quadratic component, followed by r NULL
+        # slots for the linear components that keep the target key.
+        components = self._gen_ksk_components(key_out, quad_polys, lvl)
+        return MLWE_Set(components + [None] * self.r)
+
+    def gen_rlk(
+        self,
+        key_out: MLWE_Key,
+        quad_polys: "MLWE_Key|list[Polynomial]",
+        lvl: "int|None" = None,
+    ):
+        """Relinearization key for the rank-r product.
+
+        ``quad_polys`` holds the r quadratic key terms (e.g. ``[-(s_0 * s_0)]``
+        for rank 1). The resulting key-switch set has these r real keys plus r
+        NULL slots consumed by :meth:`relinearize`/:meth:`multiply`.
+        """
+        quad_polys = quad_polys if isinstance(quad_polys, list) else quad_polys.poly
+        assert len(quad_polys) == self.r, "expected one quadratic key per component"
+        if lvl is not None:
+            return self.gen_rlk_for_level(key_out, quad_polys, lvl)
+        return [
+            self.gen_rlk_for_level(key_out, quad_polys, lvl)
+            for lvl in range(len(self.rings))
+        ]
 
     def gen_ksk(
         self,
@@ -279,26 +318,61 @@ class MLWE_Scheme:
         lib_rlwe.lib.mlwe_discrete_convolution(out_pointers, in1.obj, in2.obj)
         return out_polys
 
-    def multiply(self, in1: MLWE, in2: MLWE, ksk: "MLWE_Set | list[MLWE_Set]") -> MLWE:
-        """Performs discrete convolution and relinearization of two MLWE ciphertexts.
+    def multiply(
+        self,
+        in1: MLWE,
+        in2: MLWE,
+        ksk: "MLWE_Set | list[MLWE_Set] | None" = None,
+    ) -> MLWE:
+        """Performs discrete convolution and (optionally) relinearization.
 
         Args:
             in1: The first MLWE ciphertext.
             in2: The second MLWE ciphertext.
-            ksk: The key-switching key set for relinearization.
+            ksk: The relinearization key set. If ``None``, relinearization is
+                skipped and the extended rank-2r product is returned; feed it to
+                :meth:`relinearize` to reduce it back to rank r.
 
         Returns:
-            A new MLWE ciphertext of rank r representing the product.
+            A rank-r product when ``ksk`` is given, otherwise the extended
+            rank-2r product (with ``is_extended`` set).
         """
         assert in1.ring == in2.ring, "Ciphertexts must be in the same ring"
         assert in1.scheme == in2.scheme, "Ciphertexts must be from the same scheme"
         assert in1.lvl == in2.lvl, "Ciphertexts must have the same level"
-        ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[in1.lvl]
         in1.to_NTT()
         in2.to_NTT()
-        out = MLWE(in1.scheme, lvl=in1.lvl)
+
+        if ksk is None:
+            out = MLWE(in1.scheme, lvl=in1.lvl, rank=2 * in1.scheme.r)
+            out.is_extended = True
+            lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ffi.NULL)
+            out.repr = repr.ntt
+            return out
+
+        ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[in1.lvl]
+        # Relinearization key-switches into the extended ring, so the output
+        # needs the special-prime capacity even though it lands back in base.
+        out = MLWE(in1.scheme, lvl=in1.lvl, ring=in1.scheme.special_rings[in1.lvl])
         lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ksk.obj)
         out.repr = repr.ntt
+        out.ring = in1.scheme.rings[in1.lvl]
+        return out
+
+    def relinearize(self, c_ext: MLWE, ksk: "MLWE_Set | list[MLWE_Set]") -> MLWE:
+        """Relinearize an extended (rank-2r) product back to rank r.
+
+        Reuses the GHS hybrid key-switch: the rlk key-switches the quadratic
+        components and copies the linear ones through (their NULL slots).
+        """
+        ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c_ext.lvl]
+        out = MLWE(self, lvl=c_ext.lvl, ring=self.special_rings[c_ext.lvl])
+        c_ext.to_coeff()
+        lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(
+            out.obj, c_ext.obj, ksk.obj, c_ext.lvl
+        )
+        out.repr = repr.coeff
+        out.ring = self.rings[c_ext.lvl]
         return out
 
 
@@ -355,6 +429,12 @@ class MLWE_Set:
         self.dim = 2
         result_obj = ffi.new("void*[]", len(mlwe))
         for j in range(len(mlwe)):
+            # A ``None`` component is a NULL key-switch key: the matching
+            # ciphertext component keeps its key and is copied through (used by
+            # relinearization for the linear part of the product).
+            if mlwe[j] is None:
+                result_obj[j] = ffi.NULL
+                continue
             ell = len(mlwe[j])
             for x in mlwe[j]:
                 x.to_NTT()
@@ -379,23 +459,27 @@ class MLWE_Set:
 
 class MLWE:
     def __init__(
-        self, scheme: MLWE_Scheme, lvl: "int|None" = None, ring: "Ring|None" = None
+        self,
+        scheme: MLWE_Scheme,
+        lvl: "int|None" = None,
+        ring: "Ring|None" = None,
+        rank: "int|None" = None,
     ) -> None:
         lvl = lvl if lvl is not None else 0
-        if ring is not None:
-            self.obj = lib_rlwe.lib.mlwe_alloc_RNS_sample(
-                ring.N, scheme.r, ring.mask, ring.NTT
-            )
-            self.ring = ring
-        else:
+        if ring is None:
             ring = scheme.rings[lvl]
-            self.obj = lib_rlwe.lib.mlwe_alloc_RNS_sample(
-                ring.N, scheme.r, ring.mask, ring.NTT
-            )
-            self.ring = ring
+        # Rank defaults to the scheme's module rank; an extended (non-relinearized)
+        # product carries rank 2r.
+        self.r = rank if rank is not None else scheme.r
+        self.obj = lib_rlwe.lib.mlwe_alloc_RNS_sample(
+            ring.N, self.r, ring.mask, ring.NTT
+        )
+        self.ring = ring
         self.scheme = scheme
         self.repr = repr.empty
         self.lvl = lvl
+        # Marks a rank-2r product that still needs relinearization.
+        self.is_extended = False
 
     @property
     def ell(self) -> int:

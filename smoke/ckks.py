@@ -30,7 +30,7 @@ def main() -> int:
     key = scheme.key_gen_sparse(N // 8, 3.2)
     secret = key.poly[0]
     # Relinearization key for ciphertext * ciphertext.
-    scheme.rlk = scheme.gen_ksk(key, [-(secret * secret)])
+    scheme.rlk = scheme.gen_rlk(key, [-(secret * secret)])
 
     # Two plaintext vectors; only the first few slots are non-zero for a legible trace.
     a = [
