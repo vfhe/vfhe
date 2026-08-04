@@ -87,11 +87,12 @@ def test_ghs_automorphism(ghs):
     assert scheme.phase(c_out, key).round_division(Rp) == m0.automorphism(5)
 
 
-def test_mlwe_multiplication(bv):
-    Rq, Rp, scheme = bv
+@pytest.mark.parametrize("scheme_fixture", ["bv", "ghs"])
+def test_mlwe_multiplication(scheme_fixture, request):
+    Rq, Rp, scheme = request.getfixturevalue(scheme_fixture)
     key = scheme.key_gen_sparse(N // 8, 3.2)
     s_0 = key.poly[0]
-    scheme.rlk = scheme.gen_ksk(key, [-(s_0 * s_0)])
+    scheme.rlk = scheme.gen_rlk(key, [-(s_0 * s_0)])
 
     m1 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N)])
     m2 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N)])
@@ -99,6 +100,35 @@ def test_mlwe_multiplication(bv):
     c2 = enc(scheme, Rp, m2, key)
 
     m_out = scheme.phase(c1 * c2, key).round_division(Rp)
+
+    ell_non_special = Rq.ell - scheme.special_primes
+    P = math.prod(Rq.primes[Rp.ell : ell_non_special])
+    P_poly = Polynomial(Rp).from_bigint_array([P] + [0] * (Rp.N - 1))
+    diff = (m_out - m1 * m2 * P_poly).get_polynomial(signed=True)
+    assert max(abs(c) for c in diff) < 1000
+
+
+@pytest.mark.parametrize("scheme_fixture", ["bv", "ghs"])
+def test_mlwe_multiplication_deferred_relinearization(scheme_fixture, request):
+    Rq, Rp, scheme = request.getfixturevalue(scheme_fixture)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    s_0 = key.poly[0]
+    rlk = scheme.gen_rlk(key, [-(s_0 * s_0)])
+
+    m1 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N)])
+    m2 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N)])
+    c1 = enc(scheme, Rp, m1, key)
+    c2 = enc(scheme, Rp, m2, key)
+
+    # Multiply without a key: the product is a larger, not-yet-relinearized ct.
+    c_ext = scheme.multiply(c1, c2, None)
+    assert c_ext.is_extended
+    assert c_ext.r == 2 * scheme.r
+
+    c_relin = scheme.relinearize(c_ext, rlk)
+    assert c_relin.r == scheme.r
+
+    m_out = scheme.phase(c_relin, key).round_division(Rp)
 
     ell_non_special = Rq.ell - scheme.special_primes
     P = math.prod(Rq.primes[Rp.ell : ell_non_special])
