@@ -111,15 +111,25 @@ class CKKS_Scheme(MLWE_Scheme):
         return self.gen_ksk_automorphism(key, key, gen)
 
     def rescale(self, ciphertext: CKKS_Ciphertext) -> CKKS_Ciphertext:
-        """Divides (round_division) the ciphertext by the last active prime, and recomputes delta."""
-        ell = ciphertext.ell
-        assert ell >= 2, "Cannot rescale a ciphertext with level less than 2"
+        """Rescale down one level: move the next ring in the chain of rings.
 
-        last_prime_val = self.ring.primes[ell - 1]
-        target_ring = self.ring.quotient_ring(ell=ell - 1)
+        Levels start at 0 and grow as primes are consumed, so a rescale
+        increments ``lvl``. The destination ring is taken from ``self.rings``.
+        Only the case where the next level is a quotient of the current ring is
+        handled here; non-nested moduli need ``rational_rescale``.
+        """
+        lvl = ciphertext.lvl
+        next_lvl = lvl + 1
+        assert next_lvl < len(self.rings), "no lower level to rescale into"
 
-        ciphertext.round_division(target_ring)
-        ciphertext.delta = ciphertext.delta / last_prime_val
+        current_ring = ciphertext.ring
+        next_ring = self.rings[next_lvl]
+        if not next_ring.is_quotient_ring(current_ring):
+            return self.rational_rescale(ciphertext)
+
+        dropped = math.prod(p for p in current_ring.primes if p not in next_ring.primes)
+        ciphertext.round_division(lvl=next_lvl)
+        ciphertext.delta = ciphertext.delta / dropped
         return ciphertext
 
     def rational_rescale(self, ct: CKKS_Ciphertext) -> CKKS_Ciphertext:
@@ -180,11 +190,7 @@ class CKKS_Scheme(MLWE_Scheme):
 class CKKS_Ciphertext(MLWE):
     scheme: "CKKS_Scheme"  # narrows MLWE.scheme for the CKKS-only members
 
-    def __init__(
-        self, scheme: CKKS_Scheme, ell: "int|None" = None, lvl: "int|None" = None
-    ):
-        if lvl is None:
-            lvl = (scheme.ring.ell - ell) if ell is not None else 0
+    def __init__(self, scheme: CKKS_Scheme, lvl: "int|None" = None):
         super().__init__(scheme, lvl=lvl)
         self.delta = scheme.scaling_factor
 
@@ -201,21 +207,21 @@ class CKKS_Ciphertext(MLWE):
             )
 
             base_prod = super().__mul__(other)
-            prod = CKKS_Ciphertext(self.scheme, ell=base_prod.ell)
+            prod = CKKS_Ciphertext(self.scheme, lvl=base_prod.lvl)
             prod.copy_from(base_prod)
             prod.delta = self.delta * other.delta
 
             return self.scheme.rescale(prod)
         elif isinstance(other, Polynomial):
             base_prod = super().__mul__(other)
-            prod = CKKS_Ciphertext(self.scheme, ell=base_prod.ell)
+            prod = CKKS_Ciphertext(self.scheme, lvl=base_prod.lvl)
             prod.copy_from(base_prod)
             prod.delta = self.delta * self.scheme.scaling_factor
 
             return self.scheme.rescale(prod)
         else:
             base_prod = super().__mul__(other)
-            prod = CKKS_Ciphertext(self.scheme, ell=base_prod.ell)
+            prod = CKKS_Ciphertext(self.scheme, lvl=base_prod.lvl)
             prod.copy_from(base_prod)
             prod.delta = self.delta
             return prod

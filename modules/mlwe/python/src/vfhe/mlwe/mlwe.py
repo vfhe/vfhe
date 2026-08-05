@@ -72,6 +72,25 @@ class MLWE_Scheme:
             return self.special_rings[0].ell - self.rings[0].ell
         return 0
 
+    def level_of_ring(self, ring: Ring, strict: bool = True) -> int:
+        """Return the level index of ``ring`` in ``self.rings``.
+
+        Rings are identified by their RNS ``mask`` (their prime set), so an
+        on-the-fly quotient with the same primes as a scheme level still
+        resolves to that level. A ring outside ``self.rings`` (e.g. a
+        special/extended ring) raises when ``strict`` is set, or resolves to the
+        sentinel level ``-1`` when ``strict`` is ``False``.
+        """
+        for lvl, r in enumerate(self.rings):
+            if r.mask == ring.mask:
+                return lvl
+        if strict:
+            raise ValueError(
+                "ring is not one of the scheme's levels (e.g. a special/extended "
+                "ring); pass lvl explicitly"
+            )
+        return -1
+
     def key_gen_sparse(self, h, sigma_err, ternary=True):
         assert self.N * self.r >= h
         key = [[0] * self.N for _ in range(self.r)]
@@ -243,9 +262,10 @@ class MLWE_Scheme:
     def full_packing_keyswitch_scaled(
         self, vec: list[MLWE], ksk: MLWE_Set | list[MLWE_Set]
     ):
-        ell = int(math.log2(len(vec)))
+        # log_size is the packing depth (log2 of the vector length), based on the number of elements to pack
+        log_size = int(math.log2(len(vec)))
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[vec[0].lvl]
-        assert (1 << ell) == len(vec)
+        assert (1 << log_size) == len(vec)
         for c in vec:
             c.to_coeff()
 
@@ -253,7 +273,7 @@ class MLWE_Scheme:
         vec_ptr_array = ffi.new("void*[]", [c.obj for c in vec])
 
         lib_rlwe.lib.mlwe_full_packing_keyswitch_scaled(
-            vec_ptr_array, ell, ksk.obj, vec[0].lvl
+            vec_ptr_array, log_size, ksk.obj, vec[0].lvl
         )
 
         # The output is in vec[0]
@@ -465,7 +485,8 @@ class MLWE:
         ring: "Ring|None" = None,
         rank: "int|None" = None,
     ) -> None:
-        lvl = lvl if lvl is not None else 0
+        if lvl is None:
+            lvl = scheme.level_of_ring(ring, strict=False) if ring is not None else 0
         if ring is None:
             ring = scheme.rings[lvl]
         # Rank defaults to the scheme's module rank; an extended (non-relinearized)
@@ -583,12 +604,29 @@ class MLWE:
         lib_rlwe.lib.mlwe_copy_RNS_sample(self.obj, other.obj)
         self.repr = other.repr
 
-    def round_division(self, ring: Ring):
-        assert ring.is_quotient_ring(self.ring), "Not a quotient ring"
+    def round_division(
+        self, ring: "Ring|None" = None, lvl: "int|None" = None
+    ) -> "MLWE":
+        """Round-divide the ciphertext down into a smaller (quotient) ring.
+
+        The destination is given either as ``ring`` or as a level index ``lvl``
+        into ``scheme.rings`` (exactly one must be supplied). The dropped primes
+        are those in the current ring but not the destination. Afterwards
+        ``self.lvl`` is set to the destination's index in ``scheme.rings`` (its
+        level), not its prime count.
+        """
+        assert (ring is None) != (lvl is None), "provide exactly one of ring or lvl"
+        if lvl is None:
+            lvl = self.scheme.level_of_ring(ring)
+        else:
+            ring = self.scheme.rings[lvl]
+        assert ring.is_quotient_ring(self.ring), (
+            "destination must be a quotient of the current ring"
+        )
         self.to_coeff()
         divide_mask = self.ring.mask ^ ring.mask
         lib_rlwe.lib.mlwe_round_division_RNSc(self.obj, divide_mask)
-        self.lvl = ring.ell
+        self.lvl = lvl
         self.ring = ring
         return self
 
