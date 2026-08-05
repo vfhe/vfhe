@@ -10,14 +10,27 @@ from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, Polynomial, Ri
 class CKKS_Scheme(MLWE_Scheme):
     def __init__(
         self,
-        ring: Ring,
+        rings: "list[Ring]|Ring",
         scaling_factor: float = 2**30,
         module_rank: int = 1,
         special_primes: int = 0,
+        special_rings: "list[Ring]|None" = None,
     ):
-        super().__init__(ring, special_primes=special_primes, module_rank=module_rank)
+        """Create a CKKS scheme.
+
+        ``rings`` is either a single :class:`Ring` (the level chain is derived
+        automatically) or an explicit list of per-level rings paired with
+        ``special_rings`` when ``special_primes > 0`` -- e.g. non-nested levels
+        for rational rescaling. See :class:`MLWE_Scheme` for both modes.
+        """
+        super().__init__(
+            rings,
+            special_primes=special_primes,
+            special_rings=special_rings,
+            module_rank=module_rank,
+        )
         self.scaling_factor = scaling_factor
-        self.complex_ring = ComplexRing(ring.N // 2, True)
+        self.complex_ring = ComplexRing(self.ring.N // 2, True)
 
     def encode(self, values: list[complex | float]) -> Polynomial:
         """Encodes a list of complex/float values into a Polynomial in the ciphertext ring."""

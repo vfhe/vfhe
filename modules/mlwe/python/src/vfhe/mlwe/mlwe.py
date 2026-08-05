@@ -28,6 +28,17 @@ class MLWE_Scheme:
         max_lvl: "int|None" = None,
         module_rank: int = 1,
     ) -> None:
+        """Create a leveled scheme in one of two initialization modes.
+
+        - Single ``Ring``: the level chain is derived automatically by dropping the top prime one at a time. ``special_primes`` reserves that many top
+          primes as the special (key-switching) primes, and ``max_lvl`` caps the
+          number of levels.
+        - List of ``Ring``: the levels are given explicitly. ``rings[i]`` is
+          level ``i`` and ``special_rings[i]`` its special-prime-extended ring
+          (required when ``special_primes > 0``; defaults to ``rings``
+          otherwise). This allows non-nested level rings, e.g. for rational
+          rescaling.
+        """
         if isinstance(rings, Ring):
             max_lvl = max_lvl if max_lvl is not None else len(rings.primes) - 1
             if special_primes == 0:
@@ -46,14 +57,14 @@ class MLWE_Scheme:
                     for i in range(len(self.rings))
                 ]
         else:
-            max_lvl = max_lvl if max_lvl is not None else len(rings) - 1
+            # Explicit per-level rings: use the provided chain directly, with
+            # special_rings[i] aligned to level i (defaults to rings when there
+            # are no special primes).
+            max_lvl = max_lvl if max_lvl is not None else len(rings)
+            if special_rings is None:
+                special_rings = rings
             self.rings = [rings[i] for i in range(max_lvl)]
-            assert special_rings is not None, (
-                "special_rings required when rings is a list"
-            )
-            self.special_rings = [
-                special_rings[i] for i in range(special_primes, max_lvl)
-            ]
+            self.special_rings = [special_rings[i] for i in range(max_lvl)]
 
         self.r = module_rank
         self.N = self.rings[0].N
