@@ -61,7 +61,7 @@ def main() -> int:
         [x + y for x, y in zip(a, b)],
     )
 
-    ct_prod = ct_a * ct_b  # discrete convolution + relinearization + rescale
+    ct_prod = ct_a * ct_b  # tensor product + relinearization + rescale
     ok &= _check(
         "a * b",
         scheme.decode(scheme.decrypt(ct_prod, key), scaling_factor=ct_prod.delta),

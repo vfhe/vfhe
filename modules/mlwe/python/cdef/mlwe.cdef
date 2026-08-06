@@ -90,7 +90,8 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(void *out, void *in, void *ksk, uint64_t lvl
 void mlwe_automorphism_RNSc_GHS(void *out, void *in, uint64_t gen, void *ksk, uint64_t lvl);
 void mlwe_partial_trace(void *out, void *in, uint64_t *gens, void *ksks, uint64_t size, uint64_t lvl);
 void mlwe_trace(void *out, void *in, void *ksks, uint64_t lvl);
-void mlwe_discrete_convolution(void *out, void *in1, void *in2);
+uint64_t mlwe_extended_rank(uint64_t r);
+void mlwe_tensor_product(void *out, void *in1, void *in2);
 void mlwe_multiply(void *out, void *in1, void *in2, void *ksk);
 
 // --- mgsw ---

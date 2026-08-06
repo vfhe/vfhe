@@ -10,10 +10,14 @@ import secrets
 import pytest
 from vfhe.arith import Ring
 from vfhe.arith.residue_selection import search_log_residues_minq0
-from vfhe.fhe import CKKS_Scheme
+from vfhe.fhe import CKKS_Ciphertext, CKKS_Scheme
 
 N = 256
 rng = secrets.SystemRandom()
+
+# Module ranks above 1, paired with a ring dimension that keeps the lattice
+# dimension N*r (and the runtime) in line with the rank-1 tests above.
+RANK_DIMS = [(2, 128), (4, 64)]
 
 
 def _subring(Rq, *indices):
@@ -260,4 +264,110 @@ def test_multiplication_with_rational_rescale():
 
     dec = scheme.decode(scheme.decrypt(result, key), scaling_factor=result.delta)
     expected = [a * b * cc * d for a, b, cc, d in zip(*v)]
+    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec))
+
+
+def test_operations_preserve_ciphertext_type():
+    # Operations CKKS does not override (automorphism/rotation, key-switching,
+    # copy, add, sub) must hand back a CKKS_Ciphertext carrying the *actual*
+    # scaling factor of their input, not a plain MLWE and not a ciphertext reset
+    # to scheme.scaling_factor. They allocate through MLWE.new_like, which keeps
+    # the concrete class and copies subclass metadata (delta) over.
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
+    )
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key_out = scheme.key_gen_sparse(N // 8, 3.2)
+    poly = scheme.encode(rand_values(N // 2))
+    ct = scheme.encrypt(poly, key)
+    # Sentinel: a ciphertext that has been rescaled no longer sits at the
+    # scheme's scaling factor, so derived ciphertexts must inherit this value.
+    ct.delta = 12345.0
+
+    derived = {
+        "copy": ct.copy(),
+        "add": ct + ct,
+        "sub": ct - ct,
+        "automorphism": scheme.automorphism(
+            ct, 5, scheme.gen_ksk_automorphism(key, key, 5)
+        ),
+        "rotate": scheme.rotate(ct, 1, scheme.gen_rotation_key(key, 1)),
+        "keyswitch": scheme.keyswitch(ct, scheme.gen_ksk(key_out, key)),
+    }
+    for name, out in derived.items():
+        assert isinstance(out, CKKS_Ciphertext), f"{name} returned {type(out).__name__}"
+        assert out.delta == ct.delta, f"{name} lost delta"
+
+    # A freshly sampled ciphertext has no source to inherit from: it takes the
+    # scheme's scaling factor, but is still a CKKS_Ciphertext.
+    fresh = scheme.sample(poly, key)
+    assert isinstance(fresh, CKKS_Ciphertext)
+    assert fresh.delta == scheme.scaling_factor
+
+
+def _rank_scheme(N_r, r, scaling_factor):
+    """CKKS scheme of module rank ``r`` over a ring of dimension ``N_r``."""
+    return CKKS_Scheme(
+        Ring(N_r, 300, split_degree=1),
+        scaling_factor=scaling_factor,
+        module_rank=r,
+        special_primes=1,
+    )
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+def test_encrypt_decrypt_module_rank(r, N_r):
+    scheme = _rank_scheme(N_r, r, 2**25)
+    key = scheme.key_gen_sparse(N_r * r // 8, 3.2)
+    values = rand_values(N_r // 2)
+    ct = scheme.encrypt(scheme.encode(values), key)
+    assert ct.r == r
+    dec = scheme.decode(scheme.decrypt(ct, key))
+    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec))
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+def test_rotation_module_rank(r, N_r):
+    # The automorphism permutes all r "a" components plus b, then key-switches
+    # with an r-component rotation key.
+    k = 1
+    scheme = _rank_scheme(N_r, r, 2**25)
+    key = scheme.key_gen_sparse(N_r * r // 8, 3.2)
+    values = rand_values(N_r // 2)
+    ct = scheme.encrypt(scheme.encode(values), key)
+    ksk = scheme.gen_rotation_key(key, k)
+    dec_rot = scheme.decode(scheme.decrypt(scheme.rotate(ct, k, ksk), key))
+    M = N_r // 2
+    assert all(abs(dec_rot[i] - values[(i + k) % M]) < 0.05 for i in range(M))
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+def test_ciphertext_plaintext_multiplication_module_rank(r, N_r):
+    scheme = _rank_scheme(N_r, r, 2**49)
+    key = scheme.key_gen_sparse(N_r * r // 8, 3.2)
+    v1 = [complex(0.5, 0.5) if i == 0 else 0 for i in range(N_r // 2)]
+    v2 = [complex(0.4, -0.4) if i == 0 else 0 for i in range(N_r // 2)]
+    c1 = scheme.encrypt(scheme.encode(v1), key)
+
+    c_mul = c1 * scheme.encode(v2)
+    dec = scheme.decode(scheme.decrypt(c_mul, key), scaling_factor=c_mul.delta)
+    expected = [a * b for a, b in zip(v1, v2)]
+    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec))
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+def test_ciphertext_multiplication_module_rank(r, N_r):
+    scheme = _rank_scheme(N_r, r, 2**49)
+    key = scheme.key_gen_sparse(N_r * r // 8, 3.2)
+    # One relinearization key per quadratic pair -(s_i*s_j), i <= j.
+    scheme.rlk = scheme.gen_rlk(key, key)
+
+    v1 = [complex(0.5, 0.5) if i == 0 else 0 for i in range(N_r // 2)]
+    v2 = [complex(0.4, -0.4) if i == 0 else 0 for i in range(N_r // 2)]
+    c1 = scheme.encrypt(scheme.encode(v1), key)
+    c2 = scheme.encrypt(scheme.encode(v2), key)
+
+    c_mul = c1 * c2
+    dec = scheme.decode(scheme.decrypt(c_mul, key), scaling_factor=c_mul.delta)
+    expected = [a * b for a, b in zip(v1, v2)]
     assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec))
