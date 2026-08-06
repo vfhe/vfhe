@@ -18,7 +18,9 @@ class Multiprecision:
     # --- readers (reconstruct Python ints from the base-2^52 digit arrays) ---
     def scalar_digits(self, handle):
         s = ffi.cast("MPScalar", handle)
-        return [s.digits[i] for i in range(self.vector_size * s.d)]
+        # digits is an opaque mp_vector_t array; each entry holds vector_size lanes.
+        lanes = ffi.cast("uint64_t *", s.digits)
+        return [lanes[i] for i in range(self.vector_size * s.d)]
 
     def poly_to_list(self, handle):
         p = ffi.cast("MPPolynomial", handle)
@@ -48,7 +50,9 @@ class Multiprecision:
             hatQ.append(pow(Q[-1], -1, primes[i]))
             QhatQ.append((Q[-1] * hatQ[-1]) % ql)
 
-        pw = ffi.new("void*[]", [ffi.cast("void *", self.load(int(v))) for v in QhatQ])
+        pw = ffi.new(
+            "MPScalar[]", [ffi.cast("MPScalar", self.load(int(v))) for v in QhatQ]
+        )
 
         m_val = 2**k // ql
         assert m_val < 2**52

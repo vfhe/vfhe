@@ -3,7 +3,6 @@
 // prototypes). Handles are passed as `void *` (as the old ctypes code did);
 // the structs below are cdef'd only so Python can cast a handle and read
 // fields (rns_mask, coeffs, l, ...). Layout is filled by cffi from arith.h.
-// (Portable ABI: mp_vector_t is uint64_t.)
 
 typedef struct _NTT_proc *NTT_proc;
 
@@ -92,16 +91,22 @@ void complex_polys_ifft_scale_round_to_RNS_batch(void **rows_in, void **outs_rns
                                                  uint64_t n_complex, uint32_t log_prec, void *gs_ws,
                                                  double temp_delta);
 
-// --- multiprecision (portable ABI: mp_vector_t is uint64_t) ---
-typedef struct _MPScalar { uint64_t *digits; uint64_t d; } *MPScalar;
+// --- multiprecision ---
+// A digit vector is one uint64 in the portable build and an __m512i (8 lanes) in
+// the tuned one; arith.h owns the real typedef. Keep it opaque here so the C that
+// cffi generates matches the header in both builds. Python reads the lanes by
+// casting: ffi.cast("uint64_t *", scalar.digits), get_mp_vector_size() lanes per
+// digit.
+typedef struct _mp_vector mp_vector_t;
+typedef struct _MPScalar { mp_vector_t *digits; uint64_t d; } *MPScalar;
 typedef struct _MPPolynomial { uint64_t **coeffs; uint64_t N; uint64_t d; } *MPPolynomial;
 int get_mp_vector_size(void);
 void mp_scale(void *out, void *in, void *m);
 void mp_sub(void *out, void *a, void *b);
 void *mp_load(uint64_t *in, uint64_t d);
-uint64_t *load_m512(uint64_t in);
+mp_vector_t *load_m512(uint64_t in);
 void *new_mp_polynomial(uint64_t N, uint64_t d);
-void mp_polynomial_from_RNS(void *out, void *in, void **PW, void *q, uint64_t *m, uint64_t k);
+void mp_polynomial_from_RNS(void *out, void *in, MPScalar *PW, void *q, mp_vector_t *m, uint64_t k);
 void mp_polynomial_to_RNSc(void *out, void *in);
 
 // --- field extensions ---
