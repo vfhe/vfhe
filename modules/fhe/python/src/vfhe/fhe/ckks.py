@@ -106,8 +106,8 @@ class CKKS_Scheme(MLWE_Scheme):
         return self.phase(ciphertext, key)
 
     def rotate(
-        self, ciphertext: MLWE, k: int, ksk: "MLWE_Set | list[MLWE_Set]"
-    ) -> MLWE:
+        self, ciphertext: CKKS_Ciphertext, k: int, ksk: "MLWE_Set | list[MLWE_Set]"
+    ) -> CKKS_Ciphertext:
         """Rotates the slots of the ciphertext by k steps."""
         N = self.ring.N
         # Galois generator for rotation by k slots is 5^k mod 2N
@@ -203,9 +203,21 @@ class CKKS_Scheme(MLWE_Scheme):
 class CKKS_Ciphertext(MLWE):
     scheme: "CKKS_Scheme"  # narrows MLWE.scheme for the CKKS-only members
 
-    def __init__(self, scheme: CKKS_Scheme, lvl: "int|None" = None):
-        super().__init__(scheme, lvl=lvl)
+    def __init__(
+        self,
+        scheme: CKKS_Scheme,
+        lvl: "int|None" = None,
+        ring: "Ring|None" = None,
+        rank: "int|None" = None,
+    ):
+        super().__init__(scheme, lvl=lvl, ring=ring, rank=rank)
         self.delta = scheme.scaling_factor
+
+    def _inherit(self, other: MLWE) -> None:
+        # Keep the actual scaling factor of the ciphertext this one was derived
+        # from; operations that change it (mul, rescale) set it themselves.
+        if isinstance(other, CKKS_Ciphertext):
+            self.delta = other.delta
 
     def rescale(self) -> CKKS_Ciphertext:
         return self.scheme.rescale(self)
@@ -238,3 +250,6 @@ class CKKS_Ciphertext(MLWE):
             prod.copy_from(base_prod)
             prod.delta = self.delta
             return prod
+
+
+CKKS_Scheme.ciphertext_type = CKKS_Ciphertext

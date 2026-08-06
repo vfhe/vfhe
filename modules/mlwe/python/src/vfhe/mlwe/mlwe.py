@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import math
 import secrets
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from vfhe.arith.polynomial import Polynomial, Ring, repr
 from vfhe.misc.libvfhe import ffi, lib
 
 if TYPE_CHECKING:
     from .lwe import LWE_Key
+
+# Ciphertext operations preserve the concrete ciphertext class of their input
+# (e.g. a CKKS_Ciphertext stays a CKKS_Ciphertext); see MLWE.new_like.
+CtT = TypeVar("CtT", bound="MLWE")
 
 
 class LibMLWE:
@@ -20,6 +24,12 @@ lib_rlwe = LibMLWE()
 
 
 class MLWE_Scheme:
+    # Concrete ciphertext class this scheme allocates when it has no input
+    # ciphertext to derive the type from (see :meth:`sample`). Subclasses set it
+    # to their own ciphertext class; operations that transform an existing
+    # ciphertext use ``MLWE.new_like`` instead. Bound after MLWE is defined.
+    ciphertext_type: "type[MLWE]"
+
     def __init__(
         self,
         rings: "list[Ring]|Ring",
@@ -219,9 +229,9 @@ class MLWE_Scheme:
             result.append(self.gen_ksk_automorphism(key_out, key_in, g, lvl))
         return result
 
-    def keyswitch(self, c: MLWE, ksk: MLWE_Set | list[MLWE_Set]):
+    def keyswitch(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
-        out = MLWE(self, lvl=c.lvl, ring=self.special_rings[c.lvl])
+        out = c.new_like(lvl=c.lvl, ring=self.special_rings[c.lvl])
         c.to_coeff()
         lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(out.obj, c.obj, ksk.obj, c.lvl)
         out.repr = repr.coeff
@@ -252,18 +262,18 @@ class MLWE_Scheme:
             result_leveled.append(MLWE_Set().flatten_array(result_lvl_i))
         return result_leveled
 
-    def automorphism(self, c: MLWE, gen: int, ksk: MLWE_Set | list[MLWE_Set]):
+    def automorphism(self, c: CtT, gen: int, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
-        out = MLWE(self, lvl=c.lvl, ring=self.special_rings[c.lvl])
+        out = c.new_like(lvl=c.lvl, ring=self.special_rings[c.lvl])
         c.to_coeff()
         lib_rlwe.lib.mlwe_automorphism_RNSc_GHS(out.obj, c.obj, gen, ksk.obj, c.lvl)
         out.repr = repr.coeff
         out.ring = self.rings[c.lvl]
         return out
 
-    def trace(self, c: MLWE, ksk: MLWE_Set | list[MLWE_Set]):
+    def trace(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
-        out = MLWE(self, lvl=c.lvl, ring=self.special_rings[c.lvl])
+        out = c.new_like(lvl=c.lvl, ring=self.special_rings[c.lvl])
         c.to_coeff()
         lib_rlwe.lib.mlwe_trace(out.obj, c.obj, ksk.obj, c.lvl)
         out.repr = repr.coeff
@@ -309,7 +319,7 @@ class MLWE_Scheme:
             The sampled MLWE ciphertext.
         """
         if not out:
-            out = MLWE(self, lvl=lvl)
+            out = self.ciphertext_type(self, lvl=lvl)
         msg.to_coeff()
         lib_rlwe.lib.mlwe_RNSc_sample(out.obj, key.obj, msg.obj)
         out.repr = repr.coeff
@@ -351,10 +361,10 @@ class MLWE_Scheme:
 
     def multiply(
         self,
-        in1: MLWE,
+        in1: CtT,
         in2: MLWE,
         ksk: "MLWE_Set | list[MLWE_Set] | None" = None,
-    ) -> MLWE:
+    ) -> CtT:
         """Performs discrete convolution and (optionally) relinearization.
 
         Args:
@@ -375,7 +385,7 @@ class MLWE_Scheme:
         in2.to_NTT()
 
         if ksk is None:
-            out = MLWE(in1.scheme, lvl=in1.lvl, rank=2 * in1.scheme.r)
+            out = in1.new_like(lvl=in1.lvl, rank=2 * in1.scheme.r)
             out.is_extended = True
             lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ffi.NULL)
             out.repr = repr.ntt
@@ -384,20 +394,20 @@ class MLWE_Scheme:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[in1.lvl]
         # Relinearization key-switches into the extended ring, so the output
         # needs the special-prime capacity even though it lands back in base.
-        out = MLWE(in1.scheme, lvl=in1.lvl, ring=in1.scheme.special_rings[in1.lvl])
+        out = in1.new_like(lvl=in1.lvl, ring=in1.scheme.special_rings[in1.lvl])
         lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ksk.obj)
         out.repr = repr.ntt
         out.ring = in1.scheme.rings[in1.lvl]
         return out
 
-    def relinearize(self, c_ext: MLWE, ksk: "MLWE_Set | list[MLWE_Set]") -> MLWE:
+    def relinearize(self, c_ext: CtT, ksk: "MLWE_Set | list[MLWE_Set]") -> CtT:
         """Relinearize an extended (rank-2r) product back to rank r.
 
         Reuses the GHS hybrid key-switch: the rlk key-switches the quadratic
         components and copies the linear ones through (their NULL slots).
         """
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c_ext.lvl]
-        out = MLWE(self, lvl=c_ext.lvl, ring=self.special_rings[c_ext.lvl])
+        out = c_ext.new_like(lvl=c_ext.lvl, ring=self.special_rings[c_ext.lvl])
         c_ext.to_coeff()
         lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(
             out.obj, c_ext.obj, ksk.obj, c_ext.lvl
@@ -517,6 +527,33 @@ class MLWE:
     def ell(self) -> int:
         return self.ring.ell
 
+    def new_like(
+        self: CtT,
+        lvl: "int|None" = None,
+        ring: "Ring|None" = None,
+        rank: "int|None" = None,
+    ) -> CtT:
+        """Allocate an empty ciphertext of the same concrete type as ``self``.
+
+        Operations that derive a new ciphertext from an existing one allocate it
+        through here, so a subclass (e.g. ``CKKS_Ciphertext``) keeps its type and
+        its extra metadata instead of decaying into a plain ``MLWE``. ``lvl``
+        defaults to ``self.lvl``; ``ring`` and ``rank`` default as in
+        :meth:`__init__`.
+        """
+        out = type(self)(
+            self.scheme, lvl=self.lvl if lvl is None else lvl, ring=ring, rank=rank
+        )
+        out._inherit(self)
+        return out
+
+    def _inherit(self, other: "MLWE") -> None:
+        """Copy subclass-specific metadata from ``other`` into a fresh ``self``.
+
+        No-op for plain MLWE; subclasses that add fields (e.g. the CKKS scaling
+        factor) override this so :meth:`new_like` carries them over.
+        """
+
     def __del__(self) -> None:
         if hasattr(self, "obj") and self.obj:
             lib_rlwe.lib.free_mlwe_RNS_sample(self.obj)
@@ -606,7 +643,7 @@ class MLWE:
         return ffi.cast("RNS_MLWE", self.obj).b
 
     def copy(self):
-        res = MLWE(self.scheme, lvl=self.lvl)
+        res = self.new_like()
         lib_rlwe.lib.mlwe_copy_RNS_sample(res.obj, self.obj)
         res.repr = self.repr
         return res
@@ -616,8 +653,8 @@ class MLWE:
         self.repr = other.repr
 
     def round_division(
-        self, ring: "Ring|None" = None, lvl: "int|None" = None
-    ) -> "MLWE":
+        self: CtT, ring: "Ring|None" = None, lvl: "int|None" = None
+    ) -> CtT:
         """Round-divide the ciphertext down into a smaller (quotient) ring.
 
         The destination is given either as ``ring`` or as a level index ``lvl``
@@ -660,7 +697,7 @@ class MLWE:
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
-        res = MLWE(self.scheme, lvl=self.lvl)
+        res = self.new_like()
         if isinstance(other, MLWE):
             res.add_MLWE(self, other)
         if type(other) is Polynomial:
@@ -691,7 +728,7 @@ class MLWE:
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
-        res = MLWE(self.scheme, lvl=self.lvl)
+        res = self.new_like()
         if isinstance(other, MLWE):
             res.sub_MLWE(self, other)
         if type(other) is Polynomial:
@@ -715,7 +752,7 @@ class MLWE:
 
     def __mul__(self, other) -> MLWE:
         if type(other) is Polynomial:
-            res = MLWE(self.scheme, lvl=self.lvl)
+            res = self.new_like()
             if other.ring != self.ring:
                 assert other.ring.is_quotient_ring(self.ring)
                 other_sr = other.base_extend(self.ring)
@@ -732,7 +769,7 @@ class MLWE:
             )
             return self.scheme.multiply(self, other, self.scheme.rlk)
         else:  # assuming other is a pointer to int
-            res = MLWE(self.scheme, lvl=self.lvl)
+            res = self.new_like()
             res.multiply_scalar(self, other)
         return res
 
@@ -741,3 +778,6 @@ class MLWE:
 
     def __radd__(self, other):
         return self.__add__(other)
+
+
+MLWE_Scheme.ciphertext_type = MLWE
