@@ -259,8 +259,9 @@ def native_build_plan(
         )
     else:
         compile_args, link_args, libraries = (
-            ["-O3", "-flto", "-std=gnu11"],
-            ["-flto"],
+            # -flto=auto: parallel LTRANS jobs (bare -flto serialises them and warns).
+            ["-O3", "-flto=auto", "-std=gnu11"],
+            ["-flto=auto"],
             ["m"],
         )
 

@@ -23,7 +23,7 @@ static uint64_t barrett_factor(uint64_t val, uint64_t q, uint64_t shift)
 void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, __m512i ***out_ws,
                         __m512i ***out_w_precon)
 {
-    int logn = 0;
+    size_t logn = 0;
     while ((1ULL << logn) < n)
         logn++;
 
@@ -130,7 +130,7 @@ void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, __m512i 
 void ntt_precompute_inv(uint64_t n, uint64_t q, uint64_t inv_root_of_unity, __m512i ***out_ws,
                         __m512i ***out_w_precon)
 {
-    int logn = 0;
+    size_t logn = 0;
     while ((1ULL << logn) < n)
         logn++;
 

@@ -1317,7 +1317,6 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
     {
         if (in->rns_mask & (1ULL << i))
         {
-            const uint64_t q = in->ntt->ntt[i]->q;
             NTT_proc proc = in->ntt->ntt[i];
             const uint64_t *w_i = in->ntt->w[i];
             uint64_t w0 = w_i[0];

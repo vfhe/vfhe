@@ -103,7 +103,7 @@ void lwe_sample(LWE c, uint64_t *m, LWE_Key key)
             c->a[i][j] = modq(c->a[i][j], key->ntt->ntt[i]);
 
         uint64_t q = key->ntt->ntt[i]->q;
-        uint64_t e = e_val < 0 ? negate_modq(-e_val, q) : e_val;
+        uint64_t e = e_val < 0 ? negate_modq((uint64_t)(-e_val), q) : (uint64_t)e_val;
 
         mod_eltwise_mul(as, c->a[i], key->s[i], key->n, key->ntt->ntt[i]);
         uint64_t b = e;

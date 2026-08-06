@@ -53,7 +53,7 @@ void free_mp_polynomial(MPPolynomial p)
 // out = in*X^a mod (X^N + 1)
 void mp_polynomial_mul_by_xai(MPPolynomial out, MPPolynomial in, uint64_t a)
 {
-    const int N = out->N;
+    const uint64_t N = out->N;
     assert(out->d == in->d);
     assert(out->N == in->N);
     a &= ((N << 1) - 1); // a % 2N
@@ -63,16 +63,16 @@ void mp_polynomial_mul_by_xai(MPPolynomial out, MPPolynomial in, uint64_t a)
     {
         if (a < N)
         {
-            for (int i = 0; i < a; i++)
+            for (uint64_t i = 0; i < a; i++)
                 out->coeffs[j][i] = -in->coeffs[j][i - a + N];
-            for (int i = a; i < N; i++)
+            for (uint64_t i = a; i < N; i++)
                 out->coeffs[j][i] = in->coeffs[j][i - a];
         }
         else
         {
-            for (int i = 0; i < a - N; i++)
+            for (uint64_t i = 0; i < a - N; i++)
                 out->coeffs[j][i] = in->coeffs[j][i - a + 2 * N];
-            for (int i = a - N; i < N; i++)
+            for (uint64_t i = a - N; i < N; i++)
                 out->coeffs[j][i] = -in->coeffs[j][i - a + N];
         }
     }
