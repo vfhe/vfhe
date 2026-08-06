@@ -113,7 +113,10 @@ extern "C"
     void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, RNS_Polynomial in2);
     void mlwe_RNS_sub_polynomial(RNS_MLWE out, RNS_MLWE in1, RNS_Polynomial in2);
 
-    void mlwe_discrete_convolution(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2);
+    // Rank of the extended (not-yet-relinearized) product of two rank-r ciphertexts:
+    // r*(r+1)/2 quadratic components plus r linear ones.
+    uint64_t mlwe_extended_rank(uint64_t r);
+    void mlwe_tensor_product(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2);
     void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE **ksk);
 
     RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l,

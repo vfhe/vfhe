@@ -654,30 +654,56 @@ void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE *
     mlwe_full_packing_keyswitch_scaled_rec(vec, ell, ksks, lvl);
 }
 
-void mlwe_discrete_convolution(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2)
+uint64_t mlwe_extended_rank(uint64_t r)
 {
-    uint64_t r = in1->r;
-    for (size_t k = 0; k <= 2 * r; k++)
+    // r quadratic pairs (i <= j) is r*(r+1)/2, plus the r linear components.
+    return r * (r + 3) / 2;
+}
+
+void mlwe_tensor_product(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2)
+{
+    // Symmetric tensor product of the two ciphertext vectors. With
+    // phase(c) = b - sum_i a_i * s_i, the product of the two phases is
+    //
+    //   b1*b2 - sum_i (a1_i*b2 + b1*a2_i) * s_i + sum_{i<=j} q_ij * s_i*s_j,
+    //   where q_ij = a1_i*a2_j + a1_j*a2_i (i < j) and q_ii = a1_i*a2_i,
+    //
+    // so the product decrypts under the extended key made of the r*(r+1)/2
+    // quadratic terms -(s_i*s_j) followed by the r linear terms s_i. The output
+    // slots follow that same order: the quadratic pairs in lexicographic (i,j)
+    // order with i <= j, then the linear components, then the constant term in
+    // out[R] (R = mlwe_extended_rank(r)). At r = 1 this is O[0] = a1*a2,
+    // O[1] = a1*b2 + b1*a2, O[2] = b1*b2, matching a plain convolution.
+    const uint64_t r = in1->r;
+    assert(in2->r == r);
+    const uint64_t R = mlwe_extended_rank(r);
+    size_t k = 0;
+
+    // Quadratic slots: q_ij for i <= j.
+    for (size_t i = 0; i < r; i++)
     {
-        int first = 1;
-        for (size_t i = 0; i <= k; i++)
+        for (size_t j = i; j < r; j++)
         {
-            if (i <= r && (k - i) <= r)
+            polynomial_mul_RNS_polynomial(out[k], in1->a[i], in2->a[j]);
+            if (i != j)
             {
-                RNS_Polynomial A_i = (i < r) ? in1->a[i] : in1->b;
-                RNS_Polynomial B_ki = ((k - i) < r) ? in2->a[k - i] : in2->b;
-                if (first)
-                {
-                    polynomial_mul_RNS_polynomial(out[k], A_i, B_ki);
-                    first = 0;
-                }
-                else
-                {
-                    polynomial_mul_addto_RNS_polynomial(out[k], A_i, B_ki);
-                }
+                polynomial_mul_addto_RNS_polynomial(out[k], in1->a[j], in2->a[i]);
             }
+            k++;
         }
     }
+
+    // Linear slots: a1_i*b2 + b1*a2_i.
+    for (size_t i = 0; i < r; i++)
+    {
+        polynomial_mul_RNS_polynomial(out[k], in1->a[i], in2->b);
+        polynomial_mul_addto_RNS_polynomial(out[k], in1->b, in2->a[i]);
+        k++;
+    }
+    assert(k == R);
+
+    // Constant term.
+    polynomial_mul_RNS_polynomial(out[R], in1->b, in2->b);
 }
 
 void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE **ksk)
@@ -687,40 +713,41 @@ void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE **ksk)
     uint64_t mask = in1->b->rns_mask;
     incNTT ntt = in1->b->ntt;
 
-    // The discrete convolution produces a rank-2r ciphertext: 2r "a" components
-    // O[0..2r-1] plus the constant term O[2r]. Lay it out over an MLWE so the
-    // components map to a-slots and b directly.
+    // The tensor product produces a rank-R ciphertext (R = r*(r+3)/2): R "a"
+    // components O[0..R-1] plus the constant term O[R]. Lay it out over an MLWE
+    // so the components map to a-slots and b directly.
+    const uint64_t R = mlwe_extended_rank(r);
     if (ksk == NULL)
     {
-        // No relinearization key: hand back the extended (rank-2r) product.
-        assert(out->r == 2 * r);
-        RNS_Polynomial *conv = (RNS_Polynomial *)malloc((2 * r + 1) * sizeof(RNS_Polynomial));
-        for (size_t j = 0; j < 2 * r; j++)
+        // No relinearization key: hand back the extended (rank-R) product.
+        assert(out->r == R);
+        RNS_Polynomial *tensor = (RNS_Polynomial *)malloc((R + 1) * sizeof(RNS_Polynomial));
+        for (size_t j = 0; j < R; j++)
         {
-            conv[j] = out->a[j];
+            tensor[j] = out->a[j];
         }
-        conv[2 * r] = out->b;
-        mlwe_discrete_convolution(conv, in1, in2);
-        free(conv);
+        tensor[R] = out->b;
+        mlwe_tensor_product(tensor, in1, in2);
+        free(tensor);
         return;
     }
 
     // Relinearize down to rank r by reusing the GHS hybrid key-switch. The rlk
-    // carries a real key-switch key for each of the r quadratic components
-    // (O[0..r-1]) and NULL for each of the r linear components (O[r..2r-1]),
+    // carries a real key-switch key for each of the R-r quadratic components
+    // (O[0..R-r-1]) and NULL for each of the r linear components (O[R-r..R-1]),
     // which keep the target key and are copied through by the key-switch.
     assert(out->r == r);
-    RNS_MLWE ext = mlwe_alloc_RNS_sample(N, 2 * r, mask, ntt);
-    RNS_Polynomial *conv = (RNS_Polynomial *)malloc((2 * r + 1) * sizeof(RNS_Polynomial));
-    for (size_t j = 0; j < 2 * r; j++)
+    RNS_MLWE ext = mlwe_alloc_RNS_sample(N, R, mask, ntt);
+    RNS_Polynomial *tensor = (RNS_Polynomial *)malloc((R + 1) * sizeof(RNS_Polynomial));
+    for (size_t j = 0; j < R; j++)
     {
-        conv[j] = ext->a[j];
+        tensor[j] = ext->a[j];
     }
-    conv[2 * r] = ext->b;
-    mlwe_discrete_convolution(conv, in1, in2);
-    free(conv);
+    tensor[R] = ext->b;
+    mlwe_tensor_product(tensor, in1, in2);
+    free(tensor);
 
-    RNSc_MLWE ext_c = mlwe_alloc_RNSc_sample(N, 2 * r, mask, ntt);
+    RNSc_MLWE ext_c = mlwe_alloc_RNSc_sample(N, R, mask, ntt);
     mlwe_RNS_to_RNSc(ext_c, ext);
     mlwe_RNSc_GHS_hybrid_keyswitch((RNSc_MLWE)out, ext_c, ksk, 0);
     // Restore the NTT representation callers expect from a product.

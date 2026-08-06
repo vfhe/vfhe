@@ -88,6 +88,16 @@ class MLWE_Scheme:
         return self.rings[0]
 
     @property
+    def extended_rank(self) -> int:
+        """Rank of the extended (not-yet-relinearized) product of two samples.
+
+        The product lives in the symmetric square of the ciphertext module:
+        ``r*(r+1)/2`` quadratic components plus r linear ones (2 at rank 1). See
+        :meth:`tensor_product`.
+        """
+        return self.r * (self.r + 3) // 2
+
+    @property
     def special_primes(self) -> int:
         if self.special_rings and self.rings:
             return self.special_rings[0].ell - self.rings[0].ell
@@ -170,10 +180,25 @@ class MLWE_Scheme:
     def gen_rlk_for_level(
         self, key_out: MLWE_Key, quad_polys: list[Polynomial], lvl: int
     ):
-        # One real key-switch key per quadratic component, followed by r NULL
-        # slots for the linear components that keep the target key.
+        # One real key-switch key per quadratic component (r*(r+1)/2 of them),
+        # followed by r NULL slots for the linear components, which keep the
+        # target key and are copied through by the key-switch.
         components = self._gen_ksk_components(key_out, quad_polys, lvl)
         return MLWE_Set(components + [None] * self.r)
+
+    def quadratic_key_polys(self, key: MLWE_Key) -> list[Polynomial]:
+        """The quadratic key terms of the tensored product, in slot order.
+
+        These are ``-(s_i * s_j)`` for every pair ``i <= j`` in lexicographic
+        order -- the extended key that :meth:`tensor_product`'s quadratic slots
+        decrypt under (see that method for the layout). For rank 1 this is just
+        ``[-(s_0 * s_0)]``.
+        """
+        return [
+            -(key.poly[i] * key.poly[j])
+            for i in range(self.r)
+            for j in range(i, self.r)
+        ]
 
     def gen_rlk(
         self,
@@ -183,12 +208,21 @@ class MLWE_Scheme:
     ):
         """Relinearization key for the rank-r product.
 
-        ``quad_polys`` holds the r quadratic key terms (e.g. ``[-(s_0 * s_0)]``
-        for rank 1). The resulting key-switch set has these r real keys plus r
-        NULL slots consumed by :meth:`relinearize`/:meth:`multiply`.
+        ``quad_polys`` holds the ``r*(r+1)/2`` quadratic key terms in the slot
+        order of :meth:`tensor_product` (e.g. ``[-(s_0 * s_0)]`` for rank 1);
+        pass the :class:`MLWE_Key` itself to have them derived by
+        :meth:`quadratic_key_polys`. The resulting key-switch set has these real
+        keys plus r NULL slots for the linear components, consumed by
+        :meth:`relinearize`/:meth:`multiply`.
         """
-        quad_polys = quad_polys if isinstance(quad_polys, list) else quad_polys.poly
-        assert len(quad_polys) == self.r, "expected one quadratic key per component"
+        quad_polys = (
+            quad_polys
+            if isinstance(quad_polys, list)
+            else self.quadratic_key_polys(quad_polys)
+        )
+        assert len(quad_polys) == self.r * (self.r + 1) // 2, (
+            "expected one quadratic key per pair of key components"
+        )
         if lvl is not None:
             return self.gen_rlk_for_level(key_out, quad_polys, lvl)
         return [
@@ -337,26 +371,43 @@ class MLWE_Scheme:
         out.repr = repr.ntt
         return out
 
-    def discrete_convolution(self, in1: MLWE, in2: MLWE) -> list[Polynomial]:
-        """Computes the discrete convolution between the r+1 components of in1 and in2.
+    def tensor_product(self, in1: MLWE, in2: MLWE) -> list[Polynomial]:
+        """Symmetric tensor product of the r+1 components of ``in1`` and ``in2``.
+
+        Since ``phase(c) = b - sum_i a_i * s_i``, the product of the two phases
+        is quadratic in the key::
+
+            b1*b2 - sum_i (a1_i*b2 + b1*a2_i) * s_i + sum_{i<=j} q_ij * s_i*s_j
+
+        with ``q_ij = a1_i*a2_j + a1_j*a2_i`` (``i < j``) and
+        ``q_ii = a1_i*a2_i``. The returned polynomials follow the extended key's
+        slot order: the ``r*(r+1)/2`` quadratic components ``q_ij`` (pairs
+        ``i <= j``, lexicographic), then the r linear components, then the
+        constant term ``b1*b2`` last. Their keys are ``-(s_i * s_j)`` for the
+        quadratic slots (see :meth:`quadratic_key_polys`) and ``s_i`` for the
+        linear ones, which is why relinearization key-switches the former and
+        passes the latter through.
+
+        At rank 1 the layout coincides with the convolution of the coefficient
+        vectors ``(a, b)``; at higher ranks it does not (distinct key terms would
+        collide in a single index-sum slot).
 
         Args:
             in1: The first MLWE ciphertext.
             in2: The second MLWE ciphertext.
 
         Returns:
-            A list of 2*r+1 Polynomial objects.
+            A list of ``extended_rank + 1`` Polynomial objects.
         """
         assert in1.ring == in2.ring, "Ciphertexts must be in the same ring"
         assert in1.scheme.r == in2.scheme.r, "Ciphertexts must have the same rank"
-        r = in1.scheme.r
         in1.to_NTT()
         in2.to_NTT()
-        out_polys = [Polynomial(in1.ring) for _ in range(2 * r + 1)]
+        out_polys = [Polynomial(in1.ring) for _ in range(self.extended_rank + 1)]
         for p in out_polys:
             p.repr = repr.ntt
         out_pointers = ffi.new("void*[]", [p.obj for p in out_polys])
-        lib_rlwe.lib.mlwe_discrete_convolution(out_pointers, in1.obj, in2.obj)
+        lib_rlwe.lib.mlwe_tensor_product(out_pointers, in1.obj, in2.obj)
         return out_polys
 
     def multiply(
@@ -365,18 +416,19 @@ class MLWE_Scheme:
         in2: MLWE,
         ksk: "MLWE_Set | list[MLWE_Set] | None" = None,
     ) -> CtT:
-        """Performs discrete convolution and (optionally) relinearization.
+        """Tensors the two ciphertexts and (optionally) relinearizes.
 
         Args:
             in1: The first MLWE ciphertext.
             in2: The second MLWE ciphertext.
             ksk: The relinearization key set. If ``None``, relinearization is
-                skipped and the extended rank-2r product is returned; feed it to
+                skipped and the extended product (rank
+                :attr:`extended_rank`) is returned; feed it to
                 :meth:`relinearize` to reduce it back to rank r.
 
         Returns:
             A rank-r product when ``ksk`` is given, otherwise the extended
-            rank-2r product (with ``is_extended`` set).
+            product of rank :attr:`extended_rank` (with ``is_extended`` set).
         """
         assert in1.ring == in2.ring, "Ciphertexts must be in the same ring"
         assert in1.scheme == in2.scheme, "Ciphertexts must be from the same scheme"
@@ -385,7 +437,7 @@ class MLWE_Scheme:
         in2.to_NTT()
 
         if ksk is None:
-            out = in1.new_like(lvl=in1.lvl, rank=2 * in1.scheme.r)
+            out = in1.new_like(lvl=in1.lvl, rank=in1.scheme.extended_rank)
             out.is_extended = True
             lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ffi.NULL)
             out.repr = repr.ntt
@@ -401,7 +453,7 @@ class MLWE_Scheme:
         return out
 
     def relinearize(self, c_ext: CtT, ksk: "MLWE_Set | list[MLWE_Set]") -> CtT:
-        """Relinearize an extended (rank-2r) product back to rank r.
+        """Relinearize an extended product back to rank r.
 
         Reuses the GHS hybrid key-switch: the rlk key-switches the quadratic
         components and copies the linear ones through (their NULL slots).
@@ -511,7 +563,7 @@ class MLWE:
         if ring is None:
             ring = scheme.rings[lvl]
         # Rank defaults to the scheme's module rank; an extended (non-relinearized)
-        # product carries rank 2r.
+        # product carries the larger MLWE_Scheme.extended_rank.
         self.r = rank if rank is not None else scheme.r
         self.obj = lib_rlwe.lib.mlwe_alloc_RNS_sample(
             ring.N, self.r, ring.mask, ring.NTT
@@ -520,7 +572,7 @@ class MLWE:
         self.scheme = scheme
         self.repr = repr.empty
         self.lvl = lvl
-        # Marks a rank-2r product that still needs relinearization.
+        # Marks an extended-rank product that still needs relinearization.
         self.is_extended = False
 
     @property
