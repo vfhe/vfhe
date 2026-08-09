@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Runs OpenSSF Scorecard and uploads its SARIF to code scanning.
+name: Scorecard Analysis
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "15 1 * * 1"
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: scorecard
+  cancel-in-progress: false
+
+jobs:
+  # --------------------------------------------------------------- analyze ---
+
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read # workflow and run metadata
+      checks: read # CI results the score reads
+      contents: read # checkout
+      id-token: write # publish_results
+      issues: read # maintenance signals
+      pull-requests: read # review signals
+      security-events: write # upload code-scanning results
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          publish_results: true
+          results_file: results.sarif
+          results_format: sarif
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          if-no-files-found: error
+          name: scorecard-results
+          overwrite: true
+          path: results.sarif
+          retention-days: 7
+      - name: Upload to CodeQL
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        with:
+          sarif_file: results.sarif
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert-channel:
+    name: Alert Channel
+    needs: [analyze]
+    if: failure()
+    uses: ./.github/workflows/alert-channel.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

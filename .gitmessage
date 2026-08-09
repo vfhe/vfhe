@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
 # ── Commit message guide (50/72 rule) ──────────────────────────────
 # Subject: imperative, <= 50 chars, capitalized, no trailing period.
 # |<-------------- 50-character limit ------------->|

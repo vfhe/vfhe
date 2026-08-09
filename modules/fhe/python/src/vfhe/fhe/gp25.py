@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import math
@@ -18,9 +20,9 @@ class SAB_Key:
     def __init__(self):
         self.s = []  # list[list[list[MGSW]]] -> a_idx -> h -> r_prec -> MGSW
         self.s_sign = []  # list[list[MGSW]] -> a_idx -> h -> MGSW
-        self.packing_key: "MLWE_Set | None" = None
-        self.hw_reducing_key: "MLWE_Set | None" = None
-        self.trace_repack_key: "MLWE_Set | list | None" = None
+        self.packing_key: MLWE_Set | None = None
+        self.hw_reducing_key: MLWE_Set | None = None
+        self.trace_repack_key: MLWE_Set | list | None = None
         self.h = 0
         self.b_prec = 0
         self.r_prec = 0
@@ -30,8 +32,8 @@ class GP25:
     def __init__(
         self,
         scheme: MLWE_Scheme,
-        gsw_ell: "int|None" = None,
-        debug_key: "MLWE_Key|None" = None,
+        gsw_ell: int | None = None,
+        debug_key: MLWE_Key | None = None,
         threads: int = 1,
         trace_repack: bool = False,
     ):
@@ -122,7 +124,7 @@ class GP25:
         rlwe_in: MLWE,
         tv: MLWE,
         sab_key: SAB_Key,
-        in_modulus: "int|None" = None,
+        in_modulus: int | None = None,
     ):
         """
         Implements the Sparse Amortized Bootstrap (SAB) for RLWE.
@@ -278,7 +280,7 @@ class GP25:
         return res
 
     def setup_tv_xb(
-        self, b: Polynomial, tv: MLWE, b_prec: int, q: "int|None" = None
+        self, b: Polynomial, tv: MLWE, b_prec: int, q: int | None = None
     ) -> list[MLWE]:
         acc = []
         log_N2 = int(math.log2(2 * self.ring.N))
@@ -300,7 +302,7 @@ class GP25:
         return acc
 
     def sab_blind_rotate(
-        self, acc: list[MLWE], rlwe_in: MLWE, sab_key: SAB_Key, q: "int|None" = None
+        self, acc: list[MLWE], rlwe_in: MLWE, sab_key: SAB_Key, q: int | None = None
     ):
         N = self.ring.N
         r = rlwe_in.scheme.r

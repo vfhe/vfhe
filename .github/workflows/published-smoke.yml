@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Nightly install and test of the current release; pip resolves new deps every run.
+name: Published Smoke
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      index:
+        description: Which index to install from.
+        type: choice
+        options: [pypi, testpypi]
+        default: pypi
+      version:
+        description: Version to install; empty takes whatever the index serves now.
+        default: ""
+
+permissions:
+  contents: read # checkout
+
+concurrency:
+  group: published-smoke
+  cancel-in-progress: false
+
+jobs:
+  # ----------------------------------------------------------------- smoke ---
+
+  hosted:
+    name: Smoke Tests
+    uses: ./.github/workflows/smoke-tests.yml
+    permissions:
+      contents: read # checkout
+    with:
+      index: ${{ inputs.index || 'pypi' }}
+      requirement: vfhe${{ inputs.version && format('=={0}', inputs.version) || '' }}
+
+  silicon:
+    name: Hardware Smoke Tests
+    uses: ./.github/workflows/hardware-smoke-tests.yml
+    permissions:
+      contents: read # checkout
+    with:
+      index: ${{ inputs.index || 'pypi' }}
+      version: ${{ inputs.version }}
+
+  # ----------------------------------------------------------------- alert ---
+
+  # Nobody watches a schedule; a dispatcher is already looking at the run.
+  alert-channel:
+    name: Alert Channel
+    needs: [hosted, silicon]
+    if: failure() && github.event_name == 'schedule'
+    uses: ./.github/workflows/alert-channel.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+name: Merge coverage
+description: Merge coverage legs of a run and render the summary table.
+
+runs:
+  using: composite
+  steps:
+    # --------------------------------------------------------------- setup ---
+    - name: Set up dev environment
+      uses: ./.github/actions/setup-dev
+    # ------------------------------------------------------------- collect ---
+    - name: Download legs
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        merge-multiple: true
+        path: .coverage/legs
+        pattern: leg-*
+    - name: Merge legs and render summary
+      shell: bash
+      env:
+        REPORT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        python tools/coverage/merge.py .coverage/legs .coverage/merged
+        python tools/coverage/render.py .coverage/merged/coverage.json \
+          tools/coverage/summary.md.in "$REPORT_URL" | tee .coverage/summary.md
+        cat .coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+    # ------------------------------------------------------------- publish ---
+    - name: Upload summary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        if-no-files-found: error
+        include-hidden-files: true
+        name: coverage-summary
+        overwrite: true
+        path: .coverage/summary.md
+        retention-days: 7
+    - name: Upload full report
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        if-no-files-found: error
+        include-hidden-files: true
+        name: coverage
+        overwrite: true
+        path: .coverage/
+        retention-days: 7

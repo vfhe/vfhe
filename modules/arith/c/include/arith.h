@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #ifndef __NTT_H__
 #define __NTT_H__
 

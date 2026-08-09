@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #include <rns-rlwe.h>
 #include <math.h>
 #include <stdlib.h>
@@ -354,8 +356,8 @@ void GS_RN(double *x, double **ws, uint64_t n)
 // c = a*b
 #define COMPLEX_MULT_SCALAR(c_real, c_imag, a_real, a_imag, b_real, b_imag)                        \
     {                                                                                              \
-        c_imag = (a_real * b_imag + b_real * a_imag);                                              \
-        c_real = (a_real * b_real - a_imag * b_imag);                                              \
+        (c_imag) = ((a_real) * (b_imag) + (b_real) * (a_imag));                                    \
+        (c_real) = ((a_real) * (b_real) - (a_imag) * (b_imag));                                    \
     }
 
 void complex_poly_scale_double(double *v, double scale, uint64_t N)

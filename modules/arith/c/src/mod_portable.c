@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #include <arith.h>
 
 #if !defined(__AVX512IFMA__) || defined(PORTABLE_BUILD) || defined(PORTABLE)

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for vfhe.piop: pure-Python ML_Polynomial / MLE_Sparse
 arithmetic + evaluation, and the C-backed MLE_Dense (mle_dense_poly_* kernels)

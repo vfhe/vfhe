@@ -1,7 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 from _vfhe_proto.vfhe.circuit.gkr.v1 import gkr_pb2 as gkr
 
-__all__ = ["add_gate", "mul_gate", "serialize", "deserialize"]
+__all__ = ["add_gate", "deserialize", "mul_gate", "serialize"]
 
 
 def add_gate(left: int, right: int) -> "gkr.Gate":

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 """Compiler probing and distutils patching shared by every native build.
 
@@ -5,17 +6,15 @@ Stdlib only and loadable by file path: at build time the surrounding package
 cannot be imported, because the native extension it loads does not exist yet.
 """
 
-import os
-import shlex
-import subprocess
+import contextlib
+import importlib
 import sys
-import sysconfig
 
 
 def _accept_asm_out_path_exts(orig):
     """Wrap ``_make_out_path_exts`` so its extension table admits assembly."""
 
-    def patched(cls, output_dir, strip_dir, src_name, extensions):
+    def patched(_cls, output_dir, strip_dir, src_name, extensions):
         if isinstance(extensions, dict):
             extensions.setdefault(".S", ".o")
             extensions.setdefault(".s", ".o")
@@ -45,11 +44,12 @@ def enable_asm_sources() -> None:
         "setuptools._distutils.compilers.C.base",
         "setuptools._distutils.compilers.C.unix",
     )
+    # Wide suppress on purpose: which of these exist (and what importing them
+    # drags in) varies by Python and setuptools version; the patch loop below
+    # works with whatever did import.
     for modname in modnames:
-        try:
-            __import__(modname, fromlist=["*"])
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            importlib.import_module(modname)
 
     for name, module in list(sys.modules.items()):
         if ("distutils" not in name and "setuptools" not in name) or not module:
@@ -63,34 +63,10 @@ def enable_asm_sources() -> None:
             if hasattr(obj, "_make_out_path_exts") and not getattr(
                 obj, "_vfhe_asm_out_path_patched", False
             ):
-                setattr(
-                    obj,
-                    "_make_out_path_exts",
-                    _accept_asm_out_path_exts(getattr(obj, "_make_out_path_exts")),
+                obj._make_out_path_exts = _accept_asm_out_path_exts(
+                    obj._make_out_path_exts
                 )
-                setattr(obj, "_vfhe_asm_out_path_patched", True)
+                obj._vfhe_asm_out_path_patched = True
         module_exts = getattr(module, "src_extensions", None)
         if isinstance(module_exts, list):
             module_exts.extend(e for e in (".S", ".s") if e not in module_exts)
-
-
-def host_has_avx512ifma() -> bool:
-    """True if ``-march=native`` enables AVX-512 IFMA on *this* machine.
-
-    Asks the *same* compiler the extension will be built with what the native
-    CPU supports; the engine's SIMD kernels are guarded by ``__AVX512IFMA__``,
-    so this matches exactly what a tuned build would light up. Any failure (no
-    compiler, ``-march=native`` unsupported, non-zero exit) falls back to
-    portable, so the check can only ever *under*-tune, never mis-tune.
-    """
-    # Resolve the compiler exactly as distutils/cffi will for the real build:
-    # $CC if set, else the compiler this Python was built with, else `cc`. Keep
-    # any base flags it carries (e.g. a wrapper's --target=) so the probe and
-    # the build see the same target.
-    cc = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
-    argv = [*shlex.split(cc), "-march=native", "-dM", "-E", "-x", "c", os.devnull]
-    try:
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=30)
-    except Exception:
-        return False
-    return out.returncode == 0 and "__AVX512IFMA__" in out.stdout

@@ -1,0 +1,9 @@
+<!-- SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com> -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+## Coverage
+
+| Engine | Python lines | Python branches | C lines | C branches |
+| --- | ---: | ---: | ---: | ---: |
+{rows}
+
+One row per engine; **combined** is their union. An emulated engine is measured over the fast suite alone, so its row is a lower bound. Coverage is informational; the [coverage report]({artifact_url}) carries the line detail.

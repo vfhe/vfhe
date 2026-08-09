@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+name: Bug report
+description: Report a defect in vFHE.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Do not report security issues here; use the
+        [security policy](https://github.com/vfhe/vfhe/blob/main/SECURITY.md)
+        instead.
+  - type: checkboxes
+    id: prior-search
+    attributes:
+      label: Prior search
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Paste the output of:
+
+        ```bash
+        python -m vfhe.info
+        ```
+      placeholder: |
+        vfhe      0.0.1
+        engine    portable
+        python    3.14.5 CPython
+        platform  Linux-6.8.0-x86_64
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: compiler
+    attributes:
+      label: Compiler (source builds only)
+      description: Skip this if you installed a wheel.
+      placeholder: gcc 14 / Apple clang 16
+  - type: input
+    id: commit
+    attributes:
+      label: Commit (source builds only)
+      placeholder: 82766c7
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the smallest snippet or parameters that reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or traceback
+      render: shell

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import atexit
@@ -25,10 +27,7 @@ class NTT_Processor:
             )
         else:
             prime_map = self.prime_to_index[key]
-            new_primes = []
-            for p in primes:
-                if p not in prime_map:
-                    new_primes.append(p)
+            new_primes = [p for p in primes if p not in prime_map]
 
             if new_primes:
                 start_idx = len(self.primes[key])

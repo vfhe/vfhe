@@ -1,9 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 
 from vfhe.arith import Polynomial, Ring
 from vfhe.misc.libvfhe import ffi, lib
 
 from .piop import IOPValue, IOPVariable
+
+_background_tasks: set[asyncio.Task] = set()
 
 
 def _handle_array(polys):
@@ -44,7 +48,7 @@ class MLE:
 
     def evaluate(self, point, in_place=True):
         if isinstance(point, list):
-            normalized_point = {var: val for var, val in zip(self.variables, point)}
+            normalized_point = dict(zip(self.variables, point, strict=True))
         elif isinstance(point, dict):
             normalized_point = point.copy()
         else:
@@ -73,7 +77,9 @@ class MLE:
                 except Exception as e:
                     res_future.set_exception(e)
 
-            asyncio.create_task(wait_and_eval())
+            task = asyncio.create_task(wait_and_eval())
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
             return res_future
         else:
             resolved = {}
@@ -103,14 +109,20 @@ class ML_Polynomial(MLE):
         if not isinstance(other, ML_Polynomial):
             raise TypeError("Can only add ML_Polynomial to ML_Polynomial")
         assert self.variables == other.variables, "Variables must match"
-        new_coeffs = [c1 + c2 for c1, c2 in zip(self.coefficients, other.coefficients)]
+        new_coeffs = [
+            c1 + c2
+            for c1, c2 in zip(self.coefficients, other.coefficients, strict=True)
+        ]
         return ML_Polynomial(variables=self.variables, coefficients=new_coeffs)
 
     def __sub__(self, other):
         if not isinstance(other, ML_Polynomial):
             raise TypeError("Can only subtract ML_Polynomial from ML_Polynomial")
         assert self.variables == other.variables, "Variables must match"
-        new_coeffs = [c1 - c2 for c1, c2 in zip(self.coefficients, other.coefficients)]
+        new_coeffs = [
+            c1 - c2
+            for c1, c2 in zip(self.coefficients, other.coefficients, strict=True)
+        ]
         return ML_Polynomial(variables=self.variables, coefficients=new_coeffs)
 
     def scale(self, factor):

@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.circuit
 
 Layered GKR arithmetic-circuit representation and its polynomial export.

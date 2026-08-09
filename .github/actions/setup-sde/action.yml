@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+name: Set up Intel SDE
+description: >
+  Provision Intel SDE: restore its cache, download on a miss (sha256-checked;
+  .sde.json holds the pin and is the cache key), and allow the ptrace SDE
+  needs to control subprocesses. Linux only.
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Intel SDE
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: sde-${{ hashFiles('.sde.json') }}
+        path: .cache/sde
+    - name: Download SDE
+      shell: bash
+      run: python tools/test/_sde.py
+    # Yama (ptrace_scope=1) blocks SDE from detaching from compiler subprocesses.
+    - name: Let SDE manage subprocesses
+      shell: bash
+      run: sudo sysctl -w kernel.yama.ptrace_scope=0

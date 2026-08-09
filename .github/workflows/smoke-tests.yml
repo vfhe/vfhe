@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Installs a distribution in a clean venv and runs smoke/*.py against it.
+name: Smoke Tests
+
+on:
+  workflow_call:
+    inputs:
+      index:
+        description: Which index to install from, pypi or testpypi.
+        type: string
+        default: pypi
+      requirement:
+        description: What pip installs, like vfhe==1.2.3; empty installs the sdist this run built.
+        type: string
+        default: ""
+
+permissions:
+  contents: read # checkout
+
+jobs:
+  smoke-tests:
+    name: Smoke (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm]
+        # An index serves a wheel per interpreter; an sdist is one artifact.
+        python: >-
+          ${{ fromJSON(inputs.requirement != ''
+          && '["3.10", "3.11", "3.12", "3.13", "3.14"]'
+          || '["3.10", "3.14"]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Download sdist
+        if: inputs.requirement == ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist-sdist
+          path: dist
+      # Pinned: the picker asks the CPU, and the hosted fleet is mixed.
+      - name: Install and run smoke test
+        env:
+          INDEX: ${{ inputs.index }}
+          PACKAGE: ${{ inputs.requirement || 'dist/*.tar.gz' }}
+          VFHE_ENGINE: portable
+        run: make smoke DIST="$PACKAGE" INDEX="$INDEX"

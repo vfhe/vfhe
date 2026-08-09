@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the (reverted) vfhe.arith over the cffi boundary.
 
@@ -57,8 +58,12 @@ def test_add_sub_negate_scale(ring):
     b_c = [i * i + 3 for i in range(N)]
     a = Polynomial(ring).from_array(a_c)
     b = Polynomial(ring).from_array(b_c)
-    assert (a + b).get_polynomial() == [(x + y) % ring.q_l for x, y in zip(a_c, b_c)]
-    assert (a - b).get_polynomial() == [(x - y) % ring.q_l for x, y in zip(a_c, b_c)]
+    assert (a + b).get_polynomial() == [
+        (x + y) % ring.q_l for x, y in zip(a_c, b_c, strict=True)
+    ]
+    assert (a - b).get_polynomial() == [
+        (x - y) % ring.q_l for x, y in zip(a_c, b_c, strict=True)
+    ]
     assert (-a).get_polynomial() == [(-x) % ring.q_l for x in a_c]
     assert (a * 5).get_polynomial() == [(5 * x) % ring.q_l for x in a_c]
     assert (a + 9).get_polynomial() == [(a_c[0] + 9) % ring.q_l] + [
@@ -117,7 +122,7 @@ def test_fast_inverse_test_vectors():
     inv_slots = inv.get_coeff_matrix(repr=repr.ntt)[0]
 
     # Verify that inv_slots are the modular inverses of slots
-    for x, y in zip(slots, inv_slots):
+    for x, y in zip(slots, inv_slots, strict=True):
         assert (x * y) % q == 1
 
 

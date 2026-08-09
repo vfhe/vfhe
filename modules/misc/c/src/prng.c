@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #include "misc.h"
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
@@ -74,13 +76,14 @@ void generate_rnd_seed(uint64_t *p)
         det_fill_seed(p);
         return;
     }
-    FILE *fp;
-    fp = fopen("/dev/urandom", "r");
+    FILE *fp = fopen("/dev/urandom", "r");
+    const size_t read = fp ? fread(p, 1, 32, fp) : 0;
     if (fp)
-    {
-        size_t unused = fread(p, 1, 32, fp);
-        (void)unused;
         fclose(fp);
+    if (read != 32)
+    {
+        printf("Random Generation Failed\n");
+        return;
     }
 }
 #endif

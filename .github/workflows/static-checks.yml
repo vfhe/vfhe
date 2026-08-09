@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# gitleaks history scan and linting; both CI pipelines call it.
+name: Static Checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read # checkout
+
+jobs:
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # whole history is what gets scanned
+          persist-credentials: false
+      - name: Scan history
+        uses: ./.github/actions/scan-secrets
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Set up dev environment
+        uses: ./.github/actions/setup-dev
+      - name: Run static checks
+        run: make lint

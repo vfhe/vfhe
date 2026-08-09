@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from vfhe.misc.libvfhe import ffi, lib

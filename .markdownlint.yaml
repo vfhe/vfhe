@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+default: true
+MD013: false # line length
+MD060: false # table pipe spacing
+MD028: false # blank line between blockquotes: GitHub renders them as two, which is the intent
+MD024:
+  siblings_only: true # Keep a Changelog repeats Added/Changed/Fixed under every version

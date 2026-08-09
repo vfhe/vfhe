@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Nightly ClusterFuzzLite sessions and corpus prunes, one leg per engine.
+name: Batch Fuzzing
+
+on:
+  schedule:
+    - cron: "45 0 * * *"
+
+env:
+  FUZZ_SECONDS: "3600"
+  PRUNE_SECONDS: "600"
+
+concurrency:
+  group: fuzzing
+  cancel-in-progress: false
+
+permissions:
+  contents: read # checkout
+
+jobs:
+  # ------------------------------------------------------------------ fuzz ---
+
+  batch:
+    name: Batch (${{ matrix.engine }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90 # fuzzing and pruning budgets, plus build margin
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+          - { engine: portable, runner: [ubuntu-24.04] }
+          - { engine: avx512ifma, runner: [self-hosted, Linux, X64, avx512ifma] }
+    permissions:
+      actions: read # gh-actions filestore keeps corpus in artifacts
+      contents: read # checkout
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Build fuzzers
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: c
+      - name: Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          fuzz-seconds: ${{ env.FUZZ_SECONDS }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mode: batch
+          output-sarif: true
+      - name: Prune corpus
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          fuzz-seconds: ${{ env.PRUNE_SECONDS }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mode: prune
+          output-sarif: true
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert-channel:
+    name: Alert Channel
+    needs: [batch]
+    if: failure()
+    uses: ./.github/workflows/alert-channel.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

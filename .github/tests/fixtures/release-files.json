@@ -1,0 +1,13 @@
+{
+  "urls": [
+    {
+      "url": "https://files.pythonhosted.org/x/vfhe-1.2.3.tar.gz"
+    },
+    {
+      "url": "https://files.pythonhosted.org/x/vfhe-1.2.3-cp310-manylinux_x86_64.whl"
+    },
+    {
+      "url": "https://files.pythonhosted.org/x/vfhe-1.2.3-cp314-macosx_arm64.whl"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "title": "vfhe",
+  "title": "The vFHE Library",
   "description": "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques.",
   "upload_type": "software",
   "access_right": "open",
@@ -20,7 +20,10 @@
       "affiliation": "IMDEA Software Institute",
       "orcid": "0000-0001-5289-3769"
     },
-    { "name": "Dubois, Adrien", "affiliation": "ENS Lyon" },
+    {
+      "name": "Dubois, Adrien",
+      "affiliation": "ENS Lyon"
+    },
     {
       "name": "Fiore, Dario",
       "affiliation": "IMDEA Software Institute",
@@ -31,8 +34,14 @@
       "affiliation": "IMDEA Software Institute",
       "orcid": "0000-0001-5110-6639"
     },
-    { "name": "Köstler, Robin", "affiliation": "University of Luxembourg" },
-    { "name": "Osadnik, Michał", "affiliation": "Aalto University" },
+    {
+      "name": "Köstler, Robin",
+      "affiliation": "University of Luxembourg"
+    },
+    {
+      "name": "Osadnik, Michał",
+      "affiliation": "Aalto University"
+    },
     {
       "name": "Roșu, Alin-Petru",
       "affiliation": "IMDEA Software Institute",

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import math
@@ -10,11 +12,11 @@ from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, Polynomial, Ri
 class CKKS_Scheme(MLWE_Scheme):
     def __init__(
         self,
-        rings: "list[Ring]|Ring",
+        rings: list[Ring] | Ring,
         scaling_factor: float = 2**30,
         module_rank: int = 1,
         special_primes: int = 0,
-        special_rings: "list[Ring]|None" = None,
+        special_rings: list[Ring] | None = None,
     ):
         """Create a CKKS scheme.
 
@@ -54,7 +56,7 @@ class CKKS_Scheme(MLWE_Scheme):
         return poly
 
     def decode(
-        self, poly: Polynomial, scaling_factor: "float|None" = None
+        self, poly: Polynomial, scaling_factor: float | None = None
     ) -> list[complex]:
         """Decodes a Polynomial back into a list of complex values."""
         if scaling_factor is None:
@@ -106,7 +108,7 @@ class CKKS_Scheme(MLWE_Scheme):
         return self.phase(ciphertext, key)
 
     def rotate(
-        self, ciphertext: CKKS_Ciphertext, k: int, ksk: "MLWE_Set | list[MLWE_Set]"
+        self, ciphertext: CKKS_Ciphertext, k: int, ksk: MLWE_Set | list[MLWE_Set]
     ) -> CKKS_Ciphertext:
         """Rotates the slots of the ciphertext by k steps."""
         N = self.ring.N
@@ -116,7 +118,7 @@ class CKKS_Scheme(MLWE_Scheme):
         gen = pow(5, k_mod, 2 * N)
         return self.automorphism(ciphertext, gen, ksk)
 
-    def gen_rotation_key(self, key: MLWE_Key, k: int) -> "MLWE_Set | list[MLWE_Set]":
+    def gen_rotation_key(self, key: MLWE_Key, k: int) -> MLWE_Set | list[MLWE_Set]:
         """Generates the rotation key (automorphism key-switching key) for rotation by k slots."""
         N = self.ring.N
         k_mod = k % (N // 2)
@@ -201,14 +203,14 @@ class CKKS_Scheme(MLWE_Scheme):
 
 
 class CKKS_Ciphertext(MLWE):
-    scheme: "CKKS_Scheme"  # narrows MLWE.scheme for the CKKS-only members
+    scheme: CKKS_Scheme  # narrows MLWE.scheme for the CKKS-only members
 
     def __init__(
         self,
         scheme: CKKS_Scheme,
-        lvl: "int|None" = None,
-        ring: "Ring|None" = None,
-        rank: "int|None" = None,
+        lvl: int | None = None,
+        ring: Ring | None = None,
+        rank: int | None = None,
     ):
         super().__init__(scheme, lvl=lvl, ring=ring, rank=rank)
         self.delta = scheme.scaling_factor

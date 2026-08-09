@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
 
 void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, RNSc_Polynomial poly)

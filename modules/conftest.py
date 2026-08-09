@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 "Dev test wiring (pytest loads this before collecting any test under modules/)."
 
@@ -10,9 +11,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.dont_write_bytecode = True  # keep .pyc out of the source tree
 
 try:
-    import _vfhe_native  # noqa: F401  (availability probe for the built extension)
+    # Imported for its side effect: proving the built extension is importable.
+    import _vfhe_native  # noqa: F401  # pyright: ignore[reportUnusedImport]
 except ModuleNotFoundError:
-    sys.path.insert(0, str(ROOT / ".generated"))
+    sys.path.insert(0, str(ROOT / "build"))  # extensions and archives
     for src in sorted(ROOT.glob("modules/*/python/src")):
         sys.path.insert(0, str(src))
 
@@ -59,7 +61,7 @@ def deterministic_prng():
 
 
 @pytest.fixture(autouse=True)
-def _reset_ntt_registry():
+def _reset_ntt_registry():  # pyright: ignore[reportUnusedFunction]
     """Give every test a clean NTT prime pool.
 
     The incNTT prime pool is a process-global singleton keyed by

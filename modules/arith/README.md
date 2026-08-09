@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.arith
 
 RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: the compute engine every

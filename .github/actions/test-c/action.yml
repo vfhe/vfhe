@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+name: C suites
+description: Run the C unit tests for one engine, optionally emulated, sanitized or measured.
+
+inputs:
+  coverage:
+    description: "1 instruments the build and uploads this engine's leg."
+    default: "0"
+  emulate:
+    description: "1 runs it under the emulator the registry names for that engine."
+    default: "0"
+  engine:
+    description: Engine to build and test.
+    required: true
+  sanitize:
+    description: meson's -Db_sanitize; none is the release shape.
+    default: none
+
+runs:
+  using: composite
+  steps:
+    # --------------------------------------------------------------- setup ---
+    - name: Set up dev environment
+      uses: ./.github/actions/setup-dev
+    - name: Set up Intel SDE
+      if: inputs.emulate == '1'
+      uses: ./.github/actions/setup-sde
+    # ----------------------------------------------------------------- run ---
+    - name: Run C suites
+      shell: bash
+      env:
+        COVERAGE: ${{ inputs.coverage }}
+        EMULATE: ${{ inputs.emulate }}
+        ENGINE: ${{ inputs.engine }}
+        SANITIZE: ${{ inputs.sanitize }}
+      run: |
+        make test ENGINE="$ENGINE" SUITES=c EMULATE="$EMULATE" \
+          VFHE_SANITIZE="$SANITIZE" VFHE_COVERAGE="$COVERAGE"
+    # ------------------------------------------------------------- measure ---
+    - name: Upload C coverage leg
+      if: inputs.coverage == '1'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        if-no-files-found: error
+        include-hidden-files: true
+        name: leg-c-${{ inputs.engine }}
+        overwrite: true
+        path: .coverage/legs
+        retention-days: 7

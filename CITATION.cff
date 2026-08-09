@@ -1,6 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below (and the archived release DOI where relevant)."
-title: vfhe
+title: The vFHE Library
 abstract: "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques."
 type: software
 license: Apache-2.0

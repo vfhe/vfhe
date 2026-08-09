@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the fhe engine. CKKS and CGGI16 reuse the arith + mlwe
 // surfaces; only GP25's sparse-amortized-bootstrap kernels (fhe/c/src/gp25.c,

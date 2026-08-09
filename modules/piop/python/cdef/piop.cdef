@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the piop engine: dense multilinear-extension kernels
 // (piop/c/src/mle.c, prototyped in piop/c/include/mle.h). Polynomial handles

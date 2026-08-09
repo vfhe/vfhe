@@ -1,5 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import contextlib
+import itertools
 import math
 from enum import Enum
 
@@ -10,7 +14,7 @@ from .number_theory import crt, is_prime
 
 
 def next_power_of_2(x):
-    return 1 << int(math.ceil(math.log2(x)))
+    return 1 << math.ceil(math.log2(x))
 
 
 class Ring:
@@ -21,7 +25,7 @@ class Ring:
         split_degree=None,
         primes=None,
         mask=None,
-        prime_size: "int | list[int]" = 49,
+        prime_size: int | list[int] = 49,
         exceptional_set_size=128,
     ) -> None:
         assert (
@@ -67,7 +71,7 @@ class Ring:
 
         if primes:
             assert len(primes) >= self.ell, (
-                "not enough primes for quotient ring for size 2^%d" % mod_size
+                f"not enough primes for quotient ring for size 2^{mod_size}"
             )
             self.primes = primes[: self.ell]
         else:
@@ -89,10 +93,7 @@ class Ring:
     def get_rou_matrix(self):
         w = self.lib.incNTT_get_rou_matrix(self.NTT)
         row_len = self.N // self.split_degree
-        rou_matrix = []
-        for idx in self.prime_indices:
-            rou_matrix.append([w[idx][k] for k in range(row_len)])
-        return rou_matrix
+        return [[w[idx][k] for k in range(row_len)] for idx in self.prime_indices]
 
     def quotient_ring(self, mod_size=None, ell=None, mask=None):
         assert (mod_size is not None) ^ (ell is not None) ^ (mask is not None), (
@@ -148,7 +149,8 @@ class Ring:
 
     # generates the RNS primes of size prime_size
     @staticmethod
-    def gen_prime(rou_order, prime_size, exclude_list=[]):
+    def gen_prime(rou_order, prime_size, exclude_list=None):
+        exclude_list = exclude_list if exclude_list is not None else []
         a = ((2**prime_size - 1) // rou_order) | 1
         a -= 2
         while True:
@@ -245,10 +247,9 @@ class Polynomial:
         return out
 
     def __del__(self) -> None:
-        try:
+        # interpreter shutdown may already have torn the lib down
+        with contextlib.suppress(Exception):
             self.ring.lib.free_RNS_polynomial(self.obj)
-        except Exception:
-            pass  # interpreter shutdown
 
     # def from_int(self, i:int) -> Polynomial:
     def multiply(self, in1, in2):
@@ -399,15 +400,13 @@ class Polynomial:
     def __eq__(self, value) -> bool:
         if type(value) is int:
             self.to_coeff()
-            return all([all([value == i[0]] + [j == 0 for j in i[1:]]) for i in self])
+            return all(all([value == i[0]] + [j == 0 for j in i[1:]]) for i in self)
         elif type(value) is list:
             self.to_coeff()
             s_list = list(self)
             return all(
-                [
-                    all([value[i] == s_list[i][0]] + [j == 0 for j in s_list[i][1:]])
-                    for i in range(self.ring.ell)
-                ]
+                all([value[i] == s_list[i][0]] + [j == 0 for j in s_list[i][1:]])
+                for i in range(self.ring.ell)
             )
         else:
             self.to_repr(value.repr)
@@ -474,7 +473,7 @@ class Polynomial:
         self.to_coeff()
         rns = list(self)
         if self.ring.ell == 1:
-            unsigned_res = list(sum(rns, start=[]))
+            unsigned_res = list(itertools.chain.from_iterable(rns))
         else:
             unsigned_res = [
                 crt([rns[i][j] for i in range(self.ring.ell)], self.ring.primes)
@@ -496,7 +495,7 @@ class Polynomial:
     def decompose(self, base, small=False):
         res = []
         lst = self.get_polynomial()
-        for j in range(self.ring.bit_size // base):
+        for _ in range(self.ring.bit_size // base):
             dec = []
             for i in range(len(lst)):
                 dec.append(lst[i] & ((1 << base) - 1))
@@ -542,8 +541,7 @@ class Polynomial:
             )
             res.repr = self.repr
         else:
-            print(type(other))
-            assert False, "not implemented"
+            raise NotImplementedError(f"cannot multiply by {type(other).__name__}")
         return res
 
     def __rmul__(self, other):
@@ -568,8 +566,7 @@ class Polynomial:
             assert other < 2**self.ring.smallest_prime  # large scaling not implemented
             self.ring.lib.polynomial_scale_RNSc_polynomial(self.obj, self.obj, other)
         else:
-            print(type(other))
-            assert False  # not implemented
+            raise NotImplementedError(f"cannot scale by {type(other).__name__}")
         return self
 
     def __add__(self, other):
@@ -596,7 +593,7 @@ class Polynomial:
             if other == 0:
                 return self
             else:
-                assert False  # not implemented
+                raise NotImplementedError("nonzero int operand not supported")
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
@@ -611,7 +608,7 @@ class Polynomial:
             if other == 0:
                 return self
             else:
-                assert False  # not implemented
+                raise NotImplementedError("nonzero int operand not supported")
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
@@ -628,7 +625,7 @@ class Polynomial:
             if other == 0:
                 return self.copy()
             else:
-                assert False  # not implemented
+                raise NotImplementedError("nonzero int operand not supported")
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
