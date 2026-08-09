@@ -45,6 +45,8 @@ jobs:
           persist-credentials: false
       - name: Set up dev environment
         uses: ./.github/actions/setup-dev
+        with:
+          groups: compile
       # Unpinned: the picker choosing avx512ifma is itself what is under test.
       - name: Install from the index and run smoke
         env:

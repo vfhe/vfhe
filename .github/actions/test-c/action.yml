@@ -23,6 +23,8 @@ runs:
     # --------------------------------------------------------------- setup ---
     - name: Set up dev environment
       uses: ./.github/actions/setup-dev
+      with:
+        groups: test
     - name: Set up Intel SDE
       if: inputs.emulate == '1'
       uses: ./.github/actions/setup-sde

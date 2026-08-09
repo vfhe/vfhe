@@ -9,6 +9,8 @@ runs:
     # --------------------------------------------------------------- setup ---
     - name: Set up dev environment
       uses: ./.github/actions/setup-dev
+      with:
+        groups: test
     # ------------------------------------------------------------- collect ---
     - name: Download legs
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

@@ -66,6 +66,8 @@ jobs:
           submodules: recursive
       - name: Set up dev environment
         uses: ./.github/actions/setup-dev
+        with:
+          groups: compile
       - name: Initialize analyser
         uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
         with:

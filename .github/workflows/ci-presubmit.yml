@@ -63,6 +63,8 @@ jobs:
           persist-credentials: false
       - name: Set up dev environment
         uses: ./.github/actions/setup-dev
+        with:
+          groups: lint
       - name: Check DCO
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
