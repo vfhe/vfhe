@@ -89,9 +89,12 @@ test = [
     # Runtime dep; listed here because dev builds run in place, not pip-installed.
     "mpmath>=1.4.1",
 ]
-# `make lint` compiles the protobuf bindings pyright reads, hence compile.
+# pyright resolves every import in the tree, so this is the whole surface: the
+# protobuf bindings `make lint` compiles, pytest and mpmath from the suites,
+# cyclonedx from tools/sbom/. An unresolved import is an error, not a warning.
 lint = [
-    { include-group = "compile" },
+    { include-group = "release" }, # which includes compile
+    { include-group = "test" },
     # Pinned: an unpinned formatter bump reformats the tree and fails CI on an
     # unrelated PR. The pre-commit hooks run these same pins.
     "ruff==0.16.1",
