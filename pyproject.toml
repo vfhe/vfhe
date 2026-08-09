@@ -66,16 +66,10 @@ Changelog = "https://github.com/vfhe/vfhe/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/vfhe/vfhe/blob/main/USAGE.md"
 
 [dependency-groups]
-# What a release needs beyond the dev loop, so a release job installs exactly
-# this — and a developer can run `make sbom` / `make release-notes` by adding
-# one group. cyclonedx is pinned so the SBOM is deterministic (Dependabot
-# bumps it); amend.py imports its validator, hence one pin source.
-release = [
-    "cyclonedx-bom==7.3.1",
-    "twine", # `twine check --strict` on the sdist metadata
-    "build",
-]
-dev = [
+# One group per activity, so a job installs what it runs and its manifest says
+# what it needs. `dev` is the union: a developer must be able to run everything
+# CI runs, releases included.
+compile = [
     "setuptools",
     "cffi>=2.1.0",
     "grpcio-tools>=1.81,<1.84",
@@ -85,11 +79,19 @@ dev = [
     "meson-python>=0.18",
     "ninja",
     "setuptools-scm>=10.2.1",
+    "build", # `make sdist` is a build frontend call
+]
+test = [
+    { include-group = "compile" },
     "pytest>=9.1.1",
     "pytest-cov",
     "gcovr",  # C coverage (gcov) in the CI coverage job
     # Runtime dep; listed here because dev builds run in place, not pip-installed.
     "mpmath>=1.4.1",
+]
+# `make lint` compiles the protobuf bindings pyright reads, hence compile.
+lint = [
+    { include-group = "compile" },
     # Pinned: an unpinned formatter bump reformats the tree and fails CI on an
     # unrelated PR. The pre-commit hooks run these same pins.
     "ruff==0.16.1",
@@ -99,8 +101,18 @@ dev = [
     "dco-check==0.5.1", # CI runs it; pinned here so Dependabot can see it
     "pre-commit",
     "pyright",
-    # A developer must be able to run everything CI runs, releases included.
+]
+# cyclonedx is pinned so the SBOM is deterministic (Dependabot bumps it);
+# amend.py imports its validator, hence one pin source.
+release = [
+    { include-group = "compile" }, # `make sbom` installs a fresh sdist first
+    "cyclonedx-bom==7.3.1",
+    "twine", # `twine check --strict` on the sdist metadata
+]
+dev = [
+    { include-group = "lint" },
     { include-group = "release" },
+    { include-group = "test" },
 ]
 
 [tool.setuptools_scm]

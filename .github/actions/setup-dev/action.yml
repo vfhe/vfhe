@@ -4,6 +4,10 @@ name: Set up dev environment
 description: Python and the pinned dev dependency group, the preamble CI jobs share.
 
 inputs:
+  groups:
+    description: Dependency groups to install; empty installs the interpreter alone.
+    required: false
+    default: dev
   pip-cache:
     description: Restore pip's cache; false where a build must resolve fresh.
     required: false
@@ -29,12 +33,14 @@ runs:
         python-version-file: .python-version
     # Every action sets itself up; the marker makes the repeats a no-op.
     - name: Install dev dependencies
+      if: inputs.groups != ''
       shell: bash
       env:
-        MARKER: ${{ runner.temp }}/vfhe-deps-${{ steps.python.outputs.python-version }}
+        GROUPS: ${{ inputs.groups }}
+        MARKER: ${{ runner.temp }}/vfhe-deps-${{ steps.python.outputs.python-version }}-${{ inputs.groups }}
         PIP_CONSTRAINT: ci-constraints-requirements.txt
       run: |
         if [ ! -e "$MARKER" ]; then
-          make deps
+          make deps GROUPS="$GROUPS"
           touch "$MARKER"
         fi

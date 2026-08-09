@@ -53,6 +53,8 @@ jobs:
           persist-credentials: false
       - name: Set up dev environment
         uses: ./.github/actions/setup-dev
+        with:
+          groups: compile
       - name: Read version
         id: scm
         env:
@@ -87,6 +89,7 @@ jobs:
       - name: Set up dev environment
         uses: ./.github/actions/setup-dev
         with:
+          groups: release
           pip-cache: "false"
       - name: Build sdist
         run: make sdist

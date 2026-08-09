@@ -596,7 +596,7 @@ Workflows live in `.github/workflows/` (POSIX only: Linux and macOS):
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci-presubmit.yml` | PR | the merge gate, in stage families (parallel, not barriers): **prepare** the docs-only classification; **checks** `static-checks.yml` (the history scan and `make lint`), code scanning, DCO sign-off and dependency review; **test** the C legs, then the Python ones at `fast` depth, plus `portable` under ASan+UBSan on both hosted platforms, then the coverage comment their measured legs uploaded; **fuzz** five minutes on the changed code (portable engine); **package** `distribution-build.yml` for the sdist, then `smoke-tests.yml` installing it the way a user would. **gate** `ci-ok`, the one check branch protection requires — coverage is not among its dependencies, because it gates nothing. A docs-only pull request runs prepare plus the checks that are not about code |
+| `ci-presubmit.yml` | PR | the merge gate, in stage families (parallel, not barriers): **prepare** the docs-only classification; **checks** `static-checks.yml` (the history scan and `make lint`), code scanning, DCO sign-off and dependency review; **test** the C legs, then the Python ones at `fast` depth, plus `portable` under ASan+UBSan on both hosted platforms, then the coverage comment their measured legs uploaded; **fuzz** five minutes on the changed code (portable engine); **package** `distribution-build.yml` for the sdist and the wheels at the interpreter bounds, then `smoke-tests.yml` installing that sdist the way a user would. **gate** `ci-ok`, the one check branch protection requires — coverage is not among its dependencies, because it gates nothing. A docs-only pull request runs prepare plus the checks that are not about code |
 | `ci-postsubmit.yml` | push to main / manual | the same jobs at their complete depth over the whole grid, nothing classified or skipped, the sanitized legs again (a gate's status belongs to a SHA rebase discards), and `release-artifacts.yml` for the whole artifact set — sdist, wheels, SBOM — under a dev version nothing publishes. No DCO (a pull request gate), no dependency review (the action needs a pull request), and no coverage comment (no pull request to post on) |
 | `hardware-tests.yml` | push to main | everything the project's own machine can do and a hosted runner cannot, as one job of ordered steps: `avx512ifma` natively in the shipped shape (which is also what tests the SDE), that engine under ASan+UBSan at a speed emulation cannot reach, and `make smoke`, the only place an *installed* package selects the SIMD extension and runs it rather than merely shipping it. Its own workflow because the runner takes one job at a time: sharing a file with anything else would mean waiting for silicon or making silicon wait, and it has no dispatch so nobody can queue in front of a push. The one place `main` classifies anything: `paths-ignore: **.md`, because a machine with no second job to spare should not spend hours on a document |
 | `published-smoke.yml` | nightly / manual | what an index actually serves, re-proven on a clock: `smoke-tests.yml` across the hosted platforms and `hardware-smoke-tests.yml` on the project's machine. Nightly because `pip` resolves a different dependency closure each run — the one input that changes while a published wheel does not — and because no release event can start a workflow: `GITHUB_TOKEN` suppresses the ones a workflow emits. Dispatch it with a version straight after a release |
@@ -623,12 +623,13 @@ since the picker asks the CPU and that fleet is mixed. Ordered steps rather than
 the checkout and the dev environment once, with `!cancelled()` on the later ones
 so a failing shape does not hide the rest. It only runs on pushes to `main`, so
 it **never executes pull-request code**; a red or endlessly-queued run here is the outage alert, and
-it blocks no merge, since the merge already happened. The
+it blocks no merge, since the merge already happened.
 A job that needs this runner while it is offline **queues rather than fails**,
 and a queued job triggers no alert: the symptom is a run that never finishes,
 not a red one. Job timeouts do not apply to queue time. The
-runner needs no secrets: only `git`, a C compiler, and network access for
-the dev dependencies. Register it ephemeral (`config.sh --ephemeral`) and
+runner needs no secrets: only `git`, `make`, a C compiler, and network access —
+`setup-python` provides the interpreter and `make deps` the rest. A missing one
+of those fails every step of the job within seconds, before any suite runs. Register it ephemeral (`config.sh --ephemeral`) and
 repo-scoped, so each job starts on a clean machine. Note: GitHub disables
 every scheduled workflow after 60 days without repository activity.
 

@@ -30,6 +30,7 @@ runs:
     - name: Set up dev environment
       uses: ./.github/actions/setup-dev
       with:
+        groups: test
         python-version: ${{ inputs.python-version }}
     - name: Set up Intel SDE
       if: inputs.emulate == '1'

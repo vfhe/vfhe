@@ -12,6 +12,9 @@ CLANG_FORMAT ?= clang-format
 SOURCES = modules tools smoke .clusterfuzzlite .github
 BUILD_DIR = build
 
+# Which dependency groups `deps` installs; a CI job narrows this to what it runs.
+GROUPS ?= dev
+
 # Build knobs, passed to meson: `make test VFHE_SANITIZE=address,undefined`.
 VFHE_COVERAGE ?= 0
 VFHE_SANITIZE ?= none
@@ -108,10 +111,10 @@ clean:    ## remove all generated/build artifacts and caches
 	rm -rf .cache .coverage build dist *.egg-info
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} +
 
-deps:     ## install the dev dependency group + git hooks (not the package)
+deps:     ## install GROUPS (default dev) + git hooks (not the package)
 	$(PYTHON) -m pip install --upgrade "pip>=25.1"  # fresh venvs bundle a pip too old for --group
-	$(PYTHON) -m pip install --group dev
-	$(PYTHON) -m pre_commit install
+	$(PYTHON) -m pip install $(addprefix --group ,$(GROUPS))
+	$(if $(filter dev,$(GROUPS)),$(PYTHON) -m pre_commit install)
 
 format:   ## format all Python (ruff) and C (clang-format) sources in place
 	$(PYTHON) -m ruff format $(SOURCES)
