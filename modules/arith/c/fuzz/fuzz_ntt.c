@@ -40,7 +40,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     cursor c = {data, size, 0};
 
-    static const uint64_t Ns[4] = {8, 16, 64, 256};
+    /* The domain the suites cover: the SIMD kernels index n/16 vectors, so a
+     * smaller ring allocates none and the transform reads past it. */
+    static const uint64_t Ns[4] = {64, 256, 1024, 4096};
     const uint64_t n = Ns[take_u8(&c) & 3];
     const uint64_t qbits = 20 + (take_u8(&c) % 43); /* 20..62 */
     const uint64_t q = next_special_prime((uint64_t)1 << qbits, n, true);
