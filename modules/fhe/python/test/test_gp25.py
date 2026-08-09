@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the (reverted) vfhe.fhe GP25 sparse-amortized
 bootstrap over the cffi boundary.
@@ -33,7 +34,7 @@ def get_min_prec(key):
                 r_max = max(r_max, previous - (N - j - 1))
                 previous = N - j - 1
         r_max = max(r_max, previous)
-    return int(math.floor(math.log2(r_max))) + 1
+    return math.floor(math.log2(r_max)) + 1
 
 
 def rs_sparse_ternary_key(scheme, h, sigma, target_r_prec):

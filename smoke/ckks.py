@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 """Smoke test: end-to-end CKKS on encrypted vectors, verified against plaintext.
 
@@ -13,7 +14,7 @@ TOL = 0.05  # CKKS is approximate; results match plaintext to a few decimals
 
 
 def _check(label: str, got: list[complex], want: list[complex]) -> bool:
-    err = max(abs(g - w) for g, w in zip(got, want))
+    err = max(abs(g - w) for g, w in zip(got, want, strict=True))
     ok = err < TOL
     print(f"  {label:<26} max|error| = {err:.2e}  [{'ok' if ok else 'FAIL'}]")
     return ok
@@ -58,14 +59,14 @@ def main() -> int:
     ok &= _check(
         "a + b",
         scheme.decode(scheme.decrypt(ct_sum, key)),
-        [x + y for x, y in zip(a, b)],
+        [x + y for x, y in zip(a, b, strict=True)],
     )
 
     ct_prod = ct_a * ct_b  # tensor product + relinearization + rescale
     ok &= _check(
         "a * b",
         scheme.decode(scheme.decrypt(ct_prod, key), scaling_factor=ct_prod.delta),
-        [x * y for x, y in zip(a, b)],
+        [x * y for x, y in zip(a, b, strict=True)],
     )
 
     print("\n" + ("OK: homomorphic results match plaintext." if ok else "FAILED"))

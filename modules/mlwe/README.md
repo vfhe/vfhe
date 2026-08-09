@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.mlwe
 
 LWE / Module-LWE and MGSW over the `vfhe.arith` ring.

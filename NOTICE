@@ -1,5 +1,5 @@
-The VFHE library
-Copyright the VFHE authors.
+The vFHE library
+Copyright the vFHE authors.
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
 This product bundles third-party software, vendored as git submodules under
@@ -35,6 +35,19 @@ matching this project's license.
             helpers) were ported and adapted into larger files across
             modules/arith and modules/misc. Compiled into the native extension.
 
+- uecm_modinv_64  (extended-Euclidean modular inverse)
+  Upstream: a mersenneforum.org posting (uecm_modinv_64), per the in-source
+            attribution in modules/arith/c/src/number_theory.c.
+  License:  not stated by the upstream posting; provenance under review by the authors.
+  Usage:    inverse_mod_eea in modules/arith/c/src/number_theory.c. Compiled
+            into the native extension.
+
+- OpenFHE  (FHE library)
+  Upstream: https://www.openfhe.org/
+  License:  BSD 2-Clause (see upstream LICENSE).
+  Usage:    the ModSwitch rounding operation (RoundqQ) in
+            modules/misc/c/src/misc_tp.c is adapted from OpenFHE. Compiled into the native extension.
+
 - Intel HEXL  (homomorphic-encryption acceleration library)
   Upstream: https://github.com/intel/hexl
   License:  Apache-2.0 (see upstream LICENSE).
@@ -42,5 +55,5 @@ matching this project's license.
             approach: IFMA / AVX-512 Barrett reduction (52-bit hi/lo madd52
             products) and lazy-reduction butterflies, integrated into the
             width-specialised kernels modules/arith/c/src/mod{32,50,64}.c and
-            ntt{32,50,64}.c. Compiled into the native extension on AVX-512
+            ntt{32,50,64}.c. Compiled into the native extension in x86-tuned
             builds.

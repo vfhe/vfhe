@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 import random
 
 import pytest
@@ -37,12 +39,12 @@ def test_field_arithmetic(d):
 
     # Test addition
     c_add = a + b
-    expected_add = [(x + y) % PRIME for x, y in zip(a_coeffs, b_coeffs)]
+    expected_add = [(x + y) % PRIME for x, y in zip(a_coeffs, b_coeffs, strict=True)]
     assert [c_add.value[i] for i in range(d)] == expected_add
 
     # Test subtraction
     c_sub = a - b
-    expected_sub = [(x - y) % PRIME for x, y in zip(a_coeffs, b_coeffs)]
+    expected_sub = [(x - y) % PRIME for x, y in zip(a_coeffs, b_coeffs, strict=True)]
     assert [c_sub.value[i] for i in range(d)] == expected_sub
 
     # Test negation

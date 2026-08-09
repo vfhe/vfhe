@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Hardware tests on the self-hosted runner; hosted runners can lack ISA undeterministically.
+name: Hardware Tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+
+permissions:
+  contents: read # checkout
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # a push is a record, not a race: never cancel one
+
+jobs:
+  # ------------------------------------------------------------------ test ---
+
+  hardware-tests:
+    name: Hardware (avx512ifma)
+    runs-on: [self-hosted, Linux, X64, avx512ifma]
+    timeout-minutes: 120
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Run C suites natively
+        uses: ./.github/actions/test-c
+        with:
+          engine: avx512ifma
+      - name: Run Python suites natively
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/test-python
+        with:
+          engine: avx512ifma
+          suites: complete
+      - name: Run C suites sanitized
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/test-c
+        with:
+          engine: avx512ifma
+          sanitize: address,undefined
+      - name: Run Python suites sanitized
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/test-python
+        with:
+          engine: avx512ifma
+          sanitize: address,undefined
+          suites: fast
+      - name: Smoke test an installed package
+        if: ${{ !cancelled() }}
+        run: make smoke
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert-channel:
+    name: Alert Channel
+    needs: [hardware-tests]
+    if: failure()
+    uses: ./.github/workflows/alert-channel.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

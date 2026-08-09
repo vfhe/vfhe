@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+name: Classify changes
+description: Whether a pull request touches anything a test could fail on.
+
+outputs:
+  code:
+    description: "true unless every changed path is a .md file."
+    value: ${{ steps.classify.outputs.code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compare against the base
+      id: classify
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        changed=$(git diff --name-only "$BASE_SHA...HEAD" -- ':!*.md')
+        if [ -n "$changed" ]; then
+          echo "code=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "code=false" >> "$GITHUB_OUTPUT"
+        fi

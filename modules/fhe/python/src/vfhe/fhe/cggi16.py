@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import math
@@ -16,7 +18,7 @@ class CGGI16_Key:
 
 
 class CGGI16:
-    def __init__(self, scheme: MLWE_Scheme, gsw_ell: "int|None" = None):
+    def __init__(self, scheme: MLWE_Scheme, gsw_ell: int | None = None):
         self.scheme = scheme
         self.mgsw_scheme = MGSW_Scheme(scheme, ell=gsw_ell)
         self.ring = scheme.ring

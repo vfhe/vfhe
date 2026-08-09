@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #include "misc.h"
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
@@ -41,6 +43,18 @@ void *safe_malloc(size_t size)
         exit(EXIT_FAILURE);
     }
     return ptr;
+}
+
+void *safe_realloc(void *ptr, size_t size)
+{
+    void *grown = realloc(ptr, size);
+    if (!grown && (size > 0))
+    {
+        perror("realloc failed!");
+        free(ptr);
+        exit(EXIT_FAILURE);
+    }
+    return grown;
 }
 
 void *safe_aligned_malloc(size_t size)

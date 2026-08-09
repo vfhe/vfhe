@@ -1,0 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
+// The CPU probe's ABI. Its own file because the engine picker builds a
+// separate, tiny extension from exactly these declarations; the engines
+// carry them too (cpu_probe.c is in the library).
+
+int vfhe_cpu_supports(const char *capability);

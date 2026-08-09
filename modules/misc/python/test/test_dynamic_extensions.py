@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 import os
 import tempfile
@@ -5,8 +6,18 @@ import tempfile
 import pytest
 from vfhe.misc import dynamic_extensions, libvfhe
 
-# Compiles and reloads a live C extension; heavy enough for the complete tier.
-pytestmark = pytest.mark.complete
+# Compiles and reloads a live C extension; heavy enough for the complete suite.
+# Skipped against a gcov build: a user module links the engine archive with the
+# engine's own flags, and an instrumented archive would also demand gcov's
+# runtime. The installed-package smoke test is this path's real check, which is
+# why coverage omits dynamic_extensions altogether (pyproject.toml).
+pytestmark = [
+    pytest.mark.complete,
+    pytest.mark.skipif(
+        os.environ.get("VFHE_COVERAGE") == "1",
+        reason="a user module cannot link a gcov-instrumented libvfhe",
+    ),
+]
 
 
 @pytest.fixture
@@ -32,13 +43,13 @@ def test_dynamic_extensions_flow(restore_native_lib):
         assert os.path.exists(vfhe_h_path)
 
         # Verify that vfhe.h contains at least some library headers
-        with open(vfhe_h_path, "r") as f:
+        with open(vfhe_h_path) as f:
             vfhe_h_content = f.read()
         assert "arith.h" in vfhe_h_content
 
         vfhe_h_clean = vfhe_h_path.replace("\\", "/")
         # 2. Write custom C source code that calls an internal library function
-        # (vfhe_build_is_portable)
+        # (vfhe_engine_active)
         c_code = f"""
 #include "{vfhe_h_clean}"
 
@@ -46,8 +57,8 @@ uint64_t my_custom_add(uint64_t a, uint64_t b) {{
     return a + b;
 }}
 
-int check_portable_via_custom(void) {{
-    return vfhe_build_is_portable();
+const char *engine_via_custom(void) {{
+    return vfhe_engine_active();
 }}
 """
         c_file_path = os.path.join(user_dir, "my_extension.c")
@@ -57,7 +68,7 @@ int check_portable_via_custom(void) {{
         # 3. Write corresponding CFFI declarations
         cdef_code = """
 uint64_t my_custom_add(uint64_t a, uint64_t b);
-int check_portable_via_custom(void);
+const char *engine_via_custom(void);
 """
         cdef_file_path = os.path.join(user_dir, "my_extension.cdef")
         with open(cdef_file_path, "w") as f:
@@ -102,7 +113,7 @@ uint64_t my_custom_inline_add(uint64_t a, uint64_t b) {
         # 6. Verify that the library is reloaded and the new functions are callable
         # directly from libvfhe.lib!
         assert hasattr(libvfhe.lib, "my_custom_add")
-        assert hasattr(libvfhe.lib, "check_portable_via_custom")
+        assert hasattr(libvfhe.lib, "engine_via_custom")
         assert hasattr(libvfhe.lib, "my_custom_inline_add")
 
         # Call the custom C function and verify logic
@@ -110,9 +121,8 @@ uint64_t my_custom_inline_add(uint64_t a, uint64_t b) {
         assert res == 350
 
         # Call the function that invokes internal library functions
-        is_portable = libvfhe.lib.vfhe_build_is_portable()
-        res_portable = libvfhe.lib.check_portable_via_custom()
-        assert res_portable == is_portable
+        engine = libvfhe.ffi.string(libvfhe.lib.vfhe_engine_active())
+        assert libvfhe.ffi.string(libvfhe.lib.engine_via_custom()) == engine
 
         # Call the inline C code function and verify logic
         res_inline = libvfhe.lib.my_custom_inline_add(20, 30)

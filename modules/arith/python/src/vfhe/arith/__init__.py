@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.arith public API re-exports.
 from .complex import ComplexPolynomial, ComplexRing
@@ -7,14 +8,14 @@ from .number_theory import crt, is_prime
 from .polynomial import Polynomial, Ring, repr
 
 __all__ = [
-    "Ring",
-    "Polynomial",
-    "repr",
-    "is_prime",
-    "crt",
-    "ComplexRing",
     "ComplexPolynomial",
-    "Multiprecision",
+    "ComplexRing",
     "Field",
     "FieldElement",
+    "Multiprecision",
+    "Polynomial",
+    "Ring",
+    "crt",
+    "is_prime",
+    "repr",
 ]

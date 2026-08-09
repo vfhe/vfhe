@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from collections import deque
@@ -63,7 +65,7 @@ def width_search_modulus(moduli, residues_choices, max_modulus):
             next_m = current_m - r
             if next_m < 0:
                 continue
-            next_residues = current_residues + [r]
+            next_residues = [*current_residues, r]
             next_modulus = current_modulus + r
             if next_modulus > max_modulus:
                 continue
@@ -82,10 +84,7 @@ def union_residues(residues1, residues2):
 
 
 def residues_fit_in_top(residues, top_residues):
-    for r in set(residues):
-        if residues.count(r) > top_residues.count(r):
-            return False
-    return True
+    return all(residues.count(r) <= top_residues.count(r) for r in set(residues))
 
 
 def residues_to_mask(residues, top_residues):
@@ -103,11 +102,9 @@ def residues_to_mask(residues, top_residues):
 
 
 def select_moduli_and_residues(moduli_chain, residues_choices, max_modulus):
-    residues_per_moduli = []
-    for m in moduli_chain:
-        residues_per_moduli.append(
-            width_search_modulus(m, residues_choices, max_modulus)
-        )
+    residues_per_moduli = [
+        width_search_modulus(m, residues_choices, max_modulus) for m in moduli_chain
+    ]
 
     results = []
 
@@ -215,6 +212,7 @@ def search_log_residues_minq0(
             log_moduli_chain, log_search_range, max_modulus
         )
         if log_top_residues is not None:
+            assert residue_indices_chain is not None
             return log_top_residues, residue_indices_chain
         log_q0 += 1
         if log_q0 > log_q0_max:

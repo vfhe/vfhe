@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+option(
+    'fuzz',
+    type: 'boolean',
+    value: false,
+    description: 'build only the instrumented kernel archives, nothing Python: what a fuzzing container needs (no Python headers, no protobuf toolchain)',
+)

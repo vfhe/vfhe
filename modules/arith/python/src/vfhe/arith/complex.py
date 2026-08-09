@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from math import log2
@@ -131,8 +133,7 @@ class ComplexPolynomial:
             self.ring.lib.complex_poly_scale_double(self.obj, float(other), self.ring.N)
             return self
         else:
-            print(type(other))
-            assert False, "not implemented"
+            raise NotImplementedError(f"cannot scale by {type(other).__name__}")
 
     def __setitem__(self, idx, val: float | complex):
         if type(val) is float or type(val) is int:
@@ -142,8 +143,7 @@ class ComplexPolynomial:
             self.obj[idx] = float(val.real)
             self.obj[idx + self.ring.N] = float(val.imag)
         else:
-            print(type(val))
-            assert False, "not implemented"
+            raise NotImplementedError(f"cannot assign a {type(val).__name__}")
 
     def from_array(self, v: list[float | complex]) -> ComplexPolynomial:
         for i in range(len(v)):

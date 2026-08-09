@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.misc
 
 The native boundary plus the shared internal C utilities.

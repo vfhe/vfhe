@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+name: Verify provenance
+description: >
+  Check the build provenance of every file an index serves for a release.
+
+inputs:
+  index-api:
+    description: JSON API that lists a release's files.
+    default: https://pypi.org/pypi
+  package:
+    description: Distribution name on that index.
+    required: true
+  signer-workflow:
+    description: The only workflow whose signature counts as genuine.
+    required: true
+  version:
+    description: Release to verify.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify every file the index serves
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        INDEX_API: ${{ inputs.index-api }}
+        PACKAGE: ${{ inputs.package }}
+        REPOSITORY: ${{ github.repository }}
+        SIGNER_WORKFLOW: ${{ inputs.signer-workflow }}
+        VERSION: ${{ inputs.version }}
+      run: '"$GITHUB_ACTION_PATH/provenance.sh" "$PACKAGE" "$VERSION"'

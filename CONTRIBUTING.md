@@ -1,15 +1,20 @@
+<!-- SPDX-FileCopyrightText: 2026 Alin-Petru Roșu -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Contributing to VFHE
+# Contributing to vFHE
 
-This page covers what CI expects of a pull request;
-the [development guide](docs/DEVELOPMENT.md) covers how the project is built and laid out.
+This page covers what the project asks of a pull request — all of it
+enforced by CI, so nothing surprises you at review. The [development
+guide](https://github.com/vfhe/vfhe/blob/main/DEVELOPMENT.md) covers how
+the project is built and laid out.
 
 By contributing you agree that your work is licensed under
-[Apache-2.0](LICENSE), and you accept the [Code of Conduct](CODE_OF_CONDUCT.md).
+[Apache-2.0](https://github.com/vfhe/vfhe/blob/main/LICENSE), and you accept
+the [Code of
+Conduct](https://github.com/vfhe/vfhe/blob/main/CODE_OF_CONDUCT.md).
 
 For security problems, do not open an issue; see the
-[security policy](SECURITY.md).
+[security policy](https://github.com/vfhe/vfhe/blob/main/SECURITY.md).
 
 ## Bugs and ideas
 
@@ -26,15 +31,17 @@ python3 -m venv .venv && source .venv/bin/activate
 make deps
 ```
 
-`make deps` installs the dev dependencies and the `pre-commit` hooks: ruff and
-clang-format run on the files you touch, using the exact versions CI uses, so
-you never fail a build on formatting. See [Prerequisites](docs/DEVELOPMENT.md#prerequisites-development) if the
-build fails.
+`make deps` also installs the pre-commit hooks. They are the definition of
+every formatter and validator this project runs — `make lint` and CI both
+execute them — so a commit tells you what CI would, and `make format` fixes
+what it can. Prerequisites and everything
+about the build live in the
+[development guide](https://github.com/vfhe/vfhe/blob/main/DEVELOPMENT.md#prerequisites-development).
 
 ## Before you open a pull request
 
 ```bash
-make test-fast    # build, C unit tests, and the fast Python suite
+make test SUITES=c,fast    # C tests + the fast Python suite, on every engine your machine runs for free
 ```
 
 CI runs the complete suite across Linux and macOS on Python 3.10-3.14; the fast
@@ -45,13 +52,18 @@ including the heavy FHE bootstraps.
 
 | Check | What it wants |
 |---|---|
-| Lint | ruff (lint and format), pyright, clang-format |
-| Tests | C unit tests, then the fast and complete Python suites |
-| Sdist | the package still builds and installs from source |
-| CodeQL, Scorecard, dependency review | static analysis and supply-chain hygiene |
+| Lint | `make lint`: every pre-commit hook over the whole tree (ruff, clang-format, zizmor, actionlint, shellcheck, codespell, markdownlint, REUSE, the config validators), then pyright. It runs on documentation changes too |
+| C, Python | the C tests, then the fast Python suite, on every engine |
+| Sanitized | the same suites over an ASan+UBSan build, portable engine; the C suites on macOS, both halves on Linux |
+| Distribution Build, Smoke Tests | the sdist still builds, installs, and works from source |
+| Code Scanning | CodeQL, one leg per engine |
+| Secret Scan, Dependency Review, DCO | history hygiene, the license allow-list, the [sign-off](#sign-off-dco) |
 
-`CI OK` is the single required check; it turns green only when everything above
-passes.
+One check is required, `CI OK`, and it turns green only when every job above
+succeeded. A skip counts as a failure unless the change classification is what
+caused it, so a docs-only pull request passes by running the checks that are not
+about code, while a job that vanishes from the workflow — or a cancelled run —
+fails the gate instead of passing vacuously.
 
 ### About coverage
 
@@ -105,6 +117,11 @@ policy first.
 
 ## Adding a module
 
+Modules are a central component of the library's design, so we encourage you to
+reach out before writing code, let alone opening a pull request — an issue, or
+email <maintainers@vfhe.ai>.
+
 `modules/<name>/` is self-contained. The development guide has the
-[full layout and the steps](docs/DEVELOPMENT.md#adding-a-new-module); the build discovers
-sources automatically, so there is no central list to update.
+[full layout and the steps](https://github.com/vfhe/vfhe/blob/main/DEVELOPMENT.md#adding-a-new-module);
+the build discovers sources automatically, so there is no central list to
+update.

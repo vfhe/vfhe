@@ -1,9 +1,0 @@
-{
-  "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://github.com/vfhe/vfhe/blob/main/docs/vex/vfhe.openvex.json",
-  "author": "The VFHE Maintainers <maintainers@vfhe.ai>",
-  "role": "Project Maintainers",
-  "timestamp": "2026-07-22T00:00:00Z",
-  "version": 1,
-  "statements": []
-}

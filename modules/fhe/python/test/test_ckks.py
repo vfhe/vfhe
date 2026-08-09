@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the (reverted) vfhe.fhe CKKS scheme over cffi.
 
@@ -41,7 +42,7 @@ def test_encode_decode():
     )
     values = rand_values(N // 2)
     dec = scheme.decode(scheme.encode(values))
-    assert all(abs(v - dv) < 1e-3 for v, dv in zip(values, dec))
+    assert all(abs(v - dv) < 1e-3 for v, dv in zip(values, dec, strict=False))
 
 
 def test_encrypt_decrypt():
@@ -53,7 +54,7 @@ def test_encrypt_decrypt():
     poly = scheme.encode(values)
     ct = scheme.encrypt(poly, key)
     dec = scheme.decode(scheme.decrypt(ct, key))
-    assert all(abs(v - dv) < 0.05 for v, dv in zip(values, dec))
+    assert all(abs(v - dv) < 0.05 for v, dv in zip(values, dec, strict=False))
 
 
 @pytest.mark.parametrize("k", [1, 3, 7])
@@ -88,7 +89,7 @@ def test_keyswitch_ghs():
     ct_switched = scheme.keyswitch(ct, ksk)
 
     dec = scheme.decode(scheme.decrypt(ct_switched, key_out))
-    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec))
+    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec, strict=False))
 
 
 @pytest.mark.parametrize("special_primes", [0, 1])
@@ -112,8 +113,8 @@ def test_ciphertext_multiplication(special_primes):
 
     c_mul = c1 * c2
     dec = scheme.decode(scheme.decrypt(c_mul, key), scaling_factor=c_mul.delta)
-    expected = [a * b for a, b in zip(v1, v2)]
-    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec))
+    expected = [a * b for a, b in zip(v1, v2, strict=False)]
+    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec, strict=False))
 
 
 def test_ciphertext_plaintext_multiplication():
@@ -129,8 +130,8 @@ def test_ciphertext_plaintext_multiplication():
 
     c_mul = c1 * poly2
     dec = scheme.decode(scheme.decrypt(c_mul, key), scaling_factor=c_mul.delta)
-    expected = [a * b for a, b in zip(v1, v2)]
-    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec))
+    expected = [a * b for a, b in zip(v1, v2, strict=False)]
+    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec, strict=False))
 
 
 def test_rational_rescale_shared_primes():
@@ -158,7 +159,7 @@ def test_rational_rescale_shared_primes():
     assert rescaled.lvl == 1
 
     dec = scheme.decode(scheme.decrypt(rescaled, key), scaling_factor=rescaled.delta)
-    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec))
+    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec, strict=False))
 
 
 def test_rational_rescale_disjoint_primes():
@@ -184,7 +185,7 @@ def test_rational_rescale_disjoint_primes():
     assert rescaled.lvl == 1
 
     dec = scheme.decode(scheme.decrypt(rescaled, key), scaling_factor=rescaled.delta)
-    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec))
+    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec, strict=False))
 
 
 def test_rational_rescale_from_residue_selection():
@@ -215,7 +216,7 @@ def test_rational_rescale_from_residue_selection():
     assert rescaled.lvl == 1
 
     dec = scheme.decode(scheme.decrypt(rescaled, key), scaling_factor=rescaled.delta)
-    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec))
+    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec, strict=False))
 
 
 def test_multiplication_with_rational_rescale():
@@ -232,7 +233,7 @@ def test_multiplication_with_rational_rescale():
         max_modulus=200,
     )
     # Append one special prime (last index) for the GHS hybrid key-switch.
-    Rq = Ring(N, split_degree=1, prime_size=log_top_residues + [50])
+    Rq = Ring(N, split_degree=1, prime_size=[*log_top_residues, 50])
     special_index = len(log_top_residues)
     rings = [_subring(Rq, *indices) for indices in residue_indices_chain]
     special_rings = [
@@ -263,8 +264,8 @@ def test_multiplication_with_rational_rescale():
     assert result.lvl == 2
 
     dec = scheme.decode(scheme.decrypt(result, key), scaling_factor=result.delta)
-    expected = [a * b * cc * d for a, b, cc, d in zip(*v)]
-    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec))
+    expected = [a * b * cc * d for a, b, cc, d in zip(*v, strict=False)]
+    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec, strict=False))
 
 
 def test_operations_preserve_ciphertext_type():
@@ -323,7 +324,7 @@ def test_encrypt_decrypt_module_rank(r, N_r):
     ct = scheme.encrypt(scheme.encode(values), key)
     assert ct.r == r
     dec = scheme.decode(scheme.decrypt(ct, key))
-    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec))
+    assert all(abs(v - d) < 0.05 for v, d in zip(values, dec, strict=False))
 
 
 @pytest.mark.parametrize("r, N_r", RANK_DIMS)
@@ -351,8 +352,8 @@ def test_ciphertext_plaintext_multiplication_module_rank(r, N_r):
 
     c_mul = c1 * scheme.encode(v2)
     dec = scheme.decode(scheme.decrypt(c_mul, key), scaling_factor=c_mul.delta)
-    expected = [a * b for a, b in zip(v1, v2)]
-    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec))
+    expected = [a * b for a, b in zip(v1, v2, strict=False)]
+    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec, strict=False))
 
 
 @pytest.mark.parametrize("r, N_r", RANK_DIMS)
@@ -369,5 +370,5 @@ def test_ciphertext_multiplication_module_rank(r, N_r):
 
     c_mul = c1 * c2
     dec = scheme.decode(scheme.decrypt(c_mul, key), scaling_factor=c_mul.delta)
-    expected = [a * b for a, b in zip(v1, v2)]
-    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec))
+    expected = [a * b for a, b in zip(v1, v2, strict=False)]
+    assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec, strict=False))

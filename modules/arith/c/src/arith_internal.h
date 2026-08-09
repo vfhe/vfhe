@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #ifndef __ARITH_INTERNAL_H__
 #define __ARITH_INTERNAL_H__
 

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 def is_prime(n):
     if n < 2:
         return False
@@ -52,7 +54,7 @@ def crt(values, moduli):
     for m in moduli:
         N *= m
     result = 0
-    for val, m in zip(values, moduli):
+    for val, m in zip(values, moduli, strict=True):
         n = N // m
         inv = pow(n, -1, m)
         result = (result + val * n * inv) % N

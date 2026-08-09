@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
 #include "misc.h"
 #include <blake3.h>
@@ -37,8 +39,8 @@ void incNTT_extend_with_primes(incNTT ntt, uint64_t *new_primes, uint64_t count)
     const uint64_t log_poly_size = (uint64_t)log2(poly_size);
     uint64_t *w_p = (uint64_t *)safe_malloc(2 * poly_size * sizeof(uint64_t));
 
-    ntt->ntt = (NTT_proc *)realloc(ntt->ntt, sizeof(NTT_proc) * new_l);
-    ntt->w = (uint64_t **)realloc(ntt->w, sizeof(uint64_t *) * new_l);
+    ntt->ntt = (NTT_proc *)safe_realloc(ntt->ntt, sizeof(NTT_proc) * new_l);
+    ntt->w = (uint64_t **)safe_realloc(ntt->w, sizeof(uint64_t *) * new_l);
 
     for (size_t i = ntt->l; i < new_l; i++)
     {

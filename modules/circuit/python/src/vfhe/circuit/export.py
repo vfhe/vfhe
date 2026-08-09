@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 """Export a GKR circuit to the polynomial objects the SNARK layers consume.
 
@@ -57,12 +58,12 @@ def _bits(n: int) -> int:
     return (n - 1).bit_length()
 
 
-def _modulus(circuit: "gkr.Circuit") -> int | None:
+def _modulus(circuit: gkr.Circuit) -> int | None:
     """The circuit's field modulus as an int, or None if unset."""
     return int(circuit.field_modulus) if circuit.field_modulus else None
 
 
-def layer_bit_sizes(circuit: "gkr.Circuit") -> list[int]:
+def layer_bit_sizes(circuit: gkr.Circuit) -> list[int]:
     """Per-domain bit widths ``[s_input, s_layer0, s_layer1, ...]``.
 
     Entry 0 covers the circuit inputs; entry ``l + 1`` covers the gates of
@@ -70,12 +71,11 @@ def layer_bit_sizes(circuit: "gkr.Circuit") -> list[int]:
     padded domain has ``2^s`` positions.
     """
     sizes = [_bits(circuit.num_inputs)]
-    for layer in circuit.layers:
-        sizes.append(_bits(len(layer.gates)))
+    sizes.extend(_bits(len(layer.gates)) for layer in circuit.layers)
     return sizes
 
 
-def evaluate(circuit: "gkr.Circuit", inputs: list[int]) -> list[list[int]]:
+def evaluate(circuit: gkr.Circuit, inputs: list[int]) -> list[list[int]]:
     """Run the circuit on ``inputs`` and return every layer's wire values.
 
     Args:
@@ -114,19 +114,19 @@ def evaluate(circuit: "gkr.Circuit", inputs: list[int]) -> list[list[int]]:
     return values
 
 
-def value_tables(circuit: "gkr.Circuit", inputs: list[int]) -> list[list[int]]:
+def value_tables(circuit: gkr.Circuit, inputs: list[int]) -> list[list[int]]:
     """:func:`evaluate`, with every layer zero-padded to its ``2^s`` domain.
 
     These are the dense MLE tables of the ``W_l`` functions.
     """
     sizes = layer_bit_sizes(circuit)
     padded = []
-    for s, vals in zip(sizes, evaluate(circuit, inputs)):
+    for s, vals in zip(sizes, evaluate(circuit, inputs), strict=True):
         padded.append(vals + [0] * ((1 << s) - len(vals)))
     return padded
 
 
-def wiring_tables(circuit: "gkr.Circuit", layer: int) -> tuple[list[int], list[int]]:
+def wiring_tables(circuit: gkr.Circuit, layer: int) -> tuple[list[int], list[int]]:
     """Dense MLE tables of ``add_l`` and ``mul_l`` for one layer.
 
     Args:
@@ -159,7 +159,7 @@ def wiring_tables(circuit: "gkr.Circuit", layer: int) -> tuple[list[int], list[i
     return add_table, mul_table
 
 
-def wiring_polynomials(circuit: "gkr.Circuit", layer: int, ring):
+def wiring_polynomials(circuit: gkr.Circuit, layer: int, ring):
     """Pack a layer's wiring tables into two ``vfhe.arith`` ring elements.
 
     The tables become the *coefficients* of the returned polynomials
@@ -191,7 +191,7 @@ def wiring_polynomials(circuit: "gkr.Circuit", layer: int, ring):
     )
 
 
-def values_polynomial(circuit: "gkr.Circuit", inputs: list[int], layer: int, ring):
+def values_polynomial(circuit: gkr.Circuit, inputs: list[int], layer: int, ring):
     """Pack one layer's padded wire values into a ``vfhe.arith`` ring element.
 
     ``layer`` indexes the domains of :func:`layer_bit_sizes`: 0 is the input

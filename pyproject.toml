@@ -1,11 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
 [build-system]
 requires = [
-    "setuptools>=77",  # >=77: PEP 639 plain-string `license = "Apache-2.0"`
-    "setuptools-scm>=10.2.1",
-    "cffi>=2.1.0",
+    "meson-python>=0.18",
+    "setuptools-scm>=10.2.1", # the version, from git tags (tools/meson/print_version.py)
+    "cffi>=2.1.0",            # generates the extension's C (tools/meson/generate_ffi_c.py)
     "grpcio-tools>=1.81,<1.84",
 ]
-build-backend = "setuptools.build_meta"
+build-backend = "mesonpy"
 
 [project]
 name = "vfhe"
@@ -28,7 +30,7 @@ authors = [
     { name = "Alin-Petru Rosu" },
     { name = "Eduardo Soria-Vazquez" },
 ]
-maintainers = [{ name = "The VFHE Maintainers", email = "maintainers@vfhe.ai" }]
+maintainers = [{ name = "The vFHE Maintainers", email = "maintainers@vfhe.ai" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -48,6 +50,9 @@ dependencies = [
     "cffi>=2.1.0",
     "protobuf>=6.33,<8",
     "mpmath>=1.4.1",
+    # Runtime recompilation (dynamic_extensions): cffi compiles through
+    # setuptools, which clean venvs no longer carry on Python >= 3.12.
+    "setuptools>=66",
 ]
 
 [project.scripts]
@@ -57,54 +62,161 @@ vfhe_create_headers = "vfhe.misc.dynamic_extensions:cli_main"
 Homepage = "https://github.com/vfhe/vfhe"
 Repository = "https://github.com/vfhe/vfhe"
 Issues = "https://github.com/vfhe/vfhe/issues"
+Changelog = "https://github.com/vfhe/vfhe/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/vfhe/vfhe/blob/main/USAGE.md"
 
 [dependency-groups]
-# Pinned so the release SBOM is deterministic; Dependabot bumps it.
-sbom = ["cyclonedx-bom==7.3.1"]
+# What a release needs beyond the dev loop, so a release job installs exactly
+# this — and a developer can run `make sbom` / `make release-notes` by adding
+# one group. cyclonedx is pinned so the SBOM is deterministic (Dependabot
+# bumps it); amend.py imports its validator, hence one pin source.
+release = [
+    "cyclonedx-bom==7.3.1",
+    "twine", # `twine check --strict` on the sdist metadata
+    "build",
+]
 dev = [
     "setuptools",
     "cffi>=2.1.0",
     "grpcio-tools>=1.81,<1.84",
     "protobuf>=6.33,<8",
+    # `make build` drives meson directly; setuptools-scm answers the version.
+    "meson>=1.3",
+    "meson-python>=0.18",
+    "ninja",
+    "setuptools-scm>=10.2.1",
     "pytest>=9.1.1",
     "pytest-cov",
     "gcovr",  # C coverage (gcov) in the CI coverage job
-    "twine",  # `twine check --strict` on the sdist metadata in CI
-    "build",
     # Runtime dep; listed here because dev builds run in place, not pip-installed.
     "mpmath>=1.4.1",
     # Pinned: an unpinned formatter bump reformats the tree and fails CI on an
     # unrelated PR. The pre-commit hooks run these same pins.
     "ruff==0.16.1",
     "clang-format==22.1.8",
+    "clang-tidy==22.1.8", # the same LLVM release as clang-format
+    "zizmor==1.29.0", # workflow security lint, same single-pin-source rule
+    "dco-check==0.5.1", # CI runs it; pinned here so Dependabot can see it
     "pre-commit",
     "pyright",
+    # A developer must be able to run everything CI runs, releases included.
+    { include-group = "release" },
 ]
 
 [tool.setuptools_scm]
 fallback_version = "0.0.0"
 
+# Wheels carry BOTH engines; the picker chooses per CPU at import, so one
+# wheel per platform serves every machine of its architecture honestly.
+# Identifiers, not misspellings: distutils' ccompiler, and 2N in the FHE kernels.
+[tool.codespell]
+ignore-words-list = "ccompiler,twoN,intoto" # in-toto, the attestation format
+
+[tool.cibuildwheel]
+# Each wheel runs the fast suite from its own install: the artifact is
+# tested at birth, in build environments CI's matrix never sees. The
+# conftest probe finds _vfhe_native installed, so imports resolve to the
+# wheel, never the source tree.
+test-requires = ["pytest"]
+test-command = "python -m pytest {project}/modules -q"
+# musl is untested; macOS x86_64 needs cross-compiled archives (not yet).
+# Free-threaded: grpcio-tools and cffi publish no cp3XXt wheel, so the isolated
+# build environment compiles gRPC from source, and no test leg runs that ABI.
+skip = "*musllinux* cp3??t-*"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+
+# Editor import paths (Pylance, the pyright CLI, any pyright-based LSP);
+# lived in pyrightconfig.json until the root-clutter sweep.
+[tool.pyright]
+exclude = [
+    ".cache",
+    ".git",
+    ".venv",
+    "**/node_modules",
+    "**/__pycache__",
+    ".venv",
+    "build",
+    "dist",
+    "external",
+    "vfhe.egg-info",
+]
+extraPaths = [
+    "build",
+    "tools",
+    "tools/test",
+    "smoke",
+    "modules/arith/python/src",
+    "modules/misc/python/src",
+    "modules/circuit/python/src",
+    "modules/fhe/python/src",
+    "modules/mlwe/python/src",
+    "modules/piop/python/src",
+]
+stubPath = "tools/typings"
+typeCheckingMode = "basic"
+# Dead code is a bug in waiting: report what is defined and never read.
+# Pyright judges only what it can prove per file — private (underscored)
+# functions and classes, locals, and imports.
+reportUnusedImport = "error"
+reportUnusedVariable = "error"
+reportUnusedFunction = "error"
+reportUnusedClass = "error"
+reportUnusedExpression = "error"
+pythonVersion = "3.10"
+
 [tool.ruff]
 cache-dir = ".cache/ruff"
+# tools/ scripts import their parts by bare name (running one puts its own
+# folder on sys.path, and it adds tools/ itself), so ruff needs those roots to
+# group the imports rather than guess at them.
+src = [".", "tools", "tools/test", "tools/coverage"]
 
 [tool.ruff.lint]
 # Explicit, not `extend-select`: ruff 0.16 grew its defaults from 59 rules to
-# 413, so inheriting them lets a version bump rewrite unrelated code. This is
-# the former default set (pycodestyle + pyflakes) plus import sorting;
-# widening it is a deliberate change of its own.
-select = ["E4", "E7", "E9", "F", "I"]
+# 413, so inheriting them lets a version bump rewrite unrelated code. The
+# former default set (pycodestyle + pyflakes) plus: import sorting, bugbear,
+# comprehensions, perf, pie, ruff's own rules, bandit, simplify, pyupgrade.
+# ARG catches arguments nobody reads; F (pyflakes) already covers unused
+# imports and locals, and pyright below reports unused private functions,
+# classes, and variables — together, the dead-code sweep a linter can do.
+select = ["ARG", "E4", "E7", "E9", "F", "I", "B", "C4", "PERF", "PIE", "RUF", "S", "SIM", "UP"]
+# S603 flags every subprocess call including the list-form invocations this
+# repo uses exclusively; shell=True is still caught by S602.
+ignore = ["S603"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest asserts are the framework's idiom; random test data is not key
+# material; a fixture is requested by naming it as an argument (ARG).
+"modules/*/python/test/*" = ["ARG", "S101", "S311"]
+"modules/conftest.py" = ["S101"]
+# The research-grade algorithm wrappers document invariants with `assert`;
+# converting them to typed exceptions is an API-hardening pass for the
+# authors. ARG likewise: a few of their methods accept an option they do not
+# yet honour, and renaming a public parameter would break keyword callers —
+# so the rule guards the tooling and tests, not the crypto API.
+"modules/*/python/src/*" = ["ARG", "S101"]
 
 # Configured here, not in CI flags: a local `pytest --cov=vfhe` measures
 # exactly what CI measures.
 [tool.coverage.run]
 branch = true # match the branch coverage already gated on the C side
 source = ["vfhe"]
-# Runtime C recompilation and its build helpers; exercised only at build time
-# and by the @complete test, which the coverage job does not run.
+# Every coverage artifact lives under .coverage/ (one gitignore entry).
+data_file = ".coverage/data"
+# The runtime-recompilation dev tool; its correctness check is the smoke
+# suite against an installed package, not the instrumented library run.
 omit = [
-    "*/vfhe/misc/dynamic_extensions.py",
+    "*/vfhe/misc/dynamic_extensions/*",
     "*/vfhe/misc/_native_compiler.py",
 ]
+
+# The coverage legs run on different machines (hosted runner, self-hosted
+# runner, a laptop), so their data files record different absolute prefixes.
+# This maps them onto one path so `coverage combine` can union them.
+[tool.coverage.paths]
+source = ["modules/", "*/modules/"]
 
 [tool.pytest.ini_options]
 testpaths = ["modules/*/python/test"]

@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Publishes a pre-release to TestPyPI; PyPI accepts bare X.Y.Z tags only.
+name: Release TestPyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version of the distribution.
+        required: true
+
+concurrency:
+  group: testpypi-release
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  # -------------------------------------------------------------- validate ---
+
+  validate:
+    name: Validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # statuses main recorded for this commit
+      contents: read # checkout
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Assert dispatched from main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::dispatch this workflow from main (got $REF)."; exit 1
+          fi
+      # PEP 440 subset: X.Y.Z with an optional aN/bN/rcN and optional .devN — where pre-releases live instead of PyPI.
+      - name: Assert well-formed version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.dev[0-9]+)?$'; then
+            echo "::error::version '$VERSION' is not X.Y.Z[{a|b|rc}N][.devN]."; exit 1
+          fi
+      - name: Assert CI passed on main
+        uses: ./.github/actions/check-workflow-status
+        with:
+          presence: required
+          workflow: CI Postsubmit
+      - name: Assert hardware tests passed on main
+        uses: ./.github/actions/check-workflow-status
+        with:
+          presence: optional
+          workflow: Hardware Tests
+
+  # ------------------------------------------------------------------ dist ---
+
+  artifacts:
+    name: Release Artifacts
+    needs: [validate]
+    uses: ./.github/workflows/release-artifacts.yml
+    permissions:
+      contents: read # checkout
+    with:
+      release-version: ${{ inputs.version }}
+
+  # --------------------------------------------------------------- publish ---
+
+  publish:
+    name: Publish
+    needs: [artifacts]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/vfhe
+    permissions:
+      id-token: write # Trusted Publishing
+    steps:
+      - name: Download sdist and wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          merge-multiple: true
+          path: dist
+          pattern: dist-*
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  # ----------------------------------------------------------------- prove ---
+
+  smoke-tests:
+    name: Smoke Tests (TestPyPI)
+    needs: [publish]
+    uses: ./.github/workflows/smoke-tests.yml
+    permissions:
+      contents: read # checkout
+    with:
+      index: testpypi
+      requirement: vfhe==${{ inputs.version }}
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert-channel:
+    name: Alert Channel
+    needs: [artifacts, publish, smoke-tests, validate]
+    if: failure()
+    uses: ./.github/workflows/alert-channel.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

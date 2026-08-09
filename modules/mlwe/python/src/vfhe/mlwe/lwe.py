@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from vfhe.arith.number_theory import crt
@@ -17,11 +19,11 @@ class LWE_Key:
     def __init__(
         self,
         ring: Ring,
-        sec_sigma: "float|None" = None,
-        err_sigma: "float|None" = None,
-        sparse_h: "int|None" = None,
-        key: "list[int]|None" = None,
-        n: "int|None" = None,
+        sec_sigma: float | None = None,
+        err_sigma: float | None = None,
+        sparse_h: int | None = None,
+        key: list[int] | None = None,
+        n: int | None = None,
     ):
         self.ring = ring
         self.n = n if n is not None else ring.N
@@ -51,10 +53,7 @@ class LWE_Key:
             q_j = self.ring.primes[j]
             for i in range(self.n):
                 val = key[i]
-                if val < 0:
-                    val = (val % q_j + q_j) % q_j
-                else:
-                    val = val % q_j
+                val = (val % q_j + q_j) % q_j if val < 0 else val % q_j
                 s[j][i] = val
 
     def get_s(self) -> list[int]:
@@ -75,11 +74,11 @@ class LWE:
     def __init__(
         self,
         ring: Ring,
-        m: "list[int]|None" = None,
-        key: "LWE_Key|None" = None,
+        m: list[int] | None = None,
+        key: LWE_Key | None = None,
         is_trivial: bool = False,
         obj=None,
-        n: "int|None" = None,
+        n: int | None = None,
     ):
         self.ring = ring
         self.n = n if n is not None else ring.N
@@ -104,7 +103,7 @@ class LWE:
         if hasattr(self, "obj") and self.obj is not None:
             lib_lwe.lib.free_lwe_sample(self.obj)
 
-    def phase(self, key: LWE_Key, recompose: bool = False) -> "list[int]|int":
+    def phase(self, key: LWE_Key, recompose: bool = False) -> list[int] | int:
         out_arr = ffi.new("uint64_t[]", self.l)
         lib_lwe.lib.lwe_phase(out_arr, self.obj, key.obj)
         if recompose:
@@ -118,10 +117,7 @@ class LWE:
     def get_a(self) -> list[list[int]]:
         # Returns a list (length l) of list (length n)
         a = ffi.cast("LWE", self.obj).a
-        res = []
-        for j in range(self.l):
-            res.append([int(a[j][i]) for i in range(self.n)])
-        return res
+        return [[int(a[j][i]) for i in range(self.n)] for j in range(self.l)]
 
     def get_b(self) -> list[int]:
         b = ffi.cast("LWE", self.obj).b

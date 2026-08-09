@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+*                   @rosualinpetru
+modules/*/c/        @antoniocgj
+modules/arith/      @antoniocgj
+.github/            @rosualinpetru

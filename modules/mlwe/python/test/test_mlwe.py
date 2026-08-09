@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the (reverted) vfhe.mlwe over the cffi boundary.
 
@@ -53,7 +54,7 @@ def _mul_error(Rq, Rp, scheme, m_out, m1, m2):
 
 
 def test_encrypt_decrypt_add_sub_mul(bv):
-    Rq, Rp, scheme = bv
+    _Rq, Rp, scheme = bv
     key = scheme.key_gen_sparse(N // 8, 3.2)
     m0 = Rp.random_element()
     m1 = Rp.random_element()
@@ -70,7 +71,7 @@ def test_encrypt_decrypt_add_sub_mul(bv):
 
 
 def test_bv_keyswitch(bv):
-    Rq, Rp, scheme = bv
+    _Rq, Rp, scheme = bv
     key = scheme.key_gen_sparse(N // 8, 3.2)
     m0 = Rp.random_element()
     c0 = enc(scheme, Rp, m0, key)
@@ -81,7 +82,7 @@ def test_bv_keyswitch(bv):
 
 
 def test_ghs_keyswitch(ghs):
-    Rq, Rp, scheme = ghs
+    _Rq, Rp, scheme = ghs
     key = scheme.key_gen_sparse(N // 8, 3.2)
     m0 = Rp.random_element()
     c0 = enc(scheme, Rp, m0, key)
@@ -92,7 +93,7 @@ def test_ghs_keyswitch(ghs):
 
 
 def test_ghs_automorphism(ghs):
-    Rq, Rp, scheme = ghs
+    _Rq, Rp, scheme = ghs
     key = scheme.key_gen_sparse(N // 8, 3.2)
     m0 = Rp.random_element()
     c0 = enc(scheme, Rp, m0, key)
@@ -144,7 +145,7 @@ def test_mlwe_multiplication_deferred_relinearization(scheme_fixture, request):
 
 
 def test_mgsw_external_product_identity(bv):
-    Rq, Rp, scheme = bv
+    _Rq, Rp, scheme = bv
     key = scheme.key_gen_sparse(N // 8, 3.2)
     mgsw_scheme = MGSW_Scheme(scheme)
 
@@ -185,7 +186,7 @@ def test_tensor_product_slot_layout(r, N_r):
     # the quadratic terms -(s_i*s_j) (i <= j, lexicographic) followed by the
     # linear terms s_i, the extended phase equals the product of the two input
     # phases exactly (same ring, no rounding anywhere).
-    Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=0)
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=0)
     key = _rank_key(scheme, N_r, r)
     c1 = enc(scheme, Rp, Rp.random_element(), key)
     c2 = enc(scheme, Rp, Rp.random_element(), key)
@@ -197,7 +198,7 @@ def test_tensor_product_slot_layout(r, N_r):
     assert len(ext_key) == scheme.extended_rank
 
     ext_phase = slots[-1]
-    for slot, t in zip(slots[:-1], ext_key):
+    for slot, t in zip(slots[:-1], ext_key, strict=False):
         ext_phase = ext_phase - slot * t
 
     expected = scheme.phase(c1, key) * scheme.phase(c2, key)
@@ -208,7 +209,7 @@ def test_tensor_product_slot_layout(r, N_r):
 
 @pytest.mark.parametrize("r, N_r", RANK_DIMS)
 def test_encrypt_decrypt_add_sub_mul_module_rank(r, N_r):
-    Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=0)
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=0)
     key = _rank_key(scheme, N_r, r)
     m0 = Rp.random_element()
     m1 = Rp.random_element()
@@ -229,7 +230,7 @@ def test_encrypt_decrypt_add_sub_mul_module_rank(r, N_r):
 def test_keyswitch_module_rank(r, N_r, special_primes):
     # The hybrid key-switch consumes one gadget key per key component, so the
     # ksk grows with the rank.
-    Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes)
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes)
     key = _rank_key(scheme, N_r, r)
     key2 = _rank_key(scheme, N_r, r)
     m0 = Rp.random_element()
@@ -242,7 +243,7 @@ def test_keyswitch_module_rank(r, N_r, special_primes):
 
 @pytest.mark.parametrize("r, N_r", RANK_DIMS)
 def test_ghs_automorphism_module_rank(r, N_r):
-    Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
     key = _rank_key(scheme, N_r, r)
     m0 = Rp.random_element()
     c0 = enc(scheme, Rp, m0, key)

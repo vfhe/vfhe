@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright and licensing for the files that cannot say it themselves: a comment
+# would break them, or a tool writes them. Everything else carries its own
+# header, which is what the spdx-header hook enforces.
+version = 1
+
+# Formats with no comment syntax at all, plus the two git and pyenv read
+# verbatim: a leading `#` would become part of the value they parse.
+[[annotations]]
+path = [
+    ".gitmodules",
+    ".python-version",
+    ".github/gitleaks.json",
+    ".sde.json",
+    ".zenodo.json",
+    ".github/tests/fixtures/*.json",
+    "**/py.typed",
+    "**/.gitkeep",
+]
+SPDX-FileCopyrightText = "2026 The vFHE Authors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# A legal notice is reproduced verbatim; nothing is inserted into it.
+[[annotations]]
+path = "NOTICE"
+SPDX-FileCopyrightText = "2026 The vFHE Authors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Build output that the interpreter writes beside the sources it compiled.
+[[annotations]]
+path = "**/__pycache__/**"
+SPDX-FileCopyrightText = "2026 The vFHE Authors"
+SPDX-License-Identifier = "Apache-2.0"

@@ -1,17 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-#
-# The counterpart to SHA-pinned actions: a pinned SHA never advances on its own,
-# so Dependabot rewrites the SHA and its `# vN` comment together.
 version: 2
 updates:
   - package-ecosystem: github-actions
-    # "/" covers only .github/workflows and a root action.yml; the glob covers
-    # the composite actions.
     directories:
       - "/"
       - "/.github/actions/*"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -23,6 +21,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       dev:
         patterns: ["*"]
@@ -30,10 +30,20 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # Keeps the pinned base-builder digest tracking its moving v1 tag.
+  - package-ecosystem: gitsubmodule
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps"
+
   - package-ecosystem: docker
     directory: "/.clusterfuzzlite"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "ci"

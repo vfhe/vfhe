@@ -1,5 +1,8 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <arith.h>
+#include <vfhe_cpu.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -31,11 +34,12 @@ extern "C"
     void generate_random_bytes(uint64_t amount, uint8_t *pointer);
     double generate_normal_random(double sigma);
     void *safe_malloc(size_t size);
+    void *safe_realloc(void *ptr, size_t size);
     void *safe_aligned_malloc(size_t size);
 
-    // Build/CPU introspection; powers the runtime "you could be faster" hint.
-    int vfhe_build_is_portable(void);  // 1 if compiled with PORTABLE_BUILD
-    int vfhe_cpu_has_avx512ifma(void); // 1 if THIS CPU supports AVX-512 IFMA
+    // Which engine this binary is (CPU capability lives in vfhe_cpu.h, which
+    // this header includes).
+    const char *vfhe_engine_active(void); // e.g. "portable", "avx512ifma"
 
     // Test-only: pin the PRNG to a reproducible stream so probabilistic FHE
     // tests are deterministic. Production uses hardware entropy (never calls these).

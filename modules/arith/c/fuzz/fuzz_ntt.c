@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file fuzz_ntt.c
@@ -16,6 +17,7 @@
 #include <stdlib.h>
 
 #include <arith.h>
+#include <misc.h> /* safe_aligned_malloc: the SIMD kernels need 64-byte-aligned buffers */
 
 /* Little cursor over the fuzzer input; reads zero-padded once exhausted. */
 typedef struct
@@ -47,19 +49,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     if (!proc)
         return 0;
 
-    uint64_t *in = malloc(n * sizeof(uint64_t));
-    uint64_t *fwd = malloc(n * sizeof(uint64_t));
-    uint64_t *back = malloc(n * sizeof(uint64_t));
-    if (in && fwd && back)
-    {
-        for (uint64_t i = 0; i < n; i++)
-            in[i] = take_u64(&c) % q;
-        ntt_forward(fwd, in, proc);
-        ntt_reverse(back, fwd, proc);
-        for (uint64_t i = 0; i < n; i++)
-            if (back[i] != in[i])
-                abort(); /* NTT roundtrip must be the identity */
-    }
+    uint64_t *in = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *fwd = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *back = safe_aligned_malloc(n * sizeof(uint64_t));
+    for (uint64_t i = 0; i < n; i++)
+        in[i] = take_u64(&c) % q;
+    ntt_forward(fwd, in, proc);
+    ntt_reverse(back, fwd, proc);
+    for (uint64_t i = 0; i < n; i++)
+        if (back[i] != in[i])
+            abort(); /* NTT roundtrip must be the identity */
 
     free(in);
     free(fwd);

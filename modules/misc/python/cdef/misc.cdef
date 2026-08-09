@@ -1,10 +1,11 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
-// Python-facing ABI of the misc module: build/CPU introspection used by the
-// runtime "you could be faster" hint (see misc/libvfhe.py). The rest of misc is
-// internal engine support with no Python symbols.
+// Python-facing ABI of the misc module: which engine this binary is, used by
+// the runtime "you could be faster" hint (see misc/libvfhe.py). CPU
+// capability is vfhe_cpu.cdef. The rest of misc is internal engine support
+// with no Python symbols.
 
-int vfhe_build_is_portable(void);
-int vfhe_cpu_has_avx512ifma(void);
+const char *vfhe_engine_active(void);
 
 // Test-only: pin the PRNG to a reproducible stream so the probabilistic FHE
 // bootstrap tests (test_sab, test_functional_bootstrap) are deterministic.

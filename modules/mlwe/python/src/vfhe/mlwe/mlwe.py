@@ -1,8 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import functools
 import math
+import operator
 import secrets
-from typing import TYPE_CHECKING, TypeVar
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from vfhe.arith.polynomial import Polynomial, Ring, repr
 from vfhe.misc.libvfhe import ffi, lib
@@ -28,14 +33,14 @@ class MLWE_Scheme:
     # ciphertext to derive the type from (see :meth:`sample`). Subclasses set it
     # to their own ciphertext class; operations that transform an existing
     # ciphertext use ``MLWE.new_like`` instead. Bound after MLWE is defined.
-    ciphertext_type: "type[MLWE]"
+    ciphertext_type: type[MLWE]
 
     def __init__(
         self,
-        rings: "list[Ring]|Ring",
+        rings: list[Ring] | Ring,
         special_primes: int = 0,
-        special_rings: "list[Ring]|None" = None,
-        max_lvl: "int|None" = None,
+        special_rings: list[Ring] | None = None,
+        max_lvl: int | None = None,
         module_rank: int = 1,
     ) -> None:
         """Create a leveled scheme in one of two initialization modes.
@@ -81,7 +86,7 @@ class MLWE_Scheme:
         self.ell = len(self.rings)
         self.max_lvl = max_lvl
         self.tmp = Polynomial(self.rings[0])
-        self.rlk: "MLWE_Set | list | None" = None
+        self.rlk: MLWE_Set | list | None = None
 
     @property
     def ring(self) -> Ring:
@@ -139,7 +144,7 @@ class MLWE_Scheme:
 
     def _gen_ksk_components(
         self, key_out: MLWE_Key, key_poly: list[Polynomial], lvl: int
-    ) -> list[list["MLWE"]]:
+    ) -> list[list[MLWE]]:
         """Sample the gadget ciphertexts for one key-switch key per key poly.
 
         Returns the raw component lists (before wrapping in an ``MLWE_Set``) so
@@ -203,8 +208,8 @@ class MLWE_Scheme:
     def gen_rlk(
         self,
         key_out: MLWE_Key,
-        quad_polys: "MLWE_Key|list[Polynomial]",
-        lvl: "int|None" = None,
+        quad_polys: MLWE_Key | list[Polynomial],
+        lvl: int | None = None,
     ):
         """Relinearization key for the rank-r product.
 
@@ -233,20 +238,20 @@ class MLWE_Scheme:
     def gen_ksk(
         self,
         key_out: MLWE_Key,
-        key_in: "MLWE_Key|list[Polynomial]",
-        lvl: "int|None" = None,
+        key_in: MLWE_Key | list[Polynomial],
+        lvl: int | None = None,
     ):
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
         assert self == key_out.scheme, "Scheme mismatch"
         if lvl is not None:
             return self.gen_ksk_for_level(key_out, key_poly, lvl)
-        ksk_leveled = []
-        for lvl in range(len(self.rings)):
-            ksk_leveled.append(self.gen_ksk_for_level(key_out, key_poly, lvl))
-        return ksk_leveled
+        return [
+            self.gen_ksk_for_level(key_out, key_poly, lvl)
+            for lvl in range(len(self.rings))
+        ]
 
     def gen_ksk_automorphism(
-        self, key_out: MLWE_Key, key_in: MLWE_Key, g: int, lvl: "int|None" = None
+        self, key_out: MLWE_Key, key_in: MLWE_Key, g: int, lvl: int | None = None
     ):
         key_perm = [i.automorphism(g) for i in key_in.poly]
         return self.gen_ksk(key_out, key_perm, lvl)
@@ -256,12 +261,9 @@ class MLWE_Scheme:
         key_out: MLWE_Key,
         key_in: MLWE_Key,
         generators: list[int],
-        lvl: "int|None" = None,
+        lvl: int | None = None,
     ):
-        result = []
-        for g in generators:
-            result.append(self.gen_ksk_automorphism(key_out, key_in, g, lvl))
-        return result
+        return [self.gen_ksk_automorphism(key_out, key_in, g, lvl) for g in generators]
 
     def keyswitch(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
@@ -276,8 +278,8 @@ class MLWE_Scheme:
         self,
         key_out: MLWE_Key,
         key_in: MLWE_Key,
-        gens: "list[int]|None" = None,
-        lvl: "int|None" = None,
+        gens: list[int] | None = None,
+        lvl: int | None = None,
     ):
         log_N = int(math.log2(self.N))
         gens = (
@@ -285,14 +287,14 @@ class MLWE_Scheme:
             if gens is not None
             else [(1 << (log_N - i + 1)) + 1 for i in range(1, log_N + 1)]
         )
-        result = []
-        for g in gens:
-            result.append(self.gen_ksk_automorphism(key_out, key_in, g, lvl))
+        result = [self.gen_ksk_automorphism(key_out, key_in, g, lvl) for g in gens]
+        # The lvl argument decides which shape gen_ksk_automorphism returned.
         if lvl is not None:
-            return MLWE_Set().flatten_array(result)
+            return MLWE_Set().flatten_array(cast("list[MLWE_Set]", result))
+        leveled = cast("list[list[MLWE_Set]]", result)
         result_leveled = []
-        for lvl in range(len(result[0])):
-            result_lvl_i = [result[i][lvl] for i in range(len(gens))]
+        for lvl in range(len(leveled[0])):
+            result_lvl_i = [leveled[i][lvl] for i in range(len(gens))]
             result_leveled.append(MLWE_Set().flatten_array(result_lvl_i))
         return result_leveled
 
@@ -339,8 +341,8 @@ class MLWE_Scheme:
         self,
         msg: Polynomial,
         key: MLWE_Key,
-        out: "MLWE|None" = None,
-        lvl: "int|None" = None,
+        out: MLWE | None = None,
+        lvl: int | None = None,
     ) -> MLWE:
         """Samples an MLWE ciphertext of the given message polynomial under the given key.
 
@@ -359,7 +361,7 @@ class MLWE_Scheme:
         out.repr = repr.coeff
         return out
 
-    def phase(self, rlwe: MLWE, key: MLWE_Key, out: "Polynomial|None" = None):
+    def phase(self, rlwe: MLWE, key: MLWE_Key, out: Polynomial | None = None):
         if not out:
             out = Polynomial(rlwe.ring)
         if key.ring != rlwe.ring:
@@ -414,7 +416,7 @@ class MLWE_Scheme:
         self,
         in1: CtT,
         in2: MLWE,
-        ksk: "MLWE_Set | list[MLWE_Set] | None" = None,
+        ksk: MLWE_Set | list[MLWE_Set] | None = None,
     ) -> CtT:
         """Tensors the two ciphertexts and (optionally) relinearizes.
 
@@ -452,7 +454,7 @@ class MLWE_Scheme:
         out.ring = in1.scheme.rings[in1.lvl]
         return out
 
-    def relinearize(self, c_ext: CtT, ksk: "MLWE_Set | list[MLWE_Set]") -> CtT:
+    def relinearize(self, c_ext: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         """Relinearize an extended product back to rank r.
 
         Reuses the GHS hybrid key-switch: the rlk key-switches the quadratic
@@ -475,7 +477,7 @@ class MLWE_Key:
         key: list[list[int]],
         sigma_err: float,
         scheme: MLWE_Scheme,
-        ring: "Ring|None" = None,
+        ring: Ring | None = None,
     ):
         assert len(key) == scheme.r
         self.key = key
@@ -486,7 +488,9 @@ class MLWE_Key:
         self.ring = ring
         # the key is copied verbatim into signed int64 coeffs; wrap negatives into
         # two's-complement uint64.
-        concat_key = [x & 0xFFFFFFFFFFFFFFFF for x in sum(key, start=[])]
+        concat_key = [
+            x & 0xFFFFFFFFFFFFFFFF for x in functools.reduce(operator.iadd, key, [])
+        ]
         self.obj = lib_rlwe.lib.mlwe_new_RNS_key_from_array(
             ffi.new("uint64_t[]", concat_key),
             ring.N,
@@ -506,16 +510,16 @@ class MLWE_Key:
         if hasattr(self, "obj") and self.obj:
             lib_rlwe.lib.free_mlwe_RNS_key(self.obj)
 
-    def extract_lwe_key(self) -> "LWE_Key":
+    def extract_lwe_key(self) -> LWE_Key:
         from .lwe import LWE_Key
 
-        lwe_coeffs = sum(self.key, [])
+        lwe_coeffs = functools.reduce(operator.iadd, self.key, [])
         n = len(lwe_coeffs)
         return LWE_Key(ring=self.scheme.rings[0], key=lwe_coeffs, n=n)
 
 
 class MLWE_Set:
-    def __init__(self, mlwe: "list[list[MLWE]]|None" = None):
+    def __init__(self, mlwe: Sequence[list[MLWE] | None] | None = None):
         if mlwe is None:
             return
         self.mlwe = mlwe
@@ -525,13 +529,14 @@ class MLWE_Set:
             # A ``None`` component is a NULL key-switch key: the matching
             # ciphertext component keeps its key and is copied through (used by
             # relinearization for the linear part of the product).
-            if mlwe[j] is None:
+            component = mlwe[j]
+            if component is None:
                 result_obj[j] = ffi.NULL
                 continue
-            ell = len(mlwe[j])
-            for x in mlwe[j]:
+            ell = len(component)
+            for x in component:
                 x.to_NTT()
-            tmp = ffi.new("void*[]", [i.obj for i in mlwe[j]])
+            tmp = ffi.new("void*[]", [i.obj for i in component])
             result_obj[j] = lib_rlwe.lib.mlwe_create_copy_array(tmp, ell)
         self.obj = result_obj
 
@@ -554,9 +559,9 @@ class MLWE:
     def __init__(
         self,
         scheme: MLWE_Scheme,
-        lvl: "int|None" = None,
-        ring: "Ring|None" = None,
-        rank: "int|None" = None,
+        lvl: int | None = None,
+        ring: Ring | None = None,
+        rank: int | None = None,
     ) -> None:
         if lvl is None:
             lvl = scheme.level_of_ring(ring, strict=False) if ring is not None else 0
@@ -581,9 +586,9 @@ class MLWE:
 
     def new_like(
         self: CtT,
-        lvl: "int|None" = None,
-        ring: "Ring|None" = None,
-        rank: "int|None" = None,
+        lvl: int | None = None,
+        ring: Ring | None = None,
+        rank: int | None = None,
     ) -> CtT:
         """Allocate an empty ciphertext of the same concrete type as ``self``.
 
@@ -599,7 +604,7 @@ class MLWE:
         out._inherit(self)
         return out
 
-    def _inherit(self, other: "MLWE") -> None:
+    def _inherit(self, other: MLWE) -> None:
         """Copy subclass-specific metadata from ``other`` into a fresh ``self``.
 
         No-op for plain MLWE; subclasses that add fields (e.g. the CKKS scaling
@@ -705,7 +710,7 @@ class MLWE:
         self.repr = other.repr
 
     def round_division(
-        self: CtT, ring: "Ring|None" = None, lvl: "int|None" = None
+        self: CtT, ring: Ring | None = None, lvl: int | None = None
     ) -> CtT:
         """Round-divide the ciphertext down into a smaller (quotient) ring.
 
@@ -717,6 +722,7 @@ class MLWE:
         """
         assert (ring is None) != (lvl is None), "provide exactly one of ring or lvl"
         if lvl is None:
+            assert ring is not None
             lvl = self.scheme.level_of_ring(ring)
         else:
             ring = self.scheme.rings[lvl]
@@ -745,7 +751,7 @@ class MLWE:
             if other == 0:
                 return self.copy()
             else:
-                assert False  # not implemented
+                raise NotImplementedError
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
@@ -761,7 +767,7 @@ class MLWE:
             if other == 0:
                 return self
             else:
-                assert False  # not implemented
+                raise NotImplementedError
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
@@ -776,7 +782,7 @@ class MLWE:
             if other == 0:
                 return self.copy()
             else:
-                assert False  # not implemented
+                raise NotImplementedError
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
@@ -792,7 +798,7 @@ class MLWE:
             if other == 0:
                 return self
             else:
-                assert False  # not implemented
+                raise NotImplementedError
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()

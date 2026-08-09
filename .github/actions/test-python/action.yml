@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+name: Python suites
+description: Run the Python suites for one engine, optionally emulated, sanitized or measured.
+
+inputs:
+  coverage:
+    description: "1 instruments the build and uploads this engine's leg."
+    default: "0"
+  emulate:
+    description: "1 runs it under the emulator the registry names for that engine."
+    default: "0"
+  engine:
+    description: Engine the extension is built for.
+    required: true
+  python-version:
+    description: Interpreter the leg runs on; empty takes the repo pin.
+    default: ""
+  sanitize:
+    description: meson's -Db_sanitize; none is the release shape a wheel carries.
+    default: none
+  suites:
+    description: Depth - fast (subset) or complete (all).
+    default: fast
+
+runs:
+  using: composite
+  steps:
+    # --------------------------------------------------------------- setup ---
+    - name: Set up dev environment
+      uses: ./.github/actions/setup-dev
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Set up Intel SDE
+      if: inputs.emulate == '1'
+      uses: ./.github/actions/setup-sde
+    # ----------------------------------------------------------------- run ---
+    - name: Run Python suites
+      shell: bash
+      env:
+        ASAN_OPTIONS: detect_leaks=0 # CPython's own allocations would report as leaks
+        COVERAGE: ${{ inputs.coverage }}
+        EMULATE: ${{ inputs.emulate }}
+        ENGINE: ${{ inputs.engine }}
+        SANITIZE: ${{ inputs.sanitize }}
+        SUITES: ${{ inputs.suites }}
+      run: |
+        # ASan must enter before the interpreter; macOS has no LD_PRELOAD.
+        if [ "$SANITIZE" != "none" ] && [ "$RUNNER_OS" = "Linux" ]; then
+          LD_PRELOAD=$(gcc -print-file-name=libasan.so)
+          export LD_PRELOAD
+        fi
+        make test ENGINE="$ENGINE" SUITES="$SUITES" EMULATE="$EMULATE" \
+          VFHE_SANITIZE="$SANITIZE" VFHE_COVERAGE="$COVERAGE"
+    # ------------------------------------------------------------- measure ---
+    - name: Upload Python coverage leg
+      if: inputs.coverage == '1'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        if-no-files-found: error
+        include-hidden-files: true
+        name: leg-python-${{ inputs.engine }}
+        overwrite: true
+        path: .coverage/legs
+        retention-days: 7

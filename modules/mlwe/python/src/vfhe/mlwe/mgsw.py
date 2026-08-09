@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from vfhe.arith.polynomial import Polynomial, repr
@@ -8,7 +10,7 @@ from .mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
 
 # RNS MGSW scheme (similar to RGSW)
 class MGSW_Scheme:
-    def __init__(self, MLWE_scheme: MLWE_Scheme, ell: "int|None" = None):
+    def __init__(self, MLWE_scheme: MLWE_Scheme, ell: int | None = None):
         self.mlwe_scheme = MLWE_scheme
         self.ell = ell if ell else MLWE_scheme.rings[0].ell
         self.ring = MLWE_scheme.special_rings[0]
@@ -54,7 +56,7 @@ class MGSW_Scheme:
 
 
 class MGSW:
-    def __init__(self, scheme: MGSW_Scheme, obj: "list[MLWE]|None" = None):
+    def __init__(self, scheme: MGSW_Scheme, obj: list[MLWE] | None = None):
         self.scheme = scheme
         self.obj = (
             obj
