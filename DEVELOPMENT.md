@@ -627,11 +627,15 @@ it blocks no merge, since the merge already happened.
 A job that needs this runner while it is offline **queues rather than fails**,
 and a queued job triggers no alert: the symptom is a run that never finishes,
 not a red one. Job timeouts do not apply to queue time. The
-runner needs no secrets: only `git`, `make`, a C compiler, and network access —
-`setup-python` provides the interpreter and `make deps` the rest. A missing one
-of those fails every step of the job within seconds, before any suite runs. Register it ephemeral (`config.sh --ephemeral`) and
-repo-scoped, so each job starts on a clean machine. Note: GitHub disables
-every scheduled workflow after 60 days without repository activity.
+runner needs no secrets: only `git`, Docker, and network access. The test jobs
+declare a pinned `ubuntu:24.04` container and install their own toolchain in it,
+so the machine itself holds no compiler, `make` or Python, and provisioning it
+is a file in this repository. `batch-fuzzing.yml` is the exception and runs on
+the host, because ClusterFuzzLite drives Docker itself. Register the runner
+repo-scoped and ephemeral (`config.sh --ephemeral`), which retires the
+registration after one job — the container, not that flag, is what gives a job a
+clean filesystem. Note: GitHub disables every scheduled workflow after 60 days
+without repository activity.
 
 **Releases** are manual: one dispatch workflow per target, each owning its form,
 validation, publish credentials, and publish job; both call the shared

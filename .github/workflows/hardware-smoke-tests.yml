@@ -37,8 +37,14 @@ jobs:
   smoke-tests:
     name: Smoke Tests (silicon)
     runs-on: [self-hosted, Linux, X64, avx512ifma]
+    container:
+      image: ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
     timeout-minutes: 30
     steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
