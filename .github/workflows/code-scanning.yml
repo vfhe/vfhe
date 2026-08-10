@@ -34,12 +34,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize analyser
-        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        uses: github/codeql-action/init@d1ba80a13dd99fba24a470575428917156a28b43 # v4
         with:
           build-mode: none
           languages: python
       - name: Run analysis
-        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        uses: github/codeql-action/analyze@d1ba80a13dd99fba24a470575428917156a28b43 # v4
         with:
           category: "/language:python"
 
@@ -69,7 +69,7 @@ jobs:
         with:
           groups: compile
       - name: Initialize analyser
-        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        uses: github/codeql-action/init@d1ba80a13dd99fba24a470575428917156a28b43 # v4
         with:
           build-mode: manual
           languages: c-cpp
@@ -78,7 +78,7 @@ jobs:
           ENGINE: ${{ matrix.engine }}
         run: make build KERNELS="$ENGINE"
       - name: Run analysis
-        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        uses: github/codeql-action/analyze@d1ba80a13dd99fba24a470575428917156a28b43 # v4
         with:
           category: "/language:c-cpp/${{ matrix.engine }}/${{ matrix.os }}"
 
