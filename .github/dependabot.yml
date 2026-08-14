@@ -27,6 +27,12 @@ updates:
       dev:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    # A frozen requirements file records no parent, so a transitive pin can be
+    # raised past the ceiling its requirer sets. Drop the entry once the
+    # requirer widens its range.
+    ignore:
+      - dependency-name: chardet # cyclonedx-bom 7.3.1 requires chardet<6.0
+        versions: [">=6"]
     commit-message:
       prefix: "deps"
 
