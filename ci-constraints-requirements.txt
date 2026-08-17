@@ -84,7 +84,7 @@ rich==15.0.0
 rpds-py==2026.6.3; python_version >= "3.11"
 rpds-py==0.30.0; python_version < "3.11"
 ruff==0.16.1
-setuptools==83.0.0
+setuptools==84.0.0
 six==1.17.0
 sortedcontainers==2.4.0
 twine==7.0.0
