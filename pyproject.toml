@@ -97,7 +97,7 @@ lint = [
     { include-group = "test" },
     # Pinned: an unpinned formatter bump reformats the tree and fails CI on an
     # unrelated PR. The pre-commit hooks run these same pins.
-    "ruff==0.16.1",
+    "ruff==0.16.2",
     "clang-format==22.1.8",
     "clang-tidy==22.1.8", # the same LLVM release as clang-format
     "zizmor==1.29.0", # workflow security lint, same single-pin-source rule
