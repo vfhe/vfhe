@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-lib_sources += files('c/src/mle.c')
+lib_sources += files('c/src/mle.c', 'c/src/sumcheck.c')
 lib_includes += include_directories('c/include')
-header_files += files('c/include/mle.h')
-cdef_files += files('python/cdef/piop.cdef')
+header_files += files('c/include/mle.h', 'c/include/sumcheck.h')
+cdef_files += files('python/cdef/piop.cdef', 'python/cdef/sumcheck.cdef')
 
 python_source_dirs += meson.current_source_dir() / 'python/src'
 

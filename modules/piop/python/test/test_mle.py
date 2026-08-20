@@ -2,23 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for vfhe.piop: pure-Python ML_Polynomial / MLE_Sparse
 arithmetic + evaluation, and the C-backed MLE_Dense (mle_dense_poly_* kernels)
-over the cffi boundary, including async evaluation on resolved IOP futures.
+over the cffi boundary. Evaluation points are always concrete values —
+protocol futures live at the Transcript / Statement level (test_piop.py).
 """
 
-import asyncio
-
 from vfhe.arith import Polynomial, Ring
-from vfhe.piop import IOPValue, IOPVariable, ML_Polynomial, MLE_Dense, MLE_Sparse
+from vfhe.piop import ML_Polynomial, MLE_Dense, MLE_Sparse, MLE_Variable
 
 
 def test_ml_polynomial_arithmetic_and_eval():
-    v = [IOPVariable("x0"), IOPVariable("x1")]
+    v = [MLE_Variable("x0"), MLE_Variable("x1")]
     p1 = ML_Polynomial(variables=v, coefficients=[1, 2, 3, 4])
     p2 = ML_Polynomial(variables=v, coefficients=[10, 20, 30, 40])
     assert (p1 + p2).coefficients == [11, 22, 33, 44]
     assert (p2 - p1).coefficients == [9, 18, 27, 36]
     assert p1.scale(5).coefficients == [5, 10, 15, 20]
-    # evaluate() may return an IOPValue (async path); here it is synchronous.
     ex0 = p1.evaluate({v[0]: 2}, in_place=False)
     ex1 = p1.evaluate({v[1]: 3}, in_place=False)
     exf = p1.evaluate({v[0]: 2, v[1]: 3}, in_place=False)
@@ -28,7 +26,7 @@ def test_ml_polynomial_arithmetic_and_eval():
 
 
 def test_mle_sparse_arithmetic():
-    v = [IOPVariable("x0"), IOPVariable("x1")]
+    v = [MLE_Variable("x0"), MLE_Variable("x1")]
     s1 = MLE_Sparse(variables=v, evaluations={0: 5, 2: 12})
     s2 = MLE_Sparse(variables=v, evaluations={1: 7, 2: 3})
     assert (s1 + s2).evaluations == {0: 5, 1: 7, 2: 15}
@@ -38,7 +36,7 @@ def test_mle_sparse_arithmetic():
 
 def test_mle_dense_arithmetic_and_eval():
     ring = Ring(1024, prime_size=[49], split_degree=4)
-    v = [IOPVariable("x0"), IOPVariable("x1")]
+    v = [MLE_Variable("x0"), MLE_Variable("x1")]
     d1 = MLE_Dense(ring=ring, variables=v, evaluations=[1, 2, 3, 4])
     d2 = MLE_Dense(ring=ring, variables=v, evaluations=[10, 20, 30, 40])
 
@@ -65,20 +63,13 @@ def test_mle_dense_arithmetic_and_eval():
     assert eval_x0.py_refs[1].get_polynomial()[0] == 5
 
 
-def test_async_evaluation():
-    async def run():
-        ring = Ring(1024, prime_size=[49], split_degree=4)
-        v = [IOPVariable("x0"), IOPVariable("x1")]
-        d1 = MLE_Dense(ring=ring, variables=v, evaluations=[1, 2, 3, 4])
-        fut = IOPValue()
-        fut2 = IOPValue()
-        res = d1.evaluate({v[0]: fut, v[1]: fut2}, in_place=False)
-        assert isinstance(res, asyncio.Future) and not res.done()
-        fut.set_result(2)
-        fut2.set_result(3)
-        out = await res
-        # Full evaluation over both resolved futures -> a single (num_vars==0) poly.
-        assert out.num_vars == 0
-        return out.py_refs[0].get_polynomial()[0]
-
-    assert asyncio.run(run()) == 9
+def test_mle_dense_full_evaluation():
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    v = [MLE_Variable("x0"), MLE_Variable("x1")]
+    d1 = MLE_Dense(ring=ring, variables=v, evaluations=[1, 2, 3, 4])
+    out = d1.evaluate({v[0]: 2, v[1]: 3}, in_place=False)
+    # Full evaluation -> a single (num_vars == 0) entry; f(2, 3) = 9.
+    assert out.num_vars == 0
+    assert out.constant().get_polynomial()[0] == 9
+    # The original oracle is untouched (in_place=False).
+    assert d1.num_vars == 2 and d1.py_refs[0].get_polynomial()[0] == 1
