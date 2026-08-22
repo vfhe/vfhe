@@ -101,18 +101,12 @@ def test_mle_bind_any_position():
     msb = f.evaluate({v[2]: 2}, in_place=False)
     assert [p.get_polynomial()[0] for p in msb.table] == [9, 10, 11, 12]
     msb_poly = f.evaluate({v[2]: two}, in_place=False)
-    assert all(
-        a == b
-        for a, b in zip(msb.table, msb_poly.table, strict=True)
-    )
+    assert all(a == b for a, b in zip(msb.table, msb_poly.table, strict=True))
     # LSB variable (pairs kernel), both value types.
     lsb = f.evaluate({v[0]: 2}, in_place=False)
     assert [p.get_polynomial()[0] for p in lsb.table] == [3, 5, 7, 9]
     lsb_poly = f.evaluate({v[0]: two}, in_place=False)
-    assert all(
-        a == b
-        for a, b in zip(lsb.table, lsb_poly.table, strict=True)
-    )
+    assert all(a == b for a, b in zip(lsb.table, lsb_poly.table, strict=True))
     # Binding order does not change the result.
     zs = [ring.random_exceptional() for _ in range(3)]
     a = f.evaluate({v[0]: zs[0], v[1]: zs[1], v[2]: zs[2]}, in_place=False)

@@ -53,8 +53,8 @@ extern "C"
 
     // Recompute the root from a leaf digest and its opening, and compare:
     // `path_len` sibling digests, `index` the leaf position they belong to.
-    bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path,
-                       uint64_t path_len, const uint8_t *leaf_digest);
+    bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path, uint64_t path_len,
+                       const uint8_t *leaf_digest);
 
 #ifdef __cplusplus
 }

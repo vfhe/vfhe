@@ -494,7 +494,6 @@ class BasefoldEval(Protocol):
                 below = word0[j] if level == 1 else answer[i + 1][0][j & 1]
                 if not (below == folded):
                     raise Rejection(
-                        f"{label}: fold check failed at level {level - 1}, "
-                        f"position {j}"
+                        f"{label}: fold check failed at level {level - 1}, position {j}"
                     )
         return []

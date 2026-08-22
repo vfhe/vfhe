@@ -44,16 +44,16 @@ extern "C"
 
     // out[0..size) = the codeword of the length-`degree` message in[0..degree)
     // (zero-padded). Out and in must not alias.
-    void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size,
-                   uint64_t degree, NTT_proc *procs);
+    void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
+                   NTT_proc *procs);
 
     // The inverse transform plus the degree check that makes it a decoder:
     // returns 1 when every codeword's coefficients above `degree` vanish (so
     // `in` is a codeword of this code), 0 otherwise. Writes the recovered
     // message to out[0..degree) when `out` is non-NULL; a failed check leaves
     // the output partially written.
-    int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size,
-                  uint64_t degree, NTT_proc *procs);
+    int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
+                  NTT_proc *procs);
 
 #ifdef __cplusplus
 }

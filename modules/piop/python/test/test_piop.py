@@ -47,9 +47,7 @@ def test_relation_eval_coeff_basis():
     v, f = _coeff_mle()
     point = {v[0]: 2, v[1]: 3}  # f(2, 3) = 1 + 4 + 9 + 24 = 38
     assert Statement(Relation_Eval(), oracles=[f], point=point, value=38).check()
-    assert not Statement(
-        Relation_Eval(), oracles=[f], point=point, value=39
-    ).check()
+    assert not Statement(Relation_Eval(), oracles=[f], point=point, value=39).check()
 
 
 def test_relations_mle_dense():
@@ -91,9 +89,7 @@ def test_relation_sumprod_mle_dense():
 def test_reduce_to_chaining():
     v, f = _coeff_mle()
     sum_stmt = Statement(Relation_Sum(), oracles=[f], value=18)
-    eval_stmt = sum_stmt.reduce_to(
-        Relation_Eval(), point={v[0]: 2, v[1]: 3}, value=38
-    )
+    eval_stmt = sum_stmt.reduce_to(Relation_Eval(), point={v[0]: 2, v[1]: 3}, value=38)
     assert eval_stmt.parents == (sum_stmt,)
     assert eval_stmt.oracles == sum_stmt.oracles  # inherited by default
     assert (sum_stmt.path, eval_stmt.path) == ("", "/0")

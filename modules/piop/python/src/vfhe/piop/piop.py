@@ -652,9 +652,7 @@ class Party:
                 continue
             bundle = [stmt]
             if protocol.batching:
-                same = [
-                    s for s in worklist if type(s.relation) is type(stmt.relation)
-                ]
+                same = [s for s in worklist if type(s.relation) is type(stmt.relation)]
                 for s in same:
                     worklist.remove(s)
                 bundle += same
@@ -926,8 +924,6 @@ class IOP:
             finally:
                 prover_task.cancel()
                 verifier_task.cancel()
-                await asyncio.gather(
-                    prover_task, verifier_task, return_exceptions=True
-                )
+                await asyncio.gather(prover_task, verifier_task, return_exceptions=True)
 
         return self.loop.run_until_complete(_run())
