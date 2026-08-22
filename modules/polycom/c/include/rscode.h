@@ -36,6 +36,11 @@ extern "C"
     // One NTT_proc per active prime of `rns_mask`, for codewords of length
     // `size`; the array is `ntt->l` long and owns its procs.
     NTT_proc *rs_new_procs(incNTT ntt, uint64_t rns_mask, uint64_t size);
+
+    // Free an array from rs_new_procs. `count` must be the `ntt->l` the array
+    // was *allocated* with, which is not necessarily the caller's current
+    // `ntt->l`: extending an incNTT with new primes grows it in place, so
+    // re-reading it here would walk off the end of the array.
     void rs_free_procs(NTT_proc *procs, uint64_t count);
 
     // The 2*size-th root of unity the proc at global prime index `index`

@@ -10,6 +10,7 @@ codeword equals encoding the folded message."""
 import pytest
 from vfhe.arith import Ring
 from vfhe.polycom import FoldableRS
+from vfhe.polycom import code as code_module
 from vfhe.polycom.code import _bit_reverse
 
 
@@ -141,3 +142,42 @@ def test_parameter_validation():
         code.encode([ring.random_element() for _ in range(6)])
     with pytest.raises(ValueError, match="exceeds the level"):
         code.encode([ring.random_element() for _ in range(2 * code.k_d)])
+
+
+def test_procs_freed_with_their_allocation_length(monkeypatch):
+    """A code may outlive an extension of the incNTT it was built against.
+
+    The incNTT of an (N, split_degree) pair is shared process-wide, so a ring
+    introducing a new prime extends it in place and every existing ring's
+    `_ntt_l()` grows. The proc arrays were sized by the old count, so freeing
+    them must use that count — reading the ring's current one walks off the
+    end of the array and corrupts the heap.
+    """
+    # Own the (N, split_degree) key, so no other test's rings have already
+    # extended this incNTT: the growth below has to be ours to observe.
+    ring = Ring(512, prime_size=[49], split_degree=2)
+    code = FoldableRS(ring, k0=4, c=4, d=2)
+    allocated_l = code._procs_l
+    assert allocated_l == ring._ntt_l()
+
+    # A second ring over the same key, with a prime the first one lacks.
+    Ring(512, prime_size=[49, 50], split_degree=2)
+    assert ring._ntt_l() > allocated_l  # the shared count grew under `code`
+    assert code._procs_l == allocated_l  # but the recorded length did not
+
+    # The free path must pass the recorded length, not the ring's current one.
+    freed: list[int] = []
+    module_lib = code_module.lib
+
+    class _RecordingLib:
+        def __getattr__(self, name):
+            return getattr(module_lib, name)
+
+        def rs_free_procs(self, procs, count):
+            freed.append(count)
+            return module_lib.rs_free_procs(procs, count)
+
+    monkeypatch.setattr(code_module, "lib", _RecordingLib())
+    levels = code.d + 1
+    del code
+    assert freed == [allocated_l] * levels

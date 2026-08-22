@@ -95,6 +95,13 @@ class FoldableRS:
 
         # One NTT-processor array per level (indexed by global RNS prime
         # index, matching RNS_Polynomial.coeffs), owned by this object.
+        # `rs_new_procs` sizes each array by the NTT's prime count *at this
+        # moment*, and that count is not stable: the incNTT of an
+        # (N, split_degree) pair is shared process-wide, so a later ring
+        # adding a prime extends it in place and `ring._ntt_l()` grows under
+        # us. The length is therefore recorded here and used to free — never
+        # re-read from the ring, which would free past the end of the array.
+        self._procs_l = ring._ntt_l()
         self._procs = [
             lib.rs_new_procs(ring.NTT, ring.mask, self.n0 << level)
             for level in range(d + 1)
@@ -136,7 +143,7 @@ class FoldableRS:
         # interpreter shutdown may already have torn the lib down
         with contextlib.suppress(Exception):
             for procs in self._procs:
-                lib.rs_free_procs(procs, self.ring._ntt_l())
+                lib.rs_free_procs(procs, self._procs_l)
 
     def level_of(self, message: list) -> int:
         """The code level a message of this length belongs to."""
