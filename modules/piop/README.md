@@ -2,6 +2,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.piop
 
+> **Under development.** The code is largely verified by the test suite, but
+> the documentation text — this file and [piop.md](piop.md) — has not been
+> reviewed yet and may be inaccurate or out of date.
+
 Multilinear extensions and the interactive-oracle-proof scaffolding. The
 architecture and its derivation from the PIOP literature are documented in
 [piop.md](piop.md).

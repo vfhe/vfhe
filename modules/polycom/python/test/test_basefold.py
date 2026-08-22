@@ -147,7 +147,7 @@ def test_basefold_commit_then_eval_accepts():
 
 def test_commitment_is_a_succinct_root():
     # The point of the Merkle layer: the commitment's size is one digest,
-    # whatever the codeword length — it used to be the whole codeword.
+    # whatever the codeword length.
     _, small, f_small = _setup(num_vars=4, k0=4, c=4, d=2)  # n_d = 64
     _, big, f_big = _setup(num_vars=4, k0=4, c=16, d=2)  # n_d = 256
     com_small, _ = small.commit(f_small)
@@ -197,8 +197,8 @@ def test_basefold_opening_witness_is_required_and_typed():
     with pytest.raises(LookupError, match=r"prover\.witnesses"):
         iop.run(Statement(Relation_Eval(), **stmt))
 
-    # The polynomial alone is no longer enough: the codeword and its tree
-    # are part of the opening now.
+    # The polynomial alone is not an opening: the codeword and its tree are
+    # part of it too.
     iop = _iop(ring, scheme, com, opening=f)
     with pytest.raises(TypeError, match="BasefoldOpening"):
         iop.run(Statement(Relation_Eval(), **stmt))

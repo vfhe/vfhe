@@ -23,9 +23,9 @@ ideal oracle, via the BCS compiler [BCS16]. It commits to the codeword's
 `±x` *pairs*, one leaf each — our fold reads adjacent entries, so a single
 path authenticates both operands of a fold check ([ZCF24, Remark 9]'s
 packed leaves), halving both the paths and the tree height. Note the
-consequence for the security statement: binding is now *computational*
+consequence for the security statement: binding is *computational*
 (collision resistance) layered on the code-distance argument, where the
-oracle-model version was information-theoretic — see `soundness_error`.
+oracle-model version is information-theoretic — see `soundness_error`.
 
 The evaluation claim f(z) == v is proved as the sumcheck claim
 sum_b f(b) * eq~(z, b) == v, run for d rounds interleaved with folds of the
@@ -45,11 +45,11 @@ value the previous level's fold produced.
 
 Merkle itself is a primitive here, not a `Relation` or a `Protocol`: it
 carries computational binding with no challenges, rounds or reduction, so
-it belongs to the compiler layer rather than the IOP layer (the reasoning
-is recorded in vfhe-ai-knowledge's `modules/piop.md`). Fiat-Shamir is the
-remaining layer: it binds the commitment by hashing the statement
-(sigma_0 = rho(x)) and derives both samplers (`challenge`,
-`challenge_bits`) from the transcript, without changing any message here.
+it belongs to the compiler layer rather than the IOP layer (piop.md §7).
+Fiat-Shamir sits above it and needs nothing from this module: it binds the
+commitment by hashing the statement (sigma_0 = rho(x)) and derives both
+samplers (`challenge`, `challenge_bits`) from the transcript, without
+changing any message here.
 """
 
 from __future__ import annotations
