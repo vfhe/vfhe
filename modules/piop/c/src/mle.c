@@ -56,9 +56,8 @@ static void mle_dense_poly_bind(RNS_Polynomial out, RNS_Polynomial lo, RNS_Polyn
     polynomial_add_RNS_polynomial(out, lo, tmp2);
 }
 
-static void mle_dense_poly_bind_scalar(RNS_Polynomial out, RNS_Polynomial lo,
-                                       RNS_Polynomial hi, uint64_t a, RNS_Polynomial tmp,
-                                       RNS_Polynomial tmp2)
+static void mle_dense_poly_bind_scalar(RNS_Polynomial out, RNS_Polynomial lo, RNS_Polynomial hi,
+                                       uint64_t a, RNS_Polynomial tmp, RNS_Polynomial tmp2)
 {
     polynomial_sub_RNS_polynomial(tmp, hi, lo);
     polynomial_scale_RNS_polynomial(tmp2, tmp, a);
@@ -79,8 +78,8 @@ void mle_dense_poly_evaluate_pairs(RNS_Polynomial *out, RNS_Polynomial *in, RNS_
     free_RNS_polynomial(tmp2);
 }
 
-void mle_dense_poly_evaluate_pairs_scalar(RNS_Polynomial *out, RNS_Polynomial *in,
-                                          uint64_t a, uint64_t size)
+void mle_dense_poly_evaluate_pairs_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t a,
+                                          uint64_t size)
 {
     incNTT ntt = in[0]->ntt;
     RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
@@ -93,8 +92,8 @@ void mle_dense_poly_evaluate_pairs_scalar(RNS_Polynomial *out, RNS_Polynomial *i
     free_RNS_polynomial(tmp2);
 }
 
-void mle_dense_poly_evaluate_halves(RNS_Polynomial *out, RNS_Polynomial *in,
-                                    RNS_Polynomial a, uint64_t size)
+void mle_dense_poly_evaluate_halves(RNS_Polynomial *out, RNS_Polynomial *in, RNS_Polynomial a,
+                                    uint64_t size)
 {
     incNTT ntt = in[0]->ntt;
     RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
@@ -107,8 +106,8 @@ void mle_dense_poly_evaluate_halves(RNS_Polynomial *out, RNS_Polynomial *in,
     free_RNS_polynomial(tmp2);
 }
 
-void mle_dense_poly_evaluate_halves_scalar(RNS_Polynomial *out, RNS_Polynomial *in,
-                                           uint64_t a, uint64_t size)
+void mle_dense_poly_evaluate_halves_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t a,
+                                           uint64_t size)
 {
     incNTT ntt = in[0]->ntt;
     RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);

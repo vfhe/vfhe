@@ -55,7 +55,7 @@ def _exceptional_set_size(domain) -> int | None:
     if hasattr(domain, "primes") and hasattr(domain, "split_degree"):
         return min(domain.primes) ** domain.split_degree
     if hasattr(domain, "prime") and hasattr(domain, "d"):
-        return domain.prime ** domain.d
+        return domain.prime**domain.d
     return None
 
 

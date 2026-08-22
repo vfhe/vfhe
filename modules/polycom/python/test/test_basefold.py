@@ -222,9 +222,7 @@ def test_basefold_all_variables_folded():
     com, opening = scheme.commit(f)
     point, value = _claim(f, ring)
     iop = _iop(ring, scheme, com, opening)
-    assert iop.run(
-        Statement(Relation_Eval(), commitment=com, point=point, value=value)
-    )
+    assert iop.run(Statement(Relation_Eval(), commitment=com, point=point, value=value))
 
 
 def test_basefold_multi_prime_ring():
@@ -232,9 +230,7 @@ def test_basefold_multi_prime_ring():
     com, opening = scheme.commit(f)
     point, value = _claim(f, ring)
     iop = _iop(ring, scheme, com, opening)
-    assert iop.run(
-        Statement(Relation_Eval(), commitment=com, point=point, value=value)
-    )
+    assert iop.run(Statement(Relation_Eval(), commitment=com, point=point, value=value))
 
 
 def test_basefold_deeper_code():
@@ -244,9 +240,7 @@ def test_basefold_deeper_code():
     com, opening = scheme.commit(f)
     point, value = _claim(f, ring)
     iop = _iop(ring, scheme, com, opening)
-    assert iop.run(
-        Statement(Relation_Eval(), commitment=com, point=point, value=value)
-    )
+    assert iop.run(Statement(Relation_Eval(), commitment=com, point=point, value=value))
     assert "basefold/pi2" in iop.transcript.order
 
 
@@ -442,9 +436,7 @@ def test_basefold_rejects_a_consistently_committed_wrong_fold():
             # bad tree, so every path verifies against the root above it.
             return tuple(
                 (top, (scheme.code.pair_at(bad_word, j), bad_tree.open(j)))
-                for (top, (_, _)), j in zip(
-                    val, (q // 2 for q in queries), strict=True
-                )
+                for (top, (_, _)), j in zip(val, (q // 2 for q in queries), strict=True)
             )
         return val
 

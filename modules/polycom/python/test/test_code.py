@@ -71,7 +71,9 @@ def test_encode_pairs_are_plus_minus():
     psi = code.roots[code.d][0]
     for i in range(len(word) // 2):
         x = code.twists[code.d - 1][i][0]
-        assert x == pow(psi, 2 * _bit_reverse(i, (len(word) // 2).bit_length() - 1) + 1, p)
+        assert x == pow(
+            psi, 2 * _bit_reverse(i, (len(word) // 2).bit_length() - 1) + 1, p
+        )
         plus = minus = None
         for m, coeff in enumerate(message):
             t_plus = coeff * [pow(x, m, p)]

@@ -44,9 +44,7 @@ def _fs_sum_iop(ring: Ring) -> IOP:
 
 def _transcript_digests(iop: IOP) -> list:
     t = iop.transcript
-    return [
-        (label, element_digest(t.entries[label].result())) for label in t.order
-    ]
+    return [(label, element_digest(t.entries[label].result())) for label in t.order]
 
 
 def test_transcript_state_chaining_and_caches():

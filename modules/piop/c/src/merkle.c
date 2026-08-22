@@ -34,12 +34,14 @@ void merkle_hash(uint8_t *out, const uint8_t *in, uint64_t len)
 
 Merkle merkle_new(uint64_t size)
 {
-    if (size < 1) return NULL;
+    if (size < 1)
+        return NULL;
     Merkle mk = (Merkle)safe_malloc(sizeof(*mk));
     mk->size = size;
     // log_size = ceil(log2(size))
     mk->log_size = 0;
-    while ((1ULL << mk->log_size) < size) mk->log_size++;
+    while ((1ULL << mk->log_size) < size)
+        mk->log_size++;
     mk->levels = (uint8_t **)safe_malloc((mk->log_size + 1) * sizeof(uint8_t *));
     for (uint64_t i = 0; i <= mk->log_size; i++)
     {
@@ -50,8 +52,10 @@ Merkle merkle_new(uint64_t size)
 
 void merkle_free(Merkle mk)
 {
-    if (mk == NULL) return;
-    for (uint64_t i = 0; i <= mk->log_size; i++) free(mk->levels[i]);
+    if (mk == NULL)
+        return;
+    for (uint64_t i = 0; i <= mk->log_size; i++)
+        free(mk->levels[i]);
     free(mk->levels);
     free(mk);
 }
@@ -69,17 +73,13 @@ void merkle_commit(Merkle mk, const uint8_t *leaf_digests)
         uint8_t *level = mk->levels[i];
         for (uint64_t j = 0; j < (1ULL << i); j++)
         {
-            merkle_hash_pair(&level[j * MERKLE_DIGEST_LEN],
-                             &below[(2 * j) * MERKLE_DIGEST_LEN],
+            merkle_hash_pair(&level[j * MERKLE_DIGEST_LEN], &below[(2 * j) * MERKLE_DIGEST_LEN],
                              &below[(2 * j + 1) * MERKLE_DIGEST_LEN]);
         }
     }
 }
 
-void merkle_get_root(uint8_t *out, Merkle mk)
-{
-    memcpy(out, mk->levels[0], MERKLE_DIGEST_LEN);
-}
+void merkle_get_root(uint8_t *out, Merkle mk) { memcpy(out, mk->levels[0], MERKLE_DIGEST_LEN); }
 
 void merkle_open(uint8_t *out, Merkle mk, uint64_t index)
 {
@@ -91,16 +91,18 @@ void merkle_open(uint8_t *out, Merkle mk, uint64_t index)
     }
 }
 
-bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path,
-                   uint64_t path_len, const uint8_t *leaf_digest)
+bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path, uint64_t path_len,
+                   const uint8_t *leaf_digest)
 {
     uint8_t node[MERKLE_DIGEST_LEN], next[MERKLE_DIGEST_LEN];
     memcpy(node, leaf_digest, MERKLE_DIGEST_LEN);
     for (uint64_t i = 0; i < path_len; i++)
     {
         const uint8_t *sibling = &path[i * MERKLE_DIGEST_LEN];
-        if (index & 1) merkle_hash_pair(next, sibling, node);
-        else merkle_hash_pair(next, node, sibling);
+        if (index & 1)
+            merkle_hash_pair(next, sibling, node);
+        else
+            merkle_hash_pair(next, node, sibling);
         memcpy(node, next, MERKLE_DIGEST_LEN);
         index >>= 1;
     }
