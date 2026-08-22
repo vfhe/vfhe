@@ -4,5 +4,9 @@
 // prototyped in piop/c/include/sumcheck.h). Polynomial handles and
 // handle-arrays are passed as `void *` (cffi converts any pointer/array).
 
-void sumcheck_round(void *g0, void *g1, void *table, uint64_t size);
-void sumcheck_prod2_round(void *g_out, void *tf, void *tg, uint64_t size);
+void sumcheck_round_pairs(void *g0, void *g1, void *table, uint64_t size);
+void sumcheck_round_halves(void *g0, void *g1, void *table, uint64_t size);
+void sumcheck_round(void *g0, void *g1, void *table, uint64_t size, uint64_t eval_var_idx);
+void sumcheck_prod2_round_pairs(void *g_out, void *tf, void *tg, uint64_t size);
+void sumcheck_prod2_round_halves(void *g_out, void *tf, void *tg, uint64_t size);
+void sumcheck_prod2_round(void *g_out, void *tf, void *tg, uint64_t size, uint64_t eval_var_idx);

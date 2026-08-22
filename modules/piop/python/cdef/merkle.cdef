@@ -1,0 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the Merkle tree (piop/c/src/merkle.c, prototyped in
+// piop/c/include/merkle.h). The tree handle is passed as `void *`; digests are
+// plain byte buffers (cffi accepts a `bytes` object for a `const uint8_t *`).
+
+void merkle_hash(uint8_t *out, const uint8_t *in, uint64_t len);
+void *merkle_new(uint64_t size);
+void merkle_free(void *mk);
+void merkle_commit(void *mk, const uint8_t *leaf_digests);
+void merkle_get_root(uint8_t *out, void *mk);
+void merkle_open(uint8_t *out, void *mk, uint64_t index);
+bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path, uint64_t path_len, const uint8_t *leaf_digest);

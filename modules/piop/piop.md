@@ -13,7 +13,7 @@ quotient ring `R_q = Z_q[X]/(X^N + 1)` (`vfhe.arith.Ring` /
 `vfhe.arith.Polynomial`) or in a finite field extension
 (`vfhe.arith.Field` / `vfhe.arith.FieldElement`). The module provides:
 
-- the polynomial objects the prover sends as oracles (the `MLE` family), and
+- the polynomial objects the prover sends as oracles (`MLE`), and
 - the protocol scaffolding: claims (`Statement`), the relations they refer
   to (`Relation`), the parties, and the asynchronous plumbing
   (`IOP`, `Value`, `Variable`).
@@ -114,14 +114,24 @@ starts from four relation kinds. In all of them `f` is (an MLE of) an
   the claim reduces to the `Relation_Sum` claim
   `Σ_b eq̃(r, b)·f(b) = 0`, where `eq̃` is the multilinear equality polynomial
   (the `χ_w` Lagrange basis of [Tha22, §3.5, Lemma 3.6]).
-- **`Relation_Eval`** — instance `(f, z, v)`: `f(z) = v`.
-  The terminal claim of the sumcheck family. In a pure IOP the verifier
-  discharges it with one oracle query (here: `MLE.evaluate`); under a
-  commitment compiler it becomes an opening claim.
-- **`Relation_Open`** — instance `(commitment, z, v)`, witness `f`:
-  the commitment opens to a polynomial `f` with `f(z) = v` [BFS20]. Its
-  decider needs a commitment scheme, so it is declared here but left
-  unimplemented until one exists.
+- **`Relation_Eval`** — instance `(f and/or its commitment, z, v)`:
+  `f(z) = v`, the terminal claim of the sumcheck family. The polynomial may
+  appear as the in-process oracle (`oracles`), as its commitment
+  (`commitment`, optional), or both — they are one object at two levels of
+  instantiation, "the commitment to f is simply the oracle π_f"
+  [ZCF24, §4], so the compiled claim is *the same relation*: the standard
+  PCS evaluation relation R_Eval = {[(C, z, y); f] : f(z) = y and C opens
+  to f} [ZCF24, Def. 8; BFS20]. A commitment is instance data — created by
+  a scheme's commit algorithm (possibly long before any IOP run, reused
+  across runs), carried on statements, never on the per-execution
+  transcript — and its witness lives in `prover.witnesses[commitment]`.
+  Left terminal, the claim is decided by one oracle query (`MLE.evaluate`);
+  registering a PCS evaluation protocol (`vfhe.polycom.BasefoldEval`)
+  replaces that query with an opening argument — the "queries become
+  opening claims" side of the [CHMMVW20] compiler, done in place, with the
+  commitment taken from the field or resolved from the scheme's records of
+  the oracle. Commitment-only claims have no witness-free decider and must
+  not be left terminal.
 
 Further members of the toolbox (product-check, permutation-check, lookups
 [CBBZ23]) can be added as new `Relation` subclasses without touching
@@ -200,13 +210,19 @@ transcript.
   of the record and give domain separation, and each label is single-use;
   protocols namespace them by the statement's `path`, which the identical
   DAGs on both sides keep in agreement. The *write order* is the
-  canonical order a Fiat–Shamir transformation [FS86] hashes, per the BCS
-  compiler's chain σ_i = ρ(rt_i ‖ σ_{i−1}) [BCS16] — and FS never touches
-  this machinery: a non-interactive verifier is simply a `Verifier`
-  subtype whose `challenge` derives values from the transcript so far
-  instead of sampling. (Caveat for that future subtype: the hash must also
-  bind the statement itself, σ_0 = ρ(x) — omitting it is the "weak
-  Fiat–Shamir" bug of [DMWG23].)
+  canonical order a Fiat–Shamir transformation [FS86] hashes, and the
+  transcript maintains that hash itself: `state(upto=None)` is the chained
+  prefix digest `h_i = H(h_{i−1} ‖ H(label_i) ‖ digest(value_i))` — the
+  recursive BCS form σ_i = ρ(rt_i ‖ σ_{i−1}) [BCS16], chosen over hashing
+  one big concatenation because per-entry digests and chain values are
+  cached (`digests` / `_states`): a new entry costs one compression, any
+  prefix is a lookup, and interactive runs that never call `state()` pay
+  nothing (the caches fill lazily). The chain is seeded by
+  `bind(seed)` with the *root statement's* digest — σ_0 = ρ(x), whose
+  omission is the "weak Fiat–Shamir" bug of [DMWG23] — and entry values
+  are digested by the duck-typed `element_digest` walker (bytes, ints,
+  Polynomials via `get_hash`, MerklePaths, statements, dense MLEs, or any
+  object providing `digest()`).
 - **Challenges.** `iop.verifier.challenge(label)` returns the challenge
   `label`: the first call samples it from the domain's exceptional set (§6)
   and writes it to the transcript; later calls return the recorded value.
@@ -218,7 +234,23 @@ transcript.
   the interactive machinery mirrors that symmetry. Public-coin honesty is
   the caller's responsibility: a challenge is drawn only after the round
   message it answers is written, keeping the transcript order canonical
-  (the machinery does not enforce this; the FS hash binding will).
+  (the machinery does not enforce this; the FS hash binding does).
+- **Fiat–Shamir.** `IOP(fiat_shamir=True)` (default `False`: interactive is
+  the base model; FS is the compiled artifact you opt into) instantiates
+  `fs.FS_Verifier`, a `Verifier` overriding exactly the two draw hooks
+  behind the samplers: each value is `H(transcript.state() ‖ tag ‖ label)`
+  — the tag separates the two samplers, the label keeps back-to-back
+  challenges distinct — and `IOP.run` seeds the chain with
+  `element_digest(root statement)`. Domain challenges need a deterministic
+  bytes → exceptional-element map: a domain's own `exceptional_from_seed`
+  takes precedence; over a `Ring`, `fs.ring_exceptional_from_seed` derives
+  a constant chunk of `split_degree` coefficients below `min(pᵢ)` — an
+  exceptional set of the same size `min(pᵢ)^split_degree` (nonzero
+  small-coefficient chunks of degree < split_degree are coprime to every
+  irreducible factor), replaceable by a seeded arith-side sampler later.
+  Nothing else changes — same protocols, same transcript — and an FS run
+  is fully deterministic: same statement, same registry ⇒ byte-identical
+  transcript (the tests assert this end-to-end, basefold included).
 - **Registry.** `iop.register(relation_type, protocol)` chooses how
   statements of a relation are discharged; relations without a registered
   protocol are *terminal*. This keeps relations passive data and protocols
@@ -234,12 +266,96 @@ transcript.
   one oracle query per claim. A protocol's `verify` half raises `Rejection`
   on a failed round check, which the driver turns into a `False` verdict.
 - **Run.** `iop.run(statement)` schedules both parties' coroutines on the
-  IOP's event loop and returns the verifier's verdict. Deadlock freedom
+  IOP's event loop and returns the verifier's verdict. Each party drives
+  its own *fork* of the root statement (same public content, fresh
+  child-path counter): child paths are handed out by a per-statement
+  counter, so a root shared between the parties would give the second
+  party's children the next counter values and desynchronize every
+  path-namespaced transcript label. Deadlock freedom
   follows from the round structure itself: the prover awaits challenge *i*
   before sending message *i+1*, the verifier awaits message *i* before
   sampling challenge *i* (a crashed prover is re-raised rather than left to
   deadlock the verifier). An `IOP` object is single-use — one run consumes
   its transcript.
+
+### The non-interactive pair: producing and checking a proof
+
+`run` keeps both parties in one process, which is the interactive model and
+what protocol development wants. The point of Fiat–Shamir, though, is that
+the two halves come apart: the prover derives its own challenges, so it can
+finish alone and leave behind an object anyone can check later. Two runners
+express that, both Fiat–Shamir-only (interactively the challenges are fresh
+randomness a proof could not carry, so they refuse rather than emit an
+uncheckable object):
+
+- `iop.prove(statement) -> Proof` runs the prover alone. Nothing blocks:
+  every `challenge` is computed on the spot from the chain, and prove halves
+  only ever *write* to the transcript. (That invariant is now enforced —
+  reading with no counterparty raises instead of hanging, the failure mode
+  described in `workflow.md`.)
+- `iop.verify(statement, proof) -> bool` runs the verifier alone against
+  that object, on a *separate* IOP: proving and checking cannot share one,
+  since each consumes a transcript. The checking side needs the statement,
+  the proof, and the registry — no prover, no witnesses, no oracles.
+
+The object is the **argument string** [CY24, §4.1; CO25, §2.1], spelled
+"NARG string" in implementations [CFRG-FS, §2]; the class keeps the
+readable name `Proof`. It is deliberately *not* called a transcript: that
+word is the interactive record, prover and verifier messages both
+[CFRG-FS, §2], and it is the distinction spongefish drew when it deprecated
+`transcript()` in favour of `narg_string()`.
+
+A **`Proof` carries only the prover's messages**, in write order — "the
+argument string π contains … all IP prover messages (and none of the IP
+verifier messages)" [CO25, §4.3]. The challenges are a deterministic
+function of the messages before them, so storing them would record what the
+verifier recomputes anyway, and would invite a verifier to *trust* them —
+precisely the hole Fiat–Shamir closes. (Every proof struct in the wild
+agrees: plonky3's `FriProof` and Marlin's `Proof` carry commitments,
+openings and prover messages, never the challenges or query indices.)
+`Transcript.write(..., derived=True)` is how the samplers mark their
+entries, and `Transcript.messages()` is everything not so marked.
+
+Reading it back is a **single forward pass**: when the verifier reads a
+label nobody has written, the transcript takes the proof's next message,
+checks it is the expected one, and writes it — extending the chain in
+exactly the order the prover built it, so the verifier *re-derives* the
+challenges and reconstructs the interaction [CY24, §14.1]. Three
+malformations are therefore rejected structurally: a message out of turn, a
+proof that runs out, and one with entries left over. The last is the
+**end-of-input check**, not a tidiness rule: unread entries make a proof
+*malleable* — an adversary alters them for a second, distinct accepting
+proof of the same statement, costing strong simulation-extractability
+[CFRG-FS, §6.2] — and out-of-order or skipped messages are a real
+implementation bug class, with CVEs behind the guidance. Everything else —
+a tampered message, a substituted statement — is caught by the chain: any
+change reshuffles every later challenge, and the run stops adding up.
+
+**Note for the planned C port.** The non-interactive verifier is the part
+worth making fast, and this shape is meant to survive the move. It also
+happens to be what the implementation guidance prescribes [CFRG-FS, §8.6]:
+
+> "A byte-level interface … is advisable in place of proof data structures
+> whose fields are randomly addressable. A sequential interface, by
+> contrast, enforces in-order processing. An end-of-input check is
+> necessary to prevent malleability."
+
+— guidance written against real CVEs for out-of-order or missing prover
+messages, and the reason the same passage asks that absorbing a message and
+(de)serializing it happen *in the same call*, which `Transcript.read` does.
+So: reads are sequential with no random access, challenges are recomputed
+rather than parsed, the chain is one 32-byte state updated per entry,
+per-round verifier work is O(1) coefficient operations, and the verify path
+provably never touches prover state.
+
+What a C verifier additionally needs, and what Python does not yet have, is
+a *canonical byte encoding* of each message type: `element_digest` hashes
+values but does not serialize them, and `Proof` holds live Python objects,
+so there is nothing to parse yet. Labels are the other Python-only
+convenience — redundant in principle (the verifier knows what it expects
+next), kept for clear errors, droppable in a byte-level format. That
+encoding is the prerequisite for the port, and it is what would make this a
+NARG *string* rather than a list of objects.
 
 The first instantiation is the sumcheck protocol (`sumcheck.py`): round *i*
 sends the univariate `g_i` (as the pair `g_i(0), g_i(1)` — the oracle is a
@@ -258,7 +374,7 @@ the prover sends the per-factor values `v_j = f_j(r)`, the verifier checks
 `Relation_Eval` statements at the same point `r` — soundness `k·n/|A|`.
 
 Round messages are the **evaluations of `g_i` at the integer nodes
-`0..deg`**, Libra's format [XZZPS19, Alg. 3]: `MLE_Dense` tables are already
+`0..deg`**, Libra's format [XZZPS19, Alg. 3]: `MLE` tables are already
 in the evaluation basis, so the linear-time prover kernels accumulate the
 table halves directly (values above 1 extrapolated division-free as
 `lo + t·(hi−lo)`, e.g. `2·hi − lo` at `t = 2`). The verifier updates its
@@ -273,25 +389,44 @@ roadmap.)
 
 ### Native implementations
 
-A protocol declares the coefficient domains for which C implementations
-exist via `supported_domains` (e.g. `(Ring,)` on `Sumcheck` and
-`SumcheckProd`). The prove/verify halves choose per statement:
-`native_supported(iop, statement)` holds when the IOP's domain is a
-supported type *and* the statement's oracles are in the native
-representation (`MLE_Dense`; for `SumcheckProd`, exactly `k = 2` factors —
-the Libra `f·g` shape), and the half then delegates to the C-backed path,
-falling back to pure Python otherwise. Both paths produce identical
-transcripts, so they are interchangeable mid-stack.
+Each protocol body is written exactly once — there are no separate native
+and Python provers. The native/pure-Python decision is made at the data
+level, inside the round-message helpers: `Sumcheck.round_evals` and
+`SumcheckProd.prod_round_evals` (static) compute one round message for a
+round variable at any position and delegate to the C kernels when the
+oracles are native tables (`mle.native_table`; for the product message,
+exactly `k = 2` factors — the Libra `f·g` shape), running the naive
+pure-Python path otherwise. Both paths produce identical messages, so
+transcripts are interchangeable mid-stack — even mid-*protocol*: the
+decision is per call, so e.g. a mixed native/coefficient-basis factor pair
+simply takes the Python path. `supported_domains` (e.g. `(Ring,)`) remains
+on the protocol as declarative metadata — which domains have kernels —
+not as a dispatch switch. These helpers, with `interpolate_evals` (the
+verifier's claim update), are also the building blocks for protocols that
+interleave sumcheck rounds with other messages (basefold in
+`vfhe.polycom`, which folds a committed codeword between rounds).
 
-The prover kernels (`piop/c/src/sumcheck.c`: `sumcheck_round`,
-`sumcheck_prod2_round`) only *accumulate round messages* from the table
-halves; folding with the challenge is exactly binding the round variable,
-i.e. `mle_dense_poly_evaluate` — the native provers fold through the MLE
-API (out of place on the first round to keep the shared oracle intact, in
-place afterwards). Verifiers have a single implementation for both paths:
-their per-round work is O(1) ring operations, and the wire format is
-shared. Fields join `supported_domains` after the MLE layer moves to
-`vfhe.arith`; multithreaded kernels are roadmap.
+The two protocols share their round machinery (`_SumcheckRounds`, a
+template both subclass): per round the prover writes the round message and
+folds every table by the challenge (out of place on the first round to
+keep the shared oracles intact, in place afterwards — folding is exactly
+binding the round variable, i.e. `mle_dense_poly_evaluate*`, never a
+sumcheck kernel), and the single verifier checks `g(0) + g(1)` against the
+running claim and interpolates the next one in O(1) ring operations per
+round. Subclasses supply only the transcript prefix, the round message,
+and the closing step of each half (`Sumcheck`: the final `f(r)`;
+`SumcheckProd`: the `/vals` message, its product check, and the per-factor
+outputs).
+
+The prover kernels (`piop/c/src/sumcheck.c`) only *accumulate round
+messages* from the table pairs of the round variable — which, like MLE
+binding (§7), may sit at any position: each message has a kernel per pair
+layout (`sumcheck_round_pairs` / `_halves` and `sumcheck_prod2_round_pairs`
+/ `_halves` for the LSB and MSB variables, plus the stride-computed
+`sumcheck_round` / `sumcheck_prod2_round` generic fallbacks), chosen by the
+round-eval helpers from the variable's position. Fields join
+`supported_domains` after the MLE layer moves to `vfhe.arith`;
+multithreaded kernels are roadmap.
 
 ## 6. Challenges and soundness
 
@@ -363,30 +498,132 @@ does the same and decides the terminal leaf, translating a mid-protocol
 `check()` on a non-terminal statement — that decider enumerates the
 hypercube.
 
-### The `MLE` family (`mle.py`)
+The verifier draws two kinds of randomness, both compute-if-absent and both
+published to the transcript, so the Fiat-Shamir subtype (`fs.FS_Verifier`,
+§5) overrides exactly the two draw hooks behind them (`_draw_challenge`,
+`_draw_bits`):
+
+- `challenge(label)` — a coefficient-domain element from the exceptional
+  set (§6), what reductions consume and what `soundness_error` accounts
+  for;
+- `challenge_bits(label, bits)` — raw uniform coins as a byte string,
+  deliberately shapeless: how they become protocol randomness — spot-check
+  positions (§2's "the verifier may query it at a few positions"), a
+  permutation, a subset — is the *protocol's* business, expanded on its
+  side (e.g. `BasefoldEval.query_positions` hashes the seed in counter
+  mode and rejection-samples). The verifier stays generic; anything
+  shaped, like index sampling with a distinctness constraint, would smuggle
+  protocol knowledge into it. The coins are *published* for a reason worth
+  stating: derived randomness must be reproducible by the prover — while
+  an oracle is an in-process object the verifier just reads it, but once
+  it is a commitment the prover must learn the query positions to answer
+  them with authentication paths, which is the one structural change the
+  Merkle layer makes to a message flow (`vfhe.polycom.BasefoldEval`). No
+  exceptional-set structure, so `soundness_error` accounting never sees
+  these coins.
+
+### `MLE` and `SparseMLE` (`mle.py`)
 
 Every function `f : {0,1}^n → R` has a unique multilinear extension `f̃`,
 `f̃(x) = Σ_{w ∈ {0,1}^n} f(w)·χ_w(x)` [Tha22, §3.5, Lemma 3.6]. The module
-keeps three concrete forms behind the abstract `MLE`:
+has two *independent* types — they share vocabulary (`variables`,
+`num_vars`, `scale`, `constant`), not an inheritance chain, because a
+sparse map supports none of the folding a dense table exists for, and a
+common base could only promise an `evaluate` it cannot implement:
 
-- `ML_Polynomial` — coefficients in the monomial basis (pure Python; any
-  coefficient type with `+`/`*`).
-- `MLE_Sparse` — a sparse map of hypercube evaluations (bookkeeping form; no
-  evaluation yet).
-- `MLE_Dense` — the evaluation basis over `vfhe.arith.Polynomial`, i.e. a
-  table of `2^n` elements of `R_q`, backed by the `mle_dense_poly_*` C
-  kernels.
+- `MLE` — a dense table of `2^n` coefficients; the type protocols work
+  with. Two properties of the table, deliberately *not* subclasses, because
+  they vary independently:
+  - **`basis`** (`MLE_Basis.eval` / `MLE_Basis.coeff`) — the hypercube
+    evaluations (constructor argument `evaluations=`) or the monomial
+    coefficients (`coefficients=`, entry `b` multiplying
+    `Π_{i ∈ bits(b)} x_i`, i.e. a multilinear *polynomial* rather than an
+    extension table). Both bind a variable by folding the same (lo, hi)
+    pairs; only the fold differs — interpolation `lo + r·(hi − lo)` in the
+    evaluation basis, Horner `c_lo + r·c_hi` in the monomial one.
+    `to_coefficients()` converts (the butterfly `c_hi = e_hi − e_lo`),
+    returning another `MLE`; that LSB-first coefficient vector is
+    what a code-based commitment encodes (`vfhe.polycom`).
+  - **coefficient type** — with a `ring`, entries are
+    `vfhe.arith.Polynomial` over that `Ring` and the `mle_dense_poly_*` C
+    kernels do the work; without one, entries are plain Python values (any
+    type with `+`/`*`, e.g. exact ints for reference-semantics tests) and
+    the folds run in Python.
+
+  The kernels are RNS routines *and* interpolate, so they need a ring
+  **and** the evaluation basis: `native_table(f)` is that predicate, and it
+  — not `isinstance` — is what protocols gate native delegation on (§5).
+  `MLE.eq(ring, point)` builds the dense table of the equality
+  polynomial `eq̃(point, ·)` (the zerocheck reduction and basefold's
+  virtual factor).
+- `SparseMLE` — a sparse map of hypercube evaluations (bookkeeping form:
+  add / sub / scale only; `evaluate` raises).
+
+Representation caveat, inherited from `vfhe.arith`: reading a table entry's
+value (`== int`, iteration, `get_polynomial()`) converts *that entry* to
+coefficient form in place, so a table can end up mixed — and the C kernels,
+which read RNS form, would then silently fold the wrong data. Every native
+path therefore normalizes first (`MLE.to_NTT()`, a per-entry flag check
+when already normalized), and kernel outputs are stamped NTT-form
+(`mark_ntt`) rather than mirroring a source flag that could itself be
+stale. This is a **provisional workaround**: the fix belongs in arith,
+which should stop mutating representation on read.
 
 Evaluation binds one variable at a time by the standard fold
 `f(…, x_i = r, …)` combining the two halves of the table as
 `(1−r)·f|_{x_i=0} + r·f|_{x_i=1}` (equivalently `c_0 + r·c_1` in the monomial
 basis), the linear-time technique used by memory-efficient sumcheck provers
-[Tha22, §4.1–4.2]. The layer is deliberately asyncio-free: variables are
-plain identifiers (`MLE_Variable`, or any hashable — *not* protocol
-futures), and evaluation points are always concrete values; anything
-unresolved is a Transcript / Statement concern. Making the MLE classes
-generic over the coefficient domain (`Ring` vs `Field`) is planned follow-up
-work.
+[Tha22, §4.1–4.2]. Variable order is generic at the Python level — any
+named variable may be bound, in any order — and each implementation
+dispatches on the variable's *position* to the most efficient pair layout:
+adjacent entries for the first (LSB) variable ("pairs"), the two table
+halves for the last (MSB) one ("halves"), and a stride-computed generic
+fallback for anything in between (each backed by its own C kernel on a
+native table, by slicing on the Python path). The layer is deliberately
+asyncio-free: variables are plain identifiers (`MLE_Variable`, or any
+hashable — *not* protocol futures), and evaluation points are always
+concrete values; anything unresolved is a Transcript / Statement concern.
+
+### `Merkle` (`merkle.py`)
+
+A binary Merkle tree [Mer88] over BLAKE3: the vector commitment that turns a
+long prover oracle into a short root plus per-query openings, which is how an
+IOP is compiled into an argument [BCS16] and what a code-based
+commitment (`vfhe.polycom`) needs for its codewords. Internal nodes are
+`BLAKE3(left || right)`; a leaf count that is not a power of two is padded
+with zero digests, so the root is defined for any size (the leaf count is
+public protocol data, so the padding is not a domain separation concern).
+
+The split follows the rest of the module: the tree — building the levels,
+copying a path, replaying it — is C (`c/src/merkle.c`, one contiguous buffer
+per level), while the Python layer only decides *what a leaf hashes to*. That
+is the sole requirement on a leaf type: a `.hash()` method returning its
+digest, or a `hash=` callable given to `Merkle` / `Merkle.verify` for types
+without one. Leaves are never copied or interpreted, only referenced and
+hashed, so the tree commits to `MLE` tables, codeword entries, or anything
+else without knowing what they are.
+
+An opening (`MerklePath`) carries the sibling digests bottom-up and
+deliberately *not* the leaf index: the verifier checks the position it
+queried, never one the prover chose. Nothing in the file is PIOP-specific —
+it is here for want of a crypto-primitives module, and should move when one
+exists (like `MLE` moving to `vfhe.arith`, §1).
+
+`Merkle` is a primitive, not a `Relation` or a `Protocol`, and that is a
+deliberate layering decision rather than an omission. The root is the
+random-oracle *instantiation* of an ideal oracle — the BCS compiler
+[BCS16], as [ZCF24] §4 states for exactly this scheme — so it belongs to
+the compiler layer that also owns Fiat-Shamir, one level below the IOP.
+Structurally it could not be a `Relation` anyway: a relation here carries
+statistical soundness over exceptional-set challenges (§6), while a Merkle
+claim is computational (collision resistance) with no challenge, no round
+and no reduction, so the framework's accounting has nothing to say about
+it. And the relation a commitment participates in already exists —
+`Relation_Eval` *is* [ZCF24]'s R_Eval, its optional `commitment` field
+carrying the compiled form of the oracle; swapping a codeword for a root
+changes the type of an instance field, not the relation. Path checking
+therefore lives inside the PCS's evaluation protocol
+(`vfhe.polycom.BasefoldEval`), which is where the queried positions are.
 
 ## 8. Roadmap
 
@@ -397,16 +634,41 @@ work.
    moves to `vfhe.arith`. The pure-Python fallbacks remain naive
    (per-round hypercube re-enumeration) by design — they are the reference
    semantics, not the fast path.
-2. **Zerocheck** (`Relation_Zero → Relation_Sum(Prod)` via `eq̃`), which
-   needs an `eq̃`/virtual-polynomial form of `MLE`.
+2. **Zerocheck** (`Relation_Zero → Relation_Sum(Prod)` via `eq̃`): the
+   dense `eq̃` table exists (`MLE.eq`); a lazy/virtual-polynomial
+   form of `MLE` is still open.
 3. **Batching / folding** (`Relation_Eval^k → Relation_Eval`): a
    `batching = True` protocol per [KP23, Def. 4], via random linear
    combination over the exceptional set or the BatchEval PIOP
    [CBBZ23, §3.8]; the driver already supports it.
 4. **Lookup relation**, reducing to a mix of Eval and Sum claims.
-5. **Domain-generic MLEs**: one code path for `Ring` and `Field`
-   coefficients.
-6. **`Relation_Open`** backed by a polynomial commitment scheme.
+5. **Field coefficient domains**: `MLE` already has one code path for
+   ring-backed and plain-Python coefficients (§7), so a `Field` domain needs
+   `vfhe.arith.Field` elements to satisfy the same `+`/`*` protocol plus a
+   `sample_exceptional` alias (§6); native kernels for them are a separate
+   step.
+6. ~~**Evaluation claims backed by a polynomial commitment scheme**~~ —
+   done: registering `vfhe.polycom.BasefoldEval` for `Relation_Eval`
+   replaces the terminal oracle query with a basefold opening argument
+   (commit separately, evaluate many times; the commitment rides the
+   statement's optional `commitment` field or is resolved from the
+   scheme's records), with codewords committed by Merkle root (§7) and
+   spot-checked at positions expanded from `challenge_bits`. A separate
+   `Relation_Open` and an `EvalToOpen` bridge existed briefly and were
+   folded back in: the bridge was a pure relabeling between two spellings
+   of the same relation.
+7. ~~**Fiat-Shamir**~~ — done (`fs.FS_Verifier`, `IOP(fiat_shamir=True)`,
+   §5): both samplers derived from the transcript's chained `state()`,
+   seeded with the root statement digest [DMWG23], plus the non-interactive
+   pair `IOP.prove -> Proof` / `IOP.verify(statement, proof)`. Still open:
+   a **canonical byte encoding** for proof messages (the prerequisite for
+   both a real proof *string* and the planned C verifier, §5), `digest()`
+   hooks for any new transcript value types, and a seeded arith-side
+   `sample_exceptional` to replace `fs.ring_exceptional_from_seed`.
+8. **A native non-interactive verifier**: port the FS verifier to C once
+   the encoding above exists — the hot path is hashing and per-round
+   coefficient arithmetic, and the Python design already constrains it to a
+   single forward pass over the proof (§5).
 
 ## Bibliography
 
@@ -416,6 +678,9 @@ work.
 - **[RRR16]** Omer Reingold, Guy N. Rothblum, Ron D. Rothblum.
   *Constant-Round Interactive Proofs for Delegating Computation*. STOC 2016,
   pp. 49–62, ACM, 2016. <https://dl.acm.org/doi/10.1145/2897518.2897652>
+- **[Mer88]** Ralph C. Merkle. *A Digital Signature Based on a Conventional
+  Encryption Function*. CRYPTO '87, LNCS 293, pp. 369-378, Springer, 1988.
+  <https://doi.org/10.1007/3-540-48184-2_32>
 - **[LFKN92]** Carsten Lund, Lance Fortnow, Howard Karloff, Noam Nisan.
   *Algebraic Methods for Interactive Proof Systems*. Journal of the ACM
   39(4), pp. 859–868, 1992. <https://dl.acm.org/doi/10.1145/146585.146605>
@@ -434,6 +699,20 @@ work.
   Solutions to Identification and Signature Problems*. CRYPTO '86, LNCS 263,
   pp. 186–194, Springer, 1987.
   <https://doi.org/10.1007/3-540-47721-7_12>
+- **[CY24]** Alessandro Chiesa, Eylon Yogev. *Building Cryptographic Proofs
+  from Hash Functions*. 2024. <https://snargsbook.org/> (§4.1 defines NARG
+  = non-interactive argument and the argument string; §14.1 the
+  emulate/re-derive framing; ch. 25 casts BCS as a NARG).
+- **[CO25]** Alessandro Chiesa, Michele Orrù. *A Fiat–Shamir Transformation
+  from Duplex Sponges*. TCC 2025. ePrint 2025/536.
+  <https://eprint.iacr.org/2025/536> (§4.3: the argument string carries all
+  IP prover messages and none of the verifier's; §8.1–8.2 the byte-level
+  interface).
+- **[CFRG-FS]** Michele Orrù et al. *Fiat-Shamir Transformation*. IRTF/CFRG
+  Internet-Draft, draft-irtf-cfrg-fiat-shamir.
+  <https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-fiat-shamir> (§2
+  transcript vs NARG string; §6.2 the end-of-input MUST and malleability;
+  §8.6 sequential interface guidance).
 - **[DMWG23]** Quang Dao, Jim Miller, Opal Wright, Paul Grubbs. *Weak
   Fiat-Shamir Attacks on Modern Proof Systems*. IEEE Symposium on Security
   and Privacy 2023. ePrint 2023/691. <https://eprint.iacr.org/2023/691>

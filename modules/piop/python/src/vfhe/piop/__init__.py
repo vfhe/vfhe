@@ -1,16 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.piop public API re-exports.
-from .mle import MLE, ML_Polynomial, MLE_Dense, MLE_Sparse, MLE_Variable
+from .fs import FS_Verifier
+from .merkle import Merkle, MerklePath
+from .mle import MLE, MLE_Basis, MLE_Variable, SparseMLE
 from .piop import (
     IOP,
     Party,
+    Proof,
     Protocol,
     Prover,
     Rejection,
     Relation,
     Relation_Eval,
-    Relation_Open,
     Relation_Sum,
     Relation_SumProd,
     Relation_Zero,
@@ -19,26 +21,29 @@ from .piop import (
     Value,
     Variable,
     Verifier,
+    element_digest,
 )
 from .sumcheck import Sumcheck, SumcheckProd
 
 __all__ = [
     "IOP",
     "MLE",
-    "MLE_Dense",
-    "MLE_Sparse",
+    "FS_Verifier",
+    "MLE_Basis",
     "MLE_Variable",
-    "ML_Polynomial",
+    "Merkle",
+    "MerklePath",
     "Party",
+    "Proof",
     "Protocol",
     "Prover",
     "Rejection",
     "Relation",
     "Relation_Eval",
-    "Relation_Open",
     "Relation_Sum",
     "Relation_SumProd",
     "Relation_Zero",
+    "SparseMLE",
     "Statement",
     "Sumcheck",
     "SumcheckProd",
@@ -46,4 +51,5 @@ __all__ = [
     "Value",
     "Variable",
     "Verifier",
+    "element_digest",
 ]
