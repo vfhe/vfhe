@@ -2,6 +2,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.piop — design notes
 
+> **Under development.** The code these notes describe is largely verified by
+> the test suite, but the notes themselves have not been reviewed yet and may
+> be inaccurate or out of date.
+
 How the module's architecture is derived from the (polynomial) IOP
 literature. Bracketed keys refer to the [bibliography](#bibliography).
 
@@ -18,9 +22,10 @@ quotient ring `R_q = Z_q[X]/(X^N + 1)` (`vfhe.arith.Ring` /
   to (`Relation`), the parties, and the asynchronous plumbing
   (`IOP`, `Value`, `Variable`).
 
-Concrete protocols (sumcheck, zerocheck, …) will be built on top of these
-primitives inside this module; applications and compilations to succinct
-arguments belong to other modules.
+Concrete protocols (sumcheck and its product variant, §5) are built on top
+of these primitives inside this module; applications and compilations to
+succinct arguments belong to other modules — `vfhe.polycom` compiles the
+evaluation claims into commitment openings (§4).
 
 ## 2. Background: from IP to PIOP
 
@@ -89,8 +94,9 @@ statement:
 In an in-process IOP the `oracles` list holds the actual `MLE` objects — the
 same data an honest prover knows in full. The oracle *discipline* (the
 verifier only evaluates them at points, it never inspects representations) is
-enforced by convention for now; a commitment compiler can enforce it
-cryptographically later [BFS20].
+enforced by convention; compiling the oracle into a polynomial commitment
+enforces it cryptographically [BFS20] — registering
+`vfhe.polycom.BasefoldEval` for `Relation_Eval` does exactly that (§4).
 
 ## 4. The relation toolbox
 
@@ -290,9 +296,8 @@ uncheckable object):
 
 - `iop.prove(statement) -> Proof` runs the prover alone. Nothing blocks:
   every `challenge` is computed on the spot from the chain, and prove halves
-  only ever *write* to the transcript. (That invariant is now enforced —
-  reading with no counterparty raises instead of hanging, the failure mode
-  described in `workflow.md`.)
+  only ever *write* to the transcript — a prove half that tried to read
+  would have no counterparty, so the transcript raises instead of hanging.
 - `iop.verify(statement, proof) -> bool` runs the verifier alone against
   that object, on a *separate* IOP: proving and checking cannot share one,
   since each consumes a transcript. The checking side needs the statement,
@@ -467,7 +472,7 @@ the domain classes expose `|A|` themselves).
 Owns one execution of a protocol: the asyncio event loop, the coefficient
 `domain` (a `Ring` or `Field`, per §6), the `Transcript`, the two parties
 (the constructor instantiates `Prover` / `Verifier`, or subclasses passed as
-`prover=` / `verifier=` — e.g. a future Fiat–Shamir verifier), and the
+`prover=` / `verifier=` — e.g. the Fiat–Shamir verifier of §5), and the
 relation → protocol registry (§5). The asynchronous model exists because
 IOP messages have a *data-flow* structure: a prover message of round `i+1`
 depends on the verifier challenge of round `i`, but everything that does not
@@ -607,7 +612,7 @@ An opening (`MerklePath`) carries the sibling digests bottom-up and
 deliberately *not* the leaf index: the verifier checks the position it
 queried, never one the prover chose. Nothing in the file is PIOP-specific —
 it is here for want of a crypto-primitives module, and should move when one
-exists (like `MLE` moving to `vfhe.arith`, §1).
+exists (like `MLE` moving to `vfhe.arith`, §8).
 
 `Merkle` is a primitive, not a `Relation` or a `Protocol`, and that is a
 deliberate layering decision rather than an omission. The root is the
@@ -628,12 +633,11 @@ therefore lives inside the PCS's evaluation protocol
 ## 8. Roadmap
 
 1. **Prover kernel follow-ups**: the native Ring paths exist (§5); still
-   open are the multithreaded round kernels (the reference `sumCheck_mt`),
-   a general-`k` product kernel (native is `k = 2`), the omit-`g(1)`
-   message trick [Gru24, §3.1; DT24], and Field domains once the MLE layer
-   moves to `vfhe.arith`. The pure-Python fallbacks remain naive
-   (per-round hypercube re-enumeration) by design — they are the reference
-   semantics, not the fast path.
+   open are multithreaded round kernels, a general-`k` product kernel
+   (native is `k = 2`), the omit-`g(1)` message trick [Gru24, §3.1; DT24],
+   and Field domains once the MLE layer moves to `vfhe.arith`. The
+   pure-Python fallbacks remain naive (per-round hypercube re-enumeration)
+   by design — they are the reference semantics, not the fast path.
 2. **Zerocheck** (`Relation_Zero → Relation_Sum(Prod)` via `eq̃`): the
    dense `eq̃` table exists (`MLE.eq`); a lazy/virtual-polynomial
    form of `MLE` is still open.
@@ -647,25 +651,13 @@ therefore lives inside the PCS's evaluation protocol
    `vfhe.arith.Field` elements to satisfy the same `+`/`*` protocol plus a
    `sample_exceptional` alias (§6); native kernels for them are a separate
    step.
-6. ~~**Evaluation claims backed by a polynomial commitment scheme**~~ —
-   done: registering `vfhe.polycom.BasefoldEval` for `Relation_Eval`
-   replaces the terminal oracle query with a basefold opening argument
-   (commit separately, evaluate many times; the commitment rides the
-   statement's optional `commitment` field or is resolved from the
-   scheme's records), with codewords committed by Merkle root (§7) and
-   spot-checked at positions expanded from `challenge_bits`. A separate
-   `Relation_Open` and an `EvalToOpen` bridge existed briefly and were
-   folded back in: the bridge was a pure relabeling between two spellings
-   of the same relation.
-7. ~~**Fiat-Shamir**~~ — done (`fs.FS_Verifier`, `IOP(fiat_shamir=True)`,
-   §5): both samplers derived from the transcript's chained `state()`,
-   seeded with the root statement digest [DMWG23], plus the non-interactive
-   pair `IOP.prove -> Proof` / `IOP.verify(statement, proof)`. Still open:
-   a **canonical byte encoding** for proof messages (the prerequisite for
-   both a real proof *string* and the planned C verifier, §5), `digest()`
-   hooks for any new transcript value types, and a seeded arith-side
-   `sample_exceptional` to replace `fs.ring_exceptional_from_seed`.
-8. **A native non-interactive verifier**: port the FS verifier to C once
+6. **A canonical byte encoding for proof messages**: `element_digest`
+   hashes transcript values but does not serialize them, so a `Proof`
+   holds live Python objects rather than an argument *string*
+   [CY24, §4.1] (§5). With it come `digest()` hooks for any new transcript
+   value types, and a seeded arith-side `sample_exceptional` to replace
+   `fs.ring_exceptional_from_seed` (§5, §6).
+7. **A native non-interactive verifier**: port the FS verifier to C once
    the encoding above exists — the hot path is hashing and per-round
    coefficient arithmetic, and the Python design already constrains it to a
    single forward pass over the proof (§5).

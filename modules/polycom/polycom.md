@@ -2,6 +2,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.polycom — design notes
 
+> **Under development.** The code these notes describe is largely verified by
+> the test suite, but the notes themselves have not been reviewed yet and may
+> be inaccurate or out of date.
+
 How the module is derived from the polynomial-commitment literature.
 Bracketed keys refer to the [bibliography](#bibliography); the PIOP
 machinery this module builds on is documented in `modules/piop/piop.md`.
@@ -41,21 +45,23 @@ compiler [BCS16]. So `commit` returns `(BasefoldCommitment, BasefoldOpening)`
 — a root, and the prover data (the codeword and its tree) that every later
 evaluation proof reuses. Two consequences worth stating:
 
-- The commitment is **succinct**: one digest, whatever `n_d` is. It was
-  previously the whole codeword, readable only under an oracle-discipline
-  convention.
-- Binding becomes **computational** (collision resistance) layered on the
-  code-distance argument, where the oracle-model version was
+- The commitment is **succinct**: one digest, whatever `n_d` is — no
+  oracle-discipline convention needed to keep the verifier from reading the
+  codeword it cannot have.
+- Binding is **computational** (collision resistance) layered on the
+  code-distance argument, where the oracle-model version is
   information-theoretic; [ZCF24, Thm. 4] reduces one to the other. The
   `soundness_error` methods still report only the information-theoretic
   part, and say so.
 
-Fiat-Shamir is done, and it needed nothing from this module: `fs.FS_Verifier`
+Fiat-Shamir needs nothing from this module: `fs.FS_Verifier`
 (piop.md §5) derives `challenge` and `challenge_bits` from the transcript
 chain and seeds it with σ₀ = ρ(x), which binds the commitment because the
 commitment is a statement field. No message below changes — the same
 `BasefoldEval` runs interactively under `iop.run` and non-interactively
-under `iop.prove` / `iop.verify`.
+under `iop.prove` / `iop.verify`: the prover alone emits a `Proof`, and a
+separate IOP holding no witnesses, codewords or trees checks it — the
+BCS-compiled argument [BCS16] (piop.md §5).
 
 ## 2. The foldable code (`code.py`, `c/src/rscode.c`)
 
@@ -83,12 +89,11 @@ the same map, re-indexed.
 `FoldableRS` instantiates the family so that **every level is a
 Reed-Solomon code** — the FRI folding structure [BBHR18], rather than
 [ZCF24]'s random twists — and gets the transform from **arith's negacyclic
-NTT**, via the `rs_*` C kernels (`c/src/rscode.c`), following the structure
-of the reference implementation: one `NTT_proc` per (level, RNS prime),
-and per (prime, coefficient slot) column a gather, zero-pad, `ntt_forward`,
-scatter. This keeps the code deterministic and its distance exact
-(`1 - k/n + 1/n` per level) instead of probabilistic, and reuses the
-library's tuned kernels rather than a hand-rolled FFT.
+NTT**, via the `rs_*` C kernels (`c/src/rscode.c`): one `NTT_proc` per
+(level, RNS prime), and per (prime, coefficient slot) column a gather,
+zero-pad, `ntt_forward`, scatter. This keeps the code deterministic and its
+distance exact (`1 - k/n + 1/n` per level) instead of probabilistic, and
+reuses the library's tuned kernels rather than a hand-rolled FFT.
 
 The layout follows from what `ntt_forward` computes. With `psi` the
 `2n`-th root of unity `ntt_new_proc` picks, position `p` of a length-`n`
@@ -138,7 +143,7 @@ Three conventions to keep in mind:
   every level gets encoded, `n_0` included. Both are checked in the
   constructor.
 
-`decode` is the reference's other half: the inverse transform plus the
+`decode` is the encoder's other half: the inverse transform plus the
 degree check (coefficients above the dimension must vanish) that decides
 whether a vector is in the code. The evaluation protocol does not need it
 — the verifier *computes* the level-0 codeword rather than decoding one —
@@ -195,12 +200,14 @@ with a depth-`d` code (`k_d = 2^n`, `kappa = n - d` base variables):
    by the bound-variable eq~ factor), and computes the level-0 codeword
    `Enc_0(coefficients(h0))` itself — a codeword by construction, held in
    full, and therefore needing no tree.
-3. **Query phase** (new with the Merkle layer, and the one real change to
-   the message flow): the verifier can no longer read a committed vector,
-   so the positions come from a *published* bit-string challenge
+3. **Query phase** — the one place committing the codewords changes the
+   message flow: the verifier cannot read a committed vector, so the
+   positions come from a *published* bit-string challenge
    (`Verifier.challenge_bits`, drawn after `h0`), which both parties expand
    identically with `BasefoldEval.query_positions` — the raw coins are the
-   verifier's, their shape is the protocol's. The expansion hashes the seed
+   verifier's, their shape is the protocol's; under Fiat-Shamir the coins
+   are derived from the transcript chain (piop.md §5), changing nothing in
+   the expansion. The expansion hashes the seed
    in counter mode (BLAKE3, the tree's own hash; the ranges are powers of
    two, so masking is unbiased) and **rejection-samples the positions so
    their projections to the level-0 codeword are pairwise distinct**: two
@@ -228,38 +235,26 @@ size (`BasefoldEval.soundness_error`).
 `Relation_Eval` claims carrying oracles, and `BasefoldEval` *is* the
 compiler step of [CHMMVW20] ("queries become opening claims") for them —
 it resolves the commitment from `scheme.commitments` and proves against
-it, no bridge relation or extra DAG level. (An `EvalToOpen` protocol
-reducing `Relation_Eval -> Relation_Open` existed briefly; it was a pure
-relabeling — no messages, no soundness cost — and was folded back in.)
+it, no bridge relation or extra DAG level: a reduction from
+`Relation_Eval` to a separate "open" relation would be a pure relabeling —
+no messages, no soundness cost.
 The full compiled chain is `Relation_Sum -> Sumcheck -> Relation_Eval ->
-BasefoldEval`, with `scheme.commit(f)` run *before* the IOP — so the
-commitment precedes every challenge that fixes the evaluation point,
-resolving the ordering caveat the earlier commit-inside-prove design had
-under Fiat-Shamir.
+BasefoldEval`, with `scheme.commit(f)` run *before* the IOP, so under
+Fiat-Shamir the commitment precedes every challenge that fixes the
+evaluation point.
 
 ## 4. Roadmap
 
-1. ~~**Merkle vector commitments**~~ — done: roots commit the codewords,
-   the codeword and tree live in the `BasefoldOpening` under
-   `prover.witnesses[commitment]`, and spot checks carry authentication
-   paths over pair leaves. The **Fiat-Shamir** layer above it is done too
-   (piop.md §5): with `IOP(fiat_shamir=True)` the run collapses to a single
-   non-interactive `Proof`, produced by `iop.prove(statement)` and checked
-   by a separate `iop.verify(statement, proof)` that holds no witnesses.
-2. **Batched openings**: M evaluation claims at a common point batch into
+1. **Batched openings**: M evaluation claims at a common point batch into
    one basefold run on a random linear combination (an `M -> 1` folding
    reduction; `batching = True` on `BasefoldEval` itself, whose driver
    support already exists), and different-point claims reduce to
    common-point ones by sumcheck.
-3. **C kernel for the fold** (`fold_at` is still per-position Python over
+2. **C kernel for the fold** (`fold_at` is still per-position Python over
    `Polynomial`, one `Polynomial * list` scaling per entry); the encoder
    and decoder are native already. Multithreading the per-prime,
    per-coefficient-slot columns of `rs_encode` is the other easy win —
    they are independent transforms.
-4. ~~**Query derandomization under Fiat-Shamir**~~ — done: `challenge_bits`
-   comes from the transcript chain under `FS_Verifier`, and
-   `query_positions` expands it exactly as before, so both parties still
-   agree on the positions with no protocol change.
 
 ## Bibliography
 

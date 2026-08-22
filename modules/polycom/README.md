@@ -2,6 +2,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.polycom
 
+> **Under development.** The code is largely verified by the test suite, but
+> the documentation text — this file and [polycom.md](polycom.md) — has not
+> been reviewed yet and may be inaccurate or out of date.
+
 Polynomial commitment schemes for the multilinear oracles of `vfhe.piop`.
 The architecture and its derivation from the literature are documented in
 [polycom.md](polycom.md).

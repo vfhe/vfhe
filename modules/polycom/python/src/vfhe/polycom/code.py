@@ -6,10 +6,10 @@ The code is *interleaved*: it acts on a vector of ring elements
 coefficient-slot-wise and per RNS prime, so each (prime, coefficient slot)
 pair carries an independent RS codeword over Z_p. The transform is arith's
 negacyclic NTT of the codeword length, applied by the `rs_*` C kernels
-(`polycom/c/src/rscode.c`, following the reference implementation): with psi
-the 2n-th root of unity `ntt_new_proc` picks, position p of a length-n
-codeword holds P(psi^(2*brv(p)+1)), where brv reverses the log2(n) index
-bits — `ntt_forward` is CT_NR, natural in, bit-reversed out.
+(`polycom/c/src/rscode.c`): with psi the 2n-th root of unity `ntt_new_proc`
+picks, position p of a length-n codeword holds P(psi^(2*brv(p)+1)), where
+brv reverses the log2(n) index bits — `ntt_forward` is CT_NR, natural in,
+bit-reversed out.
 
 That layout is foldable in the basefold sense [ZCF24, Def. 3.2] with every
 level an RS code (the FRI folding structure), and the bit-reversal puts the
