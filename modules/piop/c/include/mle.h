@@ -18,6 +18,18 @@ extern "C"
                               uint64_t size);
     void mle_dense_poly_scale_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t scale,
                                      uint64_t size);
+    // Variable binding, one entry point per pair layout: adjacent entries for
+    // the LSB variable (pairs), the two table halves for the MSB variable
+    // (halves), and stride-computed indices for any position (the generic
+    // fallback). `size` is the output (folded) table size, 2^(num_vars - 1).
+    void mle_dense_poly_evaluate_pairs(RNS_Polynomial *out, RNS_Polynomial *in,
+                                       RNS_Polynomial a, uint64_t size);
+    void mle_dense_poly_evaluate_pairs_scalar(RNS_Polynomial *out, RNS_Polynomial *in,
+                                              uint64_t a, uint64_t size);
+    void mle_dense_poly_evaluate_halves(RNS_Polynomial *out, RNS_Polynomial *in,
+                                        RNS_Polynomial a, uint64_t size);
+    void mle_dense_poly_evaluate_halves_scalar(RNS_Polynomial *out, RNS_Polynomial *in,
+                                               uint64_t a, uint64_t size);
     void mle_dense_poly_evaluate(RNS_Polynomial *out, RNS_Polynomial *in, RNS_Polynomial a,
                                  uint64_t num_vars, uint64_t eval_var_idx);
     void mle_dense_poly_evaluate_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t a,

@@ -42,6 +42,85 @@ void mle_dense_poly_scale_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uint64
     }
 }
 
+// Binding one variable folds table pairs as out = lo + a * (hi - lo). The
+// entry points below only differ in where the pair (lo, hi) sits: adjacent
+// entries for the LSB variable (pairs), the two table halves for the MSB
+// variable (halves), and stride-computed indices for any variable in between
+// (the generic fallback). The Python layer picks by the variable's position.
+
+static void mle_dense_poly_bind(RNS_Polynomial out, RNS_Polynomial lo, RNS_Polynomial hi,
+                                RNS_Polynomial a, RNS_Polynomial tmp, RNS_Polynomial tmp2)
+{
+    polynomial_sub_RNS_polynomial(tmp, hi, lo);
+    polynomial_mul_RNS_polynomial(tmp2, a, tmp);
+    polynomial_add_RNS_polynomial(out, lo, tmp2);
+}
+
+static void mle_dense_poly_bind_scalar(RNS_Polynomial out, RNS_Polynomial lo,
+                                       RNS_Polynomial hi, uint64_t a, RNS_Polynomial tmp,
+                                       RNS_Polynomial tmp2)
+{
+    polynomial_sub_RNS_polynomial(tmp, hi, lo);
+    polynomial_scale_RNS_polynomial(tmp2, tmp, a);
+    polynomial_add_RNS_polynomial(out, lo, tmp2);
+}
+
+void mle_dense_poly_evaluate_pairs(RNS_Polynomial *out, RNS_Polynomial *in, RNS_Polynomial a,
+                                   uint64_t size)
+{
+    incNTT ntt = in[0]->ntt;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    for (uint64_t i = 0; i < size; i++)
+    {
+        mle_dense_poly_bind(out[i], in[2 * i], in[2 * i + 1], a, tmp, tmp2);
+    }
+    free_RNS_polynomial(tmp);
+    free_RNS_polynomial(tmp2);
+}
+
+void mle_dense_poly_evaluate_pairs_scalar(RNS_Polynomial *out, RNS_Polynomial *in,
+                                          uint64_t a, uint64_t size)
+{
+    incNTT ntt = in[0]->ntt;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    for (uint64_t i = 0; i < size; i++)
+    {
+        mle_dense_poly_bind_scalar(out[i], in[2 * i], in[2 * i + 1], a, tmp, tmp2);
+    }
+    free_RNS_polynomial(tmp);
+    free_RNS_polynomial(tmp2);
+}
+
+void mle_dense_poly_evaluate_halves(RNS_Polynomial *out, RNS_Polynomial *in,
+                                    RNS_Polynomial a, uint64_t size)
+{
+    incNTT ntt = in[0]->ntt;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    for (uint64_t i = 0; i < size; i++)
+    {
+        mle_dense_poly_bind(out[i], in[i], in[i + size], a, tmp, tmp2);
+    }
+    free_RNS_polynomial(tmp);
+    free_RNS_polynomial(tmp2);
+}
+
+void mle_dense_poly_evaluate_halves_scalar(RNS_Polynomial *out, RNS_Polynomial *in,
+                                           uint64_t a, uint64_t size)
+{
+    incNTT ntt = in[0]->ntt;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    for (uint64_t i = 0; i < size; i++)
+    {
+        mle_dense_poly_bind_scalar(out[i], in[i], in[i + size], a, tmp, tmp2);
+    }
+    free_RNS_polynomial(tmp);
+    free_RNS_polynomial(tmp2);
+}
+
 void mle_dense_poly_evaluate(RNS_Polynomial *out, RNS_Polynomial *in, RNS_Polynomial a,
                              uint64_t num_vars, uint64_t eval_var_idx)
 {
@@ -62,9 +141,7 @@ void mle_dense_poly_evaluate(RNS_Polynomial *out, RNS_Polynomial *in, RNS_Polyno
         uint64_t idx0 = i_low + (i_high << (eval_var_idx + 1));
         uint64_t idx1 = idx0 + stride;
 
-        polynomial_sub_RNS_polynomial(temp, in[idx1], in[idx0]);
-        polynomial_mul_RNS_polynomial(temp2, a, temp);
-        polynomial_add_RNS_polynomial(out[i], in[idx0], temp2);
+        mle_dense_poly_bind(out[i], in[idx0], in[idx1], a, temp, temp2);
     }
 
     free_RNS_polynomial(temp);
@@ -91,9 +168,7 @@ void mle_dense_poly_evaluate_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uin
         uint64_t idx0 = i_low + (i_high << (eval_var_idx + 1));
         uint64_t idx1 = idx0 + stride;
 
-        polynomial_sub_RNS_polynomial(temp, in[idx1], in[idx0]);
-        polynomial_scale_RNS_polynomial(temp2, temp, a);
-        polynomial_add_RNS_polynomial(out[i], in[idx0], temp2);
+        mle_dense_poly_bind_scalar(out[i], in[idx0], in[idx1], a, temp, temp2);
     }
 
     free_RNS_polynomial(temp);

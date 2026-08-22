@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
+#include "rscode.h"
+
+#include <string.h>
+
+#include "misc.h"
+
+// -------------------------------------------------------------
+// Reed-Solomon (foldable) code over R_q, per RNS prime
+// -------------------------------------------------------------
+// The transform itself is arith's negacyclic NTT of the codeword length:
+// gather one (prime, coefficient slot) column of the message vector into a
+// scratch buffer, zero-pad it to the codeword length, transform, scatter the
+// result back into the same column of the output vector. See rscode.h for the
+// evaluation-point layout the fold depends on.
+
+NTT_proc *rs_new_procs(incNTT ntt, uint64_t rns_mask, uint64_t size)
+{
+    NTT_proc *procs = (NTT_proc *)safe_malloc(sizeof(NTT_proc) * ntt->l);
+    for (uint64_t i = 0; i < ntt->l; i++)
+    {
+        procs[i] = (rns_mask & (1ULL << i)) ? ntt_new_proc(size, ntt->ntt[i]->q) : NULL;
+    }
+    return procs;
+}
+
+void rs_free_procs(NTT_proc *procs, uint64_t count)
+{
+    for (uint64_t i = 0; i < count; i++)
+    {
+        if (procs[i] != NULL)
+            ntt_free_proc(procs[i]);
+    }
+    free(procs);
+}
+
+uint64_t rs_procs_root(NTT_proc *procs, uint64_t index)
+{
+    return procs[index] == NULL ? 0 : procs[index]->root_of_unity;
+}
+
+void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
+               NTT_proc *procs)
+{
+    incNTT ntt = in[0]->ntt;
+    const uint64_t N = ntt->N;
+    const uint64_t rns_mask = in[0]->rns_mask;
+    uint64_t *codeword = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * size);
+
+    for (uint64_t k = 0; k < size; k++)
+    {
+        out[k]->rns_mask = rns_mask;
+    }
+
+    for (uint64_t i = 0; i < ntt->l; i++)
+    {
+        if (!(rns_mask & (1ULL << i)))
+            continue;
+        for (uint64_t j = 0; j < N; j++)
+        {
+            memset(&codeword[degree], 0, sizeof(uint64_t) * (size - degree));
+            for (uint64_t k = 0; k < degree; k++)
+            {
+                codeword[k] = in[k]->coeffs[i][j];
+            }
+            ntt_forward(codeword, codeword, procs[i]);
+            for (uint64_t k = 0; k < size; k++)
+            {
+                out[k]->coeffs[i][j] = codeword[k];
+            }
+        }
+    }
+
+    free(codeword);
+}
+
+int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
+              NTT_proc *procs)
+{
+    incNTT ntt = in[0]->ntt;
+    const uint64_t N = ntt->N;
+    const uint64_t rns_mask = in[0]->rns_mask;
+    uint64_t *codeword = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * size);
+    int is_codeword = 1;
+
+    if (out != NULL)
+    {
+        for (uint64_t k = 0; k < degree; k++)
+        {
+            out[k]->rns_mask = rns_mask;
+        }
+    }
+
+    for (uint64_t i = 0; i < ntt->l && is_codeword; i++)
+    {
+        if (!(rns_mask & (1ULL << i)))
+            continue;
+        for (uint64_t j = 0; j < N && is_codeword; j++)
+        {
+            for (uint64_t k = 0; k < size; k++)
+            {
+                codeword[k] = in[k]->coeffs[i][j];
+            }
+            ntt_reverse(codeword, codeword, procs[i]);
+            if (out != NULL)
+            {
+                for (uint64_t k = 0; k < degree; k++)
+                {
+                    out[k]->coeffs[i][j] = codeword[k];
+                }
+            }
+            // The degree check: a codeword of this code inverts to a message
+            // that was zero-padded above `degree`.
+            for (uint64_t k = degree; k < size; k++)
+            {
+                if (codeword[k] != 0)
+                {
+                    is_codeword = 0;
+                    break;
+                }
+            }
+        }
+    }
+
+    free(codeword);
+    return is_codeword;
+}

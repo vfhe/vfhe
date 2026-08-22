@@ -74,6 +74,7 @@ subdir('modules/fhe')
 subdir('modules/misc')
 subdir('modules/mlwe')
 subdir('modules/piop')
+subdir('modules/polycom')
 
 # --- The CPU probe ------------------------------------------------------------
 
