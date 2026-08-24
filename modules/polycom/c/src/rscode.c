@@ -17,8 +17,9 @@
 
 NTT_proc *rs_new_procs(incNTT ntt, uint64_t rns_mask, uint64_t size)
 {
-    NTT_proc *procs = (NTT_proc *)safe_malloc(sizeof(NTT_proc) * ntt->l);
-    for (uint64_t i = 0; i < ntt->l; i++)
+    const uint64_t rows = (uint64_t)(rns_mask_get_last_active_index(rns_mask) + 1);
+    NTT_proc *procs = (NTT_proc *)safe_malloc(sizeof(NTT_proc) * rows);
+    for (uint64_t i = 0; i < rows; i++)
     {
         procs[i] = (rns_mask & (1ULL << i)) ? ntt_new_proc(size, ntt->ntt[i]->q) : NULL;
     }

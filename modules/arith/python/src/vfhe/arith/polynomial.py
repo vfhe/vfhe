@@ -87,7 +87,29 @@ class Ring:
         self.NTT = NTT_processor_instance.incNTTs[(self.N, self.split_degree)]
         self.mask = sum(1 << idx for idx in self.prime_indices)
 
-    def _ntt_l(self):
+    @property
+    def rns_rows(self) -> int:
+        """Rows a native per-prime array must have to be indexed by this ring.
+
+        The native ``incNTT`` is shared process-wide per ``(N, split_degree)``
+        and a ring introducing a new prime extends it in place, so its ``l``
+        grows under every ring already built on it. Size buffers by this
+        instead: it is one past this ring's highest prime index, derived from
+        ``mask``, which never changes -- indices are handed out append-only, so
+        a ring's own primes keep theirs forever. The C kernels only ever touch
+        rows selected by the mask, so a shorter-than-``l`` array is safe, and
+        unlike ``_ntt_l()`` it is safe to remember: freeing with a re-read
+        ``l`` walks off the end of the allocation.
+        """
+        return self.mask.bit_length()
+
+    def _ntt_l(self) -> int:
+        """The shared incNTT's *current* prime count -- a live read.
+
+        This grows whenever any ring of the same ``(N, split_degree)`` is built
+        with a prime this process has not seen. Never cache it, and never size
+        an allocation with it; use `rns_rows`.
+        """
         return ffi.cast("incNTT", self.NTT).l
 
     def get_rou_matrix(self):
@@ -131,8 +153,7 @@ class Ring:
             ]
         )
         if return_pointer:
-            ntt_len = self._ntt_l()
-            delta_arr = [0] * ntt_len
+            delta_arr = [0] * self.rns_rows
             for k, idx in enumerate(self.prime_indices):
                 delta_arr[idx] = delta_big_int % self.primes[k]
             return ffi.new("uint64_t[]", delta_arr)
@@ -175,8 +196,7 @@ class Ring:
         return self.lib.polynomial_new_RNS_polynomial(self.N, self.mask, self.NTT)
 
     def scalar_array(self, value):
-        ntt_len = self._ntt_l()
-        scale_arr = [0] * ntt_len
+        scale_arr = [0] * self.rns_rows
         if isinstance(value, int):
             for k, idx in enumerate(self.prime_indices):
                 scale_arr[idx] = value % self.primes[k]
@@ -220,8 +240,7 @@ class Polynomial:
         return self
 
     def from_bigint_array(self, array: list):
-        ntt_len = self.ring._ntt_l()
-        rows = [ffi.NULL] * ntt_len
+        rows = [ffi.NULL] * self.ring.rns_rows
         keep = []  # keep row buffers alive across the (copying) C call
         for k, idx in enumerate(self.ring.prime_indices):
             p = self.ring.primes[k]
@@ -299,11 +318,28 @@ class Polynomial:
         self.ring.lib.polynomial_RNS_to_RNSc(self.obj, self.obj)
         self.repr = repr.coeff
 
-    def to_repr(self, repr):
-        if repr == repr.ntt:
+    def to_repr(self, target) -> None:
+        if target == repr.ntt:
             self.to_NTT()
-        if repr == repr.coeff:
+        elif target == repr.coeff:
             self.to_coeff()
+        else:
+            raise ValueError(f"cannot convert to {target}: not a data representation")
+
+    def _viewed_as(self, target) -> Polynomial:
+        """``self`` in `target` representation, converting a *copy* if needed.
+
+        Every reader goes through this, so that looking at a polynomial's value
+        never changes the representation of the object being read. It used to:
+        one `get_polynomial()` on a table entry left the table in mixed
+        representations, and the next C kernel over it folded the wrong data and
+        returned silent garbage.
+        """
+        if self.repr == target:
+            return self
+        view = self.copy()
+        view.to_repr(target)
+        return view
 
     def sample_uniform(self, ntt=True):
         self.ring.lib.polynomial_gen_random_RNSc_polynomial(self.obj)
@@ -399,30 +435,29 @@ class Polynomial:
 
     def __eq__(self, value) -> bool:
         if type(value) is int:
-            self.to_coeff()
             return all(all([value == i[0]] + [j == 0 for j in i[1:]]) for i in self)
         elif type(value) is list:
-            self.to_coeff()
             s_list = list(self)
             return all(
                 all([value[i] == s_list[i][0]] + [j == 0 for j in s_list[i][1:]])
                 for i in range(self.ring.ell)
             )
         else:
-            self.to_repr(value.repr)
-            return bool(self.ring.lib.polynomial_eq(self.obj, value.obj))
+            view = self._viewed_as(value.repr)
+            return bool(self.ring.lib.polynomial_eq(view.obj, value.obj))
 
     def __repr__(self) -> str:
         return str(list(self))
 
     def get_hash_pointer(self):
-        self.to_NTT()
-        return self.ring.lib.polynomial_RNS_get_hash_p(self.obj)
+        # keep the view alive: it owns the buffer the call reads
+        view = self._viewed_as(repr.ntt)
+        return self.ring.lib.polynomial_RNS_get_hash_p(view.obj)
 
     def get_hash(self):
-        self.to_NTT()
+        view = self._viewed_as(repr.ntt)
         result = ffi.new("uint64_t[4]")
-        self.ring.lib.polynomial_RNS_get_hash(result, self.obj)
+        self.ring.lib.polynomial_RNS_get_hash(result, view.obj)
         return [result[i] for i in range(4)]
 
     def __hash__(self):
@@ -432,14 +467,13 @@ class Polynomial:
 
     # for compatibility with list, not an efficient iterator
     def __iter__(self):
-        self.to_coeff()
-        out = self.get_coeff_matrix(repr=repr.coeff)
-        return iter(out)
+        return iter(self.get_coeff_matrix(repr=repr.coeff))
 
     def get_coeff_matrix(self, repr=repr.coeff):
-        if self.repr != repr:
-            self.to_repr(repr)
-        p = ffi.cast("RNS_Polynomial", self.obj)
+        # `view` must stay referenced: `p` points into the buffer it owns, and a
+        # temporary would be freed before the rows below are read.
+        view = self._viewed_as(repr)
+        p = ffi.cast("RNS_Polynomial", view.obj)
         values = []
         for idx in self.ring.prime_indices:
             row = p.coeffs[idx]
@@ -470,7 +504,6 @@ class Polynomial:
 
     # returns the list of coefficients of a Polynomial element
     def get_polynomial(self, signed: bool = False) -> list:
-        self.to_coeff()
         rns = list(self)
         if self.ring.ell == 1:
             unsigned_res = list(itertools.chain.from_iterable(rns))
@@ -526,8 +559,6 @@ class Polynomial:
             res = Polynomial(self.ring.intersec(other.ring))
             res.multiply(self, other)
         elif type(other) is int:
-            if other == 0:
-                return 0  # type: ignore
             if other == 1:
                 return self.copy()
             res = Polynomial(self.ring)
@@ -559,8 +590,6 @@ class Polynomial:
             other.to_NTT()
             self.ring.lib.polynomial_multo_RNS_polynomial(self.obj, other.obj)
         elif type(other) is int:
-            if other == 0:
-                return 0
             if other == 1:
                 return self
             assert other < 2**self.ring.smallest_prime  # large scaling not implemented
@@ -569,18 +598,29 @@ class Polynomial:
             raise NotImplementedError(f"cannot scale by {type(other).__name__}")
         return self
 
+    def _add_integer(self, out: Polynomial, other: int) -> Polynomial:
+        """``out = self + other``, in whichever representation ``self`` is in.
+
+        ``out`` may be ``self`` (the C kernels take out == in). The kernels read
+        the addend as a two's-complement int64, so negatives work and
+        subtraction is addition of the negation -- no separate kernel. Hence the
+        int64 range check and the wrap into unsigned that cffi's uint64_t
+        parameter needs.
+        """
+        assert -(2**63) <= other < 2**63, f"integer operand {other} exceeds int64"
+        wrapped = other & 0xFFFFFFFFFFFFFFFF
+        if self.repr == repr.coeff:
+            self.ring.lib.polynomial_RNSc_add_integer(out.obj, self.obj, wrapped)
+        else:
+            self.ring.lib.polynomial_RNS_add_integer(out.obj, self.obj, wrapped)
+        out.repr = self.repr
+        return out
+
     def __add__(self, other):
         if type(other) is int:
             if other == 0:
                 return self.copy()
-            else:
-                res = Polynomial(self.ring)
-                if self.repr == repr.coeff:
-                    self.ring.lib.polynomial_RNSc_add_integer(res.obj, self.obj, other)
-                else:
-                    self.ring.lib.polynomial_RNS_add_integer(res.obj, self.obj, other)
-                res.repr = self.repr
-                return res
+            return self._add_integer(Polynomial(self.ring), other)
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
@@ -592,8 +632,7 @@ class Polynomial:
         if type(other) is int:
             if other == 0:
                 return self
-            else:
-                raise NotImplementedError("nonzero int operand not supported")
+            return self._add_integer(self, other)
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
@@ -607,8 +646,7 @@ class Polynomial:
         if type(other) is int:
             if other == 0:
                 return self
-            else:
-                raise NotImplementedError("nonzero int operand not supported")
+            return self._add_integer(self, -other)
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
@@ -624,8 +662,7 @@ class Polynomial:
         if type(other) is int:
             if other == 0:
                 return self.copy()
-            else:
-                raise NotImplementedError("nonzero int operand not supported")
+            return self._add_integer(Polynomial(self.ring), -other)
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()

@@ -134,9 +134,6 @@ def test_parameter_validation():
     with pytest.raises(ValueError, match="N/split_degree"):
         # n_d = 2048 > 256: no root of unity of order 2 * n_d in the primes.
         FoldableRS(ring, k0=256, c=2, d=2)
-    with pytest.raises(ValueError, match="below 16"):
-        # arith's NTT kernels do not implement transforms shorter than that.
-        FoldableRS(ring, k0=2, c=4, d=2)
     code = _code(ring)
     with pytest.raises(ValueError, match="not k0"):
         code.encode([ring.random_element() for _ in range(6)])
@@ -144,26 +141,44 @@ def test_parameter_validation():
         code.encode([ring.random_element() for _ in range(2 * code.k_d)])
 
 
+def test_short_codeword_round_trips():
+    """A base codeword below one AVX512 lane group still encodes and folds.
+
+    n0 = 8 puts every level's transform on arith's scalar NTT path, and the
+    level-0 fold on element-wise kernels shorter than one vector.
+    """
+    ring = _ring()
+    code = FoldableRS(ring, k0=2, c=4, d=2)  # n0 = 8, n_d = 32, k_d = 8
+    message = [ring.random_element() for _ in range(code.k_d)]
+    word = code.encode(message)
+    assert len(word) == code.n_d
+    assert code.decode(word) == (True, message)
+    for level in range(code.d, 0, -1):
+        word = code.fold(word, ring.random_exceptional(), level=level)
+    assert len(word) == code.n0
+    assert code.decode(word)[0]
+
+
 def test_procs_freed_with_their_allocation_length(monkeypatch):
     """A code may outlive an extension of the incNTT it was built against.
 
     The incNTT of an (N, split_degree) pair is shared process-wide, so a ring
     introducing a new prime extends it in place and every existing ring's
-    `_ntt_l()` grows. The proc arrays were sized by the old count, so freeing
-    them must use that count — reading the ring's current one walks off the
-    end of the array and corrupts the heap.
+    `_ntt_l()` grows. The proc arrays are sized by the ring's own mask, which
+    does not, and the free path must use that — following the shared count
+    walks off the end of the array and corrupts the heap.
     """
     # Own the (N, split_degree) key, so no other test's rings have already
     # extended this incNTT: the growth below has to be ours to observe.
     ring = Ring(512, prime_size=[49], split_degree=2)
     code = FoldableRS(ring, k0=4, c=4, d=2)
-    allocated_l = code._procs_l
+    allocated_l = ring.rns_rows
     assert allocated_l == ring._ntt_l()
 
     # A second ring over the same key, with a prime the first one lacks.
     Ring(512, prime_size=[49, 50], split_degree=2)
     assert ring._ntt_l() > allocated_l  # the shared count grew under `code`
-    assert code._procs_l == allocated_l  # but the recorded length did not
+    assert ring.rns_rows == allocated_l  # but the ring's own row count did not
 
     # The free path must pass the recorded length, not the ring's current one.
     freed: list[int] = []

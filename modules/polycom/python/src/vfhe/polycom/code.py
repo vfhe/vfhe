@@ -36,12 +36,6 @@ from vfhe.arith import Polynomial, Ring
 from vfhe.misc.libvfhe import lib
 from vfhe.piop.mle import handle_array, mark_ntt
 
-# The shortest transform arith's kernels implement: the vectorized paths are
-# guarded on `sub_n >= 16` (one AVX512 lane group per butterfly stage), and
-# shorter lengths read past the buffer. Every level of the code is encoded, so
-# the *base* length n0 is what has to clear the bar.
-_MIN_CODEWORD = 16
-
 
 def _bit_reverse(i: int, bits: int) -> int:
     """`i` with its low `bits` bits reversed — the index permutation
@@ -86,22 +80,12 @@ class FoldableRS:
                 f"codeword length {self.n_d} exceeds N/split_degree = {limit}: "
                 "the ring's primes carry no root of unity of order 2 * n_d"
             )
-        if self.n0 < _MIN_CODEWORD:
-            raise ValueError(
-                f"base codeword length n0 = c * k0 = {self.n0} is below "
-                f"{_MIN_CODEWORD}: arith's NTT kernels vectorize over that many "
-                "lanes and do not support shorter transforms"
-            )
-
         # One NTT-processor array per level (indexed by global RNS prime
         # index, matching RNS_Polynomial.coeffs), owned by this object.
-        # `rs_new_procs` sizes each array by the NTT's prime count *at this
-        # moment*, and that count is not stable: the incNTT of an
-        # (N, split_degree) pair is shared process-wide, so a later ring
-        # adding a prime extends it in place and `ring._ntt_l()` grows under
-        # us. The length is therefore recorded here and used to free — never
-        # re-read from the ring, which would free past the end of the array.
-        self._procs_l = ring._ntt_l()
+        # `rs_new_procs` sizes each array by `ring.rns_rows`, which is derived
+        # from the ring's own mask and so is stable for the object's lifetime —
+        # unlike the shared incNTT's prime count, which grows whenever another
+        # ring of the same (N, split_degree) introduces a prime.
         self._procs = [
             lib.rs_new_procs(ring.NTT, ring.mask, self.n0 << level)
             for level in range(d + 1)
@@ -143,7 +127,7 @@ class FoldableRS:
         # interpreter shutdown may already have torn the lib down
         with contextlib.suppress(Exception):
             for procs in self._procs:
-                lib.rs_free_procs(procs, self._procs_l)
+                lib.rs_free_procs(procs, self.ring.rns_rows)
 
     def level_of(self, message: list) -> int:
         """The code level a message of this length belongs to."""

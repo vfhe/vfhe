@@ -64,7 +64,9 @@ def mark_ntt(polys: list) -> None:
     too; but the fresh `Polynomial` wrappers they filled still carry the
     default `empty` flag. Without this, later arithmetic on the entries
     converts domains wrongly (`Polynomial.__mul__`'s `to_NTT()` would
-    transform already-transformed data and yield ~q-sized junk).
+    transform already-transformed data and yield ~q-sized junk). Stamp the
+    output rather than copying a source entry's flag, which may describe a
+    different representation than the kernel just wrote.
     """
     for p in polys:
         p.repr = repr.ntt
@@ -195,12 +197,13 @@ class MLE:
         """Put every entry in NTT (RNS) form, the representation the C
         kernels read; a no-op on a table of plain Python values.
 
-        Necessary because reading an entry's value (`== int`, iteration,
-        `get_polynomial()`) converts *that* entry to coefficient form in
-        place, so a table can end up holding a mix which the kernels would
-        silently fold as if it were uniform. Cheap when already normalized:
-        each entry's `to_NTT()` is then just a flag check. Provisional — it
-        belongs in arith, which should stop mutating representation on read.
+        The kernels read `coeffs` directly and fold the whole table as if it
+        were uniform, so a table holding a mix of representations would give
+        silent garbage; this establishes their precondition instead. Cheap when
+        the table is already normalized: each entry's `to_NTT()` is then just a
+        flag check. (Entries no longer *become* mixed just from being read --
+        arith's readers convert a copy -- but a table can still be assembled
+        from coefficient-form elements.)
         """
         if self.ring is None:
             return
