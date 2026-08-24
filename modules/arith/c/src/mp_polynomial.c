@@ -628,19 +628,19 @@ void mp_polynomial_mod_reduce(MPPolynomial out, MPScalar q, mp_vector_t *m, uint
 void mp_polynomial_to_RNSc(RNSc_Polynomial out, MPPolynomial in)
 {
     const uint64_t N = in->N, D = in->d;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (!(out->rns_mask & (1ULL << i)))
             continue;
-        NTT_proc proc = out->ntt->ntt[i];
-        const uint64_t w1 = proc->mp_w1, q = proc->q;
+        Modulus mod = out->base->mods[i];
+        const uint64_t w1 = mod->mp_w1, q = mod->q;
         for (uint64_t c = 0; c < N; c++)
         {
             uint64_t res = 0;
             for (int64_t j = (int64_t)D - 1; j >= 0; j--)
             {
-                res = mul_modq(res, w1, proc);
-                res = add_modq(res, modq((unsigned __int128)in->coeffs[j][c], proc), q);
+                res = mul_modq(res, w1, mod);
+                res = add_modq(res, modq((unsigned __int128)in->coeffs[j][c], mod), q);
             }
             out->coeffs[i][c] = res;
         }
@@ -651,7 +651,7 @@ void mp_polynomial_from_RNS(MPPolynomial out, RNS_Polynomial in, MPScalar *PW, M
                             mp_vector_t *m, uint64_t k)
 {
     mp_polynomial_int_sp_scale_mp(out, in->coeffs[0], PW[0]);
-    for (size_t i = 1; i < in->ntt->l; i++)
+    for (size_t i = 1; i < in->base->l; i++)
     {
         mp_polynomial_int_sp_scale_addto_mp(out, in->coeffs[i], PW[i]);
         if ((i & 0xFF) == 0)

@@ -115,14 +115,25 @@ uint64_t int_mod_switch(uint64_t in, uint64_t p, uint64_t q)
     return mod_switch(in, p, q);
 }
 
-NTT_proc *new_ntt_list(uint64_t *primes, uint64_t N, uint64_t l)
+Modulus *new_modulus_list(uint64_t *primes, uint64_t l)
 {
-    NTT_proc *ntt = (NTT_proc *)safe_malloc(sizeof(NTT_proc) * l);
+    Modulus *mods = (Modulus *)safe_malloc(sizeof(Modulus) * l);
     for (size_t i = 0; i < l; i++)
     {
-        ntt[i] = ntt_new_proc(N, primes[i]);
+        mods[i] = mod_new(primes[i]);
     }
-    return ntt;
+    return mods;
+}
+
+// The plans borrow `mods`, so the caller keeps owning it and must outlive them.
+NTT_Plan *new_ntt_plan_list(Modulus *mods, uint64_t N, uint64_t l)
+{
+    NTT_Plan *plans = (NTT_Plan *)safe_malloc(sizeof(NTT_Plan) * l);
+    for (size_t i = 0; i < l; i++)
+    {
+        plans[i] = ntt_new_plan(N, mods[i]);
+    }
+    return plans;
 }
 
 // Computes (Z_q[i](Q/q[i]))**-1, for i in [0,l)

@@ -7,8 +7,8 @@
 // two AVX512 lane groups (`sub_n >= 16`) and their twiddle tables are sized
 // `n / 16`, so below NTT_MIN_VECTOR_LEN nothing is precomputed and no stage
 // runs: the forward transform used to return its input untouched and the
-// inverse walked off the buffer. `ntt_new_proc` builds these tables instead for
-// such lengths, and ntt.c's dispatchers route to the kernels here. It is also
+// inverse walked off the buffer. `ntt_new_plan` builds these tables instead for
+// such lengths, and base.c's dispatchers route to the kernels here. It is also
 // the whole implementation the portable engine uses.
 //
 // Twiddle layout: one flat table of `n` powers of the root of unity in
@@ -59,8 +59,9 @@ void ntt_scalar_free_precompute(uint64_t **ws)
     }
 }
 
-void ntt_CT_NR_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc proc)
+void ntt_CT_NR_gen(uint64_t *a, uint64_t *ws, NTT_Plan plan)
 {
+    const uint64_t n = plan->n, q = plan->mod->q;
     size_t t = n;
     for (size_t m = 1; m < n; m <<= 1)
     {
@@ -73,7 +74,7 @@ void ntt_CT_NR_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc p
             for (size_t j = j1; j < j2; j++)
             {
                 uint64_t u = a[j];
-                uint64_t v = modq((unsigned __int128)a[j + t] * w, proc);
+                uint64_t v = modq((unsigned __int128)a[j + t] * w, plan->mod);
                 a[j] = (u + v);
                 if (a[j] >= q)
                     a[j] -= q;
@@ -85,8 +86,9 @@ void ntt_CT_NR_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc p
     }
 }
 
-void ntt_GS_RN_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc proc)
+void ntt_GS_RN_gen(uint64_t *a, uint64_t *ws, NTT_Plan plan)
 {
+    const uint64_t n = plan->n, q = plan->mod->q;
     size_t t = 1;
     for (size_t m = n; m > 1; m >>= 1)
     {
@@ -106,7 +108,7 @@ void ntt_GS_RN_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc p
                 uint64_t diff = (u + q - v);
                 if (diff >= q)
                     diff -= q;
-                a[j + t] = modq((unsigned __int128)diff * w, proc);
+                a[j + t] = modq((unsigned __int128)diff * w, plan->mod);
             }
         }
         t <<= 1;
@@ -116,6 +118,6 @@ void ntt_GS_RN_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc p
     uint64_t inv_n = inverse_mod(n, q);
     for (size_t i = 0; i < n; i++)
     {
-        a[i] = modq((unsigned __int128)a[i] * inv_n, proc);
+        a[i] = modq((unsigned __int128)a[i] * inv_n, plan->mod);
     }
 }

@@ -40,15 +40,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     cursor c = {data, size, 0};
 
-    /* The domain the suites cover: the SIMD kernels index n/16 vectors, so a
-     * smaller ring allocates none and the transform reads past it. */
+    /* The domain the suites cover. Shorter transforms are legal (they take
+     * arith's scalar path); these are the vectorized sizes worth fuzzing. */
     static const uint64_t Ns[4] = {64, 256, 1024, 4096};
     const uint64_t n = Ns[take_u8(&c) & 3];
     const uint64_t qbits = 20 + (take_u8(&c) % 43); /* 20..62 */
     const uint64_t q = next_special_prime((uint64_t)1 << qbits, n, true);
 
-    NTT_proc proc = ntt_new_proc(n, q);
-    if (!proc)
+    Modulus mod = mod_new(q);
+    NTT_Plan plan = ntt_new_plan(n, mod);
+    if (!plan)
         return 0;
 
     uint64_t *in = safe_aligned_malloc(n * sizeof(uint64_t));
@@ -56,8 +57,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     uint64_t *back = safe_aligned_malloc(n * sizeof(uint64_t));
     for (uint64_t i = 0; i < n; i++)
         in[i] = take_u64(&c) % q;
-    ntt_forward(fwd, in, proc);
-    ntt_reverse(back, fwd, proc);
+    ntt_forward(fwd, in, plan);
+    ntt_reverse(back, fwd, plan);
     for (uint64_t i = 0; i < n; i++)
         if (back[i] != in[i])
             abort(); /* NTT roundtrip must be the identity */
@@ -65,6 +66,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     free(in);
     free(fwd);
     free(back);
-    ntt_free_proc(proc);
+    ntt_free_plan(plan);
+    mod_free(mod);
     return 0;
 }

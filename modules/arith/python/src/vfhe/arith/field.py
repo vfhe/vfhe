@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import contextlib
+
 from vfhe.misc.libvfhe import ffi, lib
 
 
@@ -10,7 +12,8 @@ class Field:
         self.prime = prime
         self.w = w
         self.d = d
-        self.proc = lib.field_new_proc(prime)
+        # A Field is pure modular arithmetic, so the modulus is all it needs.
+        self.mod = lib.mod_new(prime)
 
         # Precompute constants
         self.zero = FieldElement(self, [0] * d)
@@ -18,12 +21,10 @@ class Field:
         self.two = FieldElement(self, [2] + [0] * (d - 1))
         self.inv_two = self.two.inverse()
 
-    def __del__(self):
-        if hasattr(self, "proc") and self.proc:
-            # lib.ntt_free_proc is mapped from free_proc, but wait,
-            # in arith.h: void ntt_free_proc(NTT_proc proc);
-            # in arith.cdef: we don't have ntt_free_proc?
-            lib.ntt_free_proc(self.proc)
+    def __del__(self) -> None:
+        if getattr(self, "mod", None):
+            with contextlib.suppress(Exception):  # lib may be torn down already
+                lib.mod_free(self.mod)
 
 
 class FieldElement:
@@ -76,7 +77,7 @@ class FieldElement:
             other.value,
             self.field.d,
             self.field.w,
-            self.field.proc,
+            self.field.mod,
         )
         return FieldElement(self.field, res_val)
 
@@ -91,14 +92,14 @@ class FieldElement:
             hi,
             self.field.d,
             self.field.w,
-            self.field.proc,
+            self.field.mod,
         )
         return FieldElement(self.field, res_val)
 
     def inverse(self) -> FieldElement:
         res_val = ffi.new("uint64_t[]", self.field.d)
         ret = lib.field_ext_inv(
-            res_val, self.value, self.field.d, self.field.w, self.field.proc
+            res_val, self.value, self.field.d, self.field.w, self.field.mod
         )
         if ret == 0:
             raise ValueError("Element not invertible")

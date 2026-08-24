@@ -26,16 +26,18 @@ extern "C"
 {
 #endif
 
-    typedef struct _NTT_proc
+    /* A modulus q together with everything needed to reduce modulo it: the
+       Barrett constants (k, m, m52), the IFMA split of m the 50-bit kernels
+       multiply with, and the 2^52 / 2^104 residues the multiprecision path
+       folds with. This is all the modular-arithmetic kernels need -- `modq`,
+       `mul_modq` and every `mod_eltwise_*` take one of these and nothing else.
+
+       The constants depend on the engine's `modq` (mod.c vs mod_portable.c),
+       so `mod_new` is defined next to it in each and is the single place they
+       are derived. */
+    typedef struct _Modulus
     {
-        uint64_t n;
         uint64_t q;
-        void **ws_fwd;
-        void **w_precon_fwd;
-        void **ws_inv;
-        void **w_precon_inv;
-        uint64_t root_of_unity;
-        uint64_t inv_root_of_unity;
         uint64_t k;
         uint64_t m;
         uint64_t m52;
@@ -43,17 +45,46 @@ extern "C"
         uint64_t ifma_prod_right_shift;
         uint64_t mp_w1;
         uint64_t mp_w2;
-    } *NTT_proc;
+    } *Modulus;
 
-    typedef struct _incNTT
+    Modulus mod_new(uint64_t q);
+    void mod_free(Modulus mod);
+
+    /* A negacyclic NTT of one length over one modulus: the twiddle tables
+       (whose layout is engine-specific -- hence `void **`) and the roots they
+       were built from.
+
+       `mod` is **borrowed**: whoever created the modulus owns it, and
+       `ntt_free_plan` leaves it alone. That lets several plans over the same
+       prime at different lengths -- which is exactly what polycom's per-level
+       codes are -- share one set of Barrett constants. */
+    typedef struct _NTT_Plan
     {
-        NTT_proc *ntt;
+        Modulus mod;
+        uint64_t n;
+        uint64_t root_of_unity;
+        uint64_t inv_root_of_unity;
+        void **ws_fwd;
+        void **w_precon_fwd;
+        void **ws_inv;
+        void **w_precon_inv;
+    } *NTT_Plan;
+
+    /* The incomplete NTT of R_q = Z_q[X]/(X^N+1) split into `split_degree`
+       blocks, over `l` RNS primes. Owns both arrays: `mods[i]` is the modulus
+       every kernel over prime i uses, and `plans[i]` is its length-N/split_degree
+       transform, borrowing `mods[i]`. Grows in place (rns_base_extend_with_primes)
+       -- see Ring.rns_rows on the Python side before sizing anything by `l`. */
+    typedef struct _RNS_Base
+    {
+        NTT_Plan *plans;
+        Modulus *mods;
         uint64_t split_degree;
         uint64_t **w;
         uint64_t N, l;
-    } *incNTT;
+    } *RNS_Base;
 
-    void incNTT_extend_with_primes(incNTT ntt, uint64_t *new_primes, uint64_t count);
+    void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t count);
 
     static inline uint64_t rns_mask_to_l(uint64_t mask)
     {
@@ -72,7 +103,7 @@ extern "C"
     typedef struct _RNS_Polynomial
     {
         uint64_t **coeffs;
-        incNTT ntt;
+        RNS_Base base;
         uint64_t rns_mask;
         uint64_t allocated_l;
     } *RNS_Polynomial;
@@ -81,7 +112,7 @@ extern "C"
     typedef struct _RNSc_Polynomial
     {
         uint64_t **coeffs;
-        incNTT ntt;
+        RNS_Base base;
         uint64_t rns_mask;
         uint64_t allocated_l;
     } *RNSc_Polynomial;
@@ -90,7 +121,7 @@ extern "C"
     {
         uint64_t **elements;
         uint64_t n, l;
-        NTT_proc *ntt;
+        Modulus *mods;
     } *ZqVector;
 
     typedef struct _IntPolynomial
@@ -98,13 +129,6 @@ extern "C"
         uint64_t *coeffs;
         uint64_t N;
     } *IntPolynomial;
-
-#ifdef __AVX512IFMA__
-    void ntt_CT_NR(__m512i *x, __m512i **ws, __m512i **w_precon, uint64_t n, uint64_t q,
-                   NTT_proc proc);
-    void ntt_GS_RN(__m512i *x, __m512i **ws, __m512i **w_precon, uint64_t n, uint64_t q,
-                   NTT_proc proc);
-#endif
 
 #if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
     void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, __m512i ***out_ws,
@@ -120,36 +144,36 @@ void ntt_precompute_inv(uint64_t n, uint64_t q, uint64_t inv_root_of_unity, uint
 void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
 #endif
 
-    void ntt_forward(uint64_t *out, uint64_t *in, NTT_proc proc);
-    void ntt_reverse(uint64_t *out, uint64_t *in, NTT_proc proc);
+    void ntt_forward(uint64_t *out, uint64_t *in, NTT_Plan plan);
+    void ntt_reverse(uint64_t *out, uint64_t *in, NTT_Plan plan);
 
     uint64_t add_modq(uint64_t a, uint64_t b, uint64_t q);
     uint64_t sub_modq(uint64_t a, uint64_t b, uint64_t q);
     uint64_t negate_modq(uint64_t a, uint64_t q);
-    uint64_t mul_modq(uint64_t a, uint64_t b, NTT_proc proc);
-    uint64_t modq(unsigned __int128 x, NTT_proc proc);
+    uint64_t mul_modq(uint64_t a, uint64_t b, Modulus mod);
+    uint64_t modq(unsigned __int128 x, Modulus mod);
 
-    void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
+    void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
     void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                               NTT_proc proc);
+                               Modulus mod);
     void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                               NTT_proc proc);
-    void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
-    void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
+                               Modulus mod);
+    void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
+    void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
     void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                                NTT_proc proc);
+                                Modulus mod);
     void mod_eltwise_sub_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                                NTT_proc proc);
-    void mod_eltwise_negate(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-    void mod_eltwise_add(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-    void mod_eltwise_sub(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-    void mod_eltwise_reduce(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-    void mod_eltwise_reduce_signed(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc);
+                                Modulus mod);
+    void mod_eltwise_negate(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+    void mod_eltwise_add(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+    void mod_eltwise_sub(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+    void mod_eltwise_reduce(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+    void mod_eltwise_reduce_signed(uint64_t *out, int64_t *in, uint64_t n, Modulus mod);
     void mod_reduce_array_mp(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                             NTT_proc proc);
+                             Modulus mod);
 
-    NTT_proc ntt_new_proc(uint64_t n, uint64_t q);
-    void ntt_free_proc(NTT_proc proc);
+    NTT_Plan ntt_new_plan(uint64_t n, Modulus mod);
+    void ntt_free_plan(NTT_Plan plan);
 
     uint64_t power_mod(uint64_t base, uint64_t exp, uint64_t mod);
     uint64_t inverse_mod(uint64_t a, uint64_t m);
@@ -159,22 +183,21 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     uint64_t next_special_prime(uint64_t x, uint64_t n, bool primitive);
 
     // field arithmetic
-    NTT_proc field_new_proc(uint64_t q);
     void field_ext_add(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q);
     void field_ext_sub(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q);
     void field_ext_neg(uint64_t *c, const uint64_t *a, uint64_t d, uint64_t q);
     void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t w,
-                       NTT_proc proc);
+                       Modulus mod);
     void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_t exp_hi,
-                       uint64_t d, uint64_t w, NTT_proc proc);
-    int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, NTT_proc proc);
+                       uint64_t d, uint64_t w, Modulus mod);
+    int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Modulus mod);
     void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len,
                                      uint64_t d, uint64_t mod);
     void field_hash_element(uint8_t *out, const uint64_t *a, uint64_t d);
     int field_ext_is_equal(const uint64_t *a, const uint64_t *b, uint64_t d);
     void field_base_conversion(uint64_t *out, const uint64_t *in, uint64_t source_component,
                                uint64_t target_component, uint64_t d, uint64_t poly_size,
-                               const uint64_t *w_i, NTT_proc proc);
+                               const uint64_t *w_i, Modulus mod);
 
     // complex polynomial
     double **load_rous_CT(double *rous_real, double *rous_imag, uint64_t size);
@@ -192,10 +215,10 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // polynomial
     IntPolynomial polynomial_new_int_polynomial(uint64_t N);
     IntPolynomial *polynomial_new_int_polynomial_array(uint64_t size, uint64_t N);
-    RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, incNTT ntt);
+    RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, RNS_Base base);
     void polynomial_RNS_zero(RNS_Polynomial p);
     RNS_Polynomial *polynomial_new_array_of_RNS_polynomials(uint64_t N, uint64_t rns_mask,
-                                                            uint64_t size, incNTT ntt);
+                                                            uint64_t size, RNS_Base base);
     void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in);
     void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out);
     void polynomial_mul_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2);
@@ -220,11 +243,11 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
         uint64_t **D_mod_p;
     } *RNS_BaseConversionParams;
 
-    RNS_BaseConversionParams init_base_conversion_params(incNTT ntt, uint64_t in_mask,
+    RNS_BaseConversionParams init_base_conversion_params(RNS_Base base, uint64_t in_mask,
                                                          uint64_t out_mask);
     void free_base_conversion_params(RNS_BaseConversionParams params);
 
-    void rns_compute_scaling_factors(uint64_t *delta_out, incNTT ntt, uint64_t in_mask,
+    void rns_compute_scaling_factors(uint64_t *delta_out, RNS_Base base, uint64_t in_mask,
                                      uint64_t out_mask);
     void polynomial_RNSc_scaled_lift(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t *delta);
     void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
@@ -249,7 +272,7 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p);
     uint64_t *polynomial_RNS_get_hash_p(RNS_Polynomial p);
     RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N,
-                                                        uint64_t rns_mask, incNTT ntt);
+                                                        uint64_t rns_mask, RNS_Base base);
     void free_RNS_polynomial_array(uint64_t size, RNS_Polynomial *p);
     void polynomial_scale_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t scale);
     void polynomial_scale_RNS_polynomial_RNS(RNS_Polynomial out, RNS_Polynomial in1,
@@ -279,7 +302,7 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void polynomial_copy_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in);
 
     // vector
-    ZqVector alloc_ZqVector(uint64_t n, NTT_proc *ntt, uint64_t l);
+    ZqVector alloc_ZqVector(uint64_t n, Modulus *mods, uint64_t l);
     void ZqVector_add(ZqVector out, ZqVector in1, ZqVector in2);
     void ZqVector_sub(ZqVector out, ZqVector in1, ZqVector in2);
     void ZqVector_scale(ZqVector out, ZqVector in1, uint64_t scale);

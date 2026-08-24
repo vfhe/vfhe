@@ -159,25 +159,25 @@ def test_short_codeword_round_trips():
     assert code.decode(word)[0]
 
 
-def test_procs_freed_with_their_allocation_length(monkeypatch):
-    """A code may outlive an extension of the incNTT it was built against.
+def test_plans_freed_with_their_allocation_length(monkeypatch):
+    """A code may outlive an extension of the RNS base it was built against.
 
-    The incNTT of an (N, split_degree) pair is shared process-wide, so a ring
+    The RNS base of an (N, split_degree) pair is shared process-wide, so a ring
     introducing a new prime extends it in place and every existing ring's
-    `_ntt_l()` grows. The proc arrays are sized by the ring's own mask, which
+    `_base_l()` grows. The plan arrays are sized by the ring's own mask, which
     does not, and the free path must use that — following the shared count
     walks off the end of the array and corrupts the heap.
     """
     # Own the (N, split_degree) key, so no other test's rings have already
-    # extended this incNTT: the growth below has to be ours to observe.
+    # extended this base: the growth below has to be ours to observe.
     ring = Ring(512, prime_size=[49], split_degree=2)
     code = FoldableRS(ring, k0=4, c=4, d=2)
     allocated_l = ring.rns_rows
-    assert allocated_l == ring._ntt_l()
+    assert allocated_l == ring._base_l()
 
     # A second ring over the same key, with a prime the first one lacks.
     Ring(512, prime_size=[49, 50], split_degree=2)
-    assert ring._ntt_l() > allocated_l  # the shared count grew under `code`
+    assert ring._base_l() > allocated_l  # the shared count grew under `code`
     assert ring.rns_rows == allocated_l  # but the ring's own row count did not
 
     # The free path must pass the recorded length, not the ring's current one.
@@ -188,9 +188,9 @@ def test_procs_freed_with_their_allocation_length(monkeypatch):
         def __getattr__(self, name):
             return getattr(module_lib, name)
 
-        def rs_free_procs(self, procs, count):
+        def rs_free_plans(self, plans, count):
             freed.append(count)
-            return module_lib.rs_free_procs(procs, count)
+            return module_lib.rs_free_plans(plans, count)
 
     monkeypatch.setattr(code_module, "lib", _RecordingLib())
     levels = code.d + 1

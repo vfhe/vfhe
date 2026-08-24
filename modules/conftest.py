@@ -61,10 +61,10 @@ def deterministic_prng():
 
 
 @pytest.fixture(autouse=True)
-def _reset_ntt_registry():  # pyright: ignore[reportUnusedFunction]
-    """Give every test a clean NTT prime pool.
+def _reset_rns_base_registry():  # pyright: ignore[reportUnusedFunction]
+    """Give every test a clean RNS base prime pool.
 
-    The incNTT prime pool is a process-global singleton keyed by
+    The RNS base prime pool is a process-global singleton keyed by
     (N, split_degree): unrelated ring families sharing those params accumulate
     primes in one growing pool, so a ring's RNS primes are only guaranteed to
     occupy contiguous indices from 0 when it is the first registered for its
@@ -73,13 +73,14 @@ def _reset_ntt_registry():  # pyright: ignore[reportUnusedFunction]
     as its own process; resetting the registry before every test reproduces
     that isolation so cross-file ordering can't leak state.
     """
-    from vfhe.arith.ntt import NTT_processor_instance as ntt
+    from vfhe.arith.rns_base import registry
 
+    current = registry()
     for cache in (
-        ntt.incNTTs,
-        ntt.primes,
-        ntt.prime_to_index,
-        ntt.conversion_params_cache,
+        current.bases,
+        current.primes,
+        current.prime_to_index,
+        current.conversion_params_cache,
     ):
         cache.clear()
     yield

@@ -16,9 +16,10 @@ extern "C"
     void array_mod_switch(uint64_t *out, uint64_t *in, uint64_t p, uint64_t q, uint64_t n);
     void array_mod_switch_from_2k(uint64_t *out, uint64_t *in, uint64_t p, uint64_t q, uint64_t n);
     uint64_t int_mod_switch(uint64_t in, uint64_t p, uint64_t q);
-    NTT_proc *new_ntt_list(uint64_t *primes, uint64_t N, uint64_t l);
-    incNTT new_incomplete_ntt_list(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l);
-    uint64_t **incNTT_get_rou_matrix(incNTT ntt);
+    Modulus *new_modulus_list(uint64_t *primes, uint64_t l);
+    NTT_Plan *new_ntt_plan_list(Modulus *mods, uint64_t N, uint64_t l);
+    RNS_Base new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l);
+    uint64_t **rns_base_get_rou_matrix(RNS_Base base);
     uint64_t double2int(double x);
     void compute_RNS_Qhat_array(uint64_t *out, uint64_t *p, uint64_t l);
     void array_additive_inverse_mod_switch(uint64_t *out, uint64_t *in, uint64_t p, uint64_t q,

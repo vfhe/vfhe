@@ -332,15 +332,15 @@ def test_integer_operands_are_symmetric(ring):
 
 
 # --------------------------------------------------------------------------
-# The shared incNTT
+# The shared RNS base
 # --------------------------------------------------------------------------
 
 
 def test_rns_rows_is_stable_when_the_incntt_grows():
-    """A ring's row count must not follow the shared incNTT's prime count.
+    """A ring's row count must not follow the shared RNS base's prime count.
 
-    The incNTT of an (N, split_degree) pair is process-global and grows in
-    place when a ring introduces a new prime, so `_ntt_l()` increases under
+    The RNS base of an (N, split_degree) pair is process-global and grows in
+    place when a ring introduces a new prime, so `_base_l()` increases under
     rings built earlier. Anything an allocation was sized with has to come
     from the ring's own mask instead: re-reading the live count and freeing
     with it walks off the end of the array.
@@ -348,10 +348,10 @@ def test_rns_rows_is_stable_when_the_incntt_grows():
     # Own the (N, split_degree) key so the growth below is ours to observe.
     first = Ring(64, prime_size=[30], split_degree=1)
     rows = first.rns_rows
-    assert rows == first._ntt_l() == 1
+    assert rows == first._base_l() == 1
 
     second = Ring(64, prime_size=[30, 31], split_degree=1)
-    assert first._ntt_l() == 2  # the shared count grew under `first`
+    assert first._base_l() == 2  # the shared count grew under `first`
     assert first.rns_rows == rows  # the ring's own row count did not
     assert second.rns_rows == 2
 
@@ -359,3 +359,32 @@ def test_rns_rows_is_stable_when_the_incntt_grows():
     a = first.random_element()
     assert (a - a) == 0
     assert len(first.scalar_array(3)) == rows
+
+
+def test_ring_follows_a_replaced_registry(monkeypatch):
+    """A `Ring` must resolve the RNS base registry at use, not at import.
+
+    A dynamic-extension reload cannot patch the registry's `lib` (an instance
+    attribute, unlike the module-level `lib`/`ffi` `update_cffi_references`
+    rewrites), so `_reload.reinit_rns_base` swaps the whole instance. A name
+    bound at import time would keep pointing at the retired one and go on
+    building RNS bases in the unloaded library.
+    """
+    from vfhe.arith import rns_base
+
+    retired = rns_base.registry()
+    monkeypatch.setattr(rns_base, "rns_base_registry", rns_base.RNS_Base_Registry())
+    fresh = rns_base.registry()
+    assert fresh is not retired
+
+    key = (32, 1)
+    assert key not in retired.bases  # nothing has claimed it yet
+    ring = Ring(32, prime_size=[30], split_degree=1)
+
+    # the ring registered with the current registry, not the retired one
+    assert key in fresh.bases
+    assert key not in retired.bases
+    assert ring.base == fresh.bases[key]
+    # and it is a working ring, not just a bookkeeping entry
+    a = ring.random_element()
+    assert (a - a) == 0

@@ -58,20 +58,17 @@ def reinit_libvfhe(new_ffi, new_lib):
 
 
 @register_reinitializer
-def reinit_ntt(_new_ffi, _new_lib):
-    """Update NTT processor instance and flush conversion cache."""
+def reinit_rns_base(_new_ffi, _new_lib):
+    """Replace the RNS base registry and flush its conversion cache."""
     try:
-        import vfhe.arith.ntt as ntt_mod
-        from vfhe.arith.ntt import NTT_Processor
+        import vfhe.arith.rns_base as rns_base_mod
+        from vfhe.arith.rns_base import RNS_Base_Registry
 
-        if (
-            hasattr(ntt_mod, "NTT_processor_instance")
-            and ntt_mod.NTT_processor_instance
-        ):
-            ntt_mod.NTT_processor_instance.cleanup()
-        ntt_mod.NTT_processor_instance = NTT_Processor()
+        if getattr(rns_base_mod, "rns_base_registry", None):
+            rns_base_mod.rns_base_registry.cleanup()
+        rns_base_mod.rns_base_registry = RNS_Base_Registry()
     except ImportError:
-        logger.debug("vfhe.arith not imported; skipping NTT reinitialization")
+        logger.debug("vfhe.arith not imported; skipping RNS base reinitialization")
 
 
 @register_reinitializer

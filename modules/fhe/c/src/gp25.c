@@ -68,16 +68,16 @@ static inline int pthread_barrier_wait(pthread_barrier_t *barrier)
 void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
                             RNS_MLWE **ksk, uint64_t ell, uint64_t special_primes)
 {
-    uint64_t N = p0[0]->b->ntt->N;
+    uint64_t N = p0[0]->b->base->N;
     uint64_t r = p0[0]->r;
     uint64_t mask = p0[0]->b->rns_mask;
-    incNTT ntt = p0[0]->b->ntt;
+    RNS_Base base = p0[0]->b->base;
 
     // Allocate p1 array of size in_N
     RNS_MLWE *p1 = (RNS_MLWE *)malloc(in_N * sizeof(RNS_MLWE));
     for (size_t i = 0; i < in_N; i++)
     {
-        p1[i] = mlwe_alloc_RNS_sample(N, r, mask, ntt);
+        p1[i] = mlwe_alloc_RNS_sample(N, r, mask, base);
     }
 
     RNS_MLWE *p[2] = {p0, p1};
@@ -189,16 +189,16 @@ void gp25_RGSW_monomial_mul_mt(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64
         num_threads = in_N;
     }
 
-    uint64_t N = p0[0]->b->ntt->N;
+    uint64_t N = p0[0]->b->base->N;
     uint64_t r = p0[0]->r;
     uint64_t mask = p0[0]->b->rns_mask;
-    incNTT ntt = p0[0]->b->ntt;
+    RNS_Base base = p0[0]->b->base;
 
     // Allocate p1 array of size in_N
     RNS_MLWE *p1 = (RNS_MLWE *)malloc(in_N * sizeof(RNS_MLWE));
     for (size_t i = 0; i < in_N; i++)
     {
-        p1[i] = mlwe_alloc_RNS_sample(N, r, mask, ntt);
+        p1[i] = mlwe_alloc_RNS_sample(N, r, mask, base);
     }
 
     pthread_barrier_t barrier;
@@ -273,12 +273,12 @@ static void *suba_worker(void *arg)
     const uint64_t N = A->N, twoN = 2 * N;
     const uint64_t r = A->p0[0]->r;
     const uint64_t mask = A->p0[0]->b->rns_mask;
-    incNTT ntt = A->p0[0]->b->ntt;
+    RNS_Base base = A->p0[0]->b->base;
 
-    RNSc_MLWE pax = mlwe_alloc_RNSc_sample(N, r, mask, ntt); /* p[k]*X^a (coeff)   */
-    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, ntt); /* pax*(X^m2a - 1)    */
-    RNS_MLWE ext = mlwe_alloc_RNS_sample(N, r, mask, ntt);   /* s_sign (X) tmp (NTT) */
-    RNS_MLWE pax_ntt = mlwe_alloc_RNS_sample(N, r, mask, ntt);
+    RNSc_MLWE pax = mlwe_alloc_RNSc_sample(N, r, mask, base); /* p[k]*X^a (coeff)   */
+    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, base); /* pax*(X^m2a - 1)    */
+    RNS_MLWE ext = mlwe_alloc_RNS_sample(N, r, mask, base);   /* s_sign (X) tmp (NTT) */
+    RNS_MLWE pax_ntt = mlwe_alloc_RNS_sample(N, r, mask, base);
 
     for (size_t k = A->start_k; k < A->end_k; k++)
     {

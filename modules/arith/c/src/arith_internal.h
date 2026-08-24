@@ -7,26 +7,26 @@
 
 // Size-generic scalar declarations (mod_scalar.c / ntt_scalar.c). Compiled into
 // every engine: the vectorized kernels below need n >= 8 (element-wise) or
-// n >= 16 (NTT) to do any work at all, so the dispatchers in mod.c / ntt.c hand
+// n >= 16 (NTT) to do any work at all, so the dispatchers in mod.c / base.c hand
 // shorter lengths to these, and the portable engine is built entirely on them.
-void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
+void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                               NTT_proc proc);
+                               Modulus mod);
 void mod_eltwise_mul_subto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                               NTT_proc proc);
-void mod_eltwise_scale_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
-void mod_eltwise_fma_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
+                               Modulus mod);
+void mod_eltwise_scale_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
+void mod_eltwise_fma_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                                NTT_proc proc);
+                                Modulus mod);
 void mod_eltwise_sub_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                                NTT_proc proc);
-void mod_eltwise_negate_gen(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-void mod_eltwise_add_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_sub_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_reduce_gen(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-void mod_eltwise_reduce_signed_gen(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc);
+                                Modulus mod);
+void mod_eltwise_negate_gen(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_add_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_sub_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_gen(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_signed_gen(uint64_t *out, int64_t *in, uint64_t n, Modulus mod);
 void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                             NTT_proc proc);
+                             Modulus mod);
 
 // The NTT length below which the vectorized transforms cannot run: they consume
 // two AVX512 lane groups per butterfly stage, and their twiddle tables are
@@ -37,73 +37,69 @@ void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low,
 
 void ntt_scalar_precompute(uint64_t n, uint64_t q, uint64_t root_of_unity, uint64_t ***out_ws);
 void ntt_scalar_free_precompute(uint64_t **ws);
-void ntt_CT_NR_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc proc);
-void ntt_GS_RN_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc proc);
+// `ws` is the only thing the plan cannot supply: forward and inverse read
+// different tables. Length and modulus come from the plan.
+void ntt_CT_NR_gen(uint64_t *a, uint64_t *ws, NTT_Plan plan);
+void ntt_GS_RN_gen(uint64_t *a, uint64_t *ws, NTT_Plan plan);
 
 // 32-bit declarations
-void ntt_forward_32(uint64_t *out, uint64_t *in, NTT_proc proc);
-void ntt_reverse_32(uint64_t *out, uint64_t *in, NTT_proc proc);
-void mod_eltwise_mul_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_mul_addto_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                              NTT_proc proc);
-void mod_eltwise_mul_subto_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                              NTT_proc proc);
-void mod_eltwise_scale_32(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
-void mod_eltwise_fma_32(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
+void ntt_forward_32(uint64_t *out, uint64_t *in, NTT_Plan plan);
+void ntt_reverse_32(uint64_t *out, uint64_t *in, NTT_Plan plan);
+void mod_eltwise_mul_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_mul_addto_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_mul_subto_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_scale_32(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
+void mod_eltwise_fma_32(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_32(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                               NTT_proc proc);
+                               Modulus mod);
 void mod_eltwise_sub_scalar_32(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                               NTT_proc proc);
-void mod_eltwise_negate_32(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-void mod_eltwise_add_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_sub_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_reduce_32(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-void mod_eltwise_reduce_signed_32(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc);
+                               Modulus mod);
+void mod_eltwise_negate_32(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_add_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_sub_32(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_32(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_signed_32(uint64_t *out, int64_t *in, uint64_t n, Modulus mod);
 void mod_reduce_array_mp_32(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                            NTT_proc proc);
+                            Modulus mod);
 
 // 50-bit declarations
-void ntt_forward_50(uint64_t *out, uint64_t *in, NTT_proc proc);
-void ntt_reverse_50(uint64_t *out, uint64_t *in, NTT_proc proc);
-void mod_eltwise_mul_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_mul_addto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                              NTT_proc proc);
-void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                              NTT_proc proc);
-void mod_eltwise_scale_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
-void mod_eltwise_fma_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
+void ntt_forward_50(uint64_t *out, uint64_t *in, NTT_Plan plan);
+void ntt_reverse_50(uint64_t *out, uint64_t *in, NTT_Plan plan);
+void mod_eltwise_mul_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_mul_addto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_scale_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
+void mod_eltwise_fma_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_50(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                               NTT_proc proc);
+                               Modulus mod);
 void mod_eltwise_sub_scalar_50(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                               NTT_proc proc);
-void mod_eltwise_negate_50(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-void mod_eltwise_add_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_sub_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_reduce_50(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-void mod_eltwise_reduce_signed_50(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc);
+                               Modulus mod);
+void mod_eltwise_negate_50(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_add_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_sub_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_50(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_signed_50(uint64_t *out, int64_t *in, uint64_t n, Modulus mod);
 void mod_reduce_array_mp_50(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                            NTT_proc proc);
+                            Modulus mod);
 
 // 64-bit declarations
-void ntt_forward_64(uint64_t *out, uint64_t *in, NTT_proc proc);
-void ntt_reverse_64(uint64_t *out, uint64_t *in, NTT_proc proc);
-void mod_eltwise_mul_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_mul_addto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                              NTT_proc proc);
-void mod_eltwise_mul_subto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                              NTT_proc proc);
-void mod_eltwise_scale_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
-void mod_eltwise_fma_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
+void ntt_forward_64(uint64_t *out, uint64_t *in, NTT_Plan plan);
+void ntt_reverse_64(uint64_t *out, uint64_t *in, NTT_Plan plan);
+void mod_eltwise_mul_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_mul_addto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_mul_subto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_scale_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
+void mod_eltwise_fma_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_64(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                               NTT_proc proc);
+                               Modulus mod);
 void mod_eltwise_sub_scalar_64(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                               NTT_proc proc);
-void mod_eltwise_negate_64(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-void mod_eltwise_add_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_sub_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
-void mod_eltwise_reduce_64(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
-void mod_eltwise_reduce_signed_64(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc);
+                               Modulus mod);
+void mod_eltwise_negate_64(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_add_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_sub_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_64(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_signed_64(uint64_t *out, int64_t *in, uint64_t n, Modulus mod);
 void mod_reduce_array_mp_64(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                            NTT_proc proc);
+                            Modulus mod);
 
 #endif // __ARITH_INTERNAL_H__

@@ -496,7 +496,7 @@ class MLWE_Key:
             ring.N,
             scheme.r,
             ring.ell,
-            ring.NTT,
+            ring.base,
             sigma_err,
         )
         self.poly = [Polynomial(ring).from_array(s_i) for s_i in key]
@@ -571,7 +571,7 @@ class MLWE:
         # product carries the larger MLWE_Scheme.extended_rank.
         self.r = rank if rank is not None else scheme.r
         self.obj = lib_rlwe.lib.mlwe_alloc_RNS_sample(
-            ring.N, self.r, ring.mask, ring.NTT
+            ring.N, self.r, ring.mask, ring.base
         )
         self.ring = ring
         self.scheme = scheme

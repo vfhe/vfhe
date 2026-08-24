@@ -160,10 +160,10 @@ class CKKS_Scheme(MLWE_Scheme):
         end_ring = self.rings[level + 1]
 
         # Build union ring robustly by merging primes from starting and ending rings
-        from vfhe.arith.ntt import NTT_processor_instance
+        from vfhe.arith.rns_base import registry
 
         key_ntt = (self.ring.N, self.ring.split_degree)
-        prime_map = NTT_processor_instance.prime_to_index[key_ntt]
+        prime_map = registry().prime_to_index[key_ntt]
         union_primes = list(set(start_ring.primes + end_ring.primes))
         union_primes.sort(key=lambda p: prime_map[p])
         union_prime_sizes = [math.ceil(math.log2(p)) for p in union_primes]

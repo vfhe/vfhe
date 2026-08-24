@@ -152,7 +152,7 @@ static inline void InvReInterleaveT4(__m512i *A, __m512i *B)
 }
 
 static void ntt_CT_NR_internal_32(__m512i *x, __m512i **ws, __m512i **w_precon, uint64_t sub_n,
-                                  uint64_t q, size_t level, size_t offset_i, NTT_proc proc)
+                                  uint64_t q, size_t level, size_t offset_i, NTT_Plan plan)
 {
     __m512i minus_q = _mm512_set1_epi64(-q);
     __m512i q2 = _mm512_set1_epi64(2 * q);
@@ -235,26 +235,26 @@ static void ntt_CT_NR_internal_32(__m512i *x, __m512i **ws, __m512i **w_precon, 
         {
             FwdButterfly32(&x[j], &x[j + t], w_i, wp_i, minus_q, q2);
         }
-        ntt_CT_NR_internal_32(x, ws, w_precon, sub_n / 2, q, level + 1, 2 * offset_i, proc);
-        ntt_CT_NR_internal_32(x + t, ws, w_precon, sub_n / 2, q, level + 1, 2 * offset_i + 1, proc);
+        ntt_CT_NR_internal_32(x, ws, w_precon, sub_n / 2, q, level + 1, 2 * offset_i, plan);
+        ntt_CT_NR_internal_32(x + t, ws, w_precon, sub_n / 2, q, level + 1, 2 * offset_i + 1, plan);
     }
 }
 
-void ntt_forward_32(uint64_t *out, uint64_t *in, NTT_proc proc)
+void ntt_forward_32(uint64_t *out, uint64_t *in, NTT_Plan plan)
 {
     if (out != in)
     {
-        for (size_t i = 0; i < proc->n; i++)
+        for (size_t i = 0; i < plan->n; i++)
         {
             out[i] = in[i];
         }
     }
-    ntt_CT_NR_internal_32((__m512i *)out, (__m512i **)proc->ws_fwd, (__m512i **)proc->w_precon_fwd,
-                          proc->n, proc->q, 0, 0, proc);
+    ntt_CT_NR_internal_32((__m512i *)out, (__m512i **)plan->ws_fwd, (__m512i **)plan->w_precon_fwd,
+                          plan->n, plan->mod->q, 0, 0, plan);
 
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
-    const __m512i q2_vec = _mm512_set1_epi64(2 * proc->q);
-    for (size_t i = 0; i < proc->n / 8; i++)
+    const __m512i q_vec = _mm512_set1_epi64(plan->mod->q);
+    const __m512i q2_vec = _mm512_set1_epi64(2 * plan->mod->q);
+    for (size_t i = 0; i < plan->n / 8; i++)
     {
         __m512i v = ((__m512i *)out)[i];
         v = _mm512_min_epu64(v, _mm512_sub_epi64(v, q2_vec));
@@ -265,7 +265,7 @@ void ntt_forward_32(uint64_t *out, uint64_t *in, NTT_proc proc)
 
 static void ntt_GS_RN_internal_32(__m512i *x, __m512i **ws, __m512i **w_precon, uint64_t sub_n,
                                   uint64_t q, size_t l_merge, size_t offset_i, int is_top_level,
-                                  uint64_t inv_n, NTT_proc proc)
+                                  uint64_t inv_n, NTT_Plan plan)
 {
     __m512i minus_q = _mm512_set1_epi64(-q);
     __m512i q2 = _mm512_set1_epi64(2 * q);
@@ -368,9 +368,9 @@ static void ntt_GS_RN_internal_32(__m512i *x, __m512i **ws, __m512i **w_precon, 
     {
         size_t t = sub_n >> 4;
         ntt_GS_RN_internal_32(x, ws, w_precon, sub_n / 2, q, l_merge - 1, 2 * offset_i, 0, inv_n,
-                              proc);
+                              plan);
         ntt_GS_RN_internal_32(x + t, ws, w_precon, sub_n / 2, q, l_merge - 1, 2 * offset_i + 1, 0,
-                              inv_n, proc);
+                              inv_n, plan);
         if (is_top_level)
         {
             uint64_t inv_n_prime = barrett_factor_32(inv_n, q);
@@ -401,21 +401,21 @@ static void ntt_GS_RN_internal_32(__m512i *x, __m512i **ws, __m512i **w_precon, 
     }
 }
 
-void ntt_reverse_32(uint64_t *out, uint64_t *in, NTT_proc proc)
+void ntt_reverse_32(uint64_t *out, uint64_t *in, NTT_Plan plan)
 {
     if (out != in)
     {
-        for (size_t i = 0; i < proc->n; i++)
+        for (size_t i = 0; i < plan->n; i++)
         {
             out[i] = in[i];
         }
     }
     int logn = 0;
-    while ((1ULL << logn) < proc->n)
+    while ((1ULL << logn) < plan->n)
         logn++;
-    uint64_t inv_n = inverse_mod(proc->n, proc->q);
-    ntt_GS_RN_internal_32((__m512i *)out, (__m512i **)proc->ws_inv, (__m512i **)proc->w_precon_inv,
-                          proc->n, proc->q, logn - 1, 0, 1, inv_n, proc);
+    uint64_t inv_n = inverse_mod(plan->n, plan->mod->q);
+    ntt_GS_RN_internal_32((__m512i *)out, (__m512i **)plan->ws_inv, (__m512i **)plan->w_precon_inv,
+                          plan->n, plan->mod->q, logn - 1, 0, 1, inv_n, plan);
 }
 
 #endif

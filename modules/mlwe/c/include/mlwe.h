@@ -13,7 +13,7 @@ extern "C"
     {
         uint64_t **s;
         uint64_t n, l;
-        incNTT ntt;
+        RNS_Base base;
         double sigma;
     } *LWE_Key;
 
@@ -22,7 +22,7 @@ extern "C"
         uint64_t **a;
         uint64_t *b;
         uint64_t n, l;
-        incNTT ntt;
+        RNS_Base base;
     } *LWE;
 
     typedef struct _LWE_KS_Key
@@ -62,25 +62,27 @@ extern "C"
 
     // mlwe rns
     RNS_MLWE_Key mlwe_alloc_RNS_key_special_primes(uint64_t N, uint64_t r, uint64_t l,
-                                                   uint64_t special_primes, incNTT ntt,
+                                                   uint64_t special_primes, RNS_Base base,
                                                    double sigma);
     void free_polynomial_array(uint64_t size, IntPolynomial *p);
     RNS_MLWE_Key mlwe_get_RNS_key_from_array(uint64_t N, uint64_t r, uint64_t l, uint64_t *array,
-                                             incNTT ntt, double sigma);
-    RNS_MLWE_Key mlwe_alloc_RNS_key(uint64_t N, uint64_t r, uint64_t l, incNTT ntt, double sigma);
+                                             RNS_Base base, double sigma);
+    RNS_MLWE_Key mlwe_alloc_RNS_key(uint64_t N, uint64_t r, uint64_t l, RNS_Base base,
+                                    double sigma);
     void free_RNS_mlwe_sample(RNS_MLWE c);
     void free_mlwe_RNS_key(RNS_MLWE_Key key);
     LWE mlwe_extract_LWE(RNSc_MLWE in, uint64_t idx);
     RNS_MLWE_Key mlwe_new_RNS_gaussian_key(uint64_t N, uint64_t r, uint64_t l, double key_sigma,
-                                           incNTT ntt, double sigma);
-    RNS_MLWE mlwe_alloc_RNS_sample(uint64_t N, uint64_t r, uint64_t mask, incNTT ntt);
-    RNSc_MLWE mlwe_alloc_RNSc_sample(uint64_t N, uint64_t r, uint64_t mask, incNTT ntt);
+                                           RNS_Base base, double sigma);
+    RNS_MLWE mlwe_alloc_RNS_sample(uint64_t N, uint64_t r, uint64_t mask, RNS_Base base);
+    RNSc_MLWE mlwe_alloc_RNSc_sample(uint64_t N, uint64_t r, uint64_t mask, RNS_Base base);
     RNS_MLWE mlwe_new_RNS_sample(RNS_MLWE_Key key, uint64_t *m, uint64_t p);
     void mlwe_RNS_sample_of_zero(RNS_MLWE out, RNS_MLWE_Key key);
     void mlwe_RNSc_sample_of_zero(RNSc_MLWE out, RNS_MLWE_Key key);
     RNS_MLWE mlwe_new_RNS_sample_of_zero(RNS_MLWE_Key key);
     RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key);
-    RNS_MLWE mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask, incNTT ntt);
+    RNS_MLWE mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask,
+                                                 RNS_Base base);
     void mlwe_RNS_phase(RNS_Polynomial out, RNS_MLWE in, RNS_MLWE_Key key);
     void mlwe_RNSc_to_RNS(RNS_MLWE out, RNSc_MLWE in);
     void mlwe_RNS_to_RNSc(RNSc_MLWE out, RNS_MLWE in);
@@ -103,7 +105,7 @@ extern "C"
     void mlwe_RNSc_mod_switch(RNSc_MLWE c, uint64_t q);
     void mlwe_addto_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in);
     RNS_MLWE *mlwe_alloc_RNS_sample_array(uint64_t size, uint64_t N, uint64_t r, uint64_t mask,
-                                          incNTT ntt);
+                                          RNS_Base base);
     RNS_MLWE *mlwe_alloc_RNS_sample_array2(uint64_t size, RNS_MLWE c);
     void free_RNS_mlwe_array(uint64_t size, RNS_MLWE *v);
     void free_mlwe_RNS_sample(void *p);
@@ -122,7 +124,7 @@ extern "C"
     void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE **ksk);
 
     RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l,
-                                             incNTT ntt, double sigma);
+                                             RNS_Base base, double sigma);
     void mlwe_copy_array(RNS_MLWE *out, RNS_MLWE *in, uint64_t size);
     RNS_MLWE *mlwe_create_copy_array(RNS_MLWE *in, uint64_t size);
 
@@ -159,15 +161,15 @@ extern "C"
                        uint64_t special_primes, uint64_t N, uint64_t num_threads);
 
     // lwe
-    LWE_Key lwe_alloc_key(uint64_t n, uint64_t l, incNTT ntt);
-    LWE lwe_alloc_sample(uint64_t n, uint64_t l, incNTT ntt);
+    LWE_Key lwe_alloc_key(uint64_t n, uint64_t l, RNS_Base base);
+    LWE lwe_alloc_sample(uint64_t n, uint64_t l, RNS_Base base);
     void free_lwe_sample(LWE c);
-    LWE_Key lwe_new_key(uint64_t n, uint64_t l, incNTT ntt, double sec_sigma, double err_sigma);
-    LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t l, incNTT ntt, uint64_t h,
+    LWE_Key lwe_new_key(uint64_t n, uint64_t l, RNS_Base base, double sec_sigma, double err_sigma);
+    LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t l, RNS_Base base, uint64_t h,
                                        double err_sigma);
     void lwe_sample(LWE c, uint64_t *m, LWE_Key key);
     LWE lwe_new_sample(uint64_t *m, LWE_Key key);
-    LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t l, incNTT ntt);
+    LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t l, RNS_Base base);
     void lwe_phase(uint64_t *out, LWE c, LWE_Key key);
     void lwe_subto(LWE out, LWE in);
     LWE_KS_Key lwe_new_KS_key(LWE_Key out_key, LWE_Key in_key, uint64_t t, uint64_t base_bit);

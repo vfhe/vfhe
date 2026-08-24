@@ -4,108 +4,112 @@
 #include "misc.h"
 #include <blake3.h>
 
-incNTT new_incomplete_ntt_list(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l)
+RNS_Base new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l)
 {
     const uint64_t poly_size = N / split_degree;
     const uint64_t log_poly_size = (uint64_t)log2(poly_size);
     uint64_t *w_p = (uint64_t *)safe_malloc(2 * poly_size * sizeof(uint64_t));
-    incNTT ntt = (incNTT)safe_malloc(sizeof(*ntt));
-    ntt->N = N;
-    ntt->l = l;
-    ntt->ntt = new_ntt_list(primes, poly_size, l);
-    ntt->split_degree = split_degree;
-    ntt->w = (uint64_t **)safe_malloc(sizeof(uint64_t *) * l);
+    RNS_Base base = (RNS_Base)safe_malloc(sizeof(*base));
+    base->N = N;
+    base->l = l;
+    // The moduli first: the plans borrow them, so they must outlive the plans.
+    base->mods = new_modulus_list(primes, l);
+    base->plans = new_ntt_plan_list(base->mods, poly_size, l);
+    base->split_degree = split_degree;
+    base->w = (uint64_t **)safe_malloc(sizeof(uint64_t *) * l);
     for (size_t i = 0; i < l; i++)
     {
-        ntt->w[i] = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
-        uint64_t w1 = ntt->ntt[i]->root_of_unity;
+        base->w[i] = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
+        uint64_t w1 = base->plans[i]->root_of_unity;
         w_p[0] = w1;
         for (size_t j = 1; j < 2 * poly_size; j++)
         {
-            w_p[j] = mul_modq(w_p[j - 1], w1, ntt->ntt[i]);
+            w_p[j] = mul_modq(w_p[j - 1], w1, base->mods[i]);
         }
-        bit_rev(ntt->w[i], w_p, poly_size, log_poly_size + 1);
+        bit_rev(base->w[i], w_p, poly_size, log_poly_size + 1);
     }
     free(w_p);
-    return ntt;
+    return base;
 }
 
-void incNTT_extend_with_primes(incNTT ntt, uint64_t *new_primes, uint64_t count)
+void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t count)
 {
     if (count == 0)
         return;
-    uint64_t new_l = ntt->l + count;
-    const uint64_t poly_size = ntt->N / ntt->split_degree;
+    uint64_t new_l = base->l + count;
+    const uint64_t poly_size = base->N / base->split_degree;
     const uint64_t log_poly_size = (uint64_t)log2(poly_size);
     uint64_t *w_p = (uint64_t *)safe_malloc(2 * poly_size * sizeof(uint64_t));
 
-    ntt->ntt = (NTT_proc *)safe_realloc(ntt->ntt, sizeof(NTT_proc) * new_l);
-    ntt->w = (uint64_t **)safe_realloc(ntt->w, sizeof(uint64_t *) * new_l);
+    base->mods = (Modulus *)safe_realloc(base->mods, sizeof(Modulus) * new_l);
+    base->plans = (NTT_Plan *)safe_realloc(base->plans, sizeof(NTT_Plan) * new_l);
+    base->w = (uint64_t **)safe_realloc(base->w, sizeof(uint64_t *) * new_l);
 
-    for (size_t i = ntt->l; i < new_l; i++)
+    for (size_t i = base->l; i < new_l; i++)
     {
-        uint64_t prime = new_primes[i - ntt->l];
-        ntt->ntt[i] = ntt_new_proc(poly_size, prime);
-        ntt->w[i] = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
-        uint64_t w1 = ntt->ntt[i]->root_of_unity;
+        uint64_t prime = new_primes[i - base->l];
+        base->mods[i] = mod_new(prime);
+        base->plans[i] = ntt_new_plan(poly_size, base->mods[i]);
+        base->w[i] = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
+        uint64_t w1 = base->plans[i]->root_of_unity;
         w_p[0] = w1;
         for (size_t j = 1; j < 2 * poly_size; j++)
         {
-            w_p[j] = mul_modq(w_p[j - 1], w1, ntt->ntt[i]);
+            w_p[j] = mul_modq(w_p[j - 1], w1, base->mods[i]);
         }
-        bit_rev(ntt->w[i], w_p, poly_size, log_poly_size + 1);
+        bit_rev(base->w[i], w_p, poly_size, log_poly_size + 1);
     }
 
-    ntt->l = new_l;
+    base->l = new_l;
     free(w_p);
 }
 
-uint64_t **incNTT_get_rou_matrix(incNTT ntt) { return ntt->w; }
+uint64_t **rns_base_get_rou_matrix(RNS_Base base) { return base->w; }
 
-RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, incNTT ntt)
+RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, RNS_Base base)
 {
     RNS_Polynomial res;
     res = (RNS_Polynomial)safe_malloc(sizeof(*res));
-    res->coeffs = (uint64_t **)safe_malloc(sizeof(uint64_t *) * ntt->l);
-    for (size_t i = 0; i < ntt->l; i++)
+    res->coeffs = (uint64_t **)safe_malloc(sizeof(uint64_t *) * base->l);
+    for (size_t i = 0; i < base->l; i++)
     {
-        res->coeffs[i] = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * ntt->N);
+        res->coeffs[i] = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * base->N);
     }
-    res->ntt = ntt;
+    res->base = base;
     res->rns_mask = rns_mask;
-    res->allocated_l = ntt->l;
+    res->allocated_l = base->l;
     return res;
 }
 
 RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N, uint64_t rns_mask,
-                                                    incNTT ntt)
+                                                    RNS_Base base)
 {
     RNS_Polynomial *res;
     res = (RNS_Polynomial *)safe_malloc(sizeof(RNS_Polynomial) * size);
     for (size_t i = 0; i < size; i++)
     {
-        res[i] = polynomial_new_RNS_polynomial(N, rns_mask, ntt);
+        res[i] = polynomial_new_RNS_polynomial(N, rns_mask, base);
     }
     return res;
 }
 
 bool polynomial_eq(RNS_Polynomial a, RNS_Polynomial b)
 {
-    const uint64_t max_l = a->ntt->l > b->ntt->l ? a->ntt->l : b->ntt->l;
+    const uint64_t max_l = a->base->l > b->base->l ? a->base->l : b->base->l;
     for (size_t i = 0; i < max_l; i++)
     {
-        bool active_a = (i < a->ntt->l) && (a->rns_mask & (1ULL << i));
-        bool active_b = (i < b->ntt->l) && (b->rns_mask & (1ULL << i));
+        bool active_a = (i < a->base->l) && (a->rns_mask & (1ULL << i));
+        bool active_b = (i < b->base->l) && (b->rns_mask & (1ULL << i));
         if (active_a && active_b)
         {
-            if (memcmp(a->coeffs[i], b->coeffs[i], a->ntt->N * sizeof(uint64_t)) != 0)
+            if (memcmp(a->coeffs[i], b->coeffs[i], a->base->N * sizeof(uint64_t)) != 0)
             {
                 return false;
             }
         }
         else if (active_a)
         {
-            for (size_t j = 0; j < a->ntt->N; j++)
+            for (size_t j = 0; j < a->base->N; j++)
             {
                 if (a->coeffs[i][j])
                     return false;
@@ -113,7 +117,7 @@ bool polynomial_eq(RNS_Polynomial a, RNS_Polynomial b)
         }
         else if (active_b)
         {
-            for (size_t j = 0; j < b->ntt->N; j++)
+            for (size_t j = 0; j < b->base->N; j++)
             {
                 if (b->coeffs[i][j])
                     return false;
@@ -126,11 +130,11 @@ bool polynomial_eq(RNS_Polynomial a, RNS_Polynomial b)
 void polynomial_copy_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in)
 {
     out->rns_mask = in->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            memcpy(out->coeffs[i], in->coeffs[i], sizeof(uint64_t) * out->ntt->N);
+            memcpy(out->coeffs[i], in->coeffs[i], sizeof(uint64_t) * out->base->N);
         }
     }
 }
@@ -142,11 +146,11 @@ void polynomial_copy_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in)
 
 void polynomial_RNS_zero(RNS_Polynomial p)
 {
-    for (size_t i = 0; i < p->ntt->l; i++)
+    for (size_t i = 0; i < p->base->l; i++)
     {
         if (p->rns_mask & (1ULL << i))
         {
-            memset(p->coeffs[i], 0, sizeof(uint64_t) * p->ntt->N);
+            memset(p->coeffs[i], 0, sizeof(uint64_t) * p->base->N);
         }
     }
 }
@@ -172,28 +176,28 @@ void free_RNS_polynomial_array(uint64_t size, RNS_Polynomial *p)
 }
 
 RNS_Polynomial *polynomial_new_array_of_RNS_polynomials(uint64_t N, uint64_t rns_mask,
-                                                        uint64_t size, incNTT ntt)
+                                                        uint64_t size, RNS_Base base)
 {
     RNS_Polynomial *res = (RNS_Polynomial *)safe_malloc(sizeof(RNS_Polynomial) * size);
     for (size_t i = 0; i < size; i++)
-        res[i] = polynomial_new_RNS_polynomial(N, rns_mask, ntt);
+        res[i] = polynomial_new_RNS_polynomial(N, rns_mask, base);
     return res;
 }
 
 void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in)
 {
-    const uint64_t modMask = out->ntt->split_degree - 1,
-                   poly_size = out->ntt->N / out->ntt->split_degree;
-    uint64_t *temp = (uint64_t *)safe_aligned_malloc(out->ntt->N * sizeof(uint64_t));
-    for (size_t i = 0; i < out->ntt->l; i++)
+    const uint64_t modMask = out->base->split_degree - 1,
+                   poly_size = out->base->N / out->base->split_degree;
+    uint64_t *temp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            NTT_proc proc = out->ntt->ntt[i];
-            mod_eltwise_reduce_signed(temp, (int64_t *)in->coeffs, out->ntt->N, proc);
-            for (size_t j = 0; j < out->ntt->N; j++)
+            Modulus mod = out->base->mods[i];
+            mod_eltwise_reduce_signed(temp, (int64_t *)in->coeffs, out->base->N, mod);
+            for (size_t j = 0; j < out->base->N; j++)
             {
-                out->coeffs[i][(j & modMask) * poly_size + j / out->ntt->split_degree] = temp[j];
+                out->coeffs[i][(j & modMask) * poly_size + j / out->base->split_degree] = temp[j];
             }
         }
     }
@@ -203,18 +207,18 @@ void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in)
 
 void int_array_to_RNS(RNS_Polynomial out, uint64_t *in)
 {
-    const uint64_t modMask = out->ntt->split_degree - 1,
-                   poly_size = out->ntt->N / out->ntt->split_degree;
-    uint64_t *temp = (uint64_t *)safe_aligned_malloc(out->ntt->N * sizeof(uint64_t));
-    for (size_t i = 0; i < out->ntt->l; i++)
+    const uint64_t modMask = out->base->split_degree - 1,
+                   poly_size = out->base->N / out->base->split_degree;
+    uint64_t *temp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            NTT_proc proc = out->ntt->ntt[i];
-            mod_eltwise_reduce_signed(temp, (int64_t *)in, out->ntt->N, proc);
-            for (size_t j = 0; j < out->ntt->N; j++)
+            Modulus mod = out->base->mods[i];
+            mod_eltwise_reduce_signed(temp, (int64_t *)in, out->base->N, mod);
+            for (size_t j = 0; j < out->base->N; j++)
             {
-                out->coeffs[i][(j & modMask) * poly_size + j / out->ntt->split_degree] = temp[j];
+                out->coeffs[i][(j & modMask) * poly_size + j / out->base->split_degree] = temp[j];
             }
         }
     }
@@ -224,15 +228,15 @@ void int_array_to_RNS(RNS_Polynomial out, uint64_t *in)
 
 void array_to_RNS(RNS_Polynomial out, uint64_t **in)
 {
-    const uint64_t modMask = out->ntt->split_degree - 1,
-                   poly_size = out->ntt->N / out->ntt->split_degree;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    const uint64_t modMask = out->base->split_degree - 1,
+                   poly_size = out->base->N / out->base->split_degree;
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->ntt->N; j++)
+            for (size_t j = 0; j < out->base->N; j++)
             {
-                out->coeffs[i][(j & modMask) * poly_size + j / out->ntt->split_degree] = in[i][j];
+                out->coeffs[i][(j & modMask) * poly_size + j / out->base->split_degree] = in[i][j];
             }
         }
     }
@@ -241,30 +245,30 @@ void array_to_RNS(RNS_Polynomial out, uint64_t **in)
 
 void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
 {
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            const uint64_t p = out->ntt->ntt[i]->q;
-            generate_random_bytes(sizeof(uint64_t) * out->ntt->N, (uint8_t *)out->coeffs[i]);
-            array_mod_switch_from_2k(out->coeffs[i], out->coeffs[i], p, p, out->ntt->N);
+            const uint64_t p = out->base->mods[i]->q;
+            generate_random_bytes(sizeof(uint64_t) * out->base->N, (uint8_t *)out->coeffs[i]);
+            array_mod_switch_from_2k(out->coeffs[i], out->coeffs[i], p, p, out->base->N);
         }
     }
 }
 
 void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma)
 {
-    int64_t *noise_arr = (int64_t *)safe_aligned_malloc(out->ntt->N * sizeof(int64_t));
-    for (size_t j = 0; j < out->ntt->N; j++)
+    int64_t *noise_arr = (int64_t *)safe_aligned_malloc(out->base->N * sizeof(int64_t));
+    for (size_t j = 0; j < out->base->N; j++)
     {
         noise_arr[j] = (int64_t)round(generate_normal_random(sigma));
     }
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            NTT_proc proc = out->ntt->ntt[i];
-            mod_eltwise_reduce_signed(out->coeffs[i], noise_arr, out->ntt->N, proc);
+            Modulus mod = out->base->mods[i];
+            mod_eltwise_reduce_signed(out->coeffs[i], noise_arr, out->base->N, mod);
         }
     }
     free(noise_arr);
@@ -272,34 +276,34 @@ void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma)
 
 void polynomial_multo_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in)
 {
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = out->rns_mask & in->rns_mask;
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
-    uint64_t *tmp2 = (uint64_t *)safe_aligned_malloc(out->ntt->N * sizeof(uint64_t));
-    for (size_t i = 0; i < out->ntt->l; i++)
+    uint64_t *tmp2 = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            memcpy(tmp2, out->coeffs[i], sizeof(uint64_t) * out->ntt->N);
-            memset(out->coeffs[i], 0, sizeof(uint64_t) * out->ntt->N);
-            for (size_t j = 0; j < out->ntt->split_degree; j++)
+            memcpy(tmp2, out->coeffs[i], sizeof(uint64_t) * out->base->N);
+            memset(out->coeffs[i], 0, sizeof(uint64_t) * out->base->N);
+            for (size_t j = 0; j < out->base->split_degree; j++)
             {
-                for (size_t k = 0; k < out->ntt->split_degree - j; k++)
+                for (size_t k = 0; k < out->base->split_degree - j; k++)
                 {
                     mod_eltwise_mul(tmp, &in->coeffs[i][j * poly_size], &tmp2[k * poly_size],
-                                    poly_size, out->ntt->ntt[i]);
+                                    poly_size, out->base->mods[i]);
                     mod_eltwise_add(&out->coeffs[i][(j + k) * poly_size],
                                     &out->coeffs[i][(j + k) * poly_size], tmp, poly_size,
-                                    out->ntt->ntt[i]);
+                                    out->base->mods[i]);
                 }
-                for (size_t k = out->ntt->split_degree - j; k < out->ntt->split_degree; k++)
+                for (size_t k = out->base->split_degree - j; k < out->base->split_degree; k++)
                 {
                     mod_eltwise_mul(tmp, &in->coeffs[i][j * poly_size], &tmp2[k * poly_size],
-                                    poly_size, out->ntt->ntt[i]);
-                    mod_eltwise_mul(tmp, tmp, out->ntt->w[i], poly_size, out->ntt->ntt[i]);
-                    mod_eltwise_add(&out->coeffs[i][(j + k - out->ntt->split_degree) * poly_size],
-                                    &out->coeffs[i][(j + k - out->ntt->split_degree) * poly_size],
-                                    tmp, poly_size, out->ntt->ntt[i]);
+                                    poly_size, out->base->mods[i]);
+                    mod_eltwise_mul(tmp, tmp, out->base->w[i], poly_size, out->base->mods[i]);
+                    mod_eltwise_add(&out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
+                                    &out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
+                                    tmp, poly_size, out->base->mods[i]);
                 }
             }
         }
@@ -312,42 +316,42 @@ void polynomial_mul_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_P
 {
     assert(out != in1);
     assert(out != in2);
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in1->rns_mask & in2->rns_mask;
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            memset(out->coeffs[i], 0, out->ntt->N * sizeof(uint64_t));
-            for (size_t j = 0; j < out->ntt->split_degree; j++)
+            memset(out->coeffs[i], 0, out->base->N * sizeof(uint64_t));
+            for (size_t j = 0; j < out->base->split_degree; j++)
             {
-                for (size_t k = 0; k < out->ntt->split_degree - j; k++)
+                for (size_t k = 0; k < out->base->split_degree - j; k++)
                 {
                     if (j == 0)
                     {
                         mod_eltwise_mul(
                             &out->coeffs[i][(j + k) * poly_size], &in1->coeffs[i][j * poly_size],
-                            &in2->coeffs[i][k * poly_size], poly_size, out->ntt->ntt[i]);
+                            &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
                     }
                     else
                     {
                         mod_eltwise_mul(tmp, &in1->coeffs[i][j * poly_size],
                                         &in2->coeffs[i][k * poly_size], poly_size,
-                                        out->ntt->ntt[i]);
+                                        out->base->mods[i]);
                         mod_eltwise_add(&out->coeffs[i][(j + k) * poly_size],
                                         &out->coeffs[i][(j + k) * poly_size], tmp, poly_size,
-                                        out->ntt->ntt[i]);
+                                        out->base->mods[i]);
                     }
                 }
-                for (size_t k = out->ntt->split_degree - j; k < out->ntt->split_degree; k++)
+                for (size_t k = out->base->split_degree - j; k < out->base->split_degree; k++)
                 {
                     mod_eltwise_mul(tmp, &in1->coeffs[i][j * poly_size],
-                                    &in2->coeffs[i][k * poly_size], poly_size, out->ntt->ntt[i]);
-                    mod_eltwise_mul(tmp, tmp, out->ntt->w[i], poly_size, out->ntt->ntt[i]);
-                    mod_eltwise_add(&out->coeffs[i][(j + k - out->ntt->split_degree) * poly_size],
-                                    &out->coeffs[i][(j + k - out->ntt->split_degree) * poly_size],
-                                    tmp, poly_size, out->ntt->ntt[i]);
+                                    &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
+                    mod_eltwise_mul(tmp, tmp, out->base->w[i], poly_size, out->base->mods[i]);
+                    mod_eltwise_add(&out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
+                                    &out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
+                                    tmp, poly_size, out->base->mods[i]);
                 }
             }
         }
@@ -359,34 +363,34 @@ void polynomial_mul_addto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
 {
     assert(out != in1);
     assert(out != in2);
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in1->rns_mask & in2->rns_mask;
     uint64_t mask = out->rns_mask;
     // tmp is only needed for the twiddle (cross-block) term; with split_degree==1 it is unused.
-    uint64_t *tmp = (out->ntt->split_degree > 1)
+    uint64_t *tmp = (out->base->split_degree > 1)
                         ? (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t))
                         : NULL;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->ntt->split_degree; j++)
+            for (size_t j = 0; j < out->base->split_degree; j++)
             {
-                for (size_t k = 0; k < out->ntt->split_degree - j; k++)
+                for (size_t k = 0; k < out->base->split_degree - j; k++)
                 {
                     // fused: out += in1*in2 in one pass (no temp, no separate add)
                     mod_eltwise_mul_addto(
                         &out->coeffs[i][(j + k) * poly_size], &in1->coeffs[i][j * poly_size],
-                        &in2->coeffs[i][k * poly_size], poly_size, out->ntt->ntt[i]);
+                        &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
                 }
-                for (size_t k = out->ntt->split_degree - j; k < out->ntt->split_degree; k++)
+                for (size_t k = out->base->split_degree - j; k < out->base->split_degree; k++)
                 {
                     mod_eltwise_mul(tmp, &in1->coeffs[i][j * poly_size],
-                                    &in2->coeffs[i][k * poly_size], poly_size, out->ntt->ntt[i]);
-                    mod_eltwise_mul(tmp, tmp, out->ntt->w[i], poly_size, out->ntt->ntt[i]);
-                    mod_eltwise_add(&out->coeffs[i][(j + k - out->ntt->split_degree) * poly_size],
-                                    &out->coeffs[i][(j + k - out->ntt->split_degree) * poly_size],
-                                    tmp, poly_size, out->ntt->ntt[i]);
+                                    &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
+                    mod_eltwise_mul(tmp, tmp, out->base->w[i], poly_size, out->base->mods[i]);
+                    mod_eltwise_add(&out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
+                                    &out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
+                                    tmp, poly_size, out->base->mods[i]);
                 }
             }
         }
@@ -399,33 +403,33 @@ void polynomial_mul_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
 {
     assert(out != in1);
     assert(out != in2);
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in1->rns_mask & in2->rns_mask;
     uint64_t mask = out->rns_mask;
-    uint64_t *tmp = (out->ntt->split_degree > 1)
+    uint64_t *tmp = (out->base->split_degree > 1)
                         ? (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t))
                         : NULL;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->ntt->split_degree; j++)
+            for (size_t j = 0; j < out->base->split_degree; j++)
             {
-                for (size_t k = 0; k < out->ntt->split_degree - j; k++)
+                for (size_t k = 0; k < out->base->split_degree - j; k++)
                 {
                     // fused: out -= in1*in2 in one pass
                     mod_eltwise_mul_subto(
                         &out->coeffs[i][(j + k) * poly_size], &in1->coeffs[i][j * poly_size],
-                        &in2->coeffs[i][k * poly_size], poly_size, out->ntt->ntt[i]);
+                        &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
                 }
-                for (size_t k = out->ntt->split_degree - j; k < out->ntt->split_degree; k++)
+                for (size_t k = out->base->split_degree - j; k < out->base->split_degree; k++)
                 {
                     mod_eltwise_mul(tmp, &in1->coeffs[i][j * poly_size],
-                                    &in2->coeffs[i][k * poly_size], poly_size, out->ntt->ntt[i]);
-                    mod_eltwise_mul(tmp, tmp, out->ntt->w[i], poly_size, out->ntt->ntt[i]);
-                    mod_eltwise_sub(&out->coeffs[i][(j + k - out->ntt->split_degree) * poly_size],
-                                    &out->coeffs[i][(j + k - out->ntt->split_degree) * poly_size],
-                                    tmp, poly_size, out->ntt->ntt[i]);
+                                    &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
+                    mod_eltwise_mul(tmp, tmp, out->base->w[i], poly_size, out->base->mods[i]);
+                    mod_eltwise_sub(&out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
+                                    &out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
+                                    tmp, poly_size, out->base->mods[i]);
                 }
             }
         }
@@ -437,12 +441,12 @@ void polynomial_mul_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
 void polynomial_sub_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2)
 {
     out->rns_mask = in1->rns_mask & in2->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_sub(out->coeffs[i], in1->coeffs[i], in2->coeffs[i], out->ntt->N,
-                            out->ntt->ntt[i]);
+            mod_eltwise_sub(out->coeffs[i], in1->coeffs[i], in2->coeffs[i], out->base->N,
+                            out->base->mods[i]);
         }
     }
 }
@@ -455,12 +459,12 @@ void polynomial_sub_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, RN
 void polynomial_add_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, RNSc_Polynomial in2)
 {
     out->rns_mask = in1->rns_mask & in2->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_add(out->coeffs[i], in1->coeffs[i], in2->coeffs[i], out->ntt->N,
-                            out->ntt->ntt[i]);
+            mod_eltwise_add(out->coeffs[i], in1->coeffs[i], in2->coeffs[i], out->base->N,
+                            out->base->mods[i]);
         }
     }
 }
@@ -474,13 +478,13 @@ void polynomial_add_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_P
 void polynomial_RNSc_add_integer(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t in2)
 {
     out->rns_mask = in1->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
             if (out != in1)
-                memcpy(out->coeffs[i], in1->coeffs[i], out->ntt->N * sizeof(uint64_t));
-            const uint64_t q = out->ntt->ntt[i]->q;
+                memcpy(out->coeffs[i], in1->coeffs[i], out->base->N * sizeof(uint64_t));
+            const uint64_t q = out->base->mods[i]->q;
             const uint64_t in_mod_q = in2 & (1ULL << 63) ? q - ((-in2) % q) : in2 % q;
             out->coeffs[i][0] = (out->coeffs[i][0] + in_mod_q) % q;
         }
@@ -490,25 +494,25 @@ void polynomial_RNSc_add_integer(RNSc_Polynomial out, RNSc_Polynomial in1, uint6
 void polynomial_RNS_add_integer(RNS_Polynomial out, RNS_Polynomial in1, uint64_t in2)
 {
     out->rns_mask = in1->rns_mask;
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            NTT_proc proc = out->ntt->ntt[i];
+            Modulus mod = out->base->mods[i];
             if (out != in1)
-                memcpy(out->coeffs[i], in1->coeffs[i], out->ntt->N * sizeof(uint64_t));
-            const uint64_t q = proc->q;
+                memcpy(out->coeffs[i], in1->coeffs[i], out->base->N * sizeof(uint64_t));
+            const uint64_t q = mod->q;
             uint64_t in_mod_q;
             if (in2 & (1ULL << 63))
             {
-                in_mod_q = negate_modq(modq(-in2, proc), q);
+                in_mod_q = negate_modq(modq(-in2, mod), q);
             }
             else
             {
-                in_mod_q = modq(in2, proc);
+                in_mod_q = modq(in2, mod);
             }
-            mod_eltwise_add_scalar(out->coeffs[i], out->coeffs[i], in_mod_q, poly_size, proc);
+            mod_eltwise_add_scalar(out->coeffs[i], out->coeffs[i], in_mod_q, poly_size, mod);
         }
     }
 }
@@ -516,11 +520,12 @@ void polynomial_RNS_add_integer(RNS_Polynomial out, RNS_Polynomial in1, uint64_t
 void polynomial_scale_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t scale)
 {
     out->rns_mask = in1->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_scale(out->coeffs[i], in1->coeffs[i], scale, out->ntt->N, out->ntt->ntt[i]);
+            mod_eltwise_scale(out->coeffs[i], in1->coeffs[i], scale, out->base->N,
+                              out->base->mods[i]);
         }
     }
 }
@@ -530,11 +535,12 @@ void polynomial_scale_addto_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial
 {
     out->rns_mask = in1->rns_mask;
     uint64_t mask = out->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (mask & (1ULL << i))
         {
-            mod_eltwise_fma(out->coeffs[i], in1->coeffs[i], scale, out->ntt->N, out->ntt->ntt[i]);
+            mod_eltwise_fma(out->coeffs[i], in1->coeffs[i], scale, out->base->N,
+                            out->base->mods[i]);
         }
     }
 }
@@ -552,12 +558,12 @@ void polynomial_scale_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, uin
 void polynomial_scale_RNS_polynomial_RNS(RNS_Polynomial out, RNS_Polynomial in1, uint64_t *scale)
 {
     out->rns_mask = in1->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_scale(out->coeffs[i], in1->coeffs[i], scale[i], out->ntt->N,
-                              out->ntt->ntt[i]);
+            mod_eltwise_scale(out->coeffs[i], in1->coeffs[i], scale[i], out->base->N,
+                              out->base->mods[i]);
         }
     }
 }
@@ -565,11 +571,11 @@ void polynomial_scale_RNS_polynomial_RNS(RNS_Polynomial out, RNS_Polynomial in1,
 void polynomial_RNSc_negate(RNSc_Polynomial out, RNSc_Polynomial in)
 {
     out->rns_mask = in->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_negate(out->coeffs[i], in->coeffs[i], out->ntt->N, out->ntt->ntt[i]);
+            mod_eltwise_negate(out->coeffs[i], in->coeffs[i], out->base->N, out->base->mods[i]);
         }
     }
 }
@@ -582,15 +588,15 @@ void polynomial_RNS_negate(RNS_Polynomial out, RNS_Polynomial in)
 void polynomial_RNSc_to_RNS(RNS_Polynomial out, RNSc_Polynomial in)
 {
     out->rns_mask = in->rns_mask;
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t k = 0; k < out->ntt->split_degree; k++)
+            for (size_t k = 0; k < out->base->split_degree; k++)
             {
                 ntt_forward(&out->coeffs[i][k * poly_size], &in->coeffs[i][k * poly_size],
-                            out->ntt->ntt[i]);
+                            out->base->plans[i]);
             }
         }
     }
@@ -599,15 +605,15 @@ void polynomial_RNSc_to_RNS(RNS_Polynomial out, RNSc_Polynomial in)
 void polynomial_RNS_to_RNSc(RNSc_Polynomial out, RNS_Polynomial in)
 {
     out->rns_mask = in->rns_mask;
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t k = 0; k < out->ntt->split_degree; k++)
+            for (size_t k = 0; k < out->base->split_degree; k++)
             {
                 ntt_reverse(&out->coeffs[i][k * poly_size], &in->coeffs[i][k * poly_size],
-                            out->ntt->ntt[i]);
+                            out->base->plans[i]);
             }
         }
     }
@@ -615,39 +621,39 @@ void polynomial_RNS_to_RNSc(RNSc_Polynomial out, RNS_Polynomial in)
 
 void polynomial_RNSc_add_noise(RNSc_Polynomial out, RNSc_Polynomial in, double sigma)
 {
-    int64_t *noise_arr = (int64_t *)safe_aligned_malloc(out->ntt->N * sizeof(int64_t));
-    for (size_t j = 0; j < out->ntt->N; j++)
+    int64_t *noise_arr = (int64_t *)safe_aligned_malloc(out->base->N * sizeof(int64_t));
+    for (size_t j = 0; j < out->base->N; j++)
     {
         noise_arr[j] = (int64_t)round(generate_normal_random(sigma));
     }
-    uint64_t *noise_reduced = (uint64_t *)safe_aligned_malloc(out->ntt->N * sizeof(uint64_t));
+    uint64_t *noise_reduced = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
     out->rns_mask = in->rns_mask;
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            NTT_proc proc = out->ntt->ntt[i];
-            mod_eltwise_reduce_signed(noise_reduced, noise_arr, out->ntt->N, proc);
-            mod_eltwise_add(out->coeffs[i], in->coeffs[i], noise_reduced, out->ntt->N, proc);
+            Modulus mod = out->base->mods[i];
+            mod_eltwise_reduce_signed(noise_reduced, noise_arr, out->base->N, mod);
+            mod_eltwise_add(out->coeffs[i], in->coeffs[i], noise_reduced, out->base->N, mod);
         }
     }
     free(noise_reduced);
     free(noise_arr);
 }
 
-RNS_BaseConversionParams init_base_conversion_params(incNTT ntt, uint64_t in_mask,
+RNS_BaseConversionParams init_base_conversion_params(RNS_Base base, uint64_t in_mask,
                                                      uint64_t out_mask)
 {
     RNS_BaseConversionParams params = (RNS_BaseConversionParams)safe_malloc(sizeof(*params));
     params->in_mask = in_mask;
     params->out_mask = out_mask;
 
-    params->D = (uint32_t *)safe_malloc(sizeof(uint32_t) * ntt->l);
-    params->P = (uint32_t *)safe_malloc(sizeof(uint32_t) * ntt->l);
+    params->D = (uint32_t *)safe_malloc(sizeof(uint32_t) * base->l);
+    params->P = (uint32_t *)safe_malloc(sizeof(uint32_t) * base->l);
     params->w = 0;
     params->v = 0;
 
-    for (size_t i = 0; i < ntt->l; i++)
+    for (size_t i = 0; i < base->l; i++)
     {
         if (in_mask & (1ULL << i))
         {
@@ -655,7 +661,7 @@ RNS_BaseConversionParams init_base_conversion_params(incNTT ntt, uint64_t in_mas
         }
     }
 
-    for (size_t i = 0; i < ntt->l; i++)
+    for (size_t i = 0; i < base->l; i++)
     {
         if ((out_mask & (1ULL << i)) && !(in_mask & (1ULL << i)))
         {
@@ -676,16 +682,16 @@ RNS_BaseConversionParams init_base_conversion_params(incNTT ntt, uint64_t in_mas
     for (size_t j = 0; j < params->w; j++)
     {
         uint64_t idx_j = params->D[j];
-        NTT_proc proc_j = ntt->ntt[idx_j];
-        uint64_t q_j = proc_j->q;
+        Modulus mod_j = base->mods[idx_j];
+        uint64_t q_j = mod_j->q;
         uint64_t prod = 1;
         for (size_t k = 0; k < params->w; k++)
         {
             if (k == j)
                 continue;
             uint64_t idx_k = params->D[k];
-            uint64_t q_k = ntt->ntt[idx_k]->q;
-            prod = mul_modq(prod, modq(q_k, proc_j), proc_j);
+            uint64_t q_k = base->mods[idx_k]->q;
+            prod = mul_modq(prod, modq(q_k, mod_j), mod_j);
         }
         params->Dhat[j] = inverse_mod(prod, q_j);
     }
@@ -695,7 +701,7 @@ RNS_BaseConversionParams init_base_conversion_params(incNTT ntt, uint64_t in_mas
     {
         params->D_mod_p[i] = (uint64_t *)safe_malloc(sizeof(uint64_t) * params->w);
         uint64_t idx_i = params->P[i];
-        NTT_proc proc_i = ntt->ntt[idx_i];
+        Modulus mod_i = base->mods[idx_i];
         for (size_t j = 0; j < params->w; j++)
         {
             uint64_t prod = 1;
@@ -704,8 +710,8 @@ RNS_BaseConversionParams init_base_conversion_params(incNTT ntt, uint64_t in_mas
                 if (k == j)
                     continue;
                 uint64_t idx_k = params->D[k];
-                uint64_t q_k = ntt->ntt[idx_k]->q;
-                prod = mul_modq(prod, modq(q_k, proc_i), proc_i);
+                uint64_t q_k = base->mods[idx_k]->q;
+                prod = mul_modq(prod, modq(q_k, mod_i), mod_i);
             }
             params->D_mod_p[i][j] = prod;
         }
@@ -738,20 +744,20 @@ void free_base_conversion_params(RNS_BaseConversionParams params)
 void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
                                      RNS_BaseConversionParams params)
 {
-    assert(in->ntt->l == out->ntt->l);
-    assert(in->ntt->N == out->ntt->N);
+    assert(in->base->l == out->base->l);
+    assert(in->base->N == out->base->N);
 
     uint64_t in_mask = in->rns_mask;
     uint64_t out_mask = out->rns_mask;
 
     // 1. Copy matching active RNS components from in to out (if not in-place)
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if ((in_mask & (1ULL << i)) && (out_mask & (1ULL << i)))
         {
             if (out != in)
             {
-                memcpy(out->coeffs[i], in->coeffs[i], sizeof(uint64_t) * out->ntt->N);
+                memcpy(out->coeffs[i], in->coeffs[i], sizeof(uint64_t) * out->base->N);
             }
         }
     }
@@ -759,7 +765,7 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
     RNS_BaseConversionParams local_params = params;
     if (local_params == NULL)
     {
-        local_params = init_base_conversion_params(in->ntt, in_mask, out_mask);
+        local_params = init_base_conversion_params(in->base, in_mask, out_mask);
     }
     else
     {
@@ -788,25 +794,25 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
     for (size_t i = 0; i < v; i++)
     {
         uint64_t idx_i = P[i];
-        memset(out->coeffs[idx_i], 0, sizeof(uint64_t) * out->ntt->N);
+        memset(out->coeffs[idx_i], 0, sizeof(uint64_t) * out->base->N);
     }
 
     // 3. Perform Fast Base Extension
-    uint64_t *v_tmp = (uint64_t *)safe_aligned_malloc(out->ntt->N * sizeof(uint64_t));
-    uint64_t *v_tmp2 = (uint64_t *)safe_aligned_malloc(out->ntt->N * sizeof(uint64_t));
+    uint64_t *v_tmp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    uint64_t *v_tmp2 = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
 
     for (size_t j = 0; j < w; j++)
     {
         uint64_t idx_j = D[j];
-        NTT_proc proc_j = in->ntt->ntt[idx_j];
-        mod_eltwise_scale(v_tmp, in->coeffs[idx_j], Dhat[j], out->ntt->N, proc_j);
+        Modulus mod_j = in->base->mods[idx_j];
+        mod_eltwise_scale(v_tmp, in->coeffs[idx_j], Dhat[j], out->base->N, mod_j);
 
         for (size_t i = 0; i < v; i++)
         {
             uint64_t idx_i = P[i];
-            NTT_proc proc_i = out->ntt->ntt[idx_i];
-            mod_eltwise_reduce(v_tmp2, v_tmp, out->ntt->N, proc_i);
-            mod_eltwise_fma(out->coeffs[idx_i], v_tmp2, D_mod_p[i][j], out->ntt->N, proc_i);
+            Modulus mod_i = out->base->mods[idx_i];
+            mod_eltwise_reduce(v_tmp2, v_tmp, out->base->N, mod_i);
+            mod_eltwise_fma(out->coeffs[idx_i], v_tmp2, D_mod_p[i][j], out->base->N, mod_i);
         }
     }
 
@@ -823,7 +829,7 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
 
 void polynomial_RNSc_mod_reduce_lifted(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx)
 {
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
@@ -832,11 +838,12 @@ void polynomial_RNSc_mod_reduce_lifted(RNSc_Polynomial out, RNSc_Polynomial in, 
                 // in->coeffs[idx] is the residue mod p_idx (already < p_idx); reducing mod
                 // p_i (== p_idx) is the identity, so just copy instead of running Barrett.
                 if (out->coeffs[i] != in->coeffs[idx])
-                    memcpy(out->coeffs[i], in->coeffs[idx], out->ntt->N * sizeof(uint64_t));
+                    memcpy(out->coeffs[i], in->coeffs[idx], out->base->N * sizeof(uint64_t));
             }
             else
             {
-                mod_eltwise_reduce(out->coeffs[i], in->coeffs[idx], out->ntt->N, out->ntt->ntt[i]);
+                mod_eltwise_reduce(out->coeffs[i], in->coeffs[idx], out->base->N,
+                                   out->base->mods[i]);
             }
         }
     }
@@ -844,11 +851,11 @@ void polynomial_RNSc_mod_reduce_lifted(RNSc_Polynomial out, RNSc_Polynomial in, 
 
 void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in)
 {
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            memcpy(out->coeffs[i], in->coeffs[i], out->ntt->N * sizeof(uint64_t));
+            memcpy(out->coeffs[i], in->coeffs[i], out->base->N * sizeof(uint64_t));
         }
     }
 }
@@ -856,20 +863,20 @@ void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in)
 void polynomial_RNSc_decompose_small(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t log_base,
                                      uint64_t level)
 {
-    uint64_t *tmp = (uint64_t *)safe_aligned_malloc(out->ntt->N * sizeof(uint64_t));
+    uint64_t *tmp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
     const uint64_t mask = (1ULL << log_base) - 1;
     const uint64_t shift = log_base * level;
     int last_active = rns_mask_get_last_active_index(in->rns_mask);
     assert(last_active >= 0);
-    for (size_t i = 0; i < out->ntt->N; i++)
+    for (size_t i = 0; i < out->base->N; i++)
     {
         tmp[i] = (in->coeffs[last_active][i] >> shift) & mask;
     }
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            memcpy(out->coeffs[i], tmp, sizeof(uint64_t) * out->ntt->N);
+            memcpy(out->coeffs[i], tmp, sizeof(uint64_t) * out->base->N);
         }
     }
     free(tmp);
@@ -885,11 +892,11 @@ void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p)
 {
     blake3_hasher hasher;
     blake3_hasher_init(&hasher);
-    for (size_t i = 0; i < p->ntt->l; i++)
+    for (size_t i = 0; i < p->base->l; i++)
     {
         if (p->rns_mask & (1ULL << i))
         {
-            blake3_hasher_update(&hasher, p->coeffs[i], p->ntt->N * sizeof(uint64_t));
+            blake3_hasher_update(&hasher, p->coeffs[i], p->base->N * sizeof(uint64_t));
         }
     }
     blake3_hasher_finalize(&hasher, (uint8_t *)out, BLAKE3_OUT_LEN);
@@ -908,25 +915,25 @@ void polynomial_floor_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide
     if (mask == 0)
         return;
 
-    const uint64_t N = out->ntt->N;
+    const uint64_t N = out->base->N;
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
 
-    for (size_t idx = 0; idx < out->ntt->l; idx++)
+    for (size_t idx = 0; idx < out->base->l; idx++)
     {
         if (mask & (1ULL << idx))
         {
-            const uint64_t p = out->ntt->ntt[idx]->q;
-            for (size_t i = 0; i < out->ntt->l; i++)
+            const uint64_t p = out->base->mods[idx]->q;
+            for (size_t i = 0; i < out->base->l; i++)
             {
                 if (out->rns_mask & (1ULL << i))
                 {
                     if (i == idx)
                         continue;
-                    const uint64_t q = out->ntt->ntt[i]->q;
+                    const uint64_t q = out->base->mods[i]->q;
                     const uint64_t inv_p = inverse_mod(p, q);
-                    mod_eltwise_reduce(tmp, out->coeffs[idx], N, out->ntt->ntt[i]);
-                    mod_eltwise_sub(out->coeffs[i], out->coeffs[i], tmp, N, out->ntt->ntt[i]);
-                    mod_eltwise_scale(out->coeffs[i], out->coeffs[i], inv_p, N, out->ntt->ntt[i]);
+                    mod_eltwise_reduce(tmp, out->coeffs[idx], N, out->base->mods[i]);
+                    mod_eltwise_sub(out->coeffs[i], out->coeffs[i], tmp, N, out->base->mods[i]);
+                    mod_eltwise_scale(out->coeffs[i], out->coeffs[i], inv_p, N, out->base->mods[i]);
                 }
             }
             memset(out->coeffs[idx], 0, sizeof(uint64_t) * N);
@@ -942,30 +949,30 @@ void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide
     if (mask == 0)
         return;
 
-    const uint64_t N = out->ntt->N;
+    const uint64_t N = out->base->N;
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
 
-    for (size_t idx = 0; idx < out->ntt->l; idx++)
+    for (size_t idx = 0; idx < out->base->l; idx++)
     {
         if (mask & (1ULL << idx))
         {
-            const uint64_t p = out->ntt->ntt[idx]->q, half_p = p / 2;
+            const uint64_t p = out->base->mods[idx]->q, half_p = p / 2;
             mod_eltwise_add_scalar(out->coeffs[idx], out->coeffs[idx], half_p, N,
-                                   out->ntt->ntt[idx]);
-            for (size_t i = 0; i < out->ntt->l; i++)
+                                   out->base->mods[idx]);
+            for (size_t i = 0; i < out->base->l; i++)
             {
                 if (out->rns_mask & (1ULL << i))
                 {
                     if (i == idx)
                         continue;
-                    const uint64_t q = out->ntt->ntt[i]->q;
+                    const uint64_t q = out->base->mods[i]->q;
                     const uint64_t inv_p = inverse_mod(p, q);
                     const uint64_t half_p_mod_q = half_p % q;
-                    mod_eltwise_reduce(tmp, out->coeffs[idx], N, out->ntt->ntt[i]);
+                    mod_eltwise_reduce(tmp, out->coeffs[idx], N, out->base->mods[i]);
                     mod_eltwise_add_scalar(out->coeffs[i], out->coeffs[i], half_p_mod_q, N,
-                                           out->ntt->ntt[i]);
-                    mod_eltwise_sub(out->coeffs[i], out->coeffs[i], tmp, N, out->ntt->ntt[i]);
-                    mod_eltwise_scale(out->coeffs[i], out->coeffs[i], inv_p, N, out->ntt->ntt[i]);
+                                           out->base->mods[i]);
+                    mod_eltwise_sub(out->coeffs[i], out->coeffs[i], tmp, N, out->base->mods[i]);
+                    mod_eltwise_scale(out->coeffs[i], out->coeffs[i], inv_p, N, out->base->mods[i]);
                 }
             }
             memset(out->coeffs[idx], 0, sizeof(uint64_t) * N);
@@ -996,23 +1003,23 @@ void polynomial_round_division_RNSc(RNSc_Polynomial out)
 void polynomial_RNSc_permute(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t gen)
 {
     assert(out != in);
-    const uint64_t N = out->ntt->N, mod_mask = N - 1, split_degree = out->ntt->split_degree,
+    const uint64_t N = out->base->N, mod_mask = N - 1, split_degree = out->base->split_degree,
                    split_degree_mod = split_degree - 1;
     int split_degree_log = 0;
     while ((1ULL << split_degree_log) < split_degree)
         split_degree_log++;
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     assert(gen < 2 * N);
     assert(gen > 0);
     polynomial_RNS_zero((RNS_Polynomial)out);
 
     int64_t *temp_signed = (int64_t *)safe_aligned_malloc(N * sizeof(int64_t));
     out->rns_mask = in->rns_mask;
-    for (size_t j = 0; j < out->ntt->l; j++)
+    for (size_t j = 0; j < out->base->l; j++)
     {
         if (out->rns_mask & (1ULL << j))
         {
-            NTT_proc proc = out->ntt->ntt[j];
+            Modulus mod = out->base->mods[j];
             for (size_t i = 0; i < split_degree; i++)
             {
                 for (size_t i2 = 0; i2 < poly_size; i2++)
@@ -1024,7 +1031,7 @@ void polynomial_RNSc_permute(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t g
                     temp_signed[dst] = (idx & N) ? -val : val;
                 }
             }
-            mod_eltwise_reduce_signed(out->coeffs[j], temp_signed, N, proc);
+            mod_eltwise_reduce_signed(out->coeffs[j], temp_signed, N, mod);
         }
         else
         {
@@ -1048,8 +1055,8 @@ void polynomial_int_permute_mod_Q(IntPolynomial out, IntPolynomial in, uint64_t 
 void polynomial_RNSc_mul_by_xai(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t a)
 {
     assert(in != out);
-    assert(out->ntt->split_degree == 1);
-    const uint64_t N = out->ntt->N;
+    assert(out->base->split_degree == 1);
+    const uint64_t N = out->base->N;
     a &= ((N << 1) - 1);
     if (a == 0)
     {
@@ -1057,17 +1064,17 @@ void polynomial_RNSc_mul_by_xai(RNSc_Polynomial out, RNSc_Polynomial in, uint64_
         return;
     }
     out->rns_mask = in->rns_mask;
-    for (size_t j = 0; j < out->ntt->l; j++)
+    for (size_t j = 0; j < out->base->l; j++)
     {
         if (out->rns_mask & (1ULL << j))
         {
-            NTT_proc proc = in->ntt->ntt[j];
-            uint64_t q = proc->q;
+            Modulus mod = in->base->mods[j];
+            uint64_t q = mod->q;
             if (a < N)
             {
                 if (a % 8 == 0)
                 {
-                    mod_eltwise_negate(out->coeffs[j], in->coeffs[j] + N - a, a, proc);
+                    mod_eltwise_negate(out->coeffs[j], in->coeffs[j] + N - a, a, mod);
                     memcpy(out->coeffs[j] + a, in->coeffs[j], (N - a) * sizeof(uint64_t));
                 }
                 else
@@ -1087,7 +1094,7 @@ void polynomial_RNSc_mul_by_xai(RNSc_Polynomial out, RNSc_Polynomial in, uint64_
                 if (a % 8 == 0)
                 {
                     memcpy(out->coeffs[j], in->coeffs[j] + 2 * N - a, (a - N) * sizeof(uint64_t));
-                    mod_eltwise_negate(out->coeffs[j] + a - N, in->coeffs[j], 2 * N - a, proc);
+                    mod_eltwise_negate(out->coeffs[j] + a - N, in->coeffs[j], 2 * N - a, mod);
                 }
                 else
                 {
@@ -1108,12 +1115,12 @@ void polynomial_RNSc_mul_by_xai(RNSc_Polynomial out, RNSc_Polynomial in, uint64_
 void polynomial_RNSc_mul_by_xai_minus1(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t a)
 {
     assert(in != out);
-    assert(out->ntt->split_degree == 1);
-    const uint64_t N = out->ntt->N;
+    assert(out->base->split_degree == 1);
+    const uint64_t N = out->base->N;
     a &= ((N << 1) - 1);
     if (a == 0)
     {
-        for (size_t j = 0; j < out->ntt->l; j++)
+        for (size_t j = 0; j < out->base->l; j++)
         {
             memset(out->coeffs[j], 0, sizeof(uint64_t) * N);
         }
@@ -1121,20 +1128,20 @@ void polynomial_RNSc_mul_by_xai_minus1(RNSc_Polynomial out, RNSc_Polynomial in, 
         return;
     }
     out->rns_mask = in->rns_mask;
-    for (size_t j = 0; j < out->ntt->l; j++)
+    for (size_t j = 0; j < out->base->l; j++)
     {
         if (out->rns_mask & (1ULL << j))
         {
-            NTT_proc proc = in->ntt->ntt[j];
-            uint64_t q = proc->q;
+            Modulus mod = in->base->mods[j];
+            uint64_t q = mod->q;
             if (a < N)
             {
                 if (a % 8 == 0)
                 {
-                    mod_eltwise_negate(out->coeffs[j], in->coeffs[j] + N - a, a, proc);
-                    mod_eltwise_sub(out->coeffs[j], out->coeffs[j], in->coeffs[j], a, proc);
+                    mod_eltwise_negate(out->coeffs[j], in->coeffs[j] + N - a, a, mod);
+                    mod_eltwise_sub(out->coeffs[j], out->coeffs[j], in->coeffs[j], a, mod);
                     mod_eltwise_sub(out->coeffs[j] + a, in->coeffs[j], in->coeffs[j] + a, N - a,
-                                    proc);
+                                    mod);
                 }
                 else
                 {
@@ -1154,10 +1161,10 @@ void polynomial_RNSc_mul_by_xai_minus1(RNSc_Polynomial out, RNSc_Polynomial in, 
                 if (a % 8 == 0)
                 {
                     mod_eltwise_sub(out->coeffs[j], in->coeffs[j] + 2 * N - a, in->coeffs[j], a - N,
-                                    proc);
-                    mod_eltwise_negate(out->coeffs[j] + a - N, in->coeffs[j], 2 * N - a, proc);
+                                    mod);
+                    mod_eltwise_negate(out->coeffs[j] + a - N, in->coeffs[j], 2 * N - a, mod);
                     mod_eltwise_sub(out->coeffs[j] + a - N, out->coeffs[j] + a - N,
-                                    in->coeffs[j] + a - N, 2 * N - a, proc);
+                                    in->coeffs[j] + a - N, 2 * N - a, mod);
                 }
                 else
                 {
@@ -1227,13 +1234,13 @@ void free_polynomial_array(uint64_t size, IntPolynomial *p)
 
 void polynomial_RNS_broadcast_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t slot_idx)
 {
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in->rns_mask;
-    for (size_t i = 0; i < in->ntt->l; i++)
+    for (size_t i = 0; i < in->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->ntt->split_degree; j++)
+            for (size_t j = 0; j < out->base->split_degree; j++)
             {
                 for (size_t k = 0; k < poly_size; k++)
                 {
@@ -1247,11 +1254,11 @@ void polynomial_RNS_broadcast_slot(RNS_Polynomial out, RNS_Polynomial in, uint64
 void polynomial_RNS_broadcast_RNS_comp(RNS_Polynomial out, RNS_Polynomial in, uint64_t rns_comp)
 {
     out->rns_mask = in->rns_mask;
-    for (size_t i = 0; i < in->ntt->l; i++)
+    for (size_t i = 0; i < in->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t k = 0; k < out->ntt->N; k++)
+            for (size_t k = 0; k < out->base->N; k++)
             {
                 out->coeffs[i][k] = in->coeffs[rns_comp][k];
             }
@@ -1262,13 +1269,13 @@ void polynomial_RNS_broadcast_RNS_comp(RNS_Polynomial out, RNS_Polynomial in, ui
 void polynomial_RNS_rotate_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t rot)
 {
     assert(out != in);
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in->rns_mask;
-    for (size_t i = 0; i < in->ntt->l; i++)
+    for (size_t i = 0; i < in->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->ntt->split_degree; j++)
+            for (size_t j = 0; j < out->base->split_degree; j++)
             {
                 for (size_t k = 0; k < poly_size - rot; k++)
                 {
@@ -1286,13 +1293,13 @@ void polynomial_RNS_rotate_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t 
 
 void polynomial_RNS_copy_slot(RNS_Polynomial out, uint64_t dst, RNS_Polynomial in, uint64_t src)
 {
-    const uint64_t poly_size = out->ntt->N / out->ntt->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in->rns_mask;
-    for (size_t i = 0; i < in->ntt->l; i++)
+    for (size_t i = 0; i < in->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->ntt->split_degree; j++)
+            for (size_t j = 0; j < out->base->split_degree; j++)
             {
                 out->coeffs[i][j * poly_size + dst] = in->coeffs[i][j * poly_size + src];
             }
@@ -1302,11 +1309,11 @@ void polynomial_RNS_copy_slot(RNS_Polynomial out, uint64_t dst, RNS_Polynomial i
 
 int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
 {
-    const uint64_t N = in->ntt->N;
-    const uint64_t d = in->ntt->split_degree;
+    const uint64_t N = in->base->N;
+    const uint64_t d = in->base->split_degree;
     const uint64_t poly_size = N / d;
     out->rns_mask = in->rns_mask;
-    assert(out->ntt->N == N);
+    assert(out->base->N == N);
 
     uint64_t *prefix = (uint64_t *)safe_aligned_malloc(poly_size * d * sizeof(uint64_t));
     uint64_t *B = (uint64_t *)safe_aligned_malloc(poly_size * d * sizeof(uint64_t));
@@ -1315,12 +1322,12 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
 
     int status = 0;
 
-    for (size_t i = 0; i < in->ntt->l; i++)
+    for (size_t i = 0; i < in->base->l; i++)
     {
         if (in->rns_mask & (1ULL << i))
         {
-            NTT_proc proc = in->ntt->ntt[i];
-            const uint64_t *w_i = in->ntt->w[i];
+            Modulus mod = in->base->mods[i];
+            const uint64_t *w_i = in->base->w[i];
             uint64_t w0 = w_i[0];
 
             for (size_t s = 0; s < poly_size; s++)
@@ -1330,7 +1337,7 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
                 {
                     A_s[j] = in->coeffs[i][j * poly_size + s];
                 }
-                field_base_conversion(&B[s * d], A_s, s, 0, d, poly_size, w_i, proc);
+                field_base_conversion(&B[s * d], A_s, s, 0, d, poly_size, w_i, mod);
             }
 
             for (size_t j = 0; j < d; j++)
@@ -1339,10 +1346,10 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
             }
             for (size_t s = 1; s < poly_size; s++)
             {
-                field_ext_mul(&prefix[s * d], &prefix[(s - 1) * d], &B[s * d], d, w0, proc);
+                field_ext_mul(&prefix[s * d], &prefix[(s - 1) * d], &B[s * d], d, w0, mod);
             }
 
-            if (!field_ext_inv(T, &prefix[(poly_size - 1) * d], d, w0, proc))
+            if (!field_ext_inv(T, &prefix[(poly_size - 1) * d], d, w0, mod))
             {
                 status = -2;
                 break;
@@ -1351,21 +1358,21 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
             for (size_t s = poly_size - 1; s > 0; s--)
             {
                 uint64_t O_s[d];
-                field_ext_mul(O_s, T, &prefix[(s - 1) * d], d, w0, proc);
+                field_ext_mul(O_s, T, &prefix[(s - 1) * d], d, w0, mod);
 
                 uint64_t A_inv_s[d];
-                field_base_conversion(A_inv_s, O_s, 0, s, d, poly_size, w_i, proc);
+                field_base_conversion(A_inv_s, O_s, 0, s, d, poly_size, w_i, mod);
                 for (size_t j = 0; j < d; j++)
                 {
                     out->coeffs[i][j * poly_size + s] = A_inv_s[j];
                 }
 
-                field_ext_mul(tmp_field, T, &B[s * d], d, w0, proc);
+                field_ext_mul(tmp_field, T, &B[s * d], d, w0, mod);
                 memcpy(T, tmp_field, d * sizeof(uint64_t));
             }
 
             uint64_t A_inv_0[d];
-            field_base_conversion(A_inv_0, T, 0, 0, d, poly_size, w_i, proc);
+            field_base_conversion(A_inv_0, T, 0, 0, d, poly_size, w_i, mod);
             for (size_t j = 0; j < d; j++)
             {
                 out->coeffs[i][j * poly_size + 0] = A_inv_0[j];
@@ -1383,20 +1390,20 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
 
 int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in)
 {
-    if (in->ntt->split_degree != 1)
+    if (in->base->split_degree != 1)
         return polynomial_RNS_inverse_generic(out, in);
-    const uint64_t N = in->ntt->N;
+    const uint64_t N = in->base->N;
     out->rns_mask = in->rns_mask;
-    assert(out->ntt->N == N);
+    assert(out->base->N == N);
 
     uint64_t *prefix = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
 
-    for (size_t i = 0; i < in->ntt->l; i++)
+    for (size_t i = 0; i < in->base->l; i++)
     {
         if (in->rns_mask & (1ULL << i))
         {
-            const uint64_t q = in->ntt->ntt[i]->q;
-            NTT_proc proc = in->ntt->ntt[i];
+            const uint64_t q = in->base->mods[i]->q;
+            Modulus mod = in->base->mods[i];
             const uint64_t *a = in->coeffs[i];
 
             if (a[0] == 0)
@@ -1412,7 +1419,7 @@ int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in)
                     free(prefix);
                     return -2;
                 }
-                prefix[k] = mul_modq(prefix[k - 1], a[k], proc);
+                prefix[k] = mul_modq(prefix[k - 1], a[k], mod);
             }
 
             uint64_t t = inverse_mod(prefix[N - 1], q);
@@ -1420,8 +1427,8 @@ int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in)
             uint64_t *o = out->coeffs[i];
             for (size_t k = N - 1; k > 0; k--)
             {
-                o[k] = mul_modq(t, prefix[k - 1], proc);
-                t = mul_modq(t, a[k], proc);
+                o[k] = mul_modq(t, prefix[k - 1], mod);
+                t = mul_modq(t, a[k], mod);
             }
             o[0] = t;
         }
@@ -1460,24 +1467,24 @@ int rns_mask_get_last_active_index(uint64_t mask)
     return -1;
 }
 
-void rns_compute_scaling_factors(uint64_t *delta_out, incNTT ntt, uint64_t in_mask,
+void rns_compute_scaling_factors(uint64_t *delta_out, RNS_Base base, uint64_t in_mask,
                                  uint64_t out_mask)
 {
     uint64_t diff_mask = out_mask & ~in_mask;
-    for (size_t i = 0; i < ntt->l; i++)
+    for (size_t i = 0; i < base->l; i++)
     {
         if (out_mask & (1ULL << i))
         {
-            NTT_proc proc_i = ntt->ntt[i];
+            Modulus mod_i = base->mods[i];
             if (in_mask & (1ULL << i))
             {
                 uint64_t delta_i = 1;
-                for (size_t j = 0; j < ntt->l; j++)
+                for (size_t j = 0; j < base->l; j++)
                 {
                     if (diff_mask & (1ULL << j))
                     {
-                        uint64_t p_j = ntt->ntt[j]->q;
-                        delta_i = mul_modq(delta_i, modq(p_j, proc_i), proc_i);
+                        uint64_t p_j = base->mods[j]->q;
+                        delta_i = mul_modq(delta_i, modq(p_j, mod_i), mod_i);
                     }
                 }
                 delta_out[i] = delta_i;
@@ -1496,25 +1503,25 @@ void rns_compute_scaling_factors(uint64_t *delta_out, incNTT ntt, uint64_t in_ma
 
 void polynomial_RNSc_scaled_lift(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t *delta)
 {
-    assert(in->ntt->N == out->ntt->N);
-    const uint64_t N = out->ntt->N;
+    assert(in->base->N == out->base->N);
+    const uint64_t N = out->base->N;
 
     uint64_t local_delta[64];
     uint64_t *actual_delta = delta;
     if (actual_delta == NULL)
     {
-        rns_compute_scaling_factors(local_delta, out->ntt, in->rns_mask, out->rns_mask);
+        rns_compute_scaling_factors(local_delta, out->base, in->rns_mask, out->rns_mask);
         actual_delta = local_delta;
     }
 
-    for (size_t i = 0; i < out->ntt->l; i++)
+    for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            NTT_proc proc_i = out->ntt->ntt[i];
+            Modulus mod_i = out->base->mods[i];
             if (in->rns_mask & (1ULL << i))
             {
-                mod_eltwise_scale(out->coeffs[i], in->coeffs[i], actual_delta[i], N, proc_i);
+                mod_eltwise_scale(out->coeffs[i], in->coeffs[i], actual_delta[i], N, mod_i);
             }
             else
             {

@@ -31,18 +31,18 @@ class LWE_Key:
         self.q = ring.primes[0]  # Kept for backward compat
 
         if key is not None:
-            self.obj = lib_lwe.lib.lwe_alloc_key(self.n, self.l, ring.NTT)
+            self.obj = lib_lwe.lib.lwe_alloc_key(self.n, self.l, ring.base)
             self.set_s(key)
         elif sparse_h is not None and err_sigma is not None:
             self.obj = lib_lwe.lib.lwe_new_sparse_ternary_key(
-                self.n, self.l, ring.NTT, sparse_h, err_sigma
+                self.n, self.l, ring.base, sparse_h, err_sigma
             )
         elif sec_sigma is not None and err_sigma is not None:
             self.obj = lib_lwe.lib.lwe_new_key(
-                self.n, self.l, ring.NTT, sec_sigma, err_sigma
+                self.n, self.l, ring.base, sec_sigma, err_sigma
             )
         else:
-            self.obj = lib_lwe.lib.lwe_alloc_key(self.n, self.l, ring.NTT)
+            self.obj = lib_lwe.lib.lwe_alloc_key(self.n, self.l, ring.base)
 
     def set_s(self, key: list[int]):
         # Note: key might be flattened RNS polynomials. For LWE extraction,
@@ -94,10 +94,10 @@ class LWE:
         elif is_trivial and m is not None:
             m_arr = ffi.new("uint64_t[]", [x & 0xFFFFFFFFFFFFFFFF for x in m])
             self.obj = lib_lwe.lib.lwe_new_trivial_sample(
-                m_arr, self.n, self.l, ring.NTT
+                m_arr, self.n, self.l, ring.base
             )
         else:
-            self.obj = lib_lwe.lib.lwe_alloc_sample(self.n, self.l, ring.NTT)
+            self.obj = lib_lwe.lib.lwe_alloc_sample(self.n, self.l, ring.base)
 
     def __del__(self):
         if hasattr(self, "obj") and self.obj is not None:

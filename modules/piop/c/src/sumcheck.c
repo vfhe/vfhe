@@ -80,9 +80,9 @@ static void sumcheck_prod2_accumulate(RNS_Polynomial *g_out, RNS_Polynomial f_lo
 void sumcheck_prod2_round_pairs(RNS_Polynomial *g_out, RNS_Polynomial *tf, RNS_Polynomial *tg,
                                 uint64_t size)
 {
-    incNTT ntt = tf[0]->ntt;
-    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(ntt->N, tf[0]->rns_mask, ntt);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, tg[0]->rns_mask, ntt);
+    RNS_Base base = tf[0]->base;
+    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(base->N, tf[0]->rns_mask, base);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, tg[0]->rns_mask, base);
 
     polynomial_RNS_zero(g_out[0]);
     polynomial_RNS_zero(g_out[1]);
@@ -100,9 +100,9 @@ void sumcheck_prod2_round_pairs(RNS_Polynomial *g_out, RNS_Polynomial *tf, RNS_P
 void sumcheck_prod2_round_halves(RNS_Polynomial *g_out, RNS_Polynomial *tf, RNS_Polynomial *tg,
                                  uint64_t size)
 {
-    incNTT ntt = tf[0]->ntt;
-    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(ntt->N, tf[0]->rns_mask, ntt);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, tg[0]->rns_mask, ntt);
+    RNS_Base base = tf[0]->base;
+    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(base->N, tf[0]->rns_mask, base);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, tg[0]->rns_mask, base);
 
     polynomial_RNS_zero(g_out[0]);
     polynomial_RNS_zero(g_out[1]);
@@ -121,9 +121,9 @@ void sumcheck_prod2_round(RNS_Polynomial *g_out, RNS_Polynomial *tf, RNS_Polynom
                           uint64_t size, uint64_t eval_var_idx)
 {
     uint64_t stride = 1ULL << eval_var_idx;
-    incNTT ntt = tf[0]->ntt;
-    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(ntt->N, tf[0]->rns_mask, ntt);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, tg[0]->rns_mask, ntt);
+    RNS_Base base = tf[0]->base;
+    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(base->N, tf[0]->rns_mask, base);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, tg[0]->rns_mask, base);
 
     polynomial_RNS_zero(g_out[0]);
     polynomial_RNS_zero(g_out[1]);

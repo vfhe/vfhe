@@ -7,9 +7,18 @@ import atexit
 from vfhe.misc.libvfhe import ffi, lib
 
 
-class NTT_Processor:
+class RNS_Base_Registry:
+    """The process's native ``RNS_Base`` objects, one per ``(N, split_degree)``.
+
+    A base is shared by every `Ring` with that key, and it is append-only: a
+    ring introducing a prime extends the existing base in place rather than
+    getting its own. `register_ring_primes` is what does the extending, and it
+    returns the ring's prime *indices* into the shared pool -- which are stable,
+    unlike the pool's length (see `Ring.rns_rows`).
+    """
+
     def __init__(self):
-        self.incNTTs = {}  # (N, split_degree) -> incNTT pointer
+        self.bases = {}  # (N, split_degree) -> RNS_Base pointer
         self.primes = {}  # (N, split_degree) -> list of primes
         self.prime_to_index = {}  # (N, split_degree) -> {prime: index}
         self.lib = lib
@@ -19,10 +28,10 @@ class NTT_Processor:
 
     def register_ring_primes(self, primes, N, split_degree):
         key = (N, split_degree)
-        if key not in self.incNTTs:
+        if key not in self.bases:
             self.primes[key] = list(primes)
             self.prime_to_index[key] = {p: i for i, p in enumerate(primes)}
-            self.incNTTs[key] = self.lib.new_incomplete_ntt_list(
+            self.bases[key] = self.lib.new_rns_base(
                 ffi.new("uint64_t[]", list(primes)), split_degree, N, len(primes)
             )
         else:
@@ -31,8 +40,8 @@ class NTT_Processor:
 
             if new_primes:
                 start_idx = len(self.primes[key])
-                self.lib.incNTT_extend_with_primes(
-                    self.incNTTs[key],
+                self.lib.rns_base_extend_with_primes(
+                    self.bases[key],
                     ffi.new("uint64_t[]", new_primes),
                     len(new_primes),
                 )
@@ -46,8 +55,8 @@ class NTT_Processor:
         primes_tuple = tuple(self.primes[(N, split_degree)])
         key = (N, split_degree, in_mask, out_mask, primes_tuple)
         if key not in self.conversion_params_cache:
-            incNTT = self.incNTTs[(N, split_degree)]
-            params = self.lib.init_base_conversion_params(incNTT, in_mask, out_mask)
+            base = self.bases[(N, split_degree)]
+            params = self.lib.init_base_conversion_params(base, in_mask, out_mask)
             self.conversion_params_cache[key] = params
         return self.conversion_params_cache[key]
 
@@ -58,5 +67,18 @@ class NTT_Processor:
         self.conversion_params_cache.clear()
 
 
-NTT_processor_instance = NTT_Processor()
-atexit.register(NTT_processor_instance.cleanup)
+rns_base_registry = RNS_Base_Registry()
+atexit.register(rns_base_registry.cleanup)
+
+
+def registry() -> RNS_Base_Registry:
+    """The registry in force right now.
+
+    Call this instead of importing `rns_base_registry` directly. A registry
+    holds `lib` as an *instance* attribute, so a dynamic-extension reload
+    cannot patch it the way it patches module-level `lib` / `ffi` -- it
+    replaces the whole instance instead (`_reload.reinit_rns_base`). A name
+    bound at import time therefore keeps pointing at the retired registry, and
+    would go on building RNS bases in the unloaded library.
+    """
+    return rns_base_registry

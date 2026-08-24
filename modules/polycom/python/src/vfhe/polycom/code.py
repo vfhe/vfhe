@@ -6,7 +6,7 @@ The code is *interleaved*: it acts on a vector of ring elements
 coefficient-slot-wise and per RNS prime, so each (prime, coefficient slot)
 pair carries an independent RS codeword over Z_p. The transform is arith's
 negacyclic NTT of the codeword length, applied by the `rs_*` C kernels
-(`polycom/c/src/rscode.c`): with psi the 2n-th root of unity `ntt_new_proc`
+(`polycom/c/src/rscode.c`): with psi the 2n-th root of unity `ntt_new_plan`
 picks, position p of a length-n codeword holds P(psi^(2*brv(p)+1)), where
 brv reverses the log2(n) index bits — `ntt_forward` is CT_NR, natural in,
 bit-reversed out.
@@ -16,7 +16,7 @@ level an RS code (the FRI folding structure), and the bit-reversal puts the
 +/- pairs *adjacent*: positions 2i and 2i+1 hold P(x_i) and P(-x_i) for
 x_i = psi^(2*brv(i)+1), so folding with challenge r gives the evaluations of
 P_even + r * P_odd at the squared points — which are exactly the half-length
-code's points, since `ntt_new_proc` derives psi from the smallest quadratic
+code's points, since `ntt_new_plan` derives psi from the smallest quadratic
 non-residue mod p (a choice independent of the length) and therefore
 psi_{n/2} = psi_n^2. The per-prime scalars are applied through
 `Polynomial * list` (per-RNS-residue scaling), so a "scalar" here is one
@@ -80,22 +80,22 @@ class FoldableRS:
                 f"codeword length {self.n_d} exceeds N/split_degree = {limit}: "
                 "the ring's primes carry no root of unity of order 2 * n_d"
             )
-        # One NTT-processor array per level (indexed by global RNS prime
+        # One NTT-plan array per level (indexed by global RNS prime
         # index, matching RNS_Polynomial.coeffs), owned by this object.
-        # `rs_new_procs` sizes each array by `ring.rns_rows`, which is derived
+        # `rs_new_plans` sizes each array by `ring.rns_rows`, which is derived
         # from the ring's own mask and so is stable for the object's lifetime —
-        # unlike the shared incNTT's prime count, which grows whenever another
+        # unlike the shared RNS base's prime count, which grows whenever another
         # ring of the same (N, split_degree) introduces a prime.
-        self._procs = [
-            lib.rs_new_procs(ring.NTT, ring.mask, self.n0 << level)
+        self._plans = [
+            lib.rs_new_plans(ring.base, ring.mask, self.n0 << level)
             for level in range(d + 1)
         ]
         # roots[l][k] = psi for level l and the k-th active prime: the
-        # 2*n_l-th root the level-l transform uses. Read back from the procs
+        # 2*n_l-th root the level-l transform uses. Read back from the plans
         # so the twists below cannot drift from the kernels' convention.
         self.roots = [
-            [lib.rs_procs_root(procs, idx) for idx in ring.prime_indices]
-            for procs in self._procs
+            [lib.rs_plans_root(plans, idx) for idx in ring.prime_indices]
+            for plans in self._plans
         ]
         # twists[l][i] = x_i = psi_{l+1}^(2*brv(i)+1), the evaluation point of
         # the pair (2i, 2i+1) folding level l+1 -> l, and twists2_inv their
@@ -126,8 +126,8 @@ class FoldableRS:
     def __del__(self) -> None:
         # interpreter shutdown may already have torn the lib down
         with contextlib.suppress(Exception):
-            for procs in self._procs:
-                lib.rs_free_procs(procs, self.ring.rns_rows)
+            for plans in self._plans:
+                lib.rs_free_plans(plans, self.ring.rns_rows)
 
     def level_of(self, message: list) -> int:
         """The code level a message of this length belongs to."""
@@ -158,7 +158,7 @@ class FoldableRS:
             handle_array(message),
             size,
             len(message),
-            self._procs[level],
+            self._plans[level],
         )
         mark_ntt(word)
         return word
@@ -180,7 +180,7 @@ class FoldableRS:
             handle_array(word),
             size,
             degree,
-            self._procs[level],
+            self._plans[level],
         )
         mark_ntt(message)
         return bool(ok), message

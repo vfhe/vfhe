@@ -15,37 +15,39 @@
 // result back into the same column of the output vector. See rscode.h for the
 // evaluation-point layout the fold depends on.
 
-NTT_proc *rs_new_procs(incNTT ntt, uint64_t rns_mask, uint64_t size)
+NTT_Plan *rs_new_plans(RNS_Base base, uint64_t rns_mask, uint64_t size)
 {
     const uint64_t rows = (uint64_t)(rns_mask_get_last_active_index(rns_mask) + 1);
-    NTT_proc *procs = (NTT_proc *)safe_malloc(sizeof(NTT_proc) * rows);
+    NTT_Plan *plans = (NTT_Plan *)safe_malloc(sizeof(NTT_Plan) * rows);
     for (uint64_t i = 0; i < rows; i++)
     {
-        procs[i] = (rns_mask & (1ULL << i)) ? ntt_new_proc(size, ntt->ntt[i]->q) : NULL;
+        // Borrow the RNS_Base's modulus: one set of Barrett constants per prime,
+        // shared by this code's plan at every level.
+        plans[i] = (rns_mask & (1ULL << i)) ? ntt_new_plan(size, base->mods[i]) : NULL;
     }
-    return procs;
+    return plans;
 }
 
-void rs_free_procs(NTT_proc *procs, uint64_t count)
+void rs_free_plans(NTT_Plan *plans, uint64_t count)
 {
     for (uint64_t i = 0; i < count; i++)
     {
-        if (procs[i] != NULL)
-            ntt_free_proc(procs[i]);
+        if (plans[i] != NULL)
+            ntt_free_plan(plans[i]);
     }
-    free(procs);
+    free(plans);
 }
 
-uint64_t rs_procs_root(NTT_proc *procs, uint64_t index)
+uint64_t rs_plans_root(NTT_Plan *plans, uint64_t index)
 {
-    return procs[index] == NULL ? 0 : procs[index]->root_of_unity;
+    return plans[index] == NULL ? 0 : plans[index]->root_of_unity;
 }
 
 void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
-               NTT_proc *procs)
+               NTT_Plan *plans)
 {
-    incNTT ntt = in[0]->ntt;
-    const uint64_t N = ntt->N;
+    RNS_Base base = in[0]->base;
+    const uint64_t N = base->N;
     const uint64_t rns_mask = in[0]->rns_mask;
     uint64_t *codeword = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * size);
 
@@ -54,7 +56,7 @@ void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t 
         out[k]->rns_mask = rns_mask;
     }
 
-    for (uint64_t i = 0; i < ntt->l; i++)
+    for (uint64_t i = 0; i < base->l; i++)
     {
         if (!(rns_mask & (1ULL << i)))
             continue;
@@ -65,7 +67,7 @@ void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t 
             {
                 codeword[k] = in[k]->coeffs[i][j];
             }
-            ntt_forward(codeword, codeword, procs[i]);
+            ntt_forward(codeword, codeword, plans[i]);
             for (uint64_t k = 0; k < size; k++)
             {
                 out[k]->coeffs[i][j] = codeword[k];
@@ -77,10 +79,10 @@ void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t 
 }
 
 int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
-              NTT_proc *procs)
+              NTT_Plan *plans)
 {
-    incNTT ntt = in[0]->ntt;
-    const uint64_t N = ntt->N;
+    RNS_Base base = in[0]->base;
+    const uint64_t N = base->N;
     const uint64_t rns_mask = in[0]->rns_mask;
     uint64_t *codeword = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * size);
     int is_codeword = 1;
@@ -93,7 +95,7 @@ int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t d
         }
     }
 
-    for (uint64_t i = 0; i < ntt->l && is_codeword; i++)
+    for (uint64_t i = 0; i < base->l && is_codeword; i++)
     {
         if (!(rns_mask & (1ULL << i)))
             continue;
@@ -103,7 +105,7 @@ int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t d
             {
                 codeword[k] = in[k]->coeffs[i][j];
             }
-            ntt_reverse(codeword, codeword, procs[i]);
+            ntt_reverse(codeword, codeword, plans[i]);
             if (out != NULL)
             {
                 for (uint64_t k = 0; k < degree; k++)

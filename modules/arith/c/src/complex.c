@@ -39,7 +39,7 @@ void bit_reverse_array(double *v, uint64_t N, uint32_t prec)
 void complex_poly_round_to_RNS(RNS_Polynomial out, double *in, uint64_t N)
 {
     (void)N;
-    const uint64_t n = out->ntt->N;
+    const uint64_t n = out->base->N;
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * n);
     for (size_t i = 0; i < n; i++)
     {

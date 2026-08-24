@@ -9,8 +9,8 @@ from enum import Enum
 
 from vfhe.misc.libvfhe import ffi, lib
 
-from .ntt import NTT_processor_instance
 from .number_theory import crt, is_prime
+from .rns_base import registry
 
 
 def next_power_of_2(x):
@@ -45,7 +45,7 @@ class Ring:
                 )
 
             key = (N, temp_split_degree)
-            prime_map = NTT_processor_instance.prime_to_index[key]
+            prime_map = registry().prime_to_index[key]
             active_primes = [p for p in primes if ((mask >> prime_map[p]) & 1)]
             prime_size = [math.ceil(math.log2(p)) for p in active_primes]
             primes = active_primes
@@ -81,39 +81,39 @@ class Ring:
 
         self.bit_size = math.ceil(math.log2(self.q_l))
 
-        self.prime_indices = NTT_processor_instance.register_ring_primes(
+        self.prime_indices = registry().register_ring_primes(
             self.primes, self.N, self.split_degree
         )
-        self.NTT = NTT_processor_instance.incNTTs[(self.N, self.split_degree)]
+        self.base = registry().bases[(self.N, self.split_degree)]
         self.mask = sum(1 << idx for idx in self.prime_indices)
 
     @property
     def rns_rows(self) -> int:
         """Rows a native per-prime array must have to be indexed by this ring.
 
-        The native ``incNTT`` is shared process-wide per ``(N, split_degree)``
+        The native ``RNS_Base`` is shared process-wide per ``(N, split_degree)``
         and a ring introducing a new prime extends it in place, so its ``l``
         grows under every ring already built on it. Size buffers by this
         instead: it is one past this ring's highest prime index, derived from
         ``mask``, which never changes -- indices are handed out append-only, so
         a ring's own primes keep theirs forever. The C kernels only ever touch
         rows selected by the mask, so a shorter-than-``l`` array is safe, and
-        unlike ``_ntt_l()`` it is safe to remember: freeing with a re-read
+        unlike ``_base_l()`` it is safe to remember: freeing with a re-read
         ``l`` walks off the end of the allocation.
         """
         return self.mask.bit_length()
 
-    def _ntt_l(self) -> int:
-        """The shared incNTT's *current* prime count -- a live read.
+    def _base_l(self) -> int:
+        """The shared RNS base's *current* prime count -- a live read.
 
         This grows whenever any ring of the same ``(N, split_degree)`` is built
         with a prime this process has not seen. Never cache it, and never size
         an allocation with it; use `rns_rows`.
         """
-        return ffi.cast("incNTT", self.NTT).l
+        return ffi.cast("RNS_Base", self.base).l
 
     def get_rou_matrix(self):
-        w = self.lib.incNTT_get_rou_matrix(self.NTT)
+        w = self.lib.rns_base_get_rou_matrix(self.base)
         row_len = self.N // self.split_degree
         return [[w[idx][k] for k in range(row_len)] for idx in self.prime_indices]
 
@@ -193,7 +193,7 @@ class Ring:
     # in this file used to test against the definition of Ring, used in other files when efficiency is not required
 
     def alloc_polynomial(self):
-        return self.lib.polynomial_new_RNS_polynomial(self.N, self.mask, self.NTT)
+        return self.lib.polynomial_new_RNS_polynomial(self.N, self.mask, self.base)
 
     def scalar_array(self, value):
         scale_arr = [0] * self.rns_rows
@@ -378,7 +378,7 @@ class Polynomial:
         elif type(out) is Polynomial:
             out_: Polynomial = out
         if params is None:
-            params = NTT_processor_instance.get_conversion_params(
+            params = registry().get_conversion_params(
                 self.ring.N, self.ring.split_degree, self.rns_mask, out_.rns_mask
             )
         self.ring.lib.polynomial_base_conversion_RNSc(out_.obj, self.obj, params)

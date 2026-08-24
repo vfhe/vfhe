@@ -67,9 +67,9 @@ static void mle_dense_poly_bind_scalar(RNS_Polynomial out, RNS_Polynomial lo, RN
 void mle_dense_poly_evaluate_pairs(RNS_Polynomial *out, RNS_Polynomial *in, RNS_Polynomial a,
                                    uint64_t size)
 {
-    incNTT ntt = in[0]->ntt;
-    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    RNS_Base base = in[0]->base;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(base->N, in[0]->rns_mask, base);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, in[0]->rns_mask, base);
     for (uint64_t i = 0; i < size; i++)
     {
         mle_dense_poly_bind(out[i], in[2 * i], in[2 * i + 1], a, tmp, tmp2);
@@ -81,9 +81,9 @@ void mle_dense_poly_evaluate_pairs(RNS_Polynomial *out, RNS_Polynomial *in, RNS_
 void mle_dense_poly_evaluate_pairs_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t a,
                                           uint64_t size)
 {
-    incNTT ntt = in[0]->ntt;
-    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    RNS_Base base = in[0]->base;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(base->N, in[0]->rns_mask, base);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, in[0]->rns_mask, base);
     for (uint64_t i = 0; i < size; i++)
     {
         mle_dense_poly_bind_scalar(out[i], in[2 * i], in[2 * i + 1], a, tmp, tmp2);
@@ -95,9 +95,9 @@ void mle_dense_poly_evaluate_pairs_scalar(RNS_Polynomial *out, RNS_Polynomial *i
 void mle_dense_poly_evaluate_halves(RNS_Polynomial *out, RNS_Polynomial *in, RNS_Polynomial a,
                                     uint64_t size)
 {
-    incNTT ntt = in[0]->ntt;
-    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    RNS_Base base = in[0]->base;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(base->N, in[0]->rns_mask, base);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, in[0]->rns_mask, base);
     for (uint64_t i = 0; i < size; i++)
     {
         mle_dense_poly_bind(out[i], in[i], in[i + size], a, tmp, tmp2);
@@ -109,9 +109,9 @@ void mle_dense_poly_evaluate_halves(RNS_Polynomial *out, RNS_Polynomial *in, RNS
 void mle_dense_poly_evaluate_halves_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t a,
                                            uint64_t size)
 {
-    incNTT ntt = in[0]->ntt;
-    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(ntt->N, in[0]->rns_mask, ntt);
+    RNS_Base base = in[0]->base;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(base->N, in[0]->rns_mask, base);
+    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, in[0]->rns_mask, base);
     for (uint64_t i = 0; i < size; i++)
     {
         mle_dense_poly_bind_scalar(out[i], in[i], in[i + size], a, tmp, tmp2);
@@ -126,12 +126,12 @@ void mle_dense_poly_evaluate(RNS_Polynomial *out, RNS_Polynomial *in, RNS_Polyno
     uint64_t stride = 1ULL << eval_var_idx;
     uint64_t size = 1ULL << (num_vars - 1);
 
-    incNTT ntt = in[0]->ntt;
-    uint64_t N = ntt->N;
+    RNS_Base base = in[0]->base;
+    uint64_t N = base->N;
     uint64_t rns_mask = in[0]->rns_mask;
 
-    RNS_Polynomial temp = polynomial_new_RNS_polynomial(N, rns_mask, ntt);
-    RNS_Polynomial temp2 = polynomial_new_RNS_polynomial(N, rns_mask, ntt);
+    RNS_Polynomial temp = polynomial_new_RNS_polynomial(N, rns_mask, base);
+    RNS_Polynomial temp2 = polynomial_new_RNS_polynomial(N, rns_mask, base);
 
     for (uint64_t i = 0; i < size; i++)
     {
@@ -153,12 +153,12 @@ void mle_dense_poly_evaluate_scalar(RNS_Polynomial *out, RNS_Polynomial *in, uin
     uint64_t stride = 1ULL << eval_var_idx;
     uint64_t size = 1ULL << (num_vars - 1);
 
-    incNTT ntt = in[0]->ntt;
-    uint64_t N = ntt->N;
+    RNS_Base base = in[0]->base;
+    uint64_t N = base->N;
     uint64_t rns_mask = in[0]->rns_mask;
 
-    RNS_Polynomial temp = polynomial_new_RNS_polynomial(N, rns_mask, ntt);
-    RNS_Polynomial temp2 = polynomial_new_RNS_polynomial(N, rns_mask, ntt);
+    RNS_Polynomial temp = polynomial_new_RNS_polynomial(N, rns_mask, base);
+    RNS_Polynomial temp2 = polynomial_new_RNS_polynomial(N, rns_mask, base);
 
     for (uint64_t i = 0; i < size; i++)
     {
