@@ -18,6 +18,7 @@ lib_sources += files(
     'c/src/ntt_portable.c',
     'c/src/ntt_scalar.c',
     'c/src/number_theory.c',
+    'c/src/pmf.c',
     'c/src/rns_polynomial.c',
     'c/src/rns_vector.c',
 )

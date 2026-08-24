@@ -6,16 +6,11 @@ from math import log2
 
 from vfhe.misc.libvfhe import ffi, lib
 
-from .polynomial import Polynomial, Ring, repr
-
 # The AVX-512 complex FFT casts these buffers to __m512d and uses aligned loads,
-# so they must be 64-byte aligned; more than cffi's default. Back them with the
-# engine's posix_memalign allocator (freed via libc free on GC).
-_aligned64 = ffi.new_allocator(
-    alloc=lambda size: lib.safe_aligned_malloc(size),
-    free=lambda ptr: lib.free(ptr),
-    should_clear_after_alloc=True,
-)
+# so they must be 64-byte aligned; more than cffi's default. Shared with the other
+# over-aligned wrappers rather than kept private here.
+from ._alloc import aligned64 as _aligned64
+from .polynomial import Polynomial, Ring, repr
 
 
 class ComplexRing:

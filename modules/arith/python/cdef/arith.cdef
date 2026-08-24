@@ -129,3 +129,19 @@ void field_base_conversion(uint64_t *out, const uint64_t *in,
                            uint64_t d, uint64_t poly_size, const uint64_t *w_i, void *mod);
 void ntt_free_plan(void *plan);
 uint64_t inverse_mod_eea(uint64_t a, uint64_t p);
+
+// --- pseudo-Mersenne prime field (p = 2^n - c) ---
+// The parameter block stays opaque -- accessors, not a cdef'd struct -- so the
+// AVX-512 phase can add members without moving the ABI. An element is
+// pmf_limbs() uint64 words of 52-bit limbs, little-endian, in a 64-byte-aligned
+// buffer of 8 lanes whose upper lanes are always zero.
+void *pmf_new_params(uint64_t n, uint64_t c);
+void pmf_free_params(void *params);
+uint64_t pmf_limbs(void *params);
+uint64_t pmf_byte_length(void *params);
+void pmf_add(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
+void pmf_sub(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
+void pmf_neg(uint64_t *out, const uint64_t *a, void *params);
+void pmf_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
+int pmf_is_equal(const uint64_t *a, const uint64_t *b, void *params);
+void pmf_canonicalize(uint64_t *out, const uint64_t *in, void *params);
