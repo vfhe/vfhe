@@ -4,8 +4,9 @@
 from .complex import ComplexPolynomial, ComplexRing
 from .field import Field, FieldElement
 from .multiprecision import Multiprecision
-from .number_theory import crt, is_prime
+from .number_theory import crt, gen_pseudo_mersenne_prime, is_prime
 from .polynomial import Polynomial, Ring, repr
+from .pseudo_mersenne import PseudoMersenneElement, PseudoMersenneField
 
 __all__ = [
     "ComplexPolynomial",
@@ -14,8 +15,11 @@ __all__ = [
     "FieldElement",
     "Multiprecision",
     "Polynomial",
+    "PseudoMersenneElement",
+    "PseudoMersenneField",
     "Ring",
     "crt",
+    "gen_pseudo_mersenne_prime",
     "is_prime",
     "repr",
 ]
