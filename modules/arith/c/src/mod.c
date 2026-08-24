@@ -68,6 +68,11 @@ uint64_t mul_modq(uint64_t a, uint64_t b, NTT_proc proc)
 
 void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_mul_gen(out, in1, in2, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_mul_32(out, in1, in2, n, proc);
@@ -84,6 +89,11 @@ void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NT
 
 void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_mul_addto_gen(out, in1, in2, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_mul_addto_32(out, in1, in2, n, proc);
@@ -100,6 +110,11 @@ void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
 
 void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_mul_subto_gen(out, in1, in2, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_mul_subto_32(out, in1, in2, n, proc);
@@ -116,6 +131,11 @@ void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
 
 void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_scale_gen(out, in, scale, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_scale_32(out, in, scale, n, proc);
@@ -132,6 +152,11 @@ void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, 
 
 void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_fma_gen(out, in, scale, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_fma_32(out, in, scale, n, proc);
@@ -148,6 +173,11 @@ void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NT
 
 void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_add_scalar_gen(out, in, scalar, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_add_scalar_32(out, in, scalar, n, proc);
@@ -164,6 +194,11 @@ void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64
 
 void mod_eltwise_sub_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_sub_scalar_gen(out, in, scalar, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_sub_scalar_32(out, in, scalar, n, proc);
@@ -180,6 +215,11 @@ void mod_eltwise_sub_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64
 
 void mod_eltwise_negate(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_negate_gen(out, in, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_negate_32(out, in, n, proc);
@@ -196,6 +236,11 @@ void mod_eltwise_negate(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc)
 
 void mod_eltwise_add(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_add_gen(out, in1, in2, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_add_32(out, in1, in2, n, proc);
@@ -212,6 +257,11 @@ void mod_eltwise_add(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NT
 
 void mod_eltwise_sub(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_sub_gen(out, in1, in2, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_sub_32(out, in1, in2, n, proc);
@@ -228,6 +278,11 @@ void mod_eltwise_sub(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NT
 
 void mod_eltwise_reduce(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_reduce_gen(out, in, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_reduce_32(out, in, n, proc);
@@ -244,6 +299,11 @@ void mod_eltwise_reduce(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc)
 
 void mod_eltwise_reduce_signed(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_eltwise_reduce_signed_gen(out, in, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_eltwise_reduce_signed_32(out, in, n, proc);
@@ -261,6 +321,11 @@ void mod_eltwise_reduce_signed(uint64_t *out, int64_t *in, uint64_t n, NTT_proc 
 void mod_reduce_array_mp(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
                          NTT_proc proc)
 {
+    if (n < MOD_MIN_VECTOR_LEN)
+    {
+        mod_reduce_array_mp_gen(out, in_high, in_low, n, proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         mod_reduce_array_mp_32(out, in_high, in_low, n, proc);

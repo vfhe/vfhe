@@ -72,9 +72,6 @@ def interpolate_evals(evals: tuple, r):
         return evals[0] + r * (evals[1] - evals[0])
     if isinstance(evals[0], Polynomial):
         ring = evals[0].ring
-        # The integer nodes as constant ring elements (`Polynomial - int`
-        # only supports 0).
-        nodes = [Polynomial(ring).from_array([j]) for j in range(k + 1)]
         total = None
         for t in range(k + 1):
             num = None  # prod_{j != t} (r - j), a ring element
@@ -82,7 +79,7 @@ def interpolate_evals(evals: tuple, r):
             for j in range(k + 1):
                 if j == t:
                     continue
-                factor = r - nodes[j]
+                factor = r - j
                 num = factor if num is None else num * factor
                 denom *= t - j
             inv = [pow(denom % p, p - 2, p) for p in ring.primes]
