@@ -81,10 +81,8 @@ def pair_digest(pair: tuple[Polynomial, Polynomial]) -> bytes:
 
     Both ring elements are hashed with the library's `Polynomial.get_hash`
     and the two digests hashed together, so the leaf binds the pair as an
-    ordered unit. Caveat inherited from arith: `get_hash()` calls
-    `to_NTT()`, converting the entry in place — the same entry-inspection
-    hazard the MLE kernels have (ARITH-2), harmless here only because
-    codeword entries are always in NTT form.
+    ordered unit. `get_hash` hashes the NTT form and leaves the entry alone,
+    so hashing a codeword never disturbs it.
     """
     lo, hi = pair
     return hash_bytes(

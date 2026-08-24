@@ -305,6 +305,18 @@ NTT_proc ntt_new_proc(uint64_t n, uint64_t q)
     res->mp_w1 = (uint64_t)(((unsigned __int128)1 << 52) % q);
     res->mp_w2 = (uint64_t)(((unsigned __int128)1 << 104) % q);
 
+    if (n < NTT_MIN_VECTOR_LEN)
+    {
+        // No vectorized stage can run at this length, and the tables below would
+        // be empty (they are sized n / 16). Build the scalar ones instead; the
+        // transforms and the free path branch on proc->n the same way.
+        ntt_scalar_precompute(n, q, root_of_unity, (uint64_t ***)&res->ws_fwd);
+        ntt_scalar_precompute(n, q, inv_root_of_unity, (uint64_t ***)&res->ws_inv);
+        res->w_precon_fwd = NULL;
+        res->w_precon_inv = NULL;
+        return res;
+    }
+
     ntt_precompute_fwd(n, q, root_of_unity, (__m512i ***)&res->ws_fwd,
                        (__m512i ***)&res->w_precon_fwd);
     ntt_precompute_inv(n, q, inv_root_of_unity, (__m512i ***)&res->ws_inv,
@@ -314,6 +326,18 @@ NTT_proc ntt_new_proc(uint64_t n, uint64_t q)
 
 void ntt_forward(uint64_t *out, uint64_t *in, NTT_proc proc)
 {
+    if (proc->n < NTT_MIN_VECTOR_LEN)
+    {
+        if (out != in)
+        {
+            for (size_t i = 0; i < proc->n; i++)
+            {
+                out[i] = in[i];
+            }
+        }
+        ntt_CT_NR_gen(out, proc->n, proc->q, ((uint64_t **)proc->ws_fwd)[0], proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         ntt_forward_32(out, in, proc);
@@ -330,6 +354,18 @@ void ntt_forward(uint64_t *out, uint64_t *in, NTT_proc proc)
 
 void ntt_reverse(uint64_t *out, uint64_t *in, NTT_proc proc)
 {
+    if (proc->n < NTT_MIN_VECTOR_LEN)
+    {
+        if (out != in)
+        {
+            for (size_t i = 0; i < proc->n; i++)
+            {
+                out[i] = in[i];
+            }
+        }
+        ntt_GS_RN_gen(out, proc->n, proc->q, ((uint64_t **)proc->ws_inv)[0], proc);
+        return;
+    }
     if (proc->q < (1ULL << 32))
     {
         ntt_reverse_32(out, in, proc);
@@ -346,6 +382,13 @@ void ntt_reverse(uint64_t *out, uint64_t *in, NTT_proc proc)
 
 void ntt_free_proc(NTT_proc proc)
 {
+    if (proc->n < NTT_MIN_VECTOR_LEN)
+    {
+        ntt_scalar_free_precompute((uint64_t **)proc->ws_fwd);
+        ntt_scalar_free_precompute((uint64_t **)proc->ws_inv);
+        free(proc);
+        return;
+    }
     ntt_free_precompute((__m512i **)proc->ws_fwd, (__m512i **)proc->w_precon_fwd, proc->n);
     ntt_free_precompute((__m512i **)proc->ws_inv, (__m512i **)proc->w_precon_inv, proc->n);
     free(proc);

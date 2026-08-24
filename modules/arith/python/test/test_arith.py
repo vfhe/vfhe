@@ -194,3 +194,168 @@ def test_fast_inverse_generic(split_degree):
     one.to_coeff()
     coeffs = one.get_polynomial()
     assert coeffs[0] == 1 and all(c == 0 for c in coeffs[1:])
+
+
+# --------------------------------------------------------------------------
+# Short transforms and short element-wise lengths
+#
+# The vectorized kernels need two AVX512 lane groups per NTT butterfly stage
+# and one per element-wise step, so below those the transforms used to skip
+# every stage (forward) or walk off the buffer (inverse), and the element-wise
+# kernels computed nothing at all. Both now fall back to the size-generic
+# scalar path, so the results must match the big-int oracle at every length --
+# and, since only one engine is loaded per process, the oracle is what pins
+# this down rather than a cross-engine comparison.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("n", "split_degree"),
+    [(4, 1), (8, 1), (16, 1), (16, 4), (32, 4), (64, 16), (64, 4)],
+)
+def test_short_transform_matches_oracle(n, split_degree):
+    r = Ring(n, prime_size=[30], split_degree=split_degree)
+    q = r.primes[0]
+    a_c = [rng.randrange(q) for _ in range(n)]
+    b_c = [rng.randrange(q) for _ in range(n)]
+    a = Polynomial(r).from_array(a_c)
+    b = Polynomial(r).from_array(b_c)
+    assert (a * b).get_polynomial() == negacyclic_mul(a_c, b_c, q, n)
+    # forward then inverse is the identity (the inverse used to segfault here)
+    round_trip = a.copy()
+    round_trip.to_coeff()
+    round_trip.to_NTT()
+    assert round_trip.get_polynomial() == a_c
+
+
+@pytest.mark.parametrize(("n", "split_degree"), [(16, 4), (64, 16), (8, 1)])
+def test_short_elementwise_matches_oracle(n, split_degree):
+    """Element-wise ops on a ring whose per-block length is under one vector."""
+    r = Ring(n, prime_size=[30], split_degree=split_degree)
+    q = r.primes[0]
+    coeffs = [rng.randrange(q) for _ in range(n)]
+    for as_ntt in (True, False):
+        a = Polynomial(r).from_array(coeffs)
+        if not as_ntt:
+            a.to_coeff()
+        # adding a constant touches only the first N/split_degree slots, which
+        # is where a dropped vector tail used to make it a silent no-op
+        assert (a + 5).get_polynomial() == [(coeffs[0] + 5) % q, *coeffs[1:]]
+        assert (a * 3).get_polynomial() == [(c * 3) % q for c in coeffs]
+        assert (-a).get_polynomial() == [(q - c) % q for c in coeffs]
+        assert (a + a).get_polynomial() == [(2 * c) % q for c in coeffs]
+        assert (a - a) == 0
+
+
+# --------------------------------------------------------------------------
+# Representation hygiene
+# --------------------------------------------------------------------------
+
+
+def test_reading_a_polynomial_preserves_its_representation(ring):
+    """Readers convert a copy, never the object being read.
+
+    A reader that converted in place left a table in mixed representations,
+    and the next C kernel over it folded the wrong data and returned silent
+    garbage with no error anywhere.
+    """
+    for target in (repr.ntt, repr.coeff):
+        a = ring.random_element()
+        a.to_repr(target)
+        expected = a.get_polynomial()
+
+        a.get_polynomial()
+        list(a)
+        a.get_coeff_matrix()
+        a.get_coeff_matrix(repr=repr.ntt)
+        a.get_hash()
+        # the comparisons matter for their side effect, not their value
+        _ = a == 0
+        _ = a == [0, 0]
+        _ = a == ring.random_element()
+
+        assert a.repr == target
+        # and the value is untouched, not just the flag
+        assert a.get_polynomial() == expected
+
+
+def test_to_repr_rejects_a_non_representation(ring):
+    a = ring.random_element()
+    with pytest.raises(ValueError, match="not a data representation"):
+        a.to_repr(repr.empty)
+
+
+# --------------------------------------------------------------------------
+# Integer operands
+# --------------------------------------------------------------------------
+
+
+def test_scaling_by_zero_gives_a_polynomial(ring):
+    a = ring.random_element()
+    scaled = a * 0
+    assert isinstance(scaled, Polynomial)
+    assert scaled.ring is ring and scaled == 0
+    in_place = ring.random_element()
+    in_place *= 0
+    assert isinstance(in_place, Polynomial) and in_place == 0
+
+
+def test_integer_operands_are_symmetric(ring):
+    """+, -, += and -= all take any int, not just 0."""
+    coeffs = [rng.randrange(1 << 20) for _ in range(N)]
+    for target in (repr.ntt, repr.coeff):
+
+        def fresh(target=target):
+            p = Polynomial(ring).from_array(coeffs)
+            p.to_repr(target)
+            return p
+
+        assert fresh().__add__(7).get_polynomial()[0] == coeffs[0] + 7
+        assert fresh().__sub__(7).get_polynomial()[0] == coeffs[0] - 7
+        assert (7 + fresh()).get_polynomial()[0] == coeffs[0] + 7
+        assert (7 - fresh()).get_polynomial(signed=True)[0] == 7 - coeffs[0]
+        assert fresh().__add__(-7).get_polynomial()[0] == coeffs[0] - 7
+
+        acc = fresh()
+        acc += 7
+        assert acc.get_polynomial()[0] == coeffs[0] + 7
+        acc -= 7
+        assert acc.get_polynomial()[:2] == coeffs[:2]
+
+        # the int operand leaves the representation alone
+        assert (fresh() + 7).repr == target
+        # and the other coefficients with it
+        assert fresh().__sub__(7).get_polynomial()[1:] == coeffs[1:]
+
+    with pytest.raises(AssertionError, match="int64"):
+        Polynomial(ring).from_array(coeffs) + 2**63
+
+
+# --------------------------------------------------------------------------
+# The shared incNTT
+# --------------------------------------------------------------------------
+
+
+def test_rns_rows_is_stable_when_the_incntt_grows():
+    """A ring's row count must not follow the shared incNTT's prime count.
+
+    The incNTT of an (N, split_degree) pair is process-global and grows in
+    place when a ring introduces a new prime, so `_ntt_l()` increases under
+    rings built earlier. Anything an allocation was sized with has to come
+    from the ring's own mask instead: re-reading the live count and freeing
+    with it walks off the end of the array.
+    """
+    # Own the (N, split_degree) key so the growth below is ours to observe.
+    first = Ring(64, prime_size=[30], split_degree=1)
+    rows = first.rns_rows
+    assert rows == first._ntt_l() == 1
+
+    second = Ring(64, prime_size=[30, 31], split_degree=1)
+    assert first._ntt_l() == 2  # the shared count grew under `first`
+    assert first.rns_rows == rows  # the ring's own row count did not
+    assert second.rns_rows == 2
+
+    # and `first` still allocates and computes correctly afterwards
+    a = first.random_element()
+    assert (a - a) == 0
+    assert len(first.scalar_array(3)) == rows

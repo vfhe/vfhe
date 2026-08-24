@@ -5,6 +5,41 @@
 
 #include <arith.h>
 
+// Size-generic scalar declarations (mod_scalar.c / ntt_scalar.c). Compiled into
+// every engine: the vectorized kernels below need n >= 8 (element-wise) or
+// n >= 16 (NTT) to do any work at all, so the dispatchers in mod.c / ntt.c hand
+// shorter lengths to these, and the portable engine is built entirely on them.
+void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
+void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
+                               NTT_proc proc);
+void mod_eltwise_mul_subto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
+                               NTT_proc proc);
+void mod_eltwise_scale_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
+void mod_eltwise_fma_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc);
+void mod_eltwise_add_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
+                                NTT_proc proc);
+void mod_eltwise_sub_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
+                                NTT_proc proc);
+void mod_eltwise_negate_gen(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
+void mod_eltwise_add_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
+void mod_eltwise_sub_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc);
+void mod_eltwise_reduce_gen(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc);
+void mod_eltwise_reduce_signed_gen(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc);
+void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
+                             NTT_proc proc);
+
+// The NTT length below which the vectorized transforms cannot run: they consume
+// two AVX512 lane groups per butterfly stage, and their twiddle tables are
+// sized `n / 16`, so nothing is precomputed and no stage executes under it.
+#define NTT_MIN_VECTOR_LEN 16
+// Likewise for the element-wise kernels: one lane group, `n / 8` iterations.
+#define MOD_MIN_VECTOR_LEN 8
+
+void ntt_scalar_precompute(uint64_t n, uint64_t q, uint64_t root_of_unity, uint64_t ***out_ws);
+void ntt_scalar_free_precompute(uint64_t **ws);
+void ntt_CT_NR_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc proc);
+void ntt_GS_RN_gen(uint64_t *a, uint64_t n, uint64_t q, uint64_t *ws, NTT_proc proc);
+
 // 32-bit declarations
 void ntt_forward_32(uint64_t *out, uint64_t *in, NTT_proc proc);
 void ntt_reverse_32(uint64_t *out, uint64_t *in, NTT_proc proc);
