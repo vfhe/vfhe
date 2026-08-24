@@ -12,81 +12,79 @@
 #include <arith.h>
 #include "arith_internal.h"
 
-void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
+void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     for (size_t i = 0; i < n; i++)
-        out[i] = modq((unsigned __int128)in1[i] * in2[i], proc);
+        out[i] = modq((unsigned __int128)in1[i] * in2[i], mod);
 }
 
-void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                               NTT_proc proc)
-{
-    for (size_t i = 0; i < n; i++)
-    {
-        uint64_t prod = modq((unsigned __int128)in1[i] * in2[i], proc);
-        out[i] = add_modq(out[i], prod, proc->q);
-    }
-}
-
-void mod_eltwise_mul_subto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                               NTT_proc proc)
+void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     for (size_t i = 0; i < n; i++)
     {
-        uint64_t prod = modq((unsigned __int128)in1[i] * in2[i], proc);
-        out[i] = sub_modq(out[i], prod, proc->q);
+        uint64_t prod = modq((unsigned __int128)in1[i] * in2[i], mod);
+        out[i] = add_modq(out[i], prod, mod->q);
     }
 }
 
-void mod_eltwise_scale_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc)
+void mod_eltwise_mul_subto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
-    uint64_t s = scale % proc->q;
-    for (size_t i = 0; i < n; i++)
-        out[i] = modq((unsigned __int128)in[i] * s, proc);
-}
-
-void mod_eltwise_fma_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc)
-{
-    uint64_t s = scale % proc->q;
     for (size_t i = 0; i < n; i++)
     {
-        uint64_t prod = modq((unsigned __int128)in[i] * s, proc);
-        out[i] = (out[i] + prod) % proc->q;
+        uint64_t prod = modq((unsigned __int128)in1[i] * in2[i], mod);
+        out[i] = sub_modq(out[i], prod, mod->q);
     }
 }
 
-void mod_eltwise_add_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
+void mod_eltwise_scale_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
+    uint64_t s = scale % mod->q;
     for (size_t i = 0; i < n; i++)
-        out[i] = (in1[i] + in2[i]) % proc->q;
+        out[i] = modq((unsigned __int128)in[i] * s, mod);
 }
 
-void mod_eltwise_sub_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
+void mod_eltwise_fma_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
+    uint64_t s = scale % mod->q;
     for (size_t i = 0; i < n; i++)
-        out[i] = (in1[i] + proc->q - in2[i]) % proc->q;
+    {
+        uint64_t prod = modq((unsigned __int128)in[i] * s, mod);
+        out[i] = (out[i] + prod) % mod->q;
+    }
 }
 
-void mod_eltwise_negate_gen(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc)
+void mod_eltwise_add_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     for (size_t i = 0; i < n; i++)
-        out[i] = (proc->q - (in[i] % proc->q)) % proc->q;
+        out[i] = (in1[i] + in2[i]) % mod->q;
 }
 
-void mod_eltwise_reduce_gen(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc)
+void mod_eltwise_sub_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     for (size_t i = 0; i < n; i++)
-        out[i] = in[i] % proc->q;
+        out[i] = (in1[i] + mod->q - in2[i]) % mod->q;
 }
 
-void mod_eltwise_reduce_signed_gen(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc)
+void mod_eltwise_negate_gen(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
 {
-    uint64_t q = proc->q;
+    for (size_t i = 0; i < n; i++)
+        out[i] = (mod->q - (in[i] % mod->q)) % mod->q;
+}
+
+void mod_eltwise_reduce_gen(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
+{
+    for (size_t i = 0; i < n; i++)
+        out[i] = in[i] % mod->q;
+}
+
+void mod_eltwise_reduce_signed_gen(uint64_t *out, int64_t *in, uint64_t n, Modulus mod)
+{
+    uint64_t q = mod->q;
     for (size_t i = 0; i < n; i++)
     {
         int64_t val = in[i];
         uint64_t abs_val = (val < 0) ? -(uint64_t)val : (uint64_t)val;
-        uint64_t r = modq(abs_val, proc);
+        uint64_t r = modq(abs_val, mod);
         if (val < 0)
         {
             out[i] = (r == 0) ? 0 : q - r;
@@ -99,27 +97,27 @@ void mod_eltwise_reduce_signed_gen(uint64_t *out, int64_t *in, uint64_t n, NTT_p
 }
 
 void mod_eltwise_add_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                                NTT_proc proc)
+                                Modulus mod)
 {
-    uint64_t s = scalar % proc->q;
+    uint64_t s = scalar % mod->q;
     for (size_t i = 0; i < n; i++)
-        out[i] = (in[i] + s) % proc->q;
+        out[i] = (in[i] + s) % mod->q;
 }
 
 void mod_eltwise_sub_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                                NTT_proc proc)
+                                Modulus mod)
 {
-    uint64_t s = scalar % proc->q;
+    uint64_t s = scalar % mod->q;
     for (size_t i = 0; i < n; i++)
-        out[i] = (in[i] + proc->q - s) % proc->q;
+        out[i] = (in[i] + mod->q - s) % mod->q;
 }
 
 void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                             NTT_proc proc)
+                             Modulus mod)
 {
     for (size_t i = 0; i < n; i++)
     {
         unsigned __int128 val = ((unsigned __int128)in_high[i] << 64) | in_low[i];
-        out[i] = modq(val, proc);
+        out[i] = modq(val, mod);
     }
 }

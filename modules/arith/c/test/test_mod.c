@@ -90,7 +90,7 @@ static void check_ops(uint64_t q_bits)
 {
     const uint64_t n = 1024;
     const uint64_t q = next_special_prime(1ULL << q_bits, n, true);
-    NTT_proc proc = ntt_new_proc(n, q);
+    Modulus mod = mod_new(q);
 
     uint64_t *in1 = safe_aligned_malloc(n * sizeof(uint64_t));
     uint64_t *in2 = safe_aligned_malloc(n * sizeof(uint64_t));
@@ -104,44 +104,44 @@ static void check_ops(uint64_t q_bits)
 
     const uint64_t scale = 0x123456789ABCDEFULL, scalar = 0x9876543210ABCDEFULL;
 
-    mod_eltwise_add(out, in1, in2, n, proc);
+    mod_eltwise_add(out, in1, in2, n, mod);
     ref_add(ref, in1, in2, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
-    mod_eltwise_sub(out, in1, in2, n, proc);
+    mod_eltwise_sub(out, in1, in2, n, mod);
     ref_sub(ref, in1, in2, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
-    mod_eltwise_mul(out, in1, in2, n, proc);
+    mod_eltwise_mul(out, in1, in2, n, mod);
     ref_mul(ref, in1, in2, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
-    mod_eltwise_scale(out, in1, scale, n, proc);
+    mod_eltwise_scale(out, in1, scale, n, mod);
     ref_scale(ref, in1, scale, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
     for (uint64_t i = 0; i < n; i++)
         out[i] = ref[i] = i % q;
-    mod_eltwise_fma(out, in1, scale, n, proc);
+    mod_eltwise_fma(out, in1, scale, n, mod);
     ref_fma(ref, in1, scale, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
-    mod_eltwise_add_scalar(out, in1, scalar, n, proc);
+    mod_eltwise_add_scalar(out, in1, scalar, n, mod);
     ref_add_scalar(ref, in1, scalar, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
-    mod_eltwise_sub_scalar(out, in1, scalar, n, proc);
+    mod_eltwise_sub_scalar(out, in1, scalar, n, mod);
     ref_sub_scalar(ref, in1, scalar, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
-    mod_eltwise_negate(out, in1, n, proc);
+    mod_eltwise_negate(out, in1, n, mod);
     ref_negate(ref, in1, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
 
     uint64_t *large = safe_aligned_malloc(n * sizeof(uint64_t));
     for (uint64_t i = 0; i < n; i++)
         large[i] = 0xFFFFFFFFFFFFFFFFULL ^ (i * 0x12345678ULL);
-    mod_eltwise_reduce(out, large, n, proc);
+    mod_eltwise_reduce(out, large, n, mod);
     ref_reduce(ref, large, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
     free(large);
@@ -160,7 +160,7 @@ static void check_ops(uint64_t q_bits)
         else
             sig[i] = (i % 2 ? 1 : -1) * (int64_t)(i * 0x12345678ULL);
     }
-    mod_eltwise_reduce_signed(out, sig, n, proc);
+    mod_eltwise_reduce_signed(out, sig, n, mod);
     ref_reduce_signed(ref, sig, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
     free(sig);
@@ -172,7 +172,7 @@ static void check_ops(uint64_t q_bits)
         hi[i] = 0xAAAAAAAAAAAAAAAAULL ^ (i * 0x11111111ULL);
         lo[i] = 0x5555555555555555ULL ^ (i * 0x22222222ULL);
     }
-    mod_reduce_array_mp(out, hi, lo, n, proc);
+    mod_reduce_array_mp(out, hi, lo, n, mod);
     ref_reduce_mp(ref, hi, lo, n, q);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
     free(hi);
@@ -182,19 +182,19 @@ static void check_ops(uint64_t q_bits)
     free(in2);
     free(out);
     free(ref);
-    ntt_free_proc(proc);
+    mod_free(mod);
 }
 
 void test_modq_scalar(void)
 {
     const uint64_t q = next_special_prime(1ULL << 50, 1024, true);
-    NTT_proc proc = ntt_new_proc(1024, q);
+    Modulus mod = mod_new(q);
     for (int i = 0; i < 200; i++)
     {
         unsigned __int128 v = ((unsigned __int128)rand() << 64) | (unsigned)rand();
-        TEST_ASSERT_EQUAL_UINT64(ref_modq(v, q), modq(v, proc));
+        TEST_ASSERT_EQUAL_UINT64(ref_modq(v, q), modq(v, mod));
     }
-    ntt_free_proc(proc);
+    mod_free(mod);
 }
 
 void test_mod_eltwise_sweep(void)

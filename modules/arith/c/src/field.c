@@ -23,9 +23,9 @@ static void poly_copy(uint64_t *dest, const uint64_t *src, uint64_t n)
 }
 
 static int poly_divrem(uint64_t *q, uint64_t *r, const uint64_t *f, const uint64_t *g, uint64_t n,
-                       NTT_proc proc)
+                       Modulus mod)
 {
-    uint64_t p = proc->q;
+    uint64_t p = mod->q;
     poly_set_zero(q, n);
     poly_copy(r, f, n);
 
@@ -40,13 +40,13 @@ static int poly_divrem(uint64_t *q, uint64_t *r, const uint64_t *f, const uint64
     int deg_r = poly_deg(r, n);
     while (deg_r >= deg_g && deg_r >= 0)
     {
-        uint64_t coeff = mul_modq(r[deg_r], inv_lead_g, proc);
+        uint64_t coeff = mul_modq(r[deg_r], inv_lead_g, mod);
         uint64_t shift = (uint64_t)(deg_r - deg_g);
         q[shift] = coeff;
 
         for (int j = 0; j <= deg_g; ++j)
         {
-            uint64_t term = mul_modq(coeff, g[j], proc);
+            uint64_t term = mul_modq(coeff, g[j], mod);
             r[shift + j] = sub_modq(r[shift + j], term, p);
         }
 
@@ -57,32 +57,10 @@ static int poly_divrem(uint64_t *q, uint64_t *r, const uint64_t *f, const uint64
 
 // Field operations implementation
 
-NTT_proc field_new_proc(uint64_t q)
-{
-    uint64_t k = 64;
-    unsigned __int128 m_128 = ((unsigned __int128)1 << k) / q;
-    while (m_128 < (1ULL << 63))
-    {
-        k++;
-        m_128 = ((unsigned __int128)1 << k) / q;
-    }
-    uint64_t m = (uint64_t)m_128;
-    NTT_proc res = (NTT_proc)malloc(sizeof(struct _NTT_proc));
-    res->n = 1;
-    res->q = q;
-    res->root_of_unity = 0;
-    res->inv_root_of_unity = 0;
-    res->k = k;
-    res->m = m;
-    res->m52 = (k - 52 >= 64) ? 0 : (m >> (k - 52));
-    res->mp_w1 = (uint64_t)(((unsigned __int128)1 << 52) % q);
-    res->mp_w2 = (uint64_t)(((unsigned __int128)1 << 104) % q);
-    res->ws_fwd = NULL;
-    res->w_precon_fwd = NULL;
-    res->ws_inv = NULL;
-    res->w_precon_inv = NULL;
-    return res;
-}
+/* A Field is pure modular arithmetic -- no transform. It used to construct a
+   transform object here (n = 1, zero root of unity, NULL twiddle tables) with
+   its own copy of the Barrett derivation, and it never set the IFMA fields at
+   all; it now just calls `mod_new`, so there is nothing left to wrap. */
 
 void field_ext_add(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q)
 {
@@ -109,9 +87,9 @@ void field_ext_neg(uint64_t *c, const uint64_t *a, uint64_t d, uint64_t q)
 }
 
 void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t w,
-                   NTT_proc proc)
+                   Modulus mod)
 {
-    uint64_t mod = proc->q;
+    const uint64_t q = mod->q;
     uint64_t *tmp = (uint64_t *)malloc((2 * d - 1) * sizeof(uint64_t));
     memset(tmp, 0, (2 * d - 1) * sizeof(uint64_t));
 
@@ -119,15 +97,15 @@ void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d
     {
         for (uint64_t j = 0; j < d; j++)
         {
-            uint64_t prod = mul_modq(a[i], b[j], proc);
-            tmp[i + j] = add_modq(tmp[i + j], prod, mod);
+            uint64_t prod = mul_modq(a[i], b[j], mod);
+            tmp[i + j] = add_modq(tmp[i + j], prod, q);
         }
     }
 
     for (uint64_t i = 2 * d - 2; i >= d; i--)
     {
-        uint64_t folded = mul_modq(tmp[i], w, proc);
-        tmp[i - d] = add_modq(tmp[i - d], folded, mod);
+        uint64_t folded = mul_modq(tmp[i], w, mod);
+        tmp[i - d] = add_modq(tmp[i - d], folded, q);
     }
 
     for (uint64_t i = 0; i < d; i++)
@@ -138,7 +116,7 @@ void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d
 }
 
 void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_t exp_hi,
-                   uint64_t d, uint64_t w, NTT_proc proc)
+                   uint64_t d, uint64_t w, Modulus mod)
 {
     __uint128_t exp = ((__uint128_t)exp_hi << 64) | exp_lo;
     uint64_t *b = (uint64_t *)malloc(d * sizeof(uint64_t));
@@ -155,10 +133,10 @@ void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_
     {
         if (exp & 1)
         {
-            field_ext_mul(tmp, res, b, d, w, proc);
+            field_ext_mul(tmp, res, b, d, w, mod);
             memcpy(res, tmp, d * sizeof(uint64_t));
         }
-        field_ext_mul(tmp, b, b, d, w, proc);
+        field_ext_mul(tmp, b, b, d, w, mod);
         memcpy(b, tmp, d * sizeof(uint64_t));
         exp >>= 1;
     }
@@ -167,9 +145,9 @@ void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_
 }
 
 static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *b, uint64_t d,
-                              uint64_t w, NTT_proc proc)
+                              uint64_t w, Modulus mod)
 {
-    uint64_t q = proc->q;
+    uint64_t q = mod->q;
     uint64_t *tmp = (uint64_t *)malloc((2 * d + 1) * sizeof(uint64_t));
     memset(tmp, 0, (2 * d + 1) * sizeof(uint64_t));
 
@@ -177,7 +155,7 @@ static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *
     {
         for (uint64_t j = 0; j < d; j++)
         {
-            uint64_t prod = mul_modq(a[i], b[j], proc);
+            uint64_t prod = mul_modq(a[i], b[j], mod);
             tmp[i + j] = add_modq(tmp[i + j], prod, q);
         }
     }
@@ -186,7 +164,7 @@ static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *
     {
         if (tmp[i] == 0)
             continue;
-        uint64_t folded = mul_modq(tmp[i], w, proc);
+        uint64_t folded = mul_modq(tmp[i], w, mod);
         tmp[i - d] = add_modq(tmp[i - d], folded, q);
     }
 
@@ -197,9 +175,9 @@ static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *
     free(tmp);
 }
 
-int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, NTT_proc proc)
+int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Modulus mod)
 {
-    uint64_t p = proc->q;
+    uint64_t p = mod->q;
     const uint64_t n = d + 1;
 
     uint64_t *r0 = (uint64_t *)malloc(n * sizeof(uint64_t));
@@ -251,14 +229,14 @@ int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, NTT
             status = 0;
             break;
         }
-        if (!poly_divrem(q, r2, r0, r1, n, proc))
+        if (!poly_divrem(q, r2, r0, r1, n, mod))
         {
             status = 0;
             break;
         }
 
         // tmp = q * t1 mod (X^d - w)
-        poly_mul_mod_xd_w(tmp, q, t1, d, w, proc);
+        poly_mul_mod_xd_w(tmp, q, t1, d, w, mod);
 
         // t2 = t0 - tmp mod p
         for (uint64_t i = 0; i < d; i++)
@@ -284,7 +262,7 @@ int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, NTT
             uint64_t c_inv = inverse_mod(r0[0], p);
             for (uint64_t i = 0; i < d; ++i)
             {
-                ainv[i] = mul_modq(t0[i], c_inv, proc);
+                ainv[i] = mul_modq(t0[i], c_inv, mod);
             }
         }
     }
@@ -377,9 +355,9 @@ static uint64_t inverse_mod_eea_generic(uint64_t a, uint64_t m)
 
 void field_base_conversion(uint64_t *out, const uint64_t *in, uint64_t source_component,
                            uint64_t target_component, uint64_t d, uint64_t poly_size,
-                           const uint64_t *w_i, NTT_proc proc)
+                           const uint64_t *w_i, Modulus mod)
 {
-    uint64_t q = proc->q;
+    uint64_t q = mod->q;
     if (source_component == target_component)
     {
         for (uint64_t j = 0; j < d; j++)
@@ -411,7 +389,7 @@ void field_base_conversion(uint64_t *out, const uint64_t *in, uint64_t source_co
         uint64_t dest_idx = power % d;
         uint64_t exp_term = power / d;
         uint64_t factor = power_mod(w_s2, exp_term, q);
-        uint64_t prod = mul_modq(coeff, factor, proc);
+        uint64_t prod = mul_modq(coeff, factor, mod);
         out[dest_idx] = add_modq(out[dest_idx], prod, q);
     }
 }

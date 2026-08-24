@@ -52,17 +52,17 @@ void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t 
 void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
                uint64_t special_primes)
 {
-    uint64_t N = in1->b->ntt->N;
+    uint64_t N = in1->b->base->N;
     uint64_t r = in1->r;
     uint64_t mask = in1->b->rns_mask;
-    incNTT ntt = in1->b->ntt;
+    RNS_Base base = in1->b->base;
 
-    RNSc_MLWE diff = mlwe_alloc_RNSc_sample(N, r, mask, ntt);
+    RNSc_MLWE diff = mlwe_alloc_RNSc_sample(N, r, mask, base);
     mlwe_sub_RNSc_sample(diff, in2, in1);
 
     mgsw_external_product(out, mgsw, diff, ell, special_primes);
 
-    RNS_MLWE in1_NTT = mlwe_alloc_RNS_sample(N, r, mask, ntt);
+    RNS_MLWE in1_NTT = mlwe_alloc_RNS_sample(N, r, mask, base);
     mlwe_copy_RNS_sample(in1_NTT, (RNS_MLWE)in1);
     mlwe_RNSc_to_RNS(in1_NTT, (RNSc_MLWE)in1_NTT);
     mlwe_add_RNS_sample(out, out, in1_NTT);
@@ -74,13 +74,13 @@ void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint6
 void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE **ksk,
                 uint64_t ell, uint64_t special_primes)
 {
-    uint64_t N = in1->b->ntt->N;
+    uint64_t N = in1->b->base->N;
     uint64_t r = in1->r;
     uint64_t mask = in1->b->rns_mask;
-    incNTT ntt = in1->b->ntt;
+    RNS_Base base = in1->b->base;
     uint64_t gen = 2 * N - 1;
 
-    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, ntt);
+    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, base);
 
     mlwe_automorphism_RNSc_GHS(tmp, in2, gen, ksk, ell);
 
@@ -103,12 +103,12 @@ void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_
 void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
                         uint64_t special_primes)
 {
-    uint64_t N = in1->b->ntt->N;
+    uint64_t N = in1->b->base->N;
     uint64_t r = in1->r;
     uint64_t mask = in1->b->rns_mask;
-    incNTT ntt = in1->b->ntt;
+    RNS_Base base = in1->b->base;
 
-    RNSc_MLWE diff = mlwe_alloc_RNSc_sample(N, r, mask, ntt);
+    RNSc_MLWE diff = mlwe_alloc_RNSc_sample(N, r, mask, base);
     mlwe_sub_RNSc_sample(diff, in2, in1);
 
     mgsw_external_product(out, mgsw, diff, ell, special_primes); /* out in NTT  */
@@ -121,13 +121,13 @@ void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mg
 void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE **ksk,
                          uint64_t ell, uint64_t special_primes)
 {
-    uint64_t N = in1->b->ntt->N;
+    uint64_t N = in1->b->base->N;
     uint64_t r = in1->r;
     uint64_t mask = in1->b->rns_mask;
-    incNTT ntt = in1->b->ntt;
+    RNS_Base base = in1->b->base;
     uint64_t gen = 2 * N - 1;
 
-    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, ntt);
+    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, base);
 
     mlwe_automorphism_RNSc_GHS(tmp, in2, gen, ksk, ell);
 

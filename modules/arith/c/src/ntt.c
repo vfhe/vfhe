@@ -262,8 +262,10 @@ void ntt_free_precompute(__m512i **ws, __m512i **w_precon, uint64_t n)
     free(w_precon);
 }
 
-NTT_proc ntt_new_proc(uint64_t n, uint64_t q)
+NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
 {
+    const uint64_t q = mod->q;
+
     // Deterministic search for a primitive 2n-th root of unity, identical to the
     // portable kernel's so both builds agree on the transform basis. Raise
     // successive candidates g = 2, 3, 4, ... to the (q-1)/2n power and keep the
@@ -280,36 +282,17 @@ NTT_proc ntt_new_proc(uint64_t n, uint64_t q)
     }
     uint64_t inv_root_of_unity = inverse_mod(root_of_unity, q);
 
-    int q_bits = 0;
-    uint64_t temp_q = q;
-    while (temp_q > 0)
-    {
-        q_bits++;
-        temp_q >>= 1;
-    }
-    uint64_t k = 50 + q_bits;
-
-    unsigned __int128 two_to_k = (unsigned __int128)1 << k;
-
-    uint64_t m = (uint64_t)(two_to_k / q);
-    NTT_proc res = (NTT_proc)malloc(sizeof(struct _NTT_proc));
+    NTT_Plan res = (NTT_Plan)malloc(sizeof(struct _NTT_Plan));
+    res->mod = mod; // borrowed; ntt_free_plan leaves it alone
     res->n = n;
-    res->q = q;
     res->root_of_unity = root_of_unity;
     res->inv_root_of_unity = inv_root_of_unity;
-    res->k = k;
-    res->m = m;
-    res->m52 = (k - 52 >= 64) ? 0 : (m >> (k - 52));
-    res->ifma_barr_lo = m & ((1ULL << 52) - 1);
-    res->ifma_prod_right_shift = k - 52;
-    res->mp_w1 = (uint64_t)(((unsigned __int128)1 << 52) % q);
-    res->mp_w2 = (uint64_t)(((unsigned __int128)1 << 104) % q);
 
     if (n < NTT_MIN_VECTOR_LEN)
     {
         // No vectorized stage can run at this length, and the tables below would
         // be empty (they are sized n / 16). Build the scalar ones instead; the
-        // transforms and the free path branch on proc->n the same way.
+        // transforms and the free path branch on plan->n the same way.
         ntt_scalar_precompute(n, q, root_of_unity, (uint64_t ***)&res->ws_fwd);
         ntt_scalar_precompute(n, q, inv_root_of_unity, (uint64_t ***)&res->ws_inv);
         res->w_precon_fwd = NULL;
@@ -324,74 +307,74 @@ NTT_proc ntt_new_proc(uint64_t n, uint64_t q)
     return res;
 }
 
-void ntt_forward(uint64_t *out, uint64_t *in, NTT_proc proc)
+void ntt_forward(uint64_t *out, uint64_t *in, NTT_Plan plan)
 {
-    if (proc->n < NTT_MIN_VECTOR_LEN)
+    if (plan->n < NTT_MIN_VECTOR_LEN)
     {
         if (out != in)
         {
-            for (size_t i = 0; i < proc->n; i++)
+            for (size_t i = 0; i < plan->n; i++)
             {
                 out[i] = in[i];
             }
         }
-        ntt_CT_NR_gen(out, proc->n, proc->q, ((uint64_t **)proc->ws_fwd)[0], proc);
+        ntt_CT_NR_gen(out, ((uint64_t **)plan->ws_fwd)[0], plan);
         return;
     }
-    if (proc->q < (1ULL << 32))
+    if (plan->mod->q < (1ULL << 32))
     {
-        ntt_forward_32(out, in, proc);
+        ntt_forward_32(out, in, plan);
     }
-    else if (proc->q < (1ULL << 50))
+    else if (plan->mod->q < (1ULL << 50))
     {
-        ntt_forward_50(out, in, proc);
+        ntt_forward_50(out, in, plan);
     }
     else
     {
-        ntt_forward_64(out, in, proc);
+        ntt_forward_64(out, in, plan);
     }
 }
 
-void ntt_reverse(uint64_t *out, uint64_t *in, NTT_proc proc)
+void ntt_reverse(uint64_t *out, uint64_t *in, NTT_Plan plan)
 {
-    if (proc->n < NTT_MIN_VECTOR_LEN)
+    if (plan->n < NTT_MIN_VECTOR_LEN)
     {
         if (out != in)
         {
-            for (size_t i = 0; i < proc->n; i++)
+            for (size_t i = 0; i < plan->n; i++)
             {
                 out[i] = in[i];
             }
         }
-        ntt_GS_RN_gen(out, proc->n, proc->q, ((uint64_t **)proc->ws_inv)[0], proc);
+        ntt_GS_RN_gen(out, ((uint64_t **)plan->ws_inv)[0], plan);
         return;
     }
-    if (proc->q < (1ULL << 32))
+    if (plan->mod->q < (1ULL << 32))
     {
-        ntt_reverse_32(out, in, proc);
+        ntt_reverse_32(out, in, plan);
     }
-    else if (proc->q < (1ULL << 50))
+    else if (plan->mod->q < (1ULL << 50))
     {
-        ntt_reverse_50(out, in, proc);
+        ntt_reverse_50(out, in, plan);
     }
     else
     {
-        ntt_reverse_64(out, in, proc);
+        ntt_reverse_64(out, in, plan);
     }
 }
 
-void ntt_free_proc(NTT_proc proc)
+void ntt_free_plan(NTT_Plan plan)
 {
-    if (proc->n < NTT_MIN_VECTOR_LEN)
+    if (plan->n < NTT_MIN_VECTOR_LEN)
     {
-        ntt_scalar_free_precompute((uint64_t **)proc->ws_fwd);
-        ntt_scalar_free_precompute((uint64_t **)proc->ws_inv);
-        free(proc);
+        ntt_scalar_free_precompute((uint64_t **)plan->ws_fwd);
+        ntt_scalar_free_precompute((uint64_t **)plan->ws_inv);
+        free(plan);
         return;
     }
-    ntt_free_precompute((__m512i **)proc->ws_fwd, (__m512i **)proc->w_precon_fwd, proc->n);
-    ntt_free_precompute((__m512i **)proc->ws_inv, (__m512i **)proc->w_precon_inv, proc->n);
-    free(proc);
+    ntt_free_precompute((__m512i **)plan->ws_fwd, (__m512i **)plan->w_precon_fwd, plan->n);
+    ntt_free_precompute((__m512i **)plan->ws_inv, (__m512i **)plan->w_precon_inv, plan->n);
+    free(plan);
 }
 
 #endif
