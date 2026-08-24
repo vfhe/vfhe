@@ -55,17 +55,17 @@ static inline __m512i small_mod_epu64_4(__m512i x, __m512i q, __m512i twice_q)
     return _mm512_min_epu64(x, _mm512_sub_epi64(x, q));
 }
 
-void mod_eltwise_mul_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
+void mod_eltwise_mul_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const __m512i *in1v = (const __m512i *)in1;
     const __m512i *in2v = (const __m512i *)in2;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
-    const __m512i twice_q_vec = _mm512_set1_epi64(2 * proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
 
     int q_bits = 0;
-    uint64_t temp_q = proc->q;
+    uint64_t temp_q = mod->q;
     while (temp_q > 0)
     {
         q_bits++;
@@ -74,7 +74,7 @@ void mod_eltwise_mul_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
     uint64_t prod_right_shift = q_bits - 2;
 
     unsigned __int128 dividend = ((unsigned __int128)1 << (q_bits + 62));
-    uint64_t barr_lo = (uint64_t)(dividend / proc->q);
+    uint64_t barr_lo = (uint64_t)(dividend / mod->q);
     const __m512i barr_lo_vec = _mm512_set1_epi64(barr_lo);
 
     for (size_t i = 0; i < n_vec; i++)
@@ -95,18 +95,17 @@ void mod_eltwise_mul_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
 /* out += in1 * in2 (mod q), fused (see mod_eltwise_mul_addto_50). small_mod_epu64_4
  * leaves each product in [0,q); the accumulator is in [0,q), so one conditional
  * subtract completes the add. */
-void mod_eltwise_mul_addto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                              NTT_proc proc)
+void mod_eltwise_mul_addto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const __m512i *in1v = (const __m512i *)in1;
     const __m512i *in2v = (const __m512i *)in2;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
-    const __m512i twice_q_vec = _mm512_set1_epi64(2 * proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
 
     int q_bits = 0;
-    uint64_t temp_q = proc->q;
+    uint64_t temp_q = mod->q;
     while (temp_q > 0)
     {
         q_bits++;
@@ -114,7 +113,7 @@ void mod_eltwise_mul_addto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint6
     }
     uint64_t prod_right_shift = q_bits - 2;
     unsigned __int128 dividend = ((unsigned __int128)1 << (q_bits + 62));
-    uint64_t barr_lo = (uint64_t)(dividend / proc->q);
+    uint64_t barr_lo = (uint64_t)(dividend / mod->q);
     const __m512i barr_lo_vec = _mm512_set1_epi64(barr_lo);
 
     for (size_t i = 0; i < n_vec; i++)
@@ -134,18 +133,17 @@ void mod_eltwise_mul_addto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint6
 }
 
 /* out -= in1 * in2 (mod q), fused. */
-void mod_eltwise_mul_subto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
-                              NTT_proc proc)
+void mod_eltwise_mul_subto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const __m512i *in1v = (const __m512i *)in1;
     const __m512i *in2v = (const __m512i *)in2;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
-    const __m512i twice_q_vec = _mm512_set1_epi64(2 * proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
 
     int q_bits = 0;
-    uint64_t temp_q = proc->q;
+    uint64_t temp_q = mod->q;
     while (temp_q > 0)
     {
         q_bits++;
@@ -153,7 +151,7 @@ void mod_eltwise_mul_subto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint6
     }
     uint64_t prod_right_shift = q_bits - 2;
     unsigned __int128 dividend = ((unsigned __int128)1 << (q_bits + 62));
-    uint64_t barr_lo = (uint64_t)(dividend / proc->q);
+    uint64_t barr_lo = (uint64_t)(dividend / mod->q);
     const __m512i barr_lo_vec = _mm512_set1_epi64(barr_lo);
 
     for (size_t i = 0; i < n_vec; i++)
@@ -173,18 +171,18 @@ void mod_eltwise_mul_subto_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint6
     }
 }
 
-void mod_eltwise_scale_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc)
+void mod_eltwise_scale_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const uint64_t s = scale % proc->q;
+    const uint64_t s = scale % mod->q;
     const __m512i s_vec = _mm512_set1_epi64(s);
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
-    const __m512i twice_q_vec = _mm512_set1_epi64(2 * proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
 
     int q_bits = 0;
-    uint64_t temp_q = proc->q;
+    uint64_t temp_q = mod->q;
     while (temp_q > 0)
     {
         q_bits++;
@@ -193,7 +191,7 @@ void mod_eltwise_scale_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t 
     uint64_t prod_right_shift = q_bits - 2;
 
     unsigned __int128 dividend = ((unsigned __int128)1 << (q_bits + 62));
-    uint64_t barr_lo = (uint64_t)(dividend / proc->q);
+    uint64_t barr_lo = (uint64_t)(dividend / mod->q);
     const __m512i barr_lo_vec = _mm512_set1_epi64(barr_lo);
 
     for (size_t i = 0; i < n_vec; i++)
@@ -209,18 +207,18 @@ void mod_eltwise_scale_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t 
     }
 }
 
-void mod_eltwise_fma_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, NTT_proc proc)
+void mod_eltwise_fma_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const uint64_t s = scale % proc->q;
+    const uint64_t s = scale % mod->q;
     const __m512i s_vec = _mm512_set1_epi64(s);
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
-    const __m512i twice_q_vec = _mm512_set1_epi64(2 * proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
 
     int q_bits = 0;
-    uint64_t temp_q = proc->q;
+    uint64_t temp_q = mod->q;
     while (temp_q > 0)
     {
         q_bits++;
@@ -229,7 +227,7 @@ void mod_eltwise_fma_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n,
     uint64_t prod_right_shift = q_bits - 2;
 
     unsigned __int128 dividend = ((unsigned __int128)1 << (q_bits + 62));
-    uint64_t barr_lo = (uint64_t)(dividend / proc->q);
+    uint64_t barr_lo = (uint64_t)(dividend / mod->q);
     const __m512i barr_lo_vec = _mm512_set1_epi64(barr_lo);
 
     for (size_t i = 0; i < n_vec; i++)
@@ -250,14 +248,14 @@ void mod_eltwise_fma_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n,
 }
 
 void mod_eltwise_add_scalar_64(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                               NTT_proc proc)
+                               Modulus mod)
 {
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const uint64_t s = scalar % proc->q;
+    const uint64_t s = scalar % mod->q;
     const __m512i s_vec = _mm512_set1_epi64(s);
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
 
     for (size_t i = 0; i < n_vec; i++)
     {
@@ -268,14 +266,14 @@ void mod_eltwise_add_scalar_64(uint64_t *out, uint64_t *in, uint64_t scalar, uin
 }
 
 void mod_eltwise_sub_scalar_64(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
-                               NTT_proc proc)
+                               Modulus mod)
 {
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const uint64_t s = scalar % proc->q;
+    const uint64_t s = scalar % mod->q;
     const __m512i s_vec = _mm512_set1_epi64(s);
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
 
     for (size_t i = 0; i < n_vec; i++)
     {
@@ -286,12 +284,12 @@ void mod_eltwise_sub_scalar_64(uint64_t *out, uint64_t *in, uint64_t scalar, uin
     }
 }
 
-void mod_eltwise_negate_64(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc)
+void mod_eltwise_negate_64(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
 {
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
     const __m512i zero = _mm512_setzero_si512();
 
     for (size_t i = 0; i < n_vec; i++)
@@ -304,13 +302,13 @@ void mod_eltwise_negate_64(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc pro
     }
 }
 
-void mod_eltwise_add_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
+void mod_eltwise_add_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const __m512i *in1v = (const __m512i *)in1;
     const __m512i *in2v = (const __m512i *)in2;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
 
     for (size_t i = 0; i < n_vec; i++)
     {
@@ -320,13 +318,13 @@ void mod_eltwise_add_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
     }
 }
 
-void mod_eltwise_sub_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, NTT_proc proc)
+void mod_eltwise_sub_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const __m512i *in1v = (const __m512i *)in1;
     const __m512i *in2v = (const __m512i *)in2;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
 
     for (size_t i = 0; i < n_vec; i++)
     {
@@ -337,16 +335,16 @@ void mod_eltwise_sub_64(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
     }
 }
 
-void mod_eltwise_reduce_64(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc proc)
+void mod_eltwise_reduce_64(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
 {
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
-    const __m512i twice_q_vec = _mm512_set1_epi64(2 * proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
 
     int q_bits = 0;
-    uint64_t temp_q = proc->q;
+    uint64_t temp_q = mod->q;
     while (temp_q > 0)
     {
         q_bits++;
@@ -355,7 +353,7 @@ void mod_eltwise_reduce_64(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc pro
     uint64_t prod_right_shift = q_bits - 2;
 
     unsigned __int128 dividend = ((unsigned __int128)1 << (q_bits + 62));
-    uint64_t barr_lo = (uint64_t)(dividend / proc->q);
+    uint64_t barr_lo = (uint64_t)(dividend / mod->q);
     const __m512i barr_lo_vec = _mm512_set1_epi64(barr_lo);
 
     for (size_t i = 0; i < n_vec; i++)
@@ -369,16 +367,16 @@ void mod_eltwise_reduce_64(uint64_t *out, uint64_t *in, uint64_t n, NTT_proc pro
     }
 }
 
-void mod_eltwise_reduce_signed_64(uint64_t *out, int64_t *in, uint64_t n, NTT_proc proc)
+void mod_eltwise_reduce_signed_64(uint64_t *out, int64_t *in, uint64_t n, Modulus mod)
 {
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const __m512i q_vec = _mm512_set1_epi64(proc->q);
-    const __m512i twice_q_vec = _mm512_set1_epi64(2 * proc->q);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
 
     int q_bits = 0;
-    uint64_t temp_q = proc->q;
+    uint64_t temp_q = mod->q;
     while (temp_q > 0)
     {
         q_bits++;
@@ -387,7 +385,7 @@ void mod_eltwise_reduce_signed_64(uint64_t *out, int64_t *in, uint64_t n, NTT_pr
     uint64_t prod_right_shift = q_bits - 2;
 
     unsigned __int128 dividend = ((unsigned __int128)1 << (q_bits + 62));
-    uint64_t barr_lo = (uint64_t)(dividend / proc->q);
+    uint64_t barr_lo = (uint64_t)(dividend / mod->q);
     const __m512i barr_lo_vec = _mm512_set1_epi64(barr_lo);
 
     for (size_t i = 0; i < n_vec; i++)
@@ -410,12 +408,12 @@ void mod_eltwise_reduce_signed_64(uint64_t *out, int64_t *in, uint64_t n, NTT_pr
 }
 
 void mod_reduce_array_mp_64(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                            NTT_proc proc)
+                            Modulus mod)
 {
     for (size_t i = 0; i < n; i++)
     {
         unsigned __int128 val = ((unsigned __int128)in_high[i] << 64) | in_low[i];
-        out[i] = modq(val, proc);
+        out[i] = modq(val, mod);
     }
 }
 

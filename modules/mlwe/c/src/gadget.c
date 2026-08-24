@@ -5,9 +5,9 @@
 void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, RNSc_Polynomial poly)
 {
     RNSc_Polynomial tmp = (RNSc_Polynomial)polynomial_new_RNS_polynomial(
-        ksk[0]->b->ntt->N, ksk[0]->b->rns_mask, ksk[0]->b->ntt);
+        ksk[0]->b->base->N, ksk[0]->b->rns_mask, ksk[0]->b->base);
     uint64_t ksk_idx = 0;
-    for (size_t j = 0; j < out->b->ntt->l; j++)
+    for (size_t j = 0; j < out->b->base->l; j++)
     {
         if (poly->rns_mask & (1ULL << j))
         {
@@ -22,9 +22,9 @@ void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, RNSc_Polynomial po
 void gadget_mul_subto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, RNSc_Polynomial poly)
 {
     RNSc_Polynomial tmp = (RNSc_Polynomial)polynomial_new_RNS_polynomial(
-        ksk[0]->b->ntt->N, ksk[0]->b->rns_mask, ksk[0]->b->ntt);
+        ksk[0]->b->base->N, ksk[0]->b->rns_mask, ksk[0]->b->base);
     uint64_t ksk_idx = 0;
-    for (size_t j = 0; j < out->b->ntt->l; j++)
+    for (size_t j = 0; j < out->b->base->l; j++)
     {
         if (poly->rns_mask & (1ULL << j))
         {

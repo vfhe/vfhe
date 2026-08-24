@@ -19,19 +19,21 @@ void tearDown(void) {}
 
 static void roundtrip(uint64_t n, uint64_t q)
 {
-    NTT_proc proc = ntt_new_proc(n, q);
+    Modulus mod = mod_new(q);
+    NTT_Plan plan = ntt_new_plan(n, mod);
     uint64_t *in = safe_aligned_malloc(n * sizeof(uint64_t));
     uint64_t *fwd = safe_aligned_malloc(n * sizeof(uint64_t));
     uint64_t *back = safe_aligned_malloc(n * sizeof(uint64_t));
     for (uint64_t i = 0; i < n; i++)
         in[i] = (0x123456789ABCDEFULL + i) % q;
-    ntt_forward(fwd, in, proc);
-    ntt_reverse(back, fwd, proc);
+    ntt_forward(fwd, in, plan);
+    ntt_reverse(back, fwd, plan);
     TEST_ASSERT_EQUAL_UINT64_ARRAY(in, back, n);
     free(in);
     free(fwd);
     free(back);
-    ntt_free_proc(proc);
+    ntt_free_plan(plan);
+    mod_free(mod);
 }
 
 void test_ntt_roundtrip_matrix(void)
@@ -58,7 +60,8 @@ void test_ntt_negacyclic_convolution(void)
         {
             const uint64_t n = sizes[si];
             const uint64_t q = next_special_prime(1ULL << bits[bi], n, true);
-            NTT_proc proc = ntt_new_proc(n, q);
+            Modulus mod = mod_new(q);
+            NTT_Plan plan = ntt_new_plan(n, mod);
 
             uint64_t *a = safe_aligned_malloc(n * sizeof(uint64_t));
             uint64_t *b = safe_aligned_malloc(n * sizeof(uint64_t));
@@ -85,10 +88,10 @@ void test_ntt_negacyclic_convolution(void)
                         ref[i + j - n] = (ref[i + j - n] + q - p) % q;
                 }
 
-            ntt_forward(na, a, proc);
-            ntt_forward(nb, b, proc);
-            mod_eltwise_mul(nr, na, nb, n, proc);
-            ntt_reverse(res, nr, proc);
+            ntt_forward(na, a, plan);
+            ntt_forward(nb, b, plan);
+            mod_eltwise_mul(nr, na, nb, n, mod);
+            ntt_reverse(res, nr, plan);
             TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, res, n);
 
             free(a);
@@ -98,7 +101,8 @@ void test_ntt_negacyclic_convolution(void)
             free(nb);
             free(nr);
             free(res);
-            ntt_free_proc(proc);
+            ntt_free_plan(plan);
+            mod_free(mod);
         }
     }
 }
