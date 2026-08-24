@@ -102,4 +102,18 @@ void mod_eltwise_reduce_signed_64(uint64_t *out, int64_t *in, uint64_t n, Modulu
 void mod_reduce_array_mp_64(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
                             Modulus mod);
 
+// Exact unsigned __int128 reference for the pseudo-Mersenne field (pmf.c). Like
+// the _gen kernels above, these are compiled into every engine, and for a related
+// reason: when the AVX-512 pmf kernels land they go behind an ISA guard and these
+// stay outside it, so the tuned build can differential-test against them
+// in-process. Kept visible rather than static so a C test can call them too.
+// Deliberately NOT structured like the planned vector kernel -- they are the
+// oracle, and a shared shape would let one shared mistake hide in both.
+void pmf_ref_add(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
+void pmf_ref_sub(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
+void pmf_ref_neg(uint64_t *out, const uint64_t *a, PMFParams params);
+void pmf_ref_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
+// T is limbs+1 words, each below 2^60, and is clobbered. Requires limbs >= 3.
+void pmf_ref_reduce_wide(uint64_t *out, uint64_t *T, PMFParams params);
+
 #endif // __ARITH_INTERNAL_H__

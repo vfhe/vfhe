@@ -199,6 +199,66 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
                                uint64_t target_component, uint64_t d, uint64_t poly_size,
                                const uint64_t *w_i, Modulus mod);
 
+    // pseudo-Mersenne prime field
+    //
+    // F_p for p = 2^n - c with small c (the Crandall/pseudo-Mersenne family). An
+    // element is PMF_LANES uint64_t words -- one AVX-512 zmm register -- holding
+    // L = ceil(n / 52) limbs of 52 bits in lanes 0..L-1, little-endian. Lanes
+    // L..PMF_LANES-1 are ALWAYS zero, and buffers are 64-byte aligned, so the
+    // tuned engine can load an element as one __m512i.
+    //
+    // Every public input and output is CANONICAL: value in [0, p), every limb
+    // below 2^52, padding lanes zero. Lazy reduction is deliberately not offered:
+    // IFMA truncates both multiplicands to 52 bits, so carrying a value back
+    // below 2^52 after a multiply is a hardware requirement, not a policy choice.
+    //
+    // Reduction folds on 2^(52L) == e (mod p), where e = c << (52L - n). That e
+    // must fit a single limb is what bounds c, and hence which n are usable --
+    // see pmf_new_params.
+    //
+    // Self-contained: this field carries its own parameter block and does not go
+    // through Modulus / the NTT plan machinery.
+    //
+    // Nothing here is constant-time: exponents and seeds are public values.
+#define PMF_LIMB_BITS 52
+#define PMF_LIMB_MASK ((1ULL << PMF_LIMB_BITS) - 1)
+#define PMF_MAX_LIMBS 6 // L in {5, 6}; raise only alongside the kernels
+#define PMF_LANES 8     // one zmm: L limbs plus zero padding
+
+    // Immutable after construction, and so shareable across threads: no operation
+    // writes to it, and none allocates.
+    typedef struct _PMFParams
+    {
+        uint64_t n;        // p = 2^n - c
+        uint64_t c;        // odd, 0 < c < 2^(n - 52 * (L - 1))
+        uint64_t limbs;    // L = ceil(n / 52)
+        uint64_t shift;    // s = 52 * L - n, in [0, 51]
+        uint64_t fold;     // e = c << s; 2^(52L) == e (mod p)
+        uint64_t top_bits; // 52 - s: live bits of limb L-1
+        uint64_t top_mask; // (1 << top_bits) - 1
+        uint64_t nbytes;   // (n + 7) / 8: length of the canonical encoding
+
+        uint64_t p[PMF_MAX_LIMBS]; // the modulus, as limbs
+    } *PMFParams;
+
+    // Returns NULL, explaining on stderr, unless L is 5 or 6, c is odd and
+    // nonzero, and e = c << s fits a 52-bit limb. Does NOT require p to be prime:
+    // the arithmetic is correct for any modulus 2^n - c, and primality is the
+    // caller's business.
+    PMFParams pmf_new_params(uint64_t n, uint64_t c);
+    void pmf_free_params(PMFParams params);
+    uint64_t pmf_limbs(PMFParams params);
+    uint64_t pmf_byte_length(PMFParams params);
+
+    // out may alias any input, including out == a == b.
+    void pmf_add(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
+    void pmf_sub(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
+    void pmf_neg(uint64_t *out, const uint64_t *a, PMFParams params);
+    void pmf_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
+    int pmf_is_equal(const uint64_t *a, const uint64_t *b, PMFParams params);
+    // in: L limbs each below 2^52, not necessarily below p. out: canonical.
+    void pmf_canonicalize(uint64_t *out, const uint64_t *in, PMFParams params);
+
     // complex polynomial
     double **load_rous_CT(double *rous_real, double *rous_imag, uint64_t size);
     void CT_NR(double *x, double **ws, uint64_t n);
