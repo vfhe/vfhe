@@ -107,3 +107,26 @@ def test_field_sampling_and_hashing():
     b.sample_random(SEED + b"extra")
     assert a != b
     assert a.hash() != b.hash()
+
+
+def test_field_sampling_varies_within_one_element():
+    """Coefficients of a single sampled element must be independent draws.
+
+    They were not: the sampler finalized one BLAKE3 state per coefficient
+    without advancing it, so a degree-d element had one degree of freedom
+    instead of d (ARITH-8). Two different seeds still differed, which is why
+    `test_field_sampling_and_hashing` could not see it -- keep this assertion
+    for any sampler added here.
+    """
+    d = 8
+    field = Field(PRIME, 3, d)
+    a = FieldElement(field)
+    a.sample_random(SEED)
+    coeffs = [a.value[i] for i in range(d)]
+    assert len(set(coeffs)) == d
+    assert all(0 <= c < PRIME for c in coeffs)
+
+    # ...and sampling stays a pure function of the seed
+    again = FieldElement(field)
+    again.sample_random(SEED)
+    assert [again.value[i] for i in range(d)] == coeffs
