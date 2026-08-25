@@ -640,7 +640,7 @@ void mp_polynomial_to_RNSc(RNSc_Polynomial out, MPPolynomial in)
             for (int64_t j = (int64_t)D - 1; j >= 0; j--)
             {
                 res = mul_modq(res, w1, mod);
-                res = add_modq(res, modq((unsigned __int128)in->coeffs[j][c], mod), q);
+                res = add_modq(res, modq(in->coeffs[j][c], mod), q);
             }
             out->coeffs[i][c] = res;
         }

@@ -411,10 +411,7 @@ void mod_reduce_array_mp_64(uint64_t *out, uint64_t *in_high, uint64_t *in_low, 
                             Modulus mod)
 {
     for (size_t i = 0; i < n; i++)
-    {
-        unsigned __int128 val = ((unsigned __int128)in_high[i] << 64) | in_low[i];
-        out[i] = modq(val, mod);
-    }
+        out[i] = modq_wide(in_high[i], in_low[i], mod);
 }
 
 #endif

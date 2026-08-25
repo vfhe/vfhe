@@ -131,15 +131,15 @@ extern "C"
     } *IntPolynomial;
 
 #if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
-    void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, __m512i ***out_ws,
+    void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, __m512i ***out_ws,
                             __m512i ***out_w_precon);
-    void ntt_precompute_inv(uint64_t n, uint64_t q, uint64_t inv_root_of_unity, __m512i ***out_ws,
+    void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, __m512i ***out_ws,
                             __m512i ***out_w_precon);
     void ntt_free_precompute(__m512i **ws, __m512i **w_precon, uint64_t n);
 #else
-void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, uint64_t ***out_ws,
+void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t ***out_ws,
                         uint64_t ***out_w_precon);
-void ntt_precompute_inv(uint64_t n, uint64_t q, uint64_t inv_root_of_unity, uint64_t ***out_ws,
+void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uint64_t ***out_ws,
                         uint64_t ***out_w_precon);
 void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
 #endif
@@ -151,7 +151,10 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     uint64_t sub_modq(uint64_t a, uint64_t b, uint64_t q);
     uint64_t negate_modq(uint64_t a, uint64_t q);
     uint64_t mul_modq(uint64_t a, uint64_t b, Modulus mod);
-    uint64_t modq(unsigned __int128 x, Modulus mod);
+    // One 64-bit word reduced mod q, and the 128-bit value hi * 2^64 + lo
+    // reduced mod q. Both are Barrett reductions -- no division.
+    uint64_t modq(uint64_t x, Modulus mod);
+    uint64_t modq_wide(uint64_t hi, uint64_t lo, Modulus mod);
 
     void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
     void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,

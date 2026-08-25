@@ -191,11 +191,10 @@ void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char
     mask |= mask >> 16;
     mask |= mask >> 32;
 
-    // BLAKE3 as an XOF. `blake3_hasher_finalize` is a pure function of hasher
-    // state, so finalizing repeatedly without updating returns the *same*
-    // bytes -- which is how every coefficient of a sampled field element came
-    // out equal (ARITH-8). Seeking along the output stream is what makes
-    // successive draws independent.
+    // BLAKE3 as an XOF: `blake3_hasher_finalize` is a pure function of hasher
+    // state, so finalizing repeatedly without an intervening update returns the
+    // same bytes. Seeking along the output stream is what makes successive
+    // draws independent.
     uint64_t offset = 0;
     for (uint64_t i = 0; i < count; i++)
     {

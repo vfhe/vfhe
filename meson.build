@@ -45,7 +45,13 @@ engine_info = files('tools/meson/engine_info.py')
 engines = run_command(py, engine_info, 'names', check: true).stdout().strip().split('\n')
 
 # Coverage swaps LTO for gcov instrumentation, as everywhere in the build.
-lto_args = get_option('b_coverage') ? [] : ['-flto']
+#
+# -fno-semantic-interposition is what lets LTO actually inline the reduction
+# primitives. Without it GCC has to assume any default-visibility global in a
+# shared object may be interposed at load time, so a call to one becomes a PLT
+# call it cannot inline through -- which put a dynamic call per element inside
+# every scalar kernel.
+lto_args = get_option('b_coverage') ? [] : ['-flto', '-fno-semantic-interposition']
 
 # --- What the modules contribute (filled by modules/*/meson.build) -----------
 

@@ -10,11 +10,11 @@ from vfhe.misc.libvfhe import ffi, lib
 class RNS_Base_Registry:
     """The process's native ``RNS_Base`` objects, one per ``(N, split_degree)``.
 
-    A base is shared by every `Ring` with that key, and it is append-only: a
-    ring introducing a prime extends the existing base in place rather than
-    getting its own. `register_ring_primes` is what does the extending, and it
-    returns the ring's prime *indices* into the shared pool -- which are stable,
-    unlike the pool's length (see `Ring.rns_rows`).
+    A base is shared by every `Ring` with that key and is append-only: a ring
+    introducing a prime extends the existing base in place rather than getting
+    its own. `register_ring_primes` does that extending and returns the ring's
+    prime indices into the shared pool. Those indices are stable; the pool's
+    length is not (see `Ring.rns_rows`).
     """
 
     def __init__(self):
@@ -74,11 +74,10 @@ atexit.register(rns_base_registry.cleanup)
 def registry() -> RNS_Base_Registry:
     """The registry in force right now.
 
-    Call this instead of importing `rns_base_registry` directly. A registry
-    holds `lib` as an *instance* attribute, so a dynamic-extension reload
-    cannot patch it the way it patches module-level `lib` / `ffi` -- it
-    replaces the whole instance instead (`_reload.reinit_rns_base`). A name
-    bound at import time therefore keeps pointing at the retired registry, and
-    would go on building RNS bases in the unloaded library.
+    Resolve it through this rather than binding `rns_base_registry` at import
+    time. A registry holds `lib` as an instance attribute, so a
+    dynamic-extension reload replaces the whole instance
+    (`_reload.reinit_rns_base`) instead of patching it, and an import-time
+    binding would keep using the retired one.
     """
     return rns_base_registry

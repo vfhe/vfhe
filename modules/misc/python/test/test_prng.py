@@ -3,10 +3,10 @@
 """Tests for the seeded sampler in misc's prng.c.
 
 `prng_sample_below` is the library's one seeded generator: `count` values
-uniform in [0, bound), a pure function of (context, seed). Callers that need
-reproducible-from-a-transcript randomness go through it rather than growing a
-private sampler, which is how ARITH-8 happened -- a BLAKE3 state finalized once
-per draw without advancing, so every draw came out identical.
+uniform in [0, bound), a pure function of (context, seed). What is asserted
+here is what its callers rely on -- that draws are independent of each other,
+that the same arguments always give the same values, and that different
+domain-separation tags give unrelated streams.
 """
 
 from vfhe.misc.libvfhe import ffi, lib
@@ -23,7 +23,8 @@ def sample(
 
 
 def test_draws_are_independent_of_each_other():
-    """The ARITH-8 regression: successive draws must not repeat one value."""
+    """Successive draws must differ: one value repeated `count` times is the
+    failure mode of finalizing a hash state without advancing it."""
     bound = (1 << 61) - 1
     values = sample(64, bound)
     assert len(set(values)) == len(values)

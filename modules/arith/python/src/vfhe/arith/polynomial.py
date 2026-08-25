@@ -91,24 +91,21 @@ class Ring:
     def rns_rows(self) -> int:
         """Rows a native per-prime array must have to be indexed by this ring.
 
-        The native ``RNS_Base`` is shared process-wide per ``(N, split_degree)``
-        and a ring introducing a new prime extends it in place, so its ``l``
-        grows under every ring already built on it. Size buffers by this
-        instead: it is one past this ring's highest prime index, derived from
-        ``mask``, which never changes -- indices are handed out append-only, so
-        a ring's own primes keep theirs forever. The C kernels only ever touch
-        rows selected by the mask, so a shorter-than-``l`` array is safe, and
-        unlike ``_base_l()`` it is safe to remember: freeing with a re-read
-        ``l`` walks off the end of the allocation.
+        One past this ring's highest prime index, derived from ``mask``. Prime
+        indices are handed out append-only, so this is fixed for the ring's
+        lifetime and safe to store alongside an allocation sized with it. The
+        kernels only touch rows the mask selects, so an array this long is
+        enough even though the shared base may hold more primes.
         """
         return self.mask.bit_length()
 
     def _base_l(self) -> int:
-        """The shared RNS base's *current* prime count -- a live read.
+        """The shared RNS base's *current* prime count.
 
-        This grows whenever any ring of the same ``(N, split_degree)`` is built
-        with a prime this process has not seen. Never cache it, and never size
-        an allocation with it; use `rns_rows`.
+        A live read: it grows whenever any ring of the same
+        ``(N, split_degree)`` is built with a prime this process has not seen.
+        Size native arrays with `rns_rows`, which is stable, rather than with
+        this.
         """
         return ffi.cast("RNS_Base", self.base).l
 
@@ -329,11 +326,8 @@ class Polynomial:
     def _viewed_as(self, target) -> Polynomial:
         """``self`` in `target` representation, converting a *copy* if needed.
 
-        Every reader goes through this, so that looking at a polynomial's value
-        never changes the representation of the object being read. It used to:
-        one `get_polynomial()` on a table entry left the table in mixed
-        representations, and the next C kernel over it folded the wrong data and
-        returned silent garbage.
+        Every reader goes through this, so that reading a polynomial's value
+        never changes the representation of the object read. 
         """
         if self.repr == target:
             return self
@@ -601,11 +595,10 @@ class Polynomial:
     def _add_integer(self, out: Polynomial, other: int) -> Polynomial:
         """``out = self + other``, in whichever representation ``self`` is in.
 
-        ``out`` may be ``self`` (the C kernels take out == in). The kernels read
-        the addend as a two's-complement int64, so negatives work and
-        subtraction is addition of the negation -- no separate kernel. Hence the
-        int64 range check and the wrap into unsigned that cffi's uint64_t
-        parameter needs.
+        ``out`` may be ``self``; the C kernels accept out == in. They read the
+        addend as a two's-complement int64, which is why it is range-checked
+        and wrapped into the unsigned value cffi's ``uint64_t`` parameter takes,
+        and why subtraction is just addition of the negation.
         """
         assert -(2**63) <= other < 2**63, f"integer operand {other} exceeds int64"
         wrapped = other & 0xFFFFFFFFFFFFFFFF
