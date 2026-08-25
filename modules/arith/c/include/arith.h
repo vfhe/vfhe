@@ -86,6 +86,12 @@ extern "C"
 
     void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t count);
 
+    // Releases a base and everything it owns: its moduli, its plans, and the
+    // root-of-unity rows. Any NTT_Plan built elsewhere against one of these
+    // moduli (rs_new_plans borrows them) must already be gone, and so must any
+    // RNS_Polynomial allocated on this base.
+    void rns_base_free(RNS_Base base);
+
     static inline uint64_t rns_mask_to_l(uint64_t mask)
     {
         uint64_t count = 0;

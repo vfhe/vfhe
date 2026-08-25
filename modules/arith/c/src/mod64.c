@@ -176,7 +176,7 @@ void mod_eltwise_scale_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t 
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const uint64_t s = scale % mod->q;
+    const uint64_t s = modq(scale, mod);
     const __m512i s_vec = _mm512_set1_epi64(s);
     const __m512i q_vec = _mm512_set1_epi64(mod->q);
     const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
@@ -212,7 +212,7 @@ void mod_eltwise_fma_64(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n,
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const uint64_t s = scale % mod->q;
+    const uint64_t s = modq(scale, mod);
     const __m512i s_vec = _mm512_set1_epi64(s);
     const __m512i q_vec = _mm512_set1_epi64(mod->q);
     const __m512i twice_q_vec = _mm512_set1_epi64(2 * mod->q);
@@ -253,7 +253,7 @@ void mod_eltwise_add_scalar_64(uint64_t *out, uint64_t *in, uint64_t scalar, uin
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const uint64_t s = scalar % mod->q;
+    const uint64_t s = modq(scalar, mod);
     const __m512i s_vec = _mm512_set1_epi64(s);
     const __m512i q_vec = _mm512_set1_epi64(mod->q);
 
@@ -271,7 +271,7 @@ void mod_eltwise_sub_scalar_64(uint64_t *out, uint64_t *in, uint64_t scalar, uin
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const size_t n_vec = n / 8;
-    const uint64_t s = scalar % mod->q;
+    const uint64_t s = modq(scalar, mod);
     const __m512i s_vec = _mm512_set1_epi64(s);
     const __m512i q_vec = _mm512_set1_epi64(mod->q);
 

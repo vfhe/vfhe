@@ -35,7 +35,7 @@ static uint64_t det_state = 0;
 
 // Buffered entropy pool (lifted to file scope so the setters can discard it).
 static uint8_t rnd_buffer[1024] __attribute__((aligned(64)));
-static uint64_t rnd_buffer_idx = 1024;
+static uint64_t rnd_buffer_idx = sizeof(rnd_buffer);
 
 static uint64_t splitmix64_next(uint64_t *s)
 {
@@ -111,10 +111,17 @@ void get_rnd_from_hash(uint64_t amount, uint8_t *pointer)
 
 void get_rnd_from_buffer(uint64_t amount, uint8_t *pointer)
 {
-    if (amount > (1024 - rnd_buffer_idx))
+    // A request the pool could never satisfy is served directly, so the copy
+    // below always stays inside it.
+    if (amount > sizeof(rnd_buffer))
+    {
+        get_rnd_from_hash(amount, pointer);
+        return;
+    }
+    if (amount > (sizeof(rnd_buffer) - rnd_buffer_idx))
     {
         rnd_buffer_idx = 0;
-        get_rnd_from_hash(1024, rnd_buffer);
+        get_rnd_from_hash(sizeof(rnd_buffer), rnd_buffer);
     }
     memcpy(pointer, rnd_buffer + rnd_buffer_idx, (size_t)amount);
     rnd_buffer_idx += amount;
@@ -135,13 +142,13 @@ void vfhe_prng_set_deterministic_seed(uint64_t seed)
 {
     det_active = 1;
     det_state = seed;
-    rnd_buffer_idx = 1024;
+    rnd_buffer_idx = sizeof(rnd_buffer);
 }
 
 void vfhe_prng_clear_deterministic_seed(void)
 {
     det_active = 0;
-    rnd_buffer_idx = 1024;
+    rnd_buffer_idx = sizeof(rnd_buffer);
 }
 
 // --- Gaussian sampling ---------------------------------------------------

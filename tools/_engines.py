@@ -106,6 +106,8 @@ def registry(root: Path) -> list[Engine]:
                 "-mavx2",
                 "-maes",
                 "-mrdrnd",
+                "-mbmi2",
+                "-madx",
                 "-funroll-all-loops",
             ),
             defines=(),

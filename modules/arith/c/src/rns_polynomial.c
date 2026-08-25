@@ -64,6 +64,22 @@ void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t c
     free(w_p);
 }
 
+void rns_base_free(RNS_Base base)
+{
+    if (!base)
+        return;
+    for (size_t i = 0; i < base->l; i++)
+    {
+        ntt_free_plan(base->plans[i]);
+        mod_free(base->mods[i]);
+        free(base->w[i]);
+    }
+    free(base->plans);
+    free(base->mods);
+    free(base->w);
+    free(base);
+}
+
 uint64_t **rns_base_get_rou_matrix(RNS_Base base) { return base->w; }
 
 RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, RNS_Base base)
