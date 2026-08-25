@@ -9,7 +9,7 @@
 #include <string.h>
 #include <immintrin.h>
 
-void generate_rnd_seed(uint64_t *p);
+#include "misc.h"
 
 // key expansion, adapted from:
 // https://www.intel.com/content/dam/doc/white-paper/advanced-encryption-standard-new-instructions-set-paper.pdf
