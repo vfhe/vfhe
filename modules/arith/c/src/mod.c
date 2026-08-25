@@ -41,50 +41,58 @@ Modulus mod_new(uint64_t q)
 
 void mod_free(Modulus mod) { free(mod); }
 
-uint64_t modq(unsigned __int128 x, Modulus mod)
+// Barrett-reduce a value already split into 52-bit limbs, x = x0 + x1*2^52 +
+// x2*2^104, folded onto q with the precomputed residues of 2^52 and 2^104.
+static uint64_t fold_limbs_modq(uint64_t x0, uint64_t x1, uint64_t x2, Modulus mod)
 {
-    if (mod->q < (1ULL << 32))
+    const uint64_t q = mod->q;
+    const unsigned __int128 reduced =
+        x0 + (unsigned __int128)x1 * mod->mp_w1 + (unsigned __int128)x2 * mod->mp_w2;
+
+    const uint64_t r_lo = (uint64_t)reduced, r_hi = (uint64_t)(reduced >> 64);
+    const unsigned __int128 prod_hi =
+        (unsigned __int128)r_hi * mod->m + (((unsigned __int128)r_lo * mod->m) >> 64);
+
+    const uint64_t q_hat = (uint64_t)(prod_hi >> (mod->k - 64));
+    uint64_t res = (uint64_t)reduced - q_hat * q;
+    while (res >= q)
+        res -= q;
+    return res;
+}
+
+uint64_t modq(uint64_t x, Modulus mod)
+{
+    const uint64_t q = mod->q;
+
+    // A 32-bit modulus keeps m small enough that x * m stays inside 128 bits.
+    if (q < (1ULL << 32))
     {
-        if (x <= 0xFFFFFFFFFFFFFFFFULL)
-        {
-            uint64_t x64 = (uint64_t)x;
-            uint64_t q_hat = (uint64_t)(((unsigned __int128)x64 * mod->m) >> mod->k);
-            uint64_t res = x64 - q_hat * mod->q;
-            if (res >= mod->q)
-                res -= mod->q;
-            return res;
-        }
+        const uint64_t q_hat = (uint64_t)(((unsigned __int128)x * mod->m) >> mod->k);
+        uint64_t res = x - q_hat * q;
+        if (res >= q)
+            res -= q;
+        return res;
     }
 
     if (x < (1ULL << 52))
     {
-        uint64_t q_hat = (uint64_t)((x * mod->m52) >> 52);
-        uint64_t res = (uint64_t)x - q_hat * mod->q;
-        if (res >= mod->q)
-            res -= mod->q;
+        const uint64_t q_hat = (uint64_t)(((unsigned __int128)x * mod->m52) >> 52);
+        uint64_t res = x - q_hat * q;
+        if (res >= q)
+            res -= q;
         return res;
     }
 
-    uint64_t x0 = (uint64_t)x & ((1ULL << 52) - 1);
-    uint64_t x1 = (uint64_t)(x >> 52) & ((1ULL << 52) - 1);
-    uint64_t x2 = (uint64_t)(x >> 104);
+    return fold_limbs_modq(x & ((1ULL << 52) - 1), x >> 52, 0, mod);
+}
 
-    unsigned __int128 reduced =
-        x0 + (unsigned __int128)x1 * mod->mp_w1 + (unsigned __int128)x2 * mod->mp_w2;
+uint64_t modq_wide(uint64_t hi, uint64_t lo, Modulus mod)
+{
+    if (hi == 0)
+        return modq(lo, mod);
 
-    uint64_t r_lo = (uint64_t)reduced;
-    uint64_t r_hi = (uint64_t)(reduced >> 64);
-    unsigned __int128 r_lo_m = (unsigned __int128)r_lo * mod->m;
-    unsigned __int128 r_hi_m = (unsigned __int128)r_hi * mod->m;
-    unsigned __int128 prod_hi = r_hi_m + (r_lo_m >> 64);
-
-    uint64_t q_hat = (uint64_t)(prod_hi >> (mod->k - 64));
-    uint64_t res = (uint64_t)reduced - q_hat * mod->q;
-
-    while (res >= mod->q)
-        res -= mod->q;
-
-    return res;
+    const uint64_t mask52 = (1ULL << 52) - 1;
+    return fold_limbs_modq(lo & mask52, ((lo >> 52) | (hi << 12)) & mask52, hi >> 40, mod);
 }
 
 uint64_t add_modq(uint64_t a, uint64_t b, uint64_t q)
@@ -93,13 +101,23 @@ uint64_t add_modq(uint64_t a, uint64_t b, uint64_t q)
     return sum >= q ? sum - q : sum;
 }
 
-uint64_t sub_modq(uint64_t a, uint64_t b, uint64_t q) { return a >= b ? a - b : a + q - b; }
+// Branchless: the subtraction wraps exactly when b > a, and `d > a` detects
+// that, so q is added back under a mask. The ternary form costs a
+// data-dependent branch per element once this is inlined into a kernel loop.
+uint64_t sub_modq(uint64_t a, uint64_t b, uint64_t q)
+{
+    const uint64_t d = a - b;
+    return d + (q & -(uint64_t)(d > a));
+}
 
 uint64_t negate_modq(uint64_t a, uint64_t q) { return a == 0 ? 0 : q - a; }
 
+// The only place a 64x64 -> 128 product is formed; it goes straight into
+// modq_wide's two words.
 uint64_t mul_modq(uint64_t a, uint64_t b, Modulus mod)
 {
-    return modq((unsigned __int128)a * b, mod);
+    const unsigned __int128 prod = (unsigned __int128)a * b;
+    return modq_wide((uint64_t)(prod >> 64), (uint64_t)prod, mod);
 }
 
 void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)

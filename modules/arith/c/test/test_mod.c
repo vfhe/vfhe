@@ -86,10 +86,14 @@ static void ref_reduce_mp(uint64_t *o, uint64_t *hi, uint64_t *lo, uint64_t n, u
 
 /* ---- kernels vs oracles for one prime ---- */
 
-static void check_ops(uint64_t q_bits)
+/* `n` selects which implementation the dispatchers in mod.c reach: at or above
+   MOD_MIN_VECTOR_LEN (8) the vectorized kernels, below it the size-generic
+   scalar ones in mod_scalar.c. On the portable engine both settings land on the
+   scalar kernels. The root-of-unity order the prime is chosen for is fixed
+   separately, so a short `n` still gets a usable prime. */
+static void check_ops(uint64_t q_bits, uint64_t n)
 {
-    const uint64_t n = 1024;
-    const uint64_t q = next_special_prime(1ULL << q_bits, n, true);
+    const uint64_t q = next_special_prime(1ULL << q_bits, 1024, true);
     Modulus mod = mod_new(q);
 
     uint64_t *in1 = safe_aligned_malloc(n * sizeof(uint64_t));
@@ -185,29 +189,66 @@ static void check_ops(uint64_t q_bits)
     mod_free(mod);
 }
 
-void test_modq_scalar(void)
+void test_modq_one_and_two_words(void)
 {
-    const uint64_t q = next_special_prime(1ULL << 50, 1024, true);
-    Modulus mod = mod_new(q);
-    for (int i = 0; i < 200; i++)
+    /* The two-word path folds on the precomputed residues of 2^52 and 2^104 and
+       shifts by k - 64, all of which move with the size of q -- so sweep it. */
+    const uint64_t bits[] = {10, 20, 30, 40, 50, 60, 62};
+    for (unsigned b = 0; b < sizeof(bits) / sizeof(*bits); b++)
     {
-        unsigned __int128 v = ((unsigned __int128)rand() << 64) | (unsigned)rand();
-        TEST_ASSERT_EQUAL_UINT64(ref_modq(v, q), modq(v, mod));
+        const uint64_t q = next_special_prime(1ULL << bits[b], 1024, true);
+        Modulus mod = mod_new(q);
+        for (int i = 0; i < 200; i++)
+        {
+            const uint64_t hi = ((uint64_t)rand() << 32) | (unsigned)rand();
+            const uint64_t lo = ((uint64_t)rand() << 32) | (unsigned)rand();
+            const unsigned __int128 v = ((unsigned __int128)hi << 64) | lo;
+            TEST_ASSERT_EQUAL_UINT64(ref_modq(v, q), modq_wide(hi, lo, mod));
+            /* the one-word entry point and the two-word one with hi = 0 must
+               agree with each other and with the oracle */
+            TEST_ASSERT_EQUAL_UINT64(ref_modq(lo, q), modq(lo, mod));
+            TEST_ASSERT_EQUAL_UINT64(ref_modq(lo, q), modq_wide(0, lo, mod));
+            /* and mul_modq must match a 128-bit product reduced directly */
+            const uint64_t a = lo % q, c = hi % q;
+            TEST_ASSERT_EQUAL_UINT64(ref_modq((unsigned __int128)a * c, q), mul_modq(a, c, mod));
+        }
+        /* boundaries of the internal paths: the 2^52 fast path and the limbs */
+        const uint64_t edges[] = {0, 1, q - 1, (1ULL << 52) - 1, 1ULL << 52, UINT64_MAX};
+        for (unsigned e = 0; e < sizeof(edges) / sizeof(*edges); e++)
+        {
+            TEST_ASSERT_EQUAL_UINT64(ref_modq(edges[e], q), modq(edges[e], mod));
+            TEST_ASSERT_EQUAL_UINT64(ref_modq(edges[e], q), modq_wide(0, edges[e], mod));
+            TEST_ASSERT_EQUAL_UINT64(ref_modq(((unsigned __int128)edges[e] << 64) | edges[e], q),
+                                     modq_wide(edges[e], edges[e], mod));
+        }
+        mod_free(mod);
     }
-    mod_free(mod);
 }
 
 void test_mod_eltwise_sweep(void)
 {
     const uint64_t bits[] = {10, 20, 30, 40, 50, 60, 62};
     for (unsigned i = 0; i < sizeof(bits) / sizeof(*bits); i++)
-        check_ops(bits[i]);
+        check_ops(bits[i], 1024);
+}
+
+/* The same oracles at lengths below MOD_MIN_VECTOR_LEN, which is what the
+   dispatchers route to the scalar kernels. The sweep above only reaches those
+   on the portable engine, where they are the whole implementation. */
+void test_mod_eltwise_sweep_scalar_path(void)
+{
+    const uint64_t bits[] = {10, 20, 30, 40, 50, 60, 62};
+    const uint64_t lengths[] = {1, 2, 4, 7};
+    for (unsigned i = 0; i < sizeof(bits) / sizeof(*bits); i++)
+        for (unsigned j = 0; j < sizeof(lengths) / sizeof(*lengths); j++)
+            check_ops(bits[i], lengths[j]);
 }
 
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_modq_scalar);
+    RUN_TEST(test_modq_one_and_two_words);
     RUN_TEST(test_mod_eltwise_sweep);
+    RUN_TEST(test_mod_eltwise_sweep_scalar_path);
     return UNITY_END();
 }

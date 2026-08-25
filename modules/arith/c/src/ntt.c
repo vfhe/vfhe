@@ -16,15 +16,19 @@ static uint64_t reverse_bits(uint64_t x, int bits)
     return res;
 }
 
+// The per-twiddle Shoup constant floor(val * 2^shift / q). A real division on
+// purpose: this is what a Barrett-style reduction is built *from*, so it cannot
+// be computed with one -- same reason mod_new divides.
 static uint64_t barrett_factor(uint64_t val, uint64_t q, uint64_t shift)
 {
     unsigned __int128 num = (unsigned __int128)val << shift;
     return (uint64_t)(num / q);
 }
 
-void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, __m512i ***out_ws,
+void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, __m512i ***out_ws,
                         __m512i ***out_w_precon)
 {
+    const uint64_t q = mod->q;
     size_t logn = 0;
     while ((1ULL << logn) < n)
         logn++;
@@ -37,7 +41,7 @@ void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, __m512i 
     for (size_t i = 1; i < n; i++)
     {
         idx = reverse_bits(i, logn);
-        rou[idx] = (uint64_t)(((unsigned __int128)rou[prev_idx] * root_of_unity) % q);
+        rou[idx] = mul_modq(rou[prev_idx], root_of_unity, mod);
         prev_idx = idx;
     }
     __m512i **ws = (__m512i **)malloc(logn * sizeof(__m512i *));
@@ -129,9 +133,10 @@ void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, __m512i 
     *out_w_precon = w_precon;
 }
 
-void ntt_precompute_inv(uint64_t n, uint64_t q, uint64_t inv_root_of_unity, __m512i ***out_ws,
+void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, __m512i ***out_ws,
                         __m512i ***out_w_precon)
 {
+    const uint64_t q = mod->q;
     size_t logn = 0;
     while ((1ULL << logn) < n)
         logn++;
@@ -144,7 +149,7 @@ void ntt_precompute_inv(uint64_t n, uint64_t q, uint64_t inv_root_of_unity, __m5
     for (size_t i = 1; i < n; i++)
     {
         idx = reverse_bits(i, logn);
-        rou[idx] = (uint64_t)(((unsigned __int128)rou[prev_idx] * inv_root_of_unity) % q);
+        rou[idx] = mul_modq(rou[prev_idx], inv_root_of_unity, mod);
         prev_idx = idx;
     }
     uint64_t *temp = (uint64_t *)malloc(n * sizeof(uint64_t));
@@ -293,16 +298,16 @@ NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
         // No vectorized stage can run at this length, and the tables below would
         // be empty (they are sized n / 16). Build the scalar ones instead; the
         // transforms and the free path branch on plan->n the same way.
-        ntt_scalar_precompute(n, q, root_of_unity, (uint64_t ***)&res->ws_fwd);
-        ntt_scalar_precompute(n, q, inv_root_of_unity, (uint64_t ***)&res->ws_inv);
+        ntt_scalar_precompute(n, mod, root_of_unity, (uint64_t ***)&res->ws_fwd);
+        ntt_scalar_precompute(n, mod, inv_root_of_unity, (uint64_t ***)&res->ws_inv);
         res->w_precon_fwd = NULL;
         res->w_precon_inv = NULL;
         return res;
     }
 
-    ntt_precompute_fwd(n, q, root_of_unity, (__m512i ***)&res->ws_fwd,
+    ntt_precompute_fwd(n, mod, root_of_unity, (__m512i ***)&res->ws_fwd,
                        (__m512i ***)&res->w_precon_fwd);
-    ntt_precompute_inv(n, q, inv_root_of_unity, (__m512i ***)&res->ws_inv,
+    ntt_precompute_inv(n, mod, inv_root_of_unity, (__m512i ***)&res->ws_inv,
                        (__m512i ***)&res->w_precon_inv);
     return res;
 }

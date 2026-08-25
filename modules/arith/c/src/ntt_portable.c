@@ -8,17 +8,17 @@
 // This engine has no vectorized transforms, so it is the shared size-generic
 // scalar NTT (ntt_scalar.c) at every length.
 
-void ntt_precompute_fwd(uint64_t n, uint64_t q, uint64_t root_of_unity, uint64_t ***out_ws,
+void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t ***out_ws,
                         uint64_t ***out_w_precon)
 {
-    ntt_scalar_precompute(n, q, root_of_unity, out_ws);
+    ntt_scalar_precompute(n, mod, root_of_unity, out_ws);
     *out_w_precon = NULL; // Not used in portable
 }
 
-void ntt_precompute_inv(uint64_t n, uint64_t q, uint64_t inv_root_of_unity, uint64_t ***out_ws,
+void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uint64_t ***out_ws,
                         uint64_t ***out_w_precon)
 {
-    ntt_scalar_precompute(n, q, inv_root_of_unity, out_ws);
+    ntt_scalar_precompute(n, mod, inv_root_of_unity, out_ws);
     *out_w_precon = NULL;
 }
 
@@ -55,9 +55,9 @@ NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
     res->n = n;
     res->root_of_unity = root_of_unity;
     res->inv_root_of_unity = inv_root_of_unity;
-    ntt_precompute_fwd(n, q, root_of_unity, (uint64_t ***)&res->ws_fwd,
+    ntt_precompute_fwd(n, mod, root_of_unity, (uint64_t ***)&res->ws_fwd,
                        (uint64_t ***)&res->w_precon_fwd);
-    ntt_precompute_inv(n, q, inv_root_of_unity, (uint64_t ***)&res->ws_inv,
+    ntt_precompute_inv(n, mod, inv_root_of_unity, (uint64_t ***)&res->ws_inv,
                        (uint64_t ***)&res->w_precon_inv);
     return res;
 }

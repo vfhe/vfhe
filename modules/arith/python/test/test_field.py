@@ -112,11 +112,10 @@ def test_field_sampling_and_hashing():
 def test_field_sampling_varies_within_one_element():
     """Coefficients of a single sampled element must be independent draws.
 
-    They were not: the sampler finalized one BLAKE3 state per coefficient
-    without advancing it, so a degree-d element had one degree of freedom
-    instead of d (ARITH-8). Two different seeds still differed, which is why
-    `test_field_sampling_and_hashing` could not see it -- keep this assertion
-    for any sampler added here.
+    A degree-d element has d degrees of freedom, so its coefficients must
+    differ. Checking only that two seeds give different elements does not
+    establish that, since a sampler can be seed-dependent and still emit one
+    value repeated d times.
     """
     d = 8
     field = Field(PRIME, 3, d)
