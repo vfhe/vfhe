@@ -57,11 +57,6 @@ static int poly_divrem(uint64_t *q, uint64_t *r, const uint64_t *f, const uint64
 
 // Field operations implementation
 
-/* A Field is pure modular arithmetic -- no transform. It used to construct a
-   transform object here (n = 1, zero root of unity, NULL twiddle tables) with
-   its own copy of the Barrett derivation, and it never set the IFMA fields at
-   all; it now just calls `mod_new`, so there is nothing left to wrap. */
-
 void field_ext_add(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q)
 {
     for (uint64_t i = 0; i < d; i++)
@@ -279,11 +274,8 @@ int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Mod
     return status;
 }
 
-/* Uniform in F_p^d from a seed. The sampling mechanism lives in misc's prng.c
-   -- this only pins the domain-separation tag, which is the field's business
-   and not the generator's. It used to inline the whole thing and finalize the
-   same BLAKE3 state once per coefficient, so every coefficient of an element
-   came out equal (ARITH-8). */
+/* Uniform in F_p^d from a seed. The generator lives in misc's prng.c; the
+   domain-separation tag is the field's to choose. */
 void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len, uint64_t d,
                                  uint64_t mod)
 {

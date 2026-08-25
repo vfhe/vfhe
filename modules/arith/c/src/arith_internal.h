@@ -35,7 +35,7 @@ void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low,
 // Likewise for the element-wise kernels: one lane group, `n / 8` iterations.
 #define MOD_MIN_VECTOR_LEN 8
 
-void ntt_scalar_precompute(uint64_t n, uint64_t q, uint64_t root_of_unity, uint64_t ***out_ws);
+void ntt_scalar_precompute(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t ***out_ws);
 void ntt_scalar_free_precompute(uint64_t **ws);
 // `ws` is the only thing the plan cannot supply: forward and inverse read
 // different tables. Length and modulus come from the plan.
