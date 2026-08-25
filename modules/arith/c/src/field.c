@@ -279,34 +279,15 @@ int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Mod
     return status;
 }
 
+/* Uniform in F_p^d from a seed. The sampling mechanism lives in misc's prng.c
+   -- this only pins the domain-separation tag, which is the field's business
+   and not the generator's. It used to inline the whole thing and finalize the
+   same BLAKE3 state once per coefficient, so every coefficient of an element
+   came out equal (ARITH-8). */
 void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len, uint64_t d,
                                  uint64_t mod)
 {
-    blake3_hasher hasher;
-    blake3_hasher_init_derive_key(&hasher, "field_sample_element");
-    blake3_hasher_update(&hasher, seed, seed_len);
-    uint8_t buffer[BLAKE3_OUT_LEN];
-    uint64_t mask = mod;
-    mask |= mask >> 1;
-    mask |= mask >> 2;
-    mask |= mask >> 4;
-    mask |= mask >> 8;
-    mask |= mask >> 16;
-    mask |= mask >> 32;
-    for (uint64_t i = 0; i < d; i++)
-    {
-        while (true)
-        {
-            blake3_hasher_finalize(&hasher, buffer, BLAKE3_OUT_LEN);
-            uint64_t sampled = (*((uint64_t *)buffer)) & mask;
-            if (sampled < mod)
-            {
-                a[i] = sampled;
-                break;
-            }
-            blake3_hasher_update(&hasher, buffer, BLAKE3_OUT_LEN);
-        }
-    }
+    prng_sample_below(a, d, mod, "field_sample_element", seed, seed_len);
 }
 
 void field_hash_element(uint8_t *out, const uint64_t *a, uint64_t d)

@@ -4,6 +4,8 @@
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
 #endif
+#include <assert.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -140,4 +142,77 @@ void vfhe_prng_clear_deterministic_seed(void)
 {
     det_active = 0;
     rnd_buffer_idx = 1024;
+}
+
+// --- Gaussian sampling ---------------------------------------------------
+// Box-Muller over the entropy-backed stream above, so it follows the
+// deterministic-seed override too. Moved here from misc_tp.c: every generator
+// in the library lives in this file.
+
+double int2double(uint64_t x) { return ((double)x) / 18446744073709551616.0; }
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+double generate_normal_random(double sigma)
+{
+    uint64_t rnd[2];
+    generate_random_bytes(16, (uint8_t *)rnd);
+    return cos(2. * M_PI * int2double(rnd[0])) * sqrt(-2. * log(int2double(rnd[1]))) * sigma;
+}
+
+// --- Seeded sampling (deterministic, independent of the stream above) ----
+// A *different* generator from everything above: the caller supplies the seed,
+// so the result is a pure function of (context, seed) and the
+// deterministic-seed override has nothing to do with it. Used where a value
+// must be reproducible from a transcript rather than merely unpredictable.
+//
+// `context` is a domain-separation tag: two callers with the same seed and
+// different tags get independent streams. Pass a fixed string literal per use
+// site, never anything caller-controlled.
+
+void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char *context,
+                       const uint8_t *seed, uint64_t seed_len)
+{
+    assert(bound > 0); // otherwise the rejection loop below never terminates
+
+    blake3_hasher hasher;
+    blake3_hasher_init_derive_key(&hasher, context);
+    blake3_hasher_update(&hasher, seed, seed_len);
+
+    // Smallest 2^k - 1 that covers `bound`, so rejection discards under half
+    // the draws.
+    uint64_t mask = bound;
+    mask |= mask >> 1;
+    mask |= mask >> 2;
+    mask |= mask >> 4;
+    mask |= mask >> 8;
+    mask |= mask >> 16;
+    mask |= mask >> 32;
+
+    // BLAKE3 as an XOF. `blake3_hasher_finalize` is a pure function of hasher
+    // state, so finalizing repeatedly without updating returns the *same*
+    // bytes -- which is how every coefficient of a sampled field element came
+    // out equal (ARITH-8). Seeking along the output stream is what makes
+    // successive draws independent.
+    uint64_t offset = 0;
+    for (uint64_t i = 0; i < count; i++)
+    {
+        for (;;)
+        {
+            uint8_t buf[sizeof(uint64_t)];
+            blake3_hasher_finalize_seek(&hasher, offset, buf, sizeof(buf));
+            offset += sizeof(buf);
+
+            uint64_t word;
+            memcpy(&word, buf, sizeof(word)); // the buffer is not aligned for a cast
+            const uint64_t sampled = word & mask;
+            if (sampled < bound)
+            {
+                out[i] = sampled;
+                break;
+            }
+        }
+    }
 }

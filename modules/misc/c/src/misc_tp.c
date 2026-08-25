@@ -18,18 +18,6 @@ uint64_t RoundqQ(uint64_t v, uint64_t q, uint64_t Q)
     return ((uint64_t)floor(0.5 + ((double)v) * ((double)q) / ((double)Q)) % q);
 }
 
-double int2double(uint64_t x) { return ((double)x) / 18446744073709551616.0; }
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-double generate_normal_random(double sigma)
-{
-    uint64_t rnd[2];
-    generate_random_bytes(16, (uint8_t *)rnd);
-    return cos(2. * M_PI * int2double(rnd[0])) * sqrt(-2. * log(int2double(rnd[1]))) * sigma;
-}
-
 // Mem alloc
 
 uint64_t _glb_mem_count = 0;
