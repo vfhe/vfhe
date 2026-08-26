@@ -164,24 +164,14 @@ RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count)
     }
     assert(sample != NULL);
     key->mask = arith_rns_polynomial(&sample->b)->rns_mask;
-    key->acc = mlwe_alloc_sample(sample->ring, sample->r);
+    key->ring = sample->ring;
     return key;
 }
 
-void mlwe_rns_ks_key_reset_acc(RNS_MLWE_KS_Key key)
-{
-    for (size_t i = 0; i < key->acc->r; i++)
-    {
-        arith_rns_polynomial(&key->acc->a[i])->rns_mask = key->mask;
-    }
-    arith_rns_polynomial(&key->acc->b)->rns_mask = key->mask;
-}
-
-// The component arrays are borrowed from their creator; only what the key
-// itself allocated is released.
+// The component arrays are borrowed from their creator; only the key's own
+// copy of the pointer array is released.
 void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key)
 {
-    free_RNS_mlwe_sample(key->acc);
     free(key->s);
     free(key);
 }
