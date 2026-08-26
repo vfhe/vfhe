@@ -11,10 +11,14 @@ from vfhe.arith import (
     ComplexRing,
     Constraints,
     Domain,
+    ExtensionField,
     Field,
     Multiprecision,
+    Polynomial,
     PseudoMersenneField,
     Ring,
+    RNSPolynomial,
+    RNSRing,
     Spec,
     backends,
     implementations,
@@ -33,8 +37,8 @@ def test_every_implementation_is_registered():
 @pytest.mark.parametrize(
     ("cls", "key"),
     [
-        (Ring, ("rns", "ntt")),
-        (Field, ("field", "scalar")),
+        (RNSRing, ("rns", "ntt")),
+        (ExtensionField, ("field", "scalar")),
         (PseudoMersenneField, ("pmf", "limb52")),
         (ComplexRing, ("complex", "fft")),
         (Multiprecision, ("mp", "limb52")),
@@ -126,28 +130,28 @@ class TestConversions:
     """Mixed specs need an explicitly declared route."""
 
     def test_same_spec_needs_no_conversion(self):
-        assert common_spec(Ring.spec, Ring.spec) is Ring.spec
+        assert common_spec(RNSRing.spec, RNSRing.spec) is RNSRing.spec
 
     def test_unrelated_specs_refuse_to_combine(self):
         with pytest.raises(TypeError, match="no implicit conversion"):
-            common_spec(Ring.spec, Field.spec)
+            common_spec(RNSRing.spec, ExtensionField.spec)
 
     def test_an_implicit_conversion_picks_the_target(self):
         narrow = Spec(
             implementation="rns",
             backend="_test_narrow",
-            parent_cls=Ring,
+            parent_cls=RNSRing,
             capabilities=Capability.CORE,
             constraints=Constraints(max_prime_bits=32),
             rank=99,
         )
         register_conversion(
-            narrow.key, Ring.spec.key, lambda value: value, implicit=True
+            narrow.key, RNSRing.spec.key, lambda value: value, implicit=True
         )
-        assert common_spec(narrow, Ring.spec) is Ring.spec
+        assert common_spec(narrow, RNSRing.spec) is RNSRing.spec
         # and the reverse direction, which is not registered, still resolves
         # to the same target rather than silently narrowing
-        assert common_spec(Ring.spec, narrow) is Ring.spec
+        assert common_spec(RNSRing.spec, narrow) is RNSRing.spec
 
 
 def test_mlwe_refuses_a_domain_without_the_ring_capabilities():
@@ -156,3 +160,37 @@ def test_mlwe_refuses_a_domain_without_the_ring_capabilities():
 
     with pytest.raises(TypeError, match="QUOTIENT_POLY_RING"):
         MLWE_Scheme(Field(PRIME, 7, 4))
+
+
+class TestHierarchy:
+    """The generic front classes build their resolved implementation."""
+
+    def test_ring_builds_the_default_implementation(self):
+        ring = Ring(256, 300, split_degree=1)
+        assert type(ring) is RNSRing
+        assert isinstance(ring, Ring)
+
+    def test_polynomial_builds_the_ring_element_type(self):
+        ring = Ring(256, 300, split_degree=1)
+        poly = Polynomial(ring)
+        assert type(poly) is RNSPolynomial
+        assert isinstance(poly, Polynomial)
+
+    def test_field_builds_the_default_implementation(self):
+        field = Field(PRIME, 7, 4)
+        assert type(field) is ExtensionField
+        assert isinstance(field, Field)
+
+    def test_pseudo_mersenne_is_a_field(self):
+        pmf = PseudoMersenneField.generate(260)
+        assert isinstance(pmf, Field)
+        # the generic |A| answer comes from the shared base
+        assert pmf.exceptional_set_size == pmf.order == pmf.prime
+
+    def test_implementation_keyword_names_the_subclass(self):
+        assert type(Ring(256, 300, split_degree=1, implementation="rns")) is RNSRing
+        with pytest.raises(LookupError, match="unknown implementation"):
+            Ring(256, 300, implementation="nosuch")
+
+    def test_concrete_classes_construct_as_themselves(self):
+        assert type(RNSRing(256, 300, split_degree=1)) is RNSRing
