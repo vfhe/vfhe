@@ -366,11 +366,11 @@ def test_ring_follows_a_replaced_registry(monkeypatch):
 
     A dynamic-extension reload cannot patch the registry's `lib` (an instance
     attribute, unlike the module-level `lib`/`ffi` `update_cffi_references`
-    rewrites), so `_reload.reinit_rns_base` swaps the whole instance. A name
-    bound at import time would keep pointing at the retired one and go on
-    building RNS bases in the unloaded library.
+    rewrites), so the implementation's `state.register_rebind` handler swaps
+    the whole instance. A name bound at import time would keep pointing at the
+    retired one and go on building RNS bases in the unloaded library.
     """
-    from vfhe.arith import rns_base
+    from vfhe.arith.impl.rns import rns_base
 
     retired = rns_base.registry()
     monkeypatch.setattr(rns_base, "rns_base_registry", rns_base.RNS_Base_Registry())

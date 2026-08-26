@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from math import log2
 
-from vfhe.arith.polynomial import Polynomial, repr
+from vfhe.arith import Polynomial, repr
 from vfhe.misc.libvfhe import ffi, lib
 from vfhe.mlwe.lwe import LWE, LWE_Key
 from vfhe.mlwe.mgsw import CMUX, MGSW, NCMUX, MGSW_Scheme

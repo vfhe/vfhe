@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from vfhe.arith.complex import ComplexPolynomial, ComplexRing
+from vfhe.arith import ComplexPolynomial, ComplexRing
 from vfhe.misc.libvfhe import ffi
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, Polynomial, Ring, repr
 
@@ -159,20 +159,9 @@ class CKKS_Scheme(MLWE_Scheme):
         start_ring = ct.ring
         end_ring = self.rings[level + 1]
 
-        # Build union ring robustly by merging primes from starting and ending rings
-        from vfhe.arith.rns_base import registry
-
-        key_ntt = (self.ring.N, self.ring.split_degree)
-        prime_map = registry().prime_to_index[key_ntt]
-        union_primes = list(set(start_ring.primes + end_ring.primes))
-        union_primes.sort(key=lambda p: prime_map[p])
-        union_prime_sizes = [math.ceil(math.log2(p)) for p in union_primes]
-        union_ring = Ring(
-            self.ring.N,
-            primes=union_primes,
-            prime_size=union_prime_sizes,
-            split_degree=self.ring.split_degree,
-        )
+        # Rescaling to a ring that is not a quotient of the current one needs a
+        # ring holding both sets of primes to move through.
+        union_ring = start_ring.union(end_ring)
 
         # Allocate new ciphertext at the next level
         res = CKKS_Ciphertext(self, lvl=level + 1)

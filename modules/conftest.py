@@ -61,26 +61,19 @@ def deterministic_prng():
 
 
 @pytest.fixture(autouse=True)
-def _reset_rns_base_registry():  # pyright: ignore[reportUnusedFunction]
-    """Give every test a clean RNS base prime pool.
+def _reset_arith_state():  # pyright: ignore[reportUnusedFunction]
+    """Give every test empty arithmetic caches.
 
-    The RNS base prime pool is a process-global singleton keyed by
-    (N, split_degree): unrelated ring families sharing those params accumulate
-    primes in one growing pool, so a ring's RNS primes are only guaranteed to
-    occupy contiguous indices from 0 when it is the first registered for its
-    (N, split_degree). A few low-level paths (LWE extraction, packing
-    key-switch) rely on that contiguity. The original suites ran each test file
-    as its own process; resetting the registry before every test reproduces
-    that isolation so cross-file ordering can't leak state.
+    An implementation's caches are process-global. RNS keys its prime pool on
+    (N, split_degree), so unrelated ring families sharing those parameters
+    accumulate primes in one growing pool, and a ring's primes occupy
+    contiguous indices from 0 only when it is the first registered for its
+    key. A few low-level paths (LWE extraction, packing key-switch) rely on
+    that contiguity. The original suites ran each test file as its own
+    process; emptying the caches before every test reproduces that isolation
+    so cross-file ordering cannot leak state.
     """
-    from vfhe.arith.rns_base import registry
+    from vfhe.arith import reset_state
 
-    current = registry()
-    for cache in (
-        current.bases,
-        current.primes,
-        current.prime_to_index,
-        current.conversion_params_cache,
-    ):
-        cache.clear()
+    reset_state()
     yield

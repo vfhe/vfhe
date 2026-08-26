@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.arith public API re-exports.
 from .base import ArithParent, Field, Polynomial, Ring
-from .complex import ComplexPolynomial, ComplexRing
-from .field import ExtensionField, FieldElement
-from .multiprecision import Multiprecision
+from .impl.complex.complex import ComplexPolynomial, ComplexRing
+from .impl.field.field import ExtensionField, FieldElement
+from .impl.mp.multiprecision import Multiprecision
+from .impl.pmf.pseudo_mersenne import PseudoMersenneElement, PseudoMersenneField
+from .impl.rns.polynomial import RNSPolynomial, RNSRing, repr
 from .number_theory import crt, gen_pseudo_mersenne_prime, is_prime
-from .polynomial import RNSPolynomial, RNSRing, repr
-from .pseudo_mersenne import PseudoMersenneElement, PseudoMersenneField
 from .registry import (
     backends,
     implementations,
@@ -16,6 +16,12 @@ from .registry import (
     resolve,
 )
 from .spec import Capability, Constraints, Domain, Spec
+from .state import (
+    rebind as rebind_state,
+)
+from .state import (
+    reset as reset_state,
+)
 
 __all__ = [
     "ArithParent",
@@ -40,8 +46,10 @@ __all__ = [
     "gen_pseudo_mersenne_prime",
     "implementations",
     "is_prime",
+    "rebind_state",
     "register_conversion",
     "registered",
     "repr",
+    "reset_state",
     "resolve",
 ]

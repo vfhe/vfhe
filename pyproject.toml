@@ -168,6 +168,7 @@ extraPaths = [
     "modules/fhe/python/src",
     "modules/mlwe/python/src",
     "modules/piop/python/src",
+    "modules/polycom/python/src",
 ]
 stubPath = "tools/typings"
 typeCheckingMode = "basic"

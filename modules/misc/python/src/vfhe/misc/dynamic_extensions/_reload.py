@@ -58,17 +58,18 @@ def reinit_libvfhe(new_ffi, new_lib):
 
 
 @register_reinitializer
-def reinit_rns_base(_new_ffi, _new_lib):
-    """Replace the RNS base registry and flush its conversion cache."""
-    try:
-        import vfhe.arith.rns_base as rns_base_mod
-        from vfhe.arith.rns_base import RNS_Base_Registry
+def reinit_arith_state(_new_ffi, _new_lib):
+    """Rebuild every arithmetic implementation's process-global state.
 
-        if getattr(rns_base_mod, "rns_base_registry", None):
-            rns_base_mod.rns_base_registry.cleanup()
-        rns_base_mod.rns_base_registry = RNS_Base_Registry()
+    Which implementations exist, and which of them cache native objects, is
+    arith's business; each registers its own handler.
+    """
+    try:
+        from vfhe.arith import rebind_state
+
+        rebind_state()
     except ImportError:
-        logger.debug("vfhe.arith not imported; skipping RNS base reinitialization")
+        logger.debug("vfhe.arith not imported; skipping arith state reinitialization")
 
 
 @register_reinitializer

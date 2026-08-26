@@ -9,10 +9,10 @@ from vfhe.misc.libvfhe import ffi, lib
 # The AVX-512 complex FFT casts these buffers to __m512d and uses aligned loads,
 # so they must be 64-byte aligned; more than cffi's default. Shared with the other
 # over-aligned wrappers rather than kept private here.
-from ._alloc import aligned64 as _aligned64
-from .polynomial import Polynomial, Ring, repr
-from .registry import register
-from .spec import Capability, Constraints, Spec
+from ..._alloc import aligned64 as _aligned64
+from ...registry import register
+from ...spec import Capability, Constraints, Spec
+from ..rns.polynomial import Polynomial, Ring, repr
 
 
 class ComplexRing:

@@ -6,9 +6,9 @@ import contextlib
 
 from vfhe.misc.libvfhe import ffi, lib
 
-from .base import Field
-from .registry import register
-from .spec import Capability, Constraints, Spec
+from ...base import Field
+from ...registry import register
+from ...spec import Capability, Constraints, Spec
 
 
 class ExtensionField(Field):

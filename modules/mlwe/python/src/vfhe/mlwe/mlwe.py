@@ -9,9 +9,7 @@ import secrets
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, TypeVar, cast
 
-from vfhe.arith.base import ArithParent
-from vfhe.arith.polynomial import Polynomial, Ring, repr
-from vfhe.arith.spec import Capability
+from vfhe.arith import ArithParent, Capability, Polynomial, Ring, repr
 from vfhe.misc.libvfhe import ffi, lib
 
 if TYPE_CHECKING:
@@ -272,11 +270,10 @@ class MLWE_Scheme:
 
     def keyswitch(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
-        out = c.new_like(lvl=c.lvl, ring=self.special_rings[c.lvl])
+        out = c.new_like(lvl=c.lvl, ring=self.rings[c.lvl])
         c.to_coeff()
         lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(out.obj, c.obj, ksk.obj, c.lvl)
         out.repr = repr.coeff
-        out.ring = self.rings[c.lvl]
         return out
 
     def gen_ksk_trace(
@@ -305,20 +302,18 @@ class MLWE_Scheme:
 
     def automorphism(self, c: CtT, gen: int, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
-        out = c.new_like(lvl=c.lvl, ring=self.special_rings[c.lvl])
+        out = c.new_like(lvl=c.lvl, ring=self.rings[c.lvl])
         c.to_coeff()
         lib_rlwe.lib.mlwe_automorphism_RNSc_GHS(out.obj, c.obj, gen, ksk.obj, c.lvl)
         out.repr = repr.coeff
-        out.ring = self.rings[c.lvl]
         return out
 
     def trace(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
-        out = c.new_like(lvl=c.lvl, ring=self.special_rings[c.lvl])
+        out = c.new_like(lvl=c.lvl, ring=self.rings[c.lvl])
         c.to_coeff()
         lib_rlwe.lib.mlwe_trace(out.obj, c.obj, ksk.obj, c.lvl)
         out.repr = repr.coeff
-        out.ring = self.rings[c.lvl]
         return out
 
     def full_packing_keyswitch_scaled(
@@ -452,11 +447,9 @@ class MLWE_Scheme:
 
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[in1.lvl]
         # Relinearization key-switches into the extended ring, so the output
-        # needs the special-prime capacity even though it lands back in base.
-        out = in1.new_like(lvl=in1.lvl, ring=in1.scheme.special_rings[in1.lvl])
+        out = in1.new_like(lvl=in1.lvl, ring=in1.scheme.rings[in1.lvl])
         lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ksk.obj)
         out.repr = repr.ntt
-        out.ring = in1.scheme.rings[in1.lvl]
         return out
 
     def relinearize(self, c_ext: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
@@ -466,13 +459,12 @@ class MLWE_Scheme:
         components and copies the linear ones through (their NULL slots).
         """
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c_ext.lvl]
-        out = c_ext.new_like(lvl=c_ext.lvl, ring=self.special_rings[c_ext.lvl])
+        out = c_ext.new_like(lvl=c_ext.lvl, ring=self.rings[c_ext.lvl])
         c_ext.to_coeff()
         lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(
             out.obj, c_ext.obj, ksk.obj, c_ext.lvl
         )
         out.repr = repr.coeff
-        out.ring = self.rings[c_ext.lvl]
         return out
 
 

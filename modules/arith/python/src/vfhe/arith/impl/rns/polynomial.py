@@ -9,11 +9,11 @@ from enum import Enum
 
 from vfhe.misc.libvfhe import ffi, lib
 
-from .base import Polynomial, Ring
-from .number_theory import crt, is_prime
-from .registry import register
+from ...base import Polynomial, Ring
+from ...number_theory import crt, is_prime
+from ...registry import register
+from ...spec import Capability, Constraints, Spec
 from .rns_base import registry
-from .spec import Capability, Constraints, Spec
 
 
 def next_power_of_2(x):
@@ -174,6 +174,27 @@ class RNSRing(Ring):
             return other
         assert self.is_quotient_ring(other)
         return self
+
+    def union(self, other: Ring) -> Ring:
+        """The ring over both rings' primes together.
+
+        Neither ring need contain the other, so this is not `intersec`
+        reversed: it is the smallest ring both are quotients of. The primes
+        come back in the base's own order, which is the order every per-prime
+        array is indexed by, so a caller never has to know how primes are
+        numbered.
+        """
+        assert self.N == other.N and self.split_degree == other.split_degree, (
+            "rings must share N and split_degree to be combined"
+        )
+        order = registry().prime_to_index[(self.N, self.split_degree)]
+        primes = sorted(set(self.primes) | set(other.primes), key=lambda p: order[p])
+        return type(self)(
+            self.N,
+            primes=primes,
+            prime_size=[math.ceil(math.log2(p)) for p in primes],
+            split_degree=self.split_degree,
+        )
 
     # generates the RNS primes of size prime_size
     @staticmethod

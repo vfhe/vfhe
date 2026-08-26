@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from vfhe.arith import Ring
 from vfhe.arith.number_theory import crt
-from vfhe.arith.polynomial import Ring
 from vfhe.misc.libvfhe import ffi, lib
 
 

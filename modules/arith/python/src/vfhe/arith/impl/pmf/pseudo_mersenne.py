@@ -25,11 +25,11 @@ from __future__ import annotations
 
 from vfhe.misc.libvfhe import ffi, lib
 
-from ._alloc import aligned64
-from .base import Field
-from .number_theory import gen_pseudo_mersenne_prime, is_prime
-from .registry import register
-from .spec import Capability, Constraints, Spec
+from ..._alloc import aligned64
+from ...base import Field
+from ...number_theory import gen_pseudo_mersenne_prime, is_prime
+from ...registry import register
+from ...spec import Capability, Constraints, Spec
 
 _LIMB_BITS = 52
 _LIMB_MASK = (1 << _LIMB_BITS) - 1

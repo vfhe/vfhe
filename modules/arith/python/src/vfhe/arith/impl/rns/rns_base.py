@@ -6,6 +6,8 @@ import atexit
 
 from vfhe.misc.libvfhe import ffi, lib
 
+from ... import state
+
 
 class RNS_Base_Registry:
     """The process's native ``RNS_Base`` objects, one per ``(N, split_degree)``.
@@ -81,3 +83,26 @@ def registry() -> RNS_Base_Registry:
     binding would keep using the retired one.
     """
     return rns_base_registry
+
+
+@state.register_reset
+def _reset() -> None:
+    """Drop the prime pool, the bases and the cached conversion parameters.
+
+    Native conversion parameters are freed rather than dropped; the bases
+    themselves are process-lifetime by contract (every Ring on a
+    (N, split_degree) holds one, and polycom's plans borrow their moduli), so
+    only this registry's references to them go.
+    """
+    current = registry()
+    current.cleanup()
+    for cache in (current.bases, current.primes, current.prime_to_index):
+        cache.clear()
+
+
+@state.register_rebind
+def _rebind() -> None:
+    """Replace the registry, which pins `lib` as an instance attribute."""
+    global rns_base_registry
+    rns_base_registry.cleanup()
+    rns_base_registry = RNS_Base_Registry()
