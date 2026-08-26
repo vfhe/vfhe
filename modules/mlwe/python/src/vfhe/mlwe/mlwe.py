@@ -763,7 +763,7 @@ class MLWE:
         res = self.new_like()
         if isinstance(other, MLWE):
             res.add_MLWE(self, other)
-        if type(other) is Polynomial:
+        if isinstance(other, Polynomial):
             res.add_poly(self, other)
         return res
 
@@ -778,7 +778,7 @@ class MLWE:
             other.to_NTT()
         if isinstance(other, MLWE):
             self.add_MLWE(self, other)
-        if type(other) is Polynomial:
+        if isinstance(other, Polynomial):
             self.add_poly(self, other)
         return self
 
@@ -794,7 +794,7 @@ class MLWE:
         res = self.new_like()
         if isinstance(other, MLWE):
             res.sub_MLWE(self, other)
-        if type(other) is Polynomial:
+        if isinstance(other, Polynomial):
             res.sub_poly(self, other)
         return res
 
@@ -809,12 +809,12 @@ class MLWE:
             other.to_NTT()
         if isinstance(other, MLWE):
             self.sub_MLWE(self, other)
-        if type(other) is Polynomial:
+        if isinstance(other, Polynomial):
             self.sub_poly(self, other)
         return self
 
     def __mul__(self, other) -> MLWE:
-        if type(other) is Polynomial:
+        if isinstance(other, Polynomial):
             res = self.new_like()
             if other.ring != self.ring:
                 assert other.ring.is_quotient_ring(self.ring)

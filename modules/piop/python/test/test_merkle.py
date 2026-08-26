@@ -119,8 +119,10 @@ def test_library_leaf_types():
     ring = Ring(1024, prime_size=[49], split_degree=4)
     polys = [Polynomial(ring).from_array([i + 1, i + 2]) for i in range(8)]
     # Polynomial has no .hash(); its get_hash() returns four 64-bit words
-    tree = Merkle(polys, hash=Polynomial.get_hash)
-    assert Merkle.verify(tree.root, 6, tree.open(6), polys[6], hash=Polynomial.get_hash)
+    tree = Merkle(polys, hash=lambda p: p.get_hash())
+    assert Merkle.verify(
+        tree.root, 6, tree.open(6), polys[6], hash=lambda p: p.get_hash()
+    )
 
 
 def test_rejects_bad_hash_values_and_empty_leaves():

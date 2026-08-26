@@ -6,12 +6,12 @@ import contextlib
 
 from vfhe.misc.libvfhe import ffi, lib
 
-from .base import ArithParent
+from .base import Field
 from .registry import register
 from .spec import Capability, Constraints, Spec
 
 
-class Field(ArithParent):
+class ExtensionField(Field):
     def __init__(self, prime: int, w: int, d: int) -> None:
         self.prime = prime
         self.w = w
@@ -26,9 +26,7 @@ class Field(ArithParent):
         self.inv_two = self.two.inverse()
 
     @property
-    def exceptional_set_size(self) -> int:
-        """|A| for a field: every nonzero difference is invertible, so the
-        whole of F_{p^d} is exceptional."""
+    def order(self) -> int:
         return self.prime**self.d
 
     def __del__(self) -> None:
@@ -145,7 +143,7 @@ FIELD_SCALAR = register(
     Spec(
         implementation="field",
         backend="scalar",
-        parent_cls=Field,
+        parent_cls=ExtensionField,
         element_cls=FieldElement,
         capabilities=(
             Capability.CORE
@@ -159,4 +157,4 @@ FIELD_SCALAR = register(
 
 # One spec per class today, so it binds to the class; a class serving
 # several backends would set it per instance instead.
-Field.spec = FIELD_SCALAR
+ExtensionField.spec = FIELD_SCALAR

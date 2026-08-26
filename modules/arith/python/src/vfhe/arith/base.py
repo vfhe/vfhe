@@ -15,8 +15,9 @@ object is an arithmetic domain at all.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC, ABCMeta, abstractmethod
 
+from .registry import resolve
 from .spec import Capability, Domain, Spec
 
 
@@ -79,3 +80,80 @@ class ArithParent(ABC):
         deriving it from the domain's internals, which differ per
         implementation.
         """
+
+
+class _ImplementationDispatch(ABCMeta):
+    """Constructing a generic front class builds its resolved implementation.
+
+    A class that defines ``_concrete`` in its own namespace is a front:
+    calling it strips the ``implementation=`` / ``backend=`` keywords, asks
+    ``_concrete`` for the class those select, and constructs that class once,
+    normally. Subclasses do not inherit front behavior -- a concrete class
+    constructs as itself.
+    """
+
+    def __call__(cls, *args, **kwargs):
+        concrete = cls.__dict__.get("_concrete")
+        if concrete is None:
+            return super().__call__(*args, **kwargs)
+        implementation = kwargs.pop("implementation", None)
+        backend = kwargs.pop("backend", None)
+        target = concrete(implementation, backend, *args, **kwargs)
+        return target(*args, **kwargs)
+
+
+class Ring(ArithParent, metaclass=_ImplementationDispatch):
+    """A quotient polynomial ring, independent of how its elements are stored.
+
+    ``Ring(...)`` builds the default implementation (RNS); pass
+    ``implementation=`` / ``backend=`` to name another. Subclasses hold one
+    representation each and everything specific to it; what is true for every
+    representation belongs here.
+    """
+
+    @staticmethod
+    def _concrete(
+        implementation: str | None, backend: str | None, *args, **kwargs
+    ) -> type:
+        return resolve(implementation or "rns", backend).parent_cls
+
+
+class Polynomial(metaclass=_ImplementationDispatch):
+    """An element of a `Ring`, in whatever representation the ring uses.
+
+    ``Polynomial(ring, ...)`` builds the ring's own element type: the class
+    comes from the ring's spec, so a polynomial is always matched to its
+    ring's implementation and a caller never names the concrete class.
+    """
+
+    @staticmethod
+    def _concrete(
+        implementation: str | None, backend: str | None, ring=None, *args, **kwargs
+    ) -> type:
+        return ring.spec.element_cls
+
+
+class Field(ArithParent, metaclass=_ImplementationDispatch):
+    """A finite field, independent of how its elements are stored.
+
+    ``Field(...)`` builds the default implementation (the extension field over
+    a `Modulus`); pass ``implementation=`` / ``backend=`` to name another.
+    Subclasses provide `order`; what holds for every field lives here.
+    """
+
+    @staticmethod
+    def _concrete(
+        implementation: str | None, backend: str | None, *args, **kwargs
+    ) -> type:
+        return resolve(implementation or "field", backend).parent_cls
+
+    @property
+    @abstractmethod
+    def order(self) -> int:
+        """The number of elements of the field."""
+
+    @property
+    def exceptional_set_size(self) -> int:
+        """|A| for any field is its order: every nonzero difference of two
+        field elements is invertible, so the whole field is exceptional."""
+        return self.order

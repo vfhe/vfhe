@@ -9,7 +9,7 @@ from enum import Enum
 
 from vfhe.misc.libvfhe import ffi, lib
 
-from .base import ArithParent
+from .base import Polynomial, Ring
 from .number_theory import crt, is_prime
 from .registry import register
 from .rns_base import registry
@@ -20,7 +20,7 @@ def next_power_of_2(x):
     return 1 << math.ceil(math.log2(x))
 
 
-class Ring(ArithParent):
+class RNSRing(Ring):
     def __init__(
         self,
         N,
@@ -191,7 +191,7 @@ class Ring(ArithParent):
         primes = []
         for p_size in self.prime_size:
             primes.append(
-                Ring.gen_prime(
+                RNSRing.gen_prime(
                     2 * self.N // self.split_degree, p_size, exclude_list=primes
                 )
             )
@@ -227,7 +227,7 @@ class Ring(ArithParent):
 repr = Enum("Polynomial Representation", ["empty", "ntt", "coeff"])
 
 
-class Polynomial:
+class RNSPolynomial(Polynomial):
     def __init__(self, ring: Ring, repr=repr.empty) -> None:
         self.ring = ring
         self.obj = ring.alloc_polynomial()
@@ -368,7 +368,7 @@ class Polynomial:
     def base_extend(self, ring: Ring | None = None, out: Polynomial | None = None):
         if out is None and ring is not None:
             out_ = Polynomial(ring)
-        elif type(out) is Polynomial:
+        elif isinstance(out, Polynomial):
             out_: Polynomial = out
         assert self.ring.is_quotient_ring(out_.ring), "Not a quotient ring"
         return self.lift_to(out=out_)
@@ -379,7 +379,7 @@ class Polynomial:
         self.to_coeff()
         if out is None and ring is not None:
             out_ = Polynomial(ring)
-        elif type(out) is Polynomial:
+        elif isinstance(out, Polynomial):
             out_: Polynomial = out
         if params is None:
             params = registry().get_conversion_params(
@@ -557,7 +557,7 @@ class Polynomial:
         return self
 
     def __mul__(self, other) -> Polynomial:
-        if type(other) is Polynomial:
+        if isinstance(other, Polynomial):
             self.to_NTT()
             other.to_NTT()
             res = Polynomial(self.ring.intersec(other.ring))
@@ -589,7 +589,7 @@ class Polynomial:
         return (-self) + other
 
     def __imul__(self, other):
-        if type(other) is Polynomial:
+        if isinstance(other, Polynomial):
             self.to_NTT()
             other.to_NTT()
             self.ring.lib.polynomial_multo_RNS_polynomial(self.obj, other.obj)
@@ -639,7 +639,7 @@ class Polynomial:
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
-        if type(other) is Polynomial:
+        if isinstance(other, Polynomial):
             self.add(self, other)
             return self
         else:  # assume it's rlwe
@@ -680,8 +680,8 @@ RNS_NTT = register(
     Spec(
         implementation="rns",
         backend="ntt",
-        parent_cls=Ring,
-        element_cls=Polynomial,
+        parent_cls=RNSRing,
+        element_cls=RNSPolynomial,
         capabilities=(
             Capability.CORE
             | Capability.QUOTIENT_POLY_RING
@@ -695,4 +695,4 @@ RNS_NTT = register(
 
 # One spec per class today, so it binds to the class; a class serving
 # several backends would set it per instance instead.
-Ring.spec = RNS_NTT
+RNSRing.spec = RNS_NTT
