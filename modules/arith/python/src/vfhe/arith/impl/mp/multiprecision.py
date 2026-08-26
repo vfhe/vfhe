@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 
 from vfhe.engine import ffi, lib
 
-from .polynomial import Polynomial
-from .registry import register
-from .spec import Capability, Constraints, Spec
+from ...registry import register
+from ...spec import Capability, Constraints, Spec
+from ..rns.polynomial import Polynomial
 
 
 class Multiprecision:

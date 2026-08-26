@@ -52,14 +52,11 @@ def update_cffi_references(new_ffi, new_lib):
 def reinit_ntt(_new_ffi, _new_lib):
     """Update NTT processor instance and flush conversion cache."""
     try:
-        import vfhe.arith.rns_base as rns_base_mod
-        from vfhe.arith.rns_base import RNS_Base_Registry
+        from vfhe.arith import rebind_state
 
-        if getattr(rns_base_mod, "rns_base_registry", None):
-            rns_base_mod.rns_base_registry.cleanup()
-        rns_base_mod.rns_base_registry = RNS_Base_Registry()
+        rebind_state()
     except ImportError:
-        logger.debug("vfhe.arith not imported; skipping RNS base reinitialization")
+        logger.debug("vfhe.arith not imported; skipping arith state reinitialization")
 
 
 @register_reinitializer

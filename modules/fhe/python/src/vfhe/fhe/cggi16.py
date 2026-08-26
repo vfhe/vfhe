@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 
+from vfhe.arith import Polynomial, repr
 from vfhe.arith.number_theory import crt
-from vfhe.arith.polynomial import Polynomial, repr
 from vfhe.mlwe.lwe import LWE, LWE_Key, lib_lwe
 from vfhe.mlwe.mgsw import CMUX, MGSW_Scheme
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, lib_rlwe
