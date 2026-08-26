@@ -144,6 +144,133 @@ static ArithStatus rns_scale_int(ArithRing ring, ArithElement *out, const ArithE
     return ARITH_OK;
 }
 
+static ArithStatus rns_mul_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                 const ArithElement *b)
+{
+    (void)ring;
+    polynomial_mul_subto_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
+                                        arith_rns_polynomial(b));
+    return ARITH_OK;
+}
+
+static ArithStatus rns_scale_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                   uint64_t scale)
+{
+    (void)ring;
+    polynomial_scale_addto_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
+                                          scale);
+    return ARITH_OK;
+}
+
+static ArithStatus rns_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                ArithScalar scale)
+{
+    (void)ring;
+    polynomial_scale_RNS_polynomial_RNS(arith_rns_polynomial(out), arith_rns_polynomial(a),
+                                        (uint64_t *)scale.handle);
+    return ARITH_OK;
+}
+
+static ArithStatus rns_permute(ArithRing ring, ArithElement *out, const ArithElement *a,
+                               uint64_t gen)
+{
+    (void)ring;
+    polynomial_RNSc_permute((RNSc_Polynomial)arith_rns_polynomial(out),
+                            (RNSc_Polynomial)arith_rns_polynomial(a), gen);
+    return ARITH_OK;
+}
+
+static ArithStatus rns_mul_by_monomial(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                       uint64_t power, int minus_one)
+{
+    (void)ring;
+    RNSc_Polynomial z = (RNSc_Polynomial)arith_rns_polynomial(out);
+    RNSc_Polynomial x = (RNSc_Polynomial)arith_rns_polynomial(a);
+    if (minus_one)
+    {
+        polynomial_RNSc_mul_by_xai_minus1(z, x, power);
+    }
+    else
+    {
+        polynomial_RNSc_mul_by_xai(z, x, power);
+    }
+    return ARITH_OK;
+}
+
+static ArithStatus rns_sample_uniform(ArithRing ring, ArithElement *out)
+{
+    (void)ring;
+    polynomial_gen_random_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(out));
+    return ARITH_OK;
+}
+
+static ArithStatus rns_sample_gaussian(ArithRing ring, ArithElement *out, double sigma)
+{
+    (void)ring;
+    polynomial_gen_gaussian_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(out), sigma);
+    return ARITH_OK;
+}
+
+// The integer polynomial is the implementation-neutral carrier; RNS reduces it
+// per prime on the way in.
+static ArithStatus rns_from_int_array(ArithRing ring, ArithElement *out, const uint64_t *values,
+                                      uint64_t count)
+{
+    IntPolynomial tmp = polynomial_new_int_polynomial(ring->N);
+    memcpy(tmp->coeffs, values, count * sizeof(uint64_t));
+    // polynomial_to_RNS reduces per prime and then runs the forward
+    // transform, so the element lands in the mul domain.
+    polynomial_to_RNS(arith_rns_polynomial(out), tmp);
+    free_polynomial(tmp);
+    out->domain = ARITH_DOMAIN_MUL;
+    return ARITH_OK;
+}
+
+// Which primes leave is derived from the two rings, not asked of the caller:
+// the destination's mask says what stays.
+static ArithStatus rns_round_division(ArithRing ring, ArithElement *element, ArithRing to)
+{
+    const uint64_t divide_mask = params_of(ring)->rns_mask & ~params_of(to)->rns_mask;
+    polynomial_round_division_RNSc_wo_free((RNSc_Polynomial)arith_rns_polynomial(element),
+                                           divide_mask);
+    return ARITH_OK;
+}
+
+// `from` is a single-prime ring: its residue is lifted to every prime of this
+// one. rns_mask_get_active_index recovers which prime that is.
+static ArithStatus rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                         ArithRing from)
+{
+    (void)ring;
+    const int idx = rns_mask_get_active_index(params_of(from)->rns_mask, 0);
+    if (idx < 0)
+    {
+        return ARITH_BAD_DOMAIN;
+    }
+    polynomial_RNSc_mod_reduce_lifted((RNSc_Polynomial)arith_rns_polynomial(out),
+                                      (RNSc_Polynomial)arith_rns_polynomial(a), (uint64_t)idx);
+    return ARITH_OK;
+}
+
+// One residue per prime the ring holds, in the base's row order, which is what
+// the per-prime kernels index by.
+static ArithStatus rns_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out)
+{
+    RNSParams *params = params_of(ring);
+    const uint64_t rows = rns_mask_to_l(params->rns_mask);
+    uint64_t *values = (uint64_t *)safe_malloc(rows * sizeof(uint64_t));
+    memcpy(values, per_component, rows * sizeof(uint64_t));
+    out->handle = values;
+    return ARITH_OK;
+}
+
+static void rns_scalar_free(ArithRing ring, ArithScalar *scalar)
+{
+    (void)ring;
+    free(scalar->handle);
+    scalar->handle = NULL;
+}
+
 static const ArithMethods RNS_NTT_METHODS = {
     .implementation = "rns",
     .backend = "ntt",
@@ -161,7 +288,66 @@ static const ArithMethods RNS_NTT_METHODS = {
     .mul = rns_mul,
     .mul_addto = rns_mul_addto,
     .scale_int = rns_scale_int,
+    .mul_subto = rns_mul_subto,
+    .scale_addto = rns_scale_addto,
+    .scale_by = rns_scale_by,
+    .permute = rns_permute,
+    .mul_by_monomial = rns_mul_by_monomial,
+    .sample_uniform = rns_sample_uniform,
+    .sample_gaussian = rns_sample_gaussian,
+    .from_int_array = rns_from_int_array,
+    .round_division = rns_round_division,
+    .mod_reduce_lifted = rns_mod_reduce_lifted,
+    .scalar_new = rns_scalar_new,
+    .scalar_free = rns_scalar_free,
 };
+
+// Rings are shared and never freed, the same contract the RNS base they borrow
+// already has: an element does not point at its ring (arith_* takes it as an
+// argument), but a structure built over one may hold it, and nothing can prove
+// the last such structure is gone. The table is tiny -- one entry per distinct
+// (N, mask, base) a process uses.
+#define ARITH_RNS_RING_CACHE_MAX 256
+
+static struct
+{
+    uint64_t N, mask;
+    RNS_Base base;
+    ArithRing ring;
+} ring_cache[ARITH_RNS_RING_CACHE_MAX];
+static size_t ring_cache_len = 0;
+
+ArithRing arith_rns_ring_get(uint64_t N, uint64_t rns_mask, RNS_Base base)
+{
+    for (size_t i = 0; i < ring_cache_len; i++)
+    {
+        if (ring_cache[i].N == N && ring_cache[i].mask == rns_mask && ring_cache[i].base == base)
+        {
+            return ring_cache[i].ring;
+        }
+    }
+    ArithRing ring = arith_rns_ring_new(N, rns_mask, base);
+    if (ring_cache_len < ARITH_RNS_RING_CACHE_MAX)
+    {
+        ring_cache[ring_cache_len].N = N;
+        ring_cache[ring_cache_len].mask = rns_mask;
+        ring_cache[ring_cache_len].base = base;
+        ring_cache[ring_cache_len].ring = ring;
+        ring_cache_len++;
+    }
+    return ring;
+}
+
+// Drop the cache. Only the dynamic-extension reload needs this: the rings
+// point at a method table in the retired library.
+void arith_rns_ring_cache_clear(void)
+{
+    for (size_t i = 0; i < ring_cache_len; i++)
+    {
+        arith_ring_free(ring_cache[i].ring);
+    }
+    ring_cache_len = 0;
+}
 
 ArithRing arith_rns_ring_new(uint64_t N, uint64_t rns_mask, RNS_Base base)
 {
