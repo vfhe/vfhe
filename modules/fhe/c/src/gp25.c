@@ -66,7 +66,7 @@ static inline int pthread_barrier_wait(pthread_barrier_t *barrier)
 #include "mlwe.h"
 
 void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                            RNS_MLWE **ksk, uint64_t ell, uint64_t special_primes)
+                            RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes)
 {
     uint64_t N = p0[0]->b->base->N;
     uint64_t r = p0[0]->r;
@@ -126,7 +126,7 @@ typedef struct
     uint64_t in_N;
     RNS_MLWE **e;
     uint64_t r_prec;
-    RNS_MLWE **ksk;
+    RNS_MLWE_KS_Key ksk;
     uint64_t ell;
     uint64_t special_primes;
     uint64_t start_k;
@@ -175,7 +175,7 @@ void *monomial_mul_worker(void *arg)
 }
 
 void gp25_RGSW_monomial_mul_mt(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                               RNS_MLWE **ksk, uint64_t ell, uint64_t special_primes,
+                               RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
                                uint64_t num_threads)
 {
     if (num_threads <= 1)
