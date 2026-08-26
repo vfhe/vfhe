@@ -3,7 +3,7 @@
 #include <arith.h>
 #include "arith_internal.h"
 
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
 
 static uint64_t reverse_bits(uint64_t x, int bits)
 {

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 lib_sources += files(
+    'c/src/arith_generic.c',
+    'c/src/arith_rns.c',
     'c/src/complex.c',
     'c/src/field.c',
     'c/src/mod.c',
@@ -23,9 +25,14 @@ lib_sources += files(
     'c/src/rns_vector.c',
 )
 lib_includes += include_directories('c/include', 'c/src')
-header_files += files('c/include/arith.h')
+header_files += files(
+    'c/include/arith_config.h',
+    'c/include/arith.h',
+    'c/include/arith_generic.h',
+)
 cdef_files += files('python/cdef/arith.cdef')
 c_test_files += files(
+    'c/test/test_arith_generic.c',
     'c/test/test_mod.c',
     'c/test/test_ntt.c',
     'c/test/test_number_theory.c',

@@ -26,7 +26,10 @@ from __future__ import annotations
 from vfhe.misc.libvfhe import ffi, lib
 
 from ._alloc import aligned64
+from .base import ArithParent
 from .number_theory import gen_pseudo_mersenne_prime, is_prime
+from .registry import register
+from .spec import Capability, Constraints, Spec
 
 _LIMB_BITS = 52
 _LIMB_MASK = (1 << _LIMB_BITS) - 1
@@ -64,7 +67,7 @@ def _unpack(buf, limbs: int) -> int:
     return sum(int(buf[i]) << (i * _LIMB_BITS) for i in range(limbs))
 
 
-class PseudoMersenneField:
+class PseudoMersenneField(ArithParent):
     """F_p for a pseudo-Mersenne prime, with the kernels in C."""
 
     def __init__(self, prime: int) -> None:
@@ -110,6 +113,12 @@ class PseudoMersenneField:
 
         self.zero = self(0)
         self.one = self(1)
+
+    @property
+    def exceptional_set_size(self) -> int:
+        """|A| for a field: every nonzero difference is invertible, so the
+        whole of F_p is exceptional."""
+        return self.prime
 
     @classmethod
     def generate(
@@ -381,3 +390,22 @@ class PseudoMersenneElement:
     def __str__(self) -> str:
         """The decimal value alone, for printing."""
         return str(int(self))
+
+
+#: F_p for p = 2^n - c, one element per vector register, scalar kernels in C.
+#: Its elements are field scalars, so there are no quotient-polynomial-ring or
+#: tower operations, and its canonical form is its only representation.
+PMF_LIMB = register(
+    Spec(
+        implementation="pmf",
+        backend="limb52",
+        parent_cls=PseudoMersenneField,
+        element_cls=PseudoMersenneElement,
+        capabilities=(Capability.CORE | Capability.EXACT | Capability.DOMAINS_COINCIDE),
+        constraints=Constraints(max_prime_bits=_LIMB_BITS * max(_SUPPORTED_LIMBS)),
+    )
+)
+
+# One spec per class today, so it binds to the class; a class serving
+# several backends would set it per instance instead.
+PseudoMersenneField.spec = PMF_LIMB

@@ -138,6 +138,7 @@ foreach engine : engines
     # Its own name, so vfhe_engine_active() answers per engine and
     # dynamic_extensions can find the matching archive.
     cflags += '-DVFHE_ENGINE_NAME="' + engine + '"'
+    cflags += '-Wundef'
     engine_sources = []
     extra_out = run_command(py, engine_info, engine, 'extra-sources', check: true).stdout().strip()
     if extra_out != ''

@@ -9,15 +9,18 @@ from enum import Enum
 
 from vfhe.misc.libvfhe import ffi, lib
 
+from .base import ArithParent
 from .number_theory import crt, is_prime
+from .registry import register
 from .rns_base import registry
+from .spec import Capability, Constraints, Spec
 
 
 def next_power_of_2(x):
     return 1 << math.ceil(math.log2(x))
 
 
-class Ring:
+class Ring(ArithParent):
     def __init__(
         self,
         N,
@@ -86,6 +89,13 @@ class Ring:
         )
         self.base = registry().bases[(self.N, self.split_degree)]
         self.mask = sum(1 << idx for idx in self.prime_indices)
+
+    @property
+    def exceptional_set_size(self) -> int:
+        """|A| for this ring: the residue fields have size p_i^split_degree,
+        and a difference must be invertible in every one of them, so the
+        smallest bounds the set."""
+        return min(self.primes) ** self.split_degree
 
     @property
     def rns_rows(self) -> int:
@@ -327,7 +337,7 @@ class Polynomial:
         """``self`` in `target` representation, converting a *copy* if needed.
 
         Every reader goes through this, so that reading a polynomial's value
-        never changes the representation of the object read. 
+        never changes the representation of the object read.
         """
         if self.repr == target:
             return self
@@ -662,3 +672,27 @@ class Polynomial:
         res = Polynomial(self.ring.intersec(other.ring))
         res.sub(self, other)
         return res
+
+
+#: RNS residues under the number-theoretic transform: the default parent for
+#: polynomials in Z_q[X]/(X^N + 1), exact, with a full modulus tower.
+RNS_NTT = register(
+    Spec(
+        implementation="rns",
+        backend="ntt",
+        parent_cls=Ring,
+        element_cls=Polynomial,
+        capabilities=(
+            Capability.CORE
+            | Capability.QUOTIENT_POLY_RING
+            | Capability.TOWER
+            | Capability.SAMPLING
+            | Capability.EXACT
+        ),
+        constraints=Constraints(max_prime_bits=64),
+    )
+)
+
+# One spec per class today, so it binds to the class; a class serving
+# several backends would set it per instance instead.
+Ring.spec = RNS_NTT

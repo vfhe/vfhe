@@ -11,6 +11,8 @@ from vfhe.misc.libvfhe import ffi, lib
 # over-aligned wrappers rather than kept private here.
 from ._alloc import aligned64 as _aligned64
 from .polynomial import Polynomial, Ring, repr
+from .registry import register
+from .spec import Capability, Constraints, Spec
 
 
 class ComplexRing:
@@ -155,3 +157,22 @@ class ComplexPolynomial:
         self.ring.lib.complex_poly_round_to_RNS(res.obj, self.obj, ring.N)
         res.repr = repr.ntt
         return res
+
+
+#: C[X]/(X^N + 1) held as double-precision coefficient pairs, with the FFT as
+#: its multiplication transform. Floating point is approximate, so it carries
+#: no EXACT flag, and a ring over C has no modulus tower.
+COMPLEX_FFT = register(
+    Spec(
+        implementation="complex",
+        backend="fft",
+        parent_cls=ComplexRing,
+        element_cls=ComplexPolynomial,
+        capabilities=Capability.CORE | Capability.SAMPLING,
+        constraints=Constraints(),
+    )
+)
+
+# One spec per class today, so it binds to the class; a class serving
+# several backends would set it per instance instead.
+ComplexRing.spec = COMPLEX_FFT

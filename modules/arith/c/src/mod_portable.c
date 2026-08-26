@@ -3,7 +3,7 @@
 #include <arith.h>
 #include "arith_internal.h"
 
-#if !defined(__AVX512IFMA__) || defined(PORTABLE_BUILD) || defined(PORTABLE)
+#if !VFHE_HAVE_AVX512IFMA
 
 /* The Barrett constants this engine's `modq` expects: the smallest k that makes
    m at least 2^63, so the two-word path keeps full precision. The vectorized

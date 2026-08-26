@@ -9,7 +9,9 @@ import secrets
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from vfhe.arith.base import ArithParent
 from vfhe.arith.polynomial import Polynomial, Ring, repr
+from vfhe.arith.spec import Capability
 from vfhe.misc.libvfhe import ffi, lib
 
 if TYPE_CHECKING:
@@ -54,6 +56,9 @@ class MLWE_Scheme:
           otherwise). This allows non-nested level rings, e.g. for rational
           rescaling.
         """
+        first = rings if isinstance(rings, ArithParent) else rings[0]
+        first.require(Capability.QUOTIENT_POLY_RING | Capability.TOWER)
+
         if isinstance(rings, Ring):
             max_lvl = max_lvl if max_lvl is not None else len(rings.primes) - 1
             if special_primes == 0:

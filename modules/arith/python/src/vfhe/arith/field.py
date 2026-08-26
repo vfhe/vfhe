@@ -6,8 +6,12 @@ import contextlib
 
 from vfhe.misc.libvfhe import ffi, lib
 
+from .base import ArithParent
+from .registry import register
+from .spec import Capability, Constraints, Spec
 
-class Field:
+
+class Field(ArithParent):
     def __init__(self, prime: int, w: int, d: int) -> None:
         self.prime = prime
         self.w = w
@@ -20,6 +24,12 @@ class Field:
         self.one = FieldElement(self, [1] + [0] * (d - 1))
         self.two = FieldElement(self, [2] + [0] * (d - 1))
         self.inv_two = self.two.inverse()
+
+    @property
+    def exceptional_set_size(self) -> int:
+        """|A| for a field: every nonzero difference is invertible, so the
+        whole of F_{p^d} is exceptional."""
+        return self.prime**self.d
 
     def __del__(self) -> None:
         if getattr(self, "mod", None):
@@ -126,3 +136,27 @@ class FieldElement:
 
     def __ne__(self, other):
         return not self.__eq__(other)
+
+
+#: A degree-d extension of F_p by scalar modular arithmetic. Its elements are
+#: scalars, so it carries no quotient-polynomial-ring or tower operations, and
+#: its two domains are the same representation.
+FIELD_SCALAR = register(
+    Spec(
+        implementation="field",
+        backend="scalar",
+        parent_cls=Field,
+        element_cls=FieldElement,
+        capabilities=(
+            Capability.CORE
+            | Capability.SAMPLING
+            | Capability.EXACT
+            | Capability.DOMAINS_COINCIDE
+        ),
+        constraints=Constraints(max_prime_bits=64),
+    )
+)
+
+# One spec per class today, so it binds to the class; a class serving
+# several backends would set it per instance instead.
+Field.spec = FIELD_SCALAR

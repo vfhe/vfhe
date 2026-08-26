@@ -1,0 +1,158 @@
+# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-License-Identifier: Apache-2.0
+"""The implementation/backend registry and the parent contract."""
+
+from __future__ import annotations
+
+import pytest
+from vfhe.arith import (
+    ArithParent,
+    Capability,
+    ComplexRing,
+    Constraints,
+    Domain,
+    Field,
+    Multiprecision,
+    PseudoMersenneField,
+    Ring,
+    Spec,
+    backends,
+    implementations,
+    registered,
+    resolve,
+)
+from vfhe.arith.registry import common_spec, register_conversion
+
+PRIME = 0xFFFFFFFF00000001
+
+
+def test_every_implementation_is_registered():
+    assert set(implementations()) == {"complex", "field", "mp", "pmf", "rns"}
+
+
+@pytest.mark.parametrize(
+    ("cls", "key"),
+    [
+        (Ring, ("rns", "ntt")),
+        (Field, ("field", "scalar")),
+        (PseudoMersenneField, ("pmf", "limb52")),
+        (ComplexRing, ("complex", "fft")),
+        (Multiprecision, ("mp", "limb52")),
+    ],
+)
+def test_class_carries_its_spec(cls, key):
+    assert cls.spec.key == key
+    assert registered()[key].parent_cls is cls
+
+
+def test_resolve_picks_the_only_backend():
+    assert resolve("rns").key == ("rns", "ntt")
+    assert backends("rns") == ["ntt"]
+
+
+def test_resolve_rejects_an_unknown_implementation():
+    with pytest.raises(LookupError, match="unknown implementation"):
+        resolve("nosuch")
+
+
+def test_resolve_honours_a_prime_width_constraint():
+    # rns/ntt accepts 64-bit primes, so a 200-bit request has no backend.
+    resolve("rns", prime_bits=49)
+    with pytest.raises(LookupError, match="prime_bits=200"):
+        resolve("rns", prime_bits=200)
+
+
+def test_resolve_honours_a_capability_requirement():
+    resolve("rns", requires=Capability.TOWER)
+    with pytest.raises(LookupError):
+        resolve("field", requires=Capability.TOWER)
+
+
+def test_named_backend_is_checked_not_just_looked_up():
+    with pytest.raises(LookupError, match="accepts primes up to"):
+        resolve("rns", backend="ntt", prime_bits=200)
+
+
+def test_unknown_backend_names_what_exists():
+    with pytest.raises(KeyError, match="registered for it"):
+        resolve("rns", backend="nosuch")
+
+
+class TestCapabilities:
+    """A ring is a quotient polynomial ring with a tower; a field is neither."""
+
+    def test_ring(self):
+        ring = Ring(256, 300, split_degree=1)
+        assert ring.supports(Capability.QUOTIENT_POLY_RING)
+        assert ring.supports(Capability.TOWER)
+        assert ring.supports(Capability.EXACT)
+        assert not ring.domains_coincide
+        assert ring.mul_domain() is Domain.MUL
+
+    def test_field(self):
+        field = Field(PRIME, 7, 4)
+        assert not field.supports(Capability.QUOTIENT_POLY_RING)
+        assert not field.supports(Capability.TOWER)
+        assert field.domains_coincide
+        assert field.mul_domain() is Domain.CANONICAL
+
+    def test_require_names_the_missing_flag(self):
+        field = Field(PRIME, 7, 4)
+        with pytest.raises(TypeError, match="QUOTIENT_POLY_RING"):
+            field.require(Capability.QUOTIENT_POLY_RING)
+
+
+class TestExceptionalSetSize:
+    """|A| comes from the domain, not from a caller inspecting its internals."""
+
+    def test_ring_is_min_prime_to_the_split_degree(self):
+        ring = Ring(256, 300, split_degree=2)
+        assert ring.exceptional_set_size == min(ring.primes) ** ring.split_degree
+
+    def test_field_is_the_whole_field(self):
+        field = Field(PRIME, 7, 4)
+        assert field.exceptional_set_size == PRIME**4
+
+    def test_pseudo_mersenne_is_the_whole_field(self):
+        pmf = PseudoMersenneField.generate(260)
+        assert pmf.exceptional_set_size == pmf.prime
+
+    def test_domains_are_arith_parents(self):
+        assert isinstance(Ring(256, 300, split_degree=1), ArithParent)
+        assert isinstance(Field(PRIME, 7, 4), ArithParent)
+
+
+class TestConversions:
+    """Mixed specs need an explicitly declared route."""
+
+    def test_same_spec_needs_no_conversion(self):
+        assert common_spec(Ring.spec, Ring.spec) is Ring.spec
+
+    def test_unrelated_specs_refuse_to_combine(self):
+        with pytest.raises(TypeError, match="no implicit conversion"):
+            common_spec(Ring.spec, Field.spec)
+
+    def test_an_implicit_conversion_picks_the_target(self):
+        narrow = Spec(
+            implementation="rns",
+            backend="_test_narrow",
+            parent_cls=Ring,
+            capabilities=Capability.CORE,
+            constraints=Constraints(max_prime_bits=32),
+            rank=99,
+        )
+        register_conversion(
+            narrow.key, Ring.spec.key, lambda value: value, implicit=True
+        )
+        assert common_spec(narrow, Ring.spec) is Ring.spec
+        # and the reverse direction, which is not registered, still resolves
+        # to the same target rather than silently narrowing
+        assert common_spec(Ring.spec, narrow) is Ring.spec
+
+
+def test_mlwe_refuses_a_domain_without_the_ring_capabilities():
+    """The fail-early guard: FHE is instantiated over a ring, never a field."""
+    from vfhe.mlwe import MLWE_Scheme
+
+    with pytest.raises(TypeError, match="QUOTIENT_POLY_RING"):
+        MLWE_Scheme(Field(PRIME, 7, 4))

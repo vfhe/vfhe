@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 
-from vfhe.arith import Polynomial, Ring
+from vfhe.arith import ArithParent, Polynomial, Ring
 from vfhe.misc.libvfhe import lib
 
 from .mle import MLE, handle_array, mark_ntt, native_table
@@ -46,16 +46,14 @@ from .piop import (
 
 
 def _exceptional_set_size(domain) -> int | None:
-    """|A| for the domain's exceptional set; None if the domain is unknown.
+    """|A| for the domain's exceptional set; None if the domain has no size.
 
-    Duck-typed until the domain classes expose it themselves: for a Ring the
-    residue fields have size p_i^split_degree, so |A| = min(p_i)^split_degree;
-    for a Field the whole field F_{p^d} is exceptional.
+    Each arithmetic domain computes its own: the size depends on the
+    representation, and a domain that is not an `ArithParent` (an int, a
+    Fraction) has no exceptional set to report.
     """
-    if hasattr(domain, "primes") and hasattr(domain, "split_degree"):
-        return min(domain.primes) ** domain.split_degree
-    if hasattr(domain, "prime") and hasattr(domain, "d"):
-        return domain.prime**domain.d
+    if isinstance(domain, ArithParent):
+        return domain.exceptional_set_size
     return None
 
 

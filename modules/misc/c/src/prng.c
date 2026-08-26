@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "misc.h"
+#include <arith_config.h>
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <immintrin.h>
 #endif
@@ -19,8 +20,7 @@
 #endif
 
 // Forward declaration of aes_prng (only used if AES-NI is available and not in portable build)
-#if !defined(PORTABLE_BUILD) && !defined(PORTABLE) && (defined(__x86_64__) || defined(_M_X64)) &&  \
-    defined(__AES__)
+#if VFHE_HAVE_AESNI
 void aes_prng(uint8_t *output, uint64_t outlen, const uint8_t *input, uint64_t inlen);
 #endif
 
@@ -51,7 +51,7 @@ static void det_fill_seed(uint64_t *p)
         p[i] = splitmix64_next(&det_state);
 }
 
-#if (defined(__x86_64__) || defined(_M_X64)) && !defined(PORTABLE) && !defined(PORTABLE_BUILD)
+#if VFHE_HAVE_RDRAND
 // Intel hardware RDRAND seed generator
 void generate_rnd_seed(uint64_t *p)
 {
@@ -95,8 +95,7 @@ void get_rnd_from_hash(uint64_t amount, uint8_t *pointer)
     uint64_t rnd[4];
     generate_rnd_seed(rnd);
 
-#if !defined(PORTABLE_BUILD) && !defined(PORTABLE) && (defined(__x86_64__) || defined(_M_X64)) &&  \
-    defined(__AES__)
+#if VFHE_HAVE_AESNI
     aes_prng(pointer, amount, (uint8_t *)rnd, 32);
 #elif defined(USE_SHAKE)
     shake256(pointer, amount, (uint8_t *)rnd, 32);

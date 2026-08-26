@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include <rns-rlwe.h>
+#include <arith_config.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 
-#if (defined(__x86_64__) || defined(_M_X64)) && !defined(PORTABLE_BUILD)
+#if VFHE_HAVE_AVX512F
 #include <immintrin.h>
 #endif
 
@@ -50,7 +51,7 @@ void complex_poly_round_to_RNS(RNS_Polynomial out, double *in, uint64_t N)
     free(tmp);
 }
 
-#if (defined(__x86_64__) || defined(_M_X64)) && !defined(PORTABLE_BUILD)
+#if VFHE_HAVE_AVX512F
 // c = a*b
 #define COMPLEX_MULT(c_real, c_imag, a_real, a_imag, b_real, b_imag)                               \
     {                                                                                              \
