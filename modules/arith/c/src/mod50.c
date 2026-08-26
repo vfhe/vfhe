@@ -3,7 +3,7 @@
 #include <arith.h>
 #include "arith_internal.h"
 
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
 
 static inline __m512i _mm512_hexl_reduce_prod_50(__m512i v_prod_hi, __m512i v_prod_lo, Modulus mod)
 {

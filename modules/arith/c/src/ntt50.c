@@ -3,7 +3,7 @@
 #include <arith.h>
 #include "arith_internal.h"
 
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
 
 static inline void FwdButterfly(__m512i *X, __m512i *Y, __m512i W, __m512i W_precon,
                                 __m512i neg_modulus, __m512i twice_modulus)

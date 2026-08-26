@@ -5,7 +5,7 @@
 #include <util.h>
 #include <crypto.h>
 
-#if !defined(__AVX512IFMA__) || defined(PORTABLE_BUILD) || defined(PORTABLE)
+#if !VFHE_HAVE_AVX512IFMA
 static inline uint64_t madd52lo(uint64_t a, uint64_t b, uint64_t c)
 {
     unsigned __int128 prod =
@@ -23,7 +23,7 @@ static inline uint64_t madd52hi(uint64_t a, uint64_t b, uint64_t c)
 
 int get_mp_vector_size(void)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     return 8;
 #else
     return 1;
@@ -84,7 +84,7 @@ void mp_polynomial_mul_by_xai(MPPolynomial out, MPPolynomial in, uint64_t a)
 
 void mp_polynomial_negate(MPPolynomial out, MPPolynomial in)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i neg_mask = _mm512_set1_epi64(0x000FFFFFFFFFFFFFULL);
     __m512i neg_mask2 = _mm512_set1_epi64(1);
     for (size_t j = 0; j < in->d; j++)
@@ -113,7 +113,7 @@ void mp_polynomial_negate(MPPolynomial out, MPPolynomial in)
 
 void mp_polynomial_add(MPPolynomial out, MPPolynomial a, MPPolynomial b)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     for (size_t j = 0; j < a->d; j++)
     {
         __m512i *av = (__m512i *)a->coeffs[j];
@@ -146,7 +146,7 @@ void mp_polynomial_drop_digits(MPPolynomial p, uint64_t num_digits)
 
 void mp_polynomial_rnd(MPPolynomial poly)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i and_mask = _mm512_set1_epi64(0x000FFFFFFFFFFFFFULL);
     for (size_t j = 0; j < poly->d; j++)
     {
@@ -172,7 +172,7 @@ void mp_polynomial_rnd(MPPolynomial poly)
 // MPPolynomials should not have carry bits
 void mp_polynomial_scale(MPPolynomial out, MPPolynomial in, uint64_t scale)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i zero = _mm512_setzero_si512();
     __m512i scalev = _mm512_set1_epi64(scale);
     for (size_t j = 0; j < in->d; j++)
@@ -202,7 +202,7 @@ void mp_polynomial_scale(MPPolynomial out, MPPolynomial in, uint64_t scale)
 
 void mp_polynomial_sp_scale_mp(MPPolynomial out, MPPolynomial in, mp_vector_t *scale)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i zero = _mm512_setzero_si512();
     for (size_t j = 0; j < in->d; j++)
     {
@@ -231,7 +231,7 @@ void mp_polynomial_sp_scale_mp(MPPolynomial out, MPPolynomial in, mp_vector_t *s
 
 void mp_polynomial_int_sp_scale_mp(MPPolynomial out, uint64_t *in, MPScalar scale)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i zero = _mm512_setzero_si512();
     for (size_t j = 0; j < out->d - 1; j++)
     {
@@ -272,7 +272,7 @@ void mp_polynomial_int_sp_scale_mp(MPPolynomial out, uint64_t *in, MPScalar scal
 
 void mp_polynomial_int_sp_scale_addto_mp(MPPolynomial out, uint64_t *in, MPScalar scale)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     for (size_t j = 0; j < out->d - 1; j++)
     {
         __m512i *inv_sp = (__m512i *)in;
@@ -298,7 +298,7 @@ void mp_polynomial_int_sp_scale_addto_mp(MPPolynomial out, uint64_t *in, MPScala
 
 void mp_polynomial_scale_addto(MPPolynomial out, MPPolynomial in, uint64_t scale)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i scalev = _mm512_set1_epi64(scale);
     for (size_t j = 0; j < in->d; j++)
     {
@@ -335,7 +335,7 @@ void mp_polynomial_zero(MPPolynomial poly)
 
 void mp_polynomial_propagate_carry(MPPolynomial p)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i mod_mask = _mm512_set1_epi64(0x000FFFFFFFFFFFFFULL);
     for (uint64_t j = 0; j < p->d - 1; j++)
     {
@@ -400,7 +400,7 @@ void mp_polynomial_mul_addto_sparse_MPPolynomial(MPPolynomial out, MPPolynomial 
 
 void print_MPScalar(MPScalar x)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     uint64_t *v_int = (uint64_t *)x->digits;
     printf("0x");
     for (int64_t i = x->d - 1; i >= 0; i--)
@@ -439,7 +439,7 @@ uint64_t array32_bit_slice52(uint64_t *array, uint64_t start)
 
 mp_vector_t *load_m512(uint64_t in)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i *res = (__m512i *)safe_aligned_malloc(sizeof(__m512i));
     *res = _mm512_set1_epi64(in);
     return res;
@@ -455,7 +455,7 @@ MPScalar mp_load(uint64_t *in, uint64_t d)
     MPScalar out;
     out = (MPScalar)safe_malloc(sizeof(*out));
     out->d = d;
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     out->digits = (__m512i *)safe_aligned_malloc(d * sizeof(__m512i));
     for (size_t i = 0; i < d; i++)
         out->digits[i] = _mm512_set1_epi64(in[i]);
@@ -471,7 +471,7 @@ void mp_scale(MPScalar out, MPScalar in, mp_vector_t *m)
 {
     assert(in != out);
     assert(out->d >= in->d + 1);
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i mod_mask = _mm512_set1_epi64(0x000FFFFFFFFFFFFFULL);
     __m512i zero = _mm512_setzero_si512();
     out->digits[0] = zero;
@@ -498,7 +498,7 @@ void mp_scale(MPScalar out, MPScalar in, mp_vector_t *m)
 void mp_sub(MPScalar out, MPScalar a, MPScalar b)
 {
     assert(b != out);
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i mod_mask = _mm512_set1_epi64(0x000FFFFFFFFFFFFFULL);
     __m512i neg_mask = _mm512_set1_epi64(0x000FFFFFFFFFFFFFULL);
     __m512i one = _mm512_set1_epi64(1), tmp;
@@ -550,7 +550,7 @@ void mp_sub(MPScalar out, MPScalar a, MPScalar b)
 #endif
 }
 
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
 #define MPScalar_stack_alloc_(var, size, suffix)                                                   \
     struct _MPScalar __p##suffix;                                                                  \
     __p##suffix.d = (size);                                                                        \
@@ -564,7 +564,7 @@ void mp_sub(MPScalar out, MPScalar a, MPScalar b)
 
 void mp_polynomial_mod_reduce(MPPolynomial out, MPScalar q, mp_vector_t *m, uint64_t k)
 {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     __m512i zero = _mm512_setzero_si512();
     MPScalar tmp1, tmp2;
     MPScalar_stack_alloc(tmp1, out->d + 1);
@@ -677,7 +677,7 @@ void setup_mod_switch_delta(uint64_t d, uint64_t p)
     {
         if (_delta)
             free(_delta);
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
         _delta = (__m512i *)safe_aligned_malloc(sizeof(__m512i) * d);
 #else
         _delta = (uint64_t *)safe_malloc(sizeof(uint64_t) * d);
@@ -693,7 +693,7 @@ void setup_mod_switch_delta(uint64_t d, uint64_t p)
     }
     for (size_t i = 0; i < d; i++)
     {
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
         _delta[i] = _mm512_set1_epi64(array32_bit_slice52(delta32, 52 * i));
 #else
         _delta[i] = array32_bit_slice52(delta32, 52 * i);

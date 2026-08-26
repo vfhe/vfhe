@@ -3,7 +3,7 @@
 #include <arith.h>
 #include "arith_internal.h"
 
-#if !defined(__AVX512IFMA__) || defined(PORTABLE_BUILD) || defined(PORTABLE)
+#if !VFHE_HAVE_AVX512IFMA
 
 // This engine has no vectorized transforms, so it is the shared size-generic
 // scalar NTT (ntt_scalar.c) at every length.
