@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 
-lib_sources += files('c/src/rscode.c')
+lib_sources += files('c/src/rscode_rns.c')
 lib_includes += include_directories('c/include')
 header_files += files('c/include/rscode.h')
 cdef_files += files('python/cdef/polycom.cdef')

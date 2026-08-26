@@ -11,7 +11,7 @@ from __future__ import annotations
 import operator
 from enum import Enum
 
-from vfhe.arith import Polynomial, Ring, repr
+from vfhe.arith import Polynomial, Ring, domain_of, repr
 from vfhe.misc.libvfhe import ffi, lib
 
 # Which basis a dense table is written in — a property of the table, not of
@@ -51,9 +51,25 @@ def _pair_indices(size: int, idx: int):
         yield lo, lo + stride
 
 
-def handle_array(polys: list):
-    """C array of RNS_Polynomial handles for a list of Polynomials."""
-    return ffi.new("void*[]", [p.obj for p in polys])
+def element_array(polys: list):
+    """C array of `ArithElement` for a list of ring elements.
+
+    A view: each entry points at the element's own storage, so the array must
+    not outlive them. It also carries the domain each element is in, which the
+    kernels check, so `stamp_domains` has to run after anything that changes a
+    representation without rebuilding the array.
+    """
+    array = ffi.new("ArithElement[]", len(polys))
+    for slot, poly in zip(array, polys, strict=True):
+        slot.handle = poly.obj
+        slot.domain = domain_of(poly.repr)
+    return array
+
+
+def stamp_domains(array, polys: list) -> None:
+    """Refresh an element array's domains from the elements it views."""
+    for slot, poly in zip(array, polys, strict=True):
+        slot.domain = domain_of(poly.repr)
 
 
 def mark_ntt(polys: list) -> None:
@@ -163,7 +179,7 @@ class MLE:
     def _set_table(self, entries: list) -> None:
         """Install a table and the handle array the kernels take with it."""
         self.table = entries
-        self.table_ptr = handle_array(entries) if self.ring is not None else None
+        self.table_ptr = element_array(entries) if self.ring is not None else None
 
     @classmethod
     def _like(cls, src: MLE, entries: list, basis=None) -> MLE:
@@ -209,6 +225,9 @@ class MLE:
             return
         for p in self.table:
             p.to_NTT()
+        # the array the kernels read carries the domain too, and they refuse
+        # to combine elements that disagree
+        stamp_domains(self.table_ptr, self.table)
 
     def _entries_copy(self) -> list:
         """A table whose entries can be reassigned without touching self's."""
@@ -244,7 +263,7 @@ class MLE:
         size = 1 << self.num_vars
         new_table = [Polynomial(self.ring) for _ in range(size)]
         res = MLE._like(self, new_table)
-        kernel(res.table_ptr, self.table_ptr, *args, size)
+        kernel(self.ring.arith_ring, res.table_ptr, self.table_ptr, *args, size)
         mark_ntt(new_table)
         return res
 
@@ -268,7 +287,7 @@ class MLE:
             return MLE._like(self, [c * factor for c in self.table])
         if isinstance(factor, Polynomial):
             factor.to_NTT()
-            return self._elementwise(lib.mle_dense_poly_scale, factor.obj)
+            return self._elementwise(lib.mle_dense_poly_scale, factor.as_element())
         return self._elementwise(lib.mle_dense_poly_scale_scalar, int(factor))
 
     def __mul__(self, other):
@@ -322,12 +341,16 @@ class MLE:
         small integer); `tail` completes the chosen kernel's signature."""
         self.to_NTT()
         new_table = [Polynomial(self.ring) for _ in range(1 << (self.num_vars - 1))]
-        new_ptr = handle_array(new_table)
+        new_ptr = element_array(new_table)
         if isinstance(val, Polynomial):
             val.to_NTT()
-            poly_kernel(new_ptr, self.table_ptr, val.obj, *tail)
+            poly_kernel(
+                self.ring.arith_ring, new_ptr, self.table_ptr, val.as_element(), *tail
+            )
         else:
-            scalar_kernel(new_ptr, self.table_ptr, int(val), *tail)
+            scalar_kernel(
+                self.ring.arith_ring, new_ptr, self.table_ptr, int(val), *tail
+            )
         mark_ntt(new_table)
         self.table, self.table_ptr = new_table, new_ptr
 

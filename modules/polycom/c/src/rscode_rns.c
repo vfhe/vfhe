@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
+//
+// The Reed-Solomon code over an RNS ring. The transform runs per prime and the
+// codeword is gathered coefficient by coefficient, so the whole file is tied to
+// the representation; only the signatures are generic, so a field version can
+// sit beside it under the same entry points.
 #include "rscode.h"
+#include <arith_generic.h>
 
 #include <string.h>
 
@@ -43,17 +49,16 @@ uint64_t rs_plans_root(NTT_Plan *plans, uint64_t index)
     return plans[index] == NULL ? 0 : plans[index]->root_of_unity;
 }
 
-void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
-               NTT_Plan *plans)
+void rs_encode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degree, NTT_Plan *plans)
 {
-    RNS_Base base = in[0]->base;
+    RNS_Base base = arith_rns_polynomial(&in[0])->base;
     const uint64_t N = base->N;
-    const uint64_t rns_mask = in[0]->rns_mask;
+    const uint64_t rns_mask = arith_rns_polynomial(&in[0])->rns_mask;
     uint64_t *codeword = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * size);
 
     for (uint64_t k = 0; k < size; k++)
     {
-        out[k]->rns_mask = rns_mask;
+        arith_rns_polynomial(&out[k])->rns_mask = rns_mask;
     }
 
     for (uint64_t i = 0; i < base->l; i++)
@@ -65,12 +70,12 @@ void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t 
             memset(&codeword[degree], 0, sizeof(uint64_t) * (size - degree));
             for (uint64_t k = 0; k < degree; k++)
             {
-                codeword[k] = in[k]->coeffs[i][j];
+                codeword[k] = arith_rns_polynomial(&in[k])->coeffs[i][j];
             }
             ntt_forward(codeword, codeword, plans[i]);
             for (uint64_t k = 0; k < size; k++)
             {
-                out[k]->coeffs[i][j] = codeword[k];
+                arith_rns_polynomial(&out[k])->coeffs[i][j] = codeword[k];
             }
         }
     }
@@ -78,12 +83,11 @@ void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t 
     free(codeword);
 }
 
-int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
-              NTT_Plan *plans)
+int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degree, NTT_Plan *plans)
 {
-    RNS_Base base = in[0]->base;
+    RNS_Base base = arith_rns_polynomial(&in[0])->base;
     const uint64_t N = base->N;
-    const uint64_t rns_mask = in[0]->rns_mask;
+    const uint64_t rns_mask = arith_rns_polynomial(&in[0])->rns_mask;
     uint64_t *codeword = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * size);
     int is_codeword = 1;
 
@@ -91,7 +95,7 @@ int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t d
     {
         for (uint64_t k = 0; k < degree; k++)
         {
-            out[k]->rns_mask = rns_mask;
+            arith_rns_polynomial(&out[k])->rns_mask = rns_mask;
         }
     }
 
@@ -103,14 +107,14 @@ int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t d
         {
             for (uint64_t k = 0; k < size; k++)
             {
-                codeword[k] = in[k]->coeffs[i][j];
+                codeword[k] = arith_rns_polynomial(&in[k])->coeffs[i][j];
             }
             ntt_reverse(codeword, codeword, plans[i]);
             if (out != NULL)
             {
                 for (uint64_t k = 0; k < degree; k++)
                 {
-                    out[k]->coeffs[i][j] = codeword[k];
+                    arith_rns_polynomial(&out[k])->coeffs[i][j] = codeword[k];
                 }
             }
             // The degree check: a codeword of this code inverts to a message

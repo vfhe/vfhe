@@ -26,7 +26,7 @@ from fractions import Fraction
 from vfhe.arith import ArithParent, Polynomial, Ring
 from vfhe.misc.libvfhe import lib
 
-from .mle import MLE, handle_array, mark_ntt, native_table
+from .mle import MLE, element_array, mark_ntt, native_table
 from .piop import (
     IOP,
     Protocol,
@@ -218,11 +218,22 @@ class Sumcheck(_SumcheckRounds):
         g0, g1 = Polynomial(f.ring), Polynomial(f.ring)
         size = 1 << f.num_vars
         if idx == 0:
-            lib.sumcheck_round_pairs(g0.obj, g1.obj, f.table_ptr, size)
+            lib.sumcheck_round_pairs(
+                f.ring.arith_ring, g0.as_element(), g1.as_element(), f.table_ptr, size
+            )
         elif idx == f.num_vars - 1:
-            lib.sumcheck_round_halves(g0.obj, g1.obj, f.table_ptr, size)
+            lib.sumcheck_round_halves(
+                f.ring.arith_ring, g0.as_element(), g1.as_element(), f.table_ptr, size
+            )
         else:
-            lib.sumcheck_round(g0.obj, g1.obj, f.table_ptr, size, idx)
+            lib.sumcheck_round(
+                f.ring.arith_ring,
+                g0.as_element(),
+                g1.as_element(),
+                f.table_ptr,
+                size,
+                idx,
+            )
         mark_ntt([g0, g1])
         return (g0, g1)
 
@@ -332,14 +343,20 @@ class SumcheckProd(_SumcheckRounds):
         f.to_NTT()  # the kernels read RNS form; see MLE.to_NTT
         g.to_NTT()
         evals = [Polynomial(f.ring) for _ in range(3)]
-        handles = handle_array(evals)
+        handles = element_array(evals)
         size = 1 << f.num_vars
         if idx == 0:
-            lib.sumcheck_prod2_round_pairs(handles, f.table_ptr, g.table_ptr, size)
+            lib.sumcheck_prod2_round_pairs(
+                f.ring.arith_ring, handles, f.table_ptr, g.table_ptr, size
+            )
         elif idx == f.num_vars - 1:
-            lib.sumcheck_prod2_round_halves(handles, f.table_ptr, g.table_ptr, size)
+            lib.sumcheck_prod2_round_halves(
+                f.ring.arith_ring, handles, f.table_ptr, g.table_ptr, size
+            )
         else:
-            lib.sumcheck_prod2_round(handles, f.table_ptr, g.table_ptr, size, idx)
+            lib.sumcheck_prod2_round(
+                f.ring.arith_ring, handles, f.table_ptr, g.table_ptr, size, idx
+            )
         mark_ntt(evals)
         return tuple(evals)
 
