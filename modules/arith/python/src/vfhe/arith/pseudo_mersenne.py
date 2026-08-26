@@ -26,7 +26,7 @@ from __future__ import annotations
 from vfhe.misc.libvfhe import ffi, lib
 
 from ._alloc import aligned64
-from .base import ArithParent
+from .base import Field
 from .number_theory import gen_pseudo_mersenne_prime, is_prime
 from .registry import register
 from .spec import Capability, Constraints, Spec
@@ -67,7 +67,7 @@ def _unpack(buf, limbs: int) -> int:
     return sum(int(buf[i]) << (i * _LIMB_BITS) for i in range(limbs))
 
 
-class PseudoMersenneField(ArithParent):
+class PseudoMersenneField(Field):
     """F_p for a pseudo-Mersenne prime, with the kernels in C."""
 
     def __init__(self, prime: int) -> None:
@@ -115,9 +115,7 @@ class PseudoMersenneField(ArithParent):
         self.one = self(1)
 
     @property
-    def exceptional_set_size(self) -> int:
-        """|A| for a field: every nonzero difference is invertible, so the
-        whole of F_p is exceptional."""
+    def order(self) -> int:
         return self.prime
 
     @classmethod

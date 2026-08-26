@@ -12,7 +12,7 @@ objects, `open(index)` produces the sibling path of one leaf, and the static
 Leaf hashing is the one thing a leaf type must provide: a `.hash()` method
 returning the leaf's digest (`vfhe.arith.FieldElement` has one), or a
 `hash=` callable passed to `Merkle` / `Merkle.verify` for types that do not
-(e.g. `hash=Polynomial.get_hash`). Nothing else about a leaf is assumed -
+(e.g. `hash=lambda p: p.get_hash()`). Nothing else about a leaf is assumed -
 in particular the tree never keeps a copy of one, only a reference.
 
 This module is a general-purpose primitive with no PIOP-specific content; it
@@ -46,7 +46,7 @@ def _as_digest(value) -> bytes:
 
     Bytes-like values pass through (what `FieldElement.hash()` returns); a
     sequence of four ints is packed little-endian, so the library's other
-    hash producer, `Polynomial.get_hash()` (a `uint64_t[4]` read back as
+    hash producer, an element's `get_hash()` (a `uint64_t[4]` read back as
     ints), also works as a `hash=` callable.
     """
     if isinstance(value, bytes | bytearray | memoryview):

@@ -76,18 +76,21 @@ from vfhe.piop.sumcheck import _exceptional_set_size, interpolate_evals
 from .code import FoldableRS
 
 
+def _element_hash(element: Polynomial):
+    """The element's own digest, dispatched through its class."""
+    return element.get_hash()
+
+
 def pair_digest(pair: tuple[Polynomial, Polynomial]) -> bytes:
     """The Merkle leaf digest of one `±x` pair.
 
-    Both ring elements are hashed with the library's `Polynomial.get_hash`
-    and the two digests hashed together, so the leaf binds the pair as an
-    ordered unit. `get_hash` hashes the NTT form and leaves the entry alone,
-    so hashing a codeword never disturbs it.
+    Both ring elements are hashed with their own `get_hash` and the two
+    digests hashed together, so the leaf binds the pair as an ordered unit.
+    `get_hash` hashes the NTT form and leaves the entry alone, so hashing a
+    codeword never disturbs it.
     """
     lo, hi = pair
-    return hash_bytes(
-        leaf_digest(lo, Polynomial.get_hash) + leaf_digest(hi, Polynomial.get_hash)
-    )
+    return hash_bytes(leaf_digest(lo, _element_hash) + leaf_digest(hi, _element_hash))
 
 
 class BasefoldCommitment:
