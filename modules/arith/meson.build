@@ -2,27 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 lib_sources += files(
+    # the interface, and what belongs to no single representation
     'c/src/arith_generic.c',
-    'c/src/arith_rns.c',
-    'c/src/complex.c',
-    'c/src/field.c',
-    'c/src/mod.c',
-    'c/src/mod32.c',
-    'c/src/mod50.c',
-    'c/src/mod64.c',
-    'c/src/mod_portable.c',
-    'c/src/mod_scalar.c',
-    'c/src/mp_polynomial.c',
-    'c/src/ntt.c',
-    'c/src/ntt32.c',
-    'c/src/ntt50.c',
-    'c/src/ntt64.c',
-    'c/src/ntt_portable.c',
-    'c/src/ntt_scalar.c',
     'c/src/number_theory.c',
-    'c/src/pmf.c',
-    'c/src/rns_polynomial.c',
-    'c/src/rns_vector.c',
+    # shared modular-arithmetic and transform kernels
+    'c/src/kernels/mod.c',
+    'c/src/kernels/mod32.c',
+    'c/src/kernels/mod50.c',
+    'c/src/kernels/mod64.c',
+    'c/src/kernels/mod_portable.c',
+    'c/src/kernels/mod_scalar.c',
+    'c/src/kernels/ntt.c',
+    'c/src/kernels/ntt32.c',
+    'c/src/kernels/ntt50.c',
+    'c/src/kernels/ntt64.c',
+    'c/src/kernels/ntt_portable.c',
+    'c/src/kernels/ntt_scalar.c',
+    # one directory per implementation
+    'c/src/complex/complex.c',
+    'c/src/field/field.c',
+    'c/src/mp/mp_polynomial.c',
+    'c/src/pmf/pmf.c',
+    'c/src/rns/arith_rns.c',
+    'c/src/rns/rns_polynomial.c',
+    'c/src/rns/rns_vector.c',
 )
 lib_includes += include_directories('c/include', 'c/src')
 header_files += files(
