@@ -154,8 +154,8 @@ class FoldableRS:
             p.to_NTT()
         word = [Polynomial(self.ring) for _ in range(size)]
         lib.rs_encode(
-            handle_array(word),
-            handle_array(message),
+            element_array(word),
+            element_array(message),
             size,
             len(message),
             self._plans[level],
@@ -176,8 +176,8 @@ class FoldableRS:
         degree = self.k0 << level
         message = [Polynomial(self.ring) for _ in range(degree)]
         ok = lib.rs_decode(
-            handle_array(message),
-            handle_array(word),
+            element_array(message),
+            element_array(word),
             size,
             degree,
             self._plans[level],

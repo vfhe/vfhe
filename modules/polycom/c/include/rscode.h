@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <arith.h>
+#include <arith_generic.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -52,7 +53,7 @@ extern "C"
 
     // out[0..size) = the codeword of the length-`degree` message in[0..degree)
     // (zero-padded). Out and in must not alias.
-    void rs_encode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
+    void rs_encode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degree,
                    NTT_Plan *plans);
 
     // The inverse transform plus the degree check that makes it a decoder:
@@ -60,7 +61,7 @@ extern "C"
     // `in` is a codeword of this code), 0 otherwise. Writes the recovered
     // message to out[0..degree) when `out` is non-NULL; a failed check leaves
     // the output partially written.
-    int rs_decode(RNS_Polynomial *out, RNS_Polynomial *in, uint64_t size, uint64_t degree,
+    int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degree,
                   NTT_Plan *plans);
 
 #ifdef __cplusplus
