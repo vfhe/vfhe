@@ -91,6 +91,15 @@ class RNSRing(Ring):
         self.mask = sum(1 << idx for idx in self.prime_indices)
 
     @property
+    def arith_ring(self):
+        """This ring's handle in the generic C interface.
+
+        Shared and never freed, so it is safe to hold: a structure built over
+        a ring may point at it, and nothing can prove the last one is gone.
+        """
+        return self.lib.arith_rns_ring_get(self.N, self.mask, self.base)
+
+    @property
     def exceptional_set_size(self) -> int:
         """|A| for this ring: the residue fields have size p_i^split_degree,
         and a difference must be invertible in every one of them, so the
@@ -246,6 +255,15 @@ class RNSRing(Ring):
 
 
 repr = Enum("Polynomial Representation", ["empty", "ntt", "coeff"])
+
+#: This implementation's representation flag as a generic arithmetic domain:
+#: the two say the same thing about an element, in the two vocabularies.
+_DOMAIN = {repr.empty: 0, repr.coeff: 1, repr.ntt: 2}
+
+
+def domain_of(representation) -> int:
+    """The `ArithDomain` value matching a `repr`."""
+    return _DOMAIN[representation]
 
 
 class RNSPolynomial(Polynomial):
@@ -543,6 +561,16 @@ class RNSPolynomial(Polynomial):
             return [
                 min(i, -(self.ring.q_l - i), key=lambda x: abs(x)) for i in unsigned_res
             ]
+
+    def as_element(self):
+        """This polynomial as an `ArithElement` for the generic C interface.
+
+        A view, not a copy: the returned struct points at the same storage, so
+        it must not outlive this polynomial.
+        """
+        return ffi.new(
+            "ArithElement *", {"handle": self.obj, "domain": _DOMAIN[self.repr]}
+        )
 
     def copy(self) -> Polynomial:
         res = Polynomial(self.ring)

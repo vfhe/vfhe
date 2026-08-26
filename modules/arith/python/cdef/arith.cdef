@@ -27,7 +27,12 @@ typedef struct _RNS_Polynomial {
 // --- misc ---
 void *safe_aligned_malloc(uint64_t size);
 
-// --- generic arithmetic rings ---
+// --- generic arithmetic ---
+// A ring is opaque; only its address is handled here. An element is the
+// implementation's handle plus the domain it is currently in.
+typedef struct _ArithRing *ArithRing;
+typedef struct { void *handle; int domain; } ArithElement;
+void arith_copy(ArithRing ring, ArithElement *out, ArithElement *in);
 void *arith_rns_ring_get(uint64_t N, uint64_t rns_mask, void *base);
 void arith_rns_ring_cache_clear(void);
 

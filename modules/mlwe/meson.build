@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 lib_sources += files(
-    'c/src/gadget.c',
+    'c/src/gadget_rns.c',
     'c/src/lwe.c',
     'c/src/mgsw.c',
     'c/src/mlwe.c',

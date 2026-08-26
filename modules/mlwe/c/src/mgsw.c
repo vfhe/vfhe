@@ -7,64 +7,42 @@ void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t 
                            uint64_t special_primes)
 {
     const uint64_t r = in->r;
-    uint64_t extended_mask = mgsw[0]->b->rns_mask;
-    for (size_t i = 0; i < out->r; i++)
-    {
-        out->a[i]->rns_mask = extended_mask;
-    }
-    out->b->rns_mask = extended_mask;
+    (void)special_primes;
 
-    mlwe_RNS_trivial_sample_of_zero(out);
+    // The products accumulate in the ring the MGSW key lives in, which is
+    // wider than `out`'s: `out` is only allocated for its own ring. The
+    // rescale afterwards brings the result back, and which primes leave
+    // follows from the two rings rather than from counting special ones.
+    RNS_MLWE acc = mlwe_alloc_sample(mgsw[0]->ring, out->r);
+    mlwe_RNS_trivial_sample_of_zero(acc);
 
     for (size_t j = 0; j < r; j++)
     {
-        gadget_mul_addto_polynomial(out, &mgsw[j * ell], in->a[j]);
+        gadget_mul_addto_polynomial(acc, &mgsw[j * ell], &in->a[j]);
     }
+    gadget_mul_addto_polynomial(acc, &mgsw[r * ell], &in->b);
 
-    gadget_mul_addto_polynomial(out, &mgsw[r * ell], in->b);
-
-    if (special_primes > 0)
-    {
-        mlwe_RNS_to_RNSc((RNSc_MLWE)out, out);
-        uint64_t divide_mask = 0;
-        uint64_t temp_mask = ((RNSc_Polynomial)out->b)->rns_mask;
-        uint64_t count = 0;
-        for (int idx = 63; idx >= 0 && count < special_primes; idx--)
-        {
-            if (temp_mask & (1ULL << idx))
-            {
-                divide_mask |= (1ULL << idx);
-                count++;
-            }
-        }
-        if (divide_mask > 0)
-        {
-            for (size_t j = 0; j < out->r; j++)
-            {
-                polynomial_round_division_RNSc_wo_free(((RNSc_MLWE)out)->a[j], divide_mask);
-            }
-            polynomial_round_division_RNSc_wo_free(((RNSc_MLWE)out)->b, divide_mask);
-        }
-        mlwe_RNSc_to_RNS(out, (RNSc_MLWE)out);
-    }
+    mlwe_RNS_to_RNSc(acc, acc);
+    mlwe_round_division(acc, out->ring);
+    mlwe_RNSc_to_RNS(acc, acc);
+    mlwe_copy_RNS_sample(out, acc);
+    free_mlwe_RNS_sample(acc);
 }
 
 void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
                uint64_t special_primes)
 {
-    uint64_t N = in1->b->base->N;
-    uint64_t r = in1->r;
-    uint64_t mask = in1->b->rns_mask;
-    RNS_Base base = in1->b->base;
+    const uint64_t r = in1->r;
+    ArithRing ring = in1->ring;
 
-    RNSc_MLWE diff = mlwe_alloc_RNSc_sample(N, r, mask, base);
+    RNSc_MLWE diff = mlwe_alloc_sample(ring, r);
     mlwe_sub_RNSc_sample(diff, in2, in1);
 
     mgsw_external_product(out, mgsw, diff, ell, special_primes);
 
-    RNS_MLWE in1_NTT = mlwe_alloc_RNS_sample(N, r, mask, base);
-    mlwe_copy_RNS_sample(in1_NTT, (RNS_MLWE)in1);
-    mlwe_RNSc_to_RNS(in1_NTT, (RNSc_MLWE)in1_NTT);
+    RNS_MLWE in1_NTT = mlwe_alloc_sample(ring, r);
+    mlwe_copy_RNS_sample(in1_NTT, in1);
+    mlwe_RNSc_to_RNS(in1_NTT, in1_NTT);
     mlwe_add_RNS_sample(out, out, in1_NTT);
 
     free_mlwe_RNS_sample(diff);
@@ -74,13 +52,11 @@ void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint6
 void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE_KS_Key ksk,
                 uint64_t ell, uint64_t special_primes)
 {
-    uint64_t N = in1->b->base->N;
-    uint64_t r = in1->r;
-    uint64_t mask = in1->b->rns_mask;
-    RNS_Base base = in1->b->base;
-    uint64_t gen = 2 * N - 1;
+    const uint64_t r = in1->r;
+    ArithRing ring = in1->ring;
+    const uint64_t gen = 2 * ring->N - 1;
 
-    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, base);
+    RNSc_MLWE tmp = mlwe_alloc_sample(ring, r);
 
     mlwe_automorphism_RNSc_GHS(tmp, in2, gen, ksk, ell);
 
@@ -103,17 +79,15 @@ void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_
 void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
                         uint64_t special_primes)
 {
-    uint64_t N = in1->b->base->N;
-    uint64_t r = in1->r;
-    uint64_t mask = in1->b->rns_mask;
-    RNS_Base base = in1->b->base;
+    const uint64_t r = in1->r;
+    ArithRing ring = in1->ring;
 
-    RNSc_MLWE diff = mlwe_alloc_RNSc_sample(N, r, mask, base);
+    RNSc_MLWE diff = mlwe_alloc_sample(ring, r);
     mlwe_sub_RNSc_sample(diff, in2, in1);
 
     mgsw_external_product(out, mgsw, diff, ell, special_primes); /* out in NTT  */
-    mlwe_RNS_to_RNSc((RNSc_MLWE)out, out);                       /* out -> coeff */
-    mlwe_addto_RNSc_sample((RNSc_MLWE)out, in1); /* out += in1 (coeff; no fwd NTT of in1) */
+    mlwe_RNS_to_RNSc(out, out);                                  /* out -> coeff */
+    mlwe_addto_RNSc_sample(out, in1); /* out += in1 (coeff; no fwd NTT of in1) */
 
     free_mlwe_RNS_sample(diff);
 }
@@ -121,13 +95,11 @@ void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mg
 void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                          RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes)
 {
-    uint64_t N = in1->b->base->N;
-    uint64_t r = in1->r;
-    uint64_t mask = in1->b->rns_mask;
-    RNS_Base base = in1->b->base;
-    uint64_t gen = 2 * N - 1;
+    const uint64_t r = in1->r;
+    ArithRing ring = in1->ring;
+    const uint64_t gen = 2 * ring->N - 1;
 
-    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, base);
+    RNSc_MLWE tmp = mlwe_alloc_sample(ring, r);
 
     mlwe_automorphism_RNSc_GHS(tmp, in2, gen, ksk, ell);
 

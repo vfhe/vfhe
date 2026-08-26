@@ -9,7 +9,14 @@ import secrets
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, TypeVar, cast
 
-from vfhe.arith import ArithParent, Capability, Polynomial, Ring, repr
+from vfhe.arith import (
+    ArithParent,
+    Capability,
+    Polynomial,
+    Ring,
+    domain_of,
+    repr,
+)
 from vfhe.misc.libvfhe import ffi, lib
 
 if TYPE_CHECKING:
@@ -357,7 +364,7 @@ class MLWE_Scheme:
         if not out:
             out = self.ciphertext_type(self, lvl=lvl)
         msg.to_coeff()
-        lib_rlwe.lib.mlwe_RNSc_sample(out.obj, key.obj, msg.obj)
+        lib_rlwe.lib.mlwe_RNSc_sample(out.obj, key.obj, msg.as_element())
         out.repr = repr.coeff
         return out
 
@@ -369,7 +376,7 @@ class MLWE_Scheme:
         else:
             key_at_ring = key
         rlwe.to_NTT()
-        lib_rlwe.lib.mlwe_RNS_phase(out.obj, rlwe.obj, key_at_ring.obj)
+        lib_rlwe.lib.mlwe_RNS_phase(out.as_element(), rlwe.obj, key_at_ring.obj)
         out.repr = repr.ntt
         return out
 
@@ -408,8 +415,13 @@ class MLWE_Scheme:
         out_polys = [Polynomial(in1.ring) for _ in range(self.extended_rank + 1)]
         for p in out_polys:
             p.repr = repr.ntt
-        out_pointers = ffi.new("void*[]", [p.obj for p in out_polys])
-        lib_rlwe.lib.mlwe_tensor_product(out_pointers, in1.obj, in2.obj)
+        # The kernel writes whole elements, so it needs an array of them, not
+        # of bare handles; the storage behind each is the polynomial's own.
+        out_elements = ffi.new("ArithElement[]", self.extended_rank + 1)
+        for slot, poly in zip(out_elements, out_polys, strict=True):
+            slot.handle = poly.obj
+            slot.domain = domain_of(poly.repr)
+        lib_rlwe.lib.mlwe_tensor_product(out_elements, in1.obj, in2.obj)
         return out_polys
 
     def multiply(
@@ -501,7 +513,9 @@ class MLWE_Key:
             p.to_NTT()
         struct = ffi.cast("RNS_MLWE_Key", self.obj)
         for i in range(scheme.r):
-            ring.lib.polynomial_copy_RNS_polynomial(struct.s_RNS[i], self.poly[i].obj)
+            ring.lib.arith_copy(
+                struct.ring, ffi.addressof(struct.s[i]), self.poly[i].as_element()
+            )
 
     def __del__(self) -> None:
         if hasattr(self, "obj") and self.obj:
@@ -574,10 +588,29 @@ class MLWE:
         )
         self.ring = ring
         self.scheme = scheme
-        self.repr = repr.empty
+        self.repr = repr.empty  # also stamps the C-side domains, see the setter
         self.lvl = lvl
         # Marks an extended-rank product that still needs relinearization.
         self.is_extended = False
+
+    @property
+    def repr(self):
+        """Which domain every component of this sample is in.
+
+        Setting it stamps the same answer into the C structure. The generic
+        kernels refuse to combine elements from different domains, so the two
+        sides must not drift: this is the one place that writes either.
+        """
+        return self._repr
+
+    @repr.setter
+    def repr(self, value) -> None:
+        self._repr = value
+        struct = ffi.cast("MLWE", self.obj)
+        domain = domain_of(value)
+        for i in range(self.r):
+            struct.a[i].domain = domain
+        struct.b.domain = domain
 
     @property
     def ell(self) -> int:
@@ -629,7 +662,7 @@ class MLWE:
     def multiply_poly(self, in_rlwe, in_poly):
         assert in_rlwe.ring == in_poly.ring, "trying to mul things in different rings"
         assert in_rlwe.repr == in_poly.repr == repr.ntt
-        lib_rlwe.lib.mlwe_RNS_mul_by_poly(self.obj, in_rlwe.obj, in_poly.obj)
+        lib_rlwe.lib.mlwe_RNS_mul_by_poly(self.obj, in_rlwe.obj, in_poly.as_element())
         self.repr = repr.ntt
 
     def multiply_scalar(self, in_rlwe, pointer_to_int_list):
@@ -652,17 +685,17 @@ class MLWE:
         assert in1.ring == in2.ring, "trying to add things in different rings"
         assert in1.repr == in2.repr
         if in1.repr == repr.ntt:
-            lib_rlwe.lib.mlwe_RNS_add_polynomial(self.obj, in1.obj, in2.obj)
+            lib_rlwe.lib.mlwe_RNS_add_polynomial(self.obj, in1.obj, in2.as_element())
         else:
-            lib_rlwe.lib.mlwe_add_RNSc_polynomial(self.obj, in1.obj, in2.obj)
+            lib_rlwe.lib.mlwe_add_RNSc_polynomial(self.obj, in1.obj, in2.as_element())
         self.repr = in1.repr
 
     def sub_poly(self, in1, in2):
         assert in1.repr == in2.repr
         if in1.repr == repr.ntt:
-            lib_rlwe.lib.mlwe_RNS_sub_polynomial(self.obj, in1.obj, in2.obj)
+            lib_rlwe.lib.mlwe_RNS_sub_polynomial(self.obj, in1.obj, in2.as_element())
         else:
-            lib_rlwe.lib.mlwe_sub_RNSc_polynomial(self.obj, in1.obj, in2.obj)
+            lib_rlwe.lib.mlwe_sub_RNSc_polynomial(self.obj, in1.obj, in2.as_element())
         self.repr = in1.repr
 
     def get_a_poly(self, j: int) -> Polynomial:
@@ -691,12 +724,12 @@ class MLWE:
         return res
 
     def obj_a_i(self, j):
-        # self.obj points to RNS_MLWE { a, b, r }; a is an array of RNS_Polynomial
-        return ffi.cast("RNS_MLWE", self.obj).a[j]
+        # self.obj points to MLWE { a, b, r, ring }; a[j] is an ArithElement,
+        # and `handle` is the representation behind it.
+        return ffi.cast("MLWE", self.obj).a[j].handle
 
     def obj_b(self):
-        # b is the second member of RNS_MLWE
-        return ffi.cast("RNS_MLWE", self.obj).b
+        return ffi.cast("MLWE", self.obj).b.handle
 
     def copy(self):
         res = self.new_like()
@@ -729,8 +762,7 @@ class MLWE:
             "destination must be a quotient of the current ring"
         )
         self.to_coeff()
-        divide_mask = self.ring.mask ^ ring.mask
-        lib_rlwe.lib.mlwe_round_division_RNSc(self.obj, divide_mask)
+        lib_rlwe.lib.mlwe_round_division(self.obj, ring.arith_ring)
         self.lvl = lvl
         self.ring = ring
         return self

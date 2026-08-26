@@ -5,80 +5,47 @@
 
 // MLWE RNS functions
 
-RNS_MLWE_Key mlwe_alloc_RNS_key(uint64_t N, uint64_t r, uint64_t l, RNS_Base base, double sigma)
+RNS_MLWE_Key mlwe_alloc_key(ArithRing ring, uint64_t r, uint64_t l, double sigma)
 {
-    RNS_MLWE_Key res;
-    res = (RNS_MLWE_Key)safe_malloc(sizeof(*res));
+    RNS_MLWE_Key res = (RNS_MLWE_Key)safe_malloc(sizeof(*res));
     res->sigma = sigma;
-    res->N = N;
+    res->N = ring->N;
     res->l = l;
     res->r = r;
-    res->s = polynomial_new_int_polynomial_array(r, N);
-    res->s_RNS = polynomial_new_RNS_polynomial_array(r, N, (1ULL << l) - 1, base);
+    res->ring = ring;
+    res->s = (ArithElement *)safe_malloc(r * sizeof(ArithElement));
+    for (size_t i = 0; i < r; i++)
+    {
+        arith_new(ring, &res->s[i]);
+    }
     return res;
 }
 
 void free_mlwe_RNS_key(RNS_MLWE_Key key)
 {
-    free_polynomial_array(key->r, key->s);
-    free_RNS_polynomial_array(key->r, key->s_RNS);
+    for (size_t i = 0; i < key->r; i++)
+    {
+        arith_free(key->ring, &key->s[i]);
+    }
+    free(key->s);
     free(key);
 }
 
-RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l,
-                                         RNS_Base base, double sigma)
+MLWE mlwe_alloc_sample(ArithRing ring, uint64_t r)
 {
-    RNS_MLWE_Key res = mlwe_alloc_RNS_key(N, r, l, base, sigma);
+    MLWE res = (MLWE)safe_malloc(sizeof(*res));
+    res->a = (ArithElement *)safe_malloc(r * sizeof(ArithElement));
     for (size_t i = 0; i < r; i++)
     {
-        memcpy(res->s[i]->coeffs, &array[i * N], N * sizeof(uint64_t));
-        polynomial_to_RNS(res->s_RNS[i], res->s[i]);
+        arith_new(ring, &res->a[i]);
     }
-    return res;
-}
-
-RNS_MLWE_Key mlwe_new_RNS_gaussian_key(uint64_t N, uint64_t r, uint64_t l, double key_sigma,
-                                       RNS_Base base, double sigma)
-{
-    RNS_MLWE_Key res = mlwe_alloc_RNS_key(N, r, l, base, sigma);
-    for (size_t i = 0; i < r; i++)
-    {
-        for (size_t j = 0; j < N; j++)
-        {
-            res->s[i]->coeffs[j] = (uint64_t)((int64_t)generate_normal_random(key_sigma));
-        }
-        polynomial_to_RNS(res->s_RNS[i], res->s[i]);
-    }
-    return res;
-}
-
-RNS_MLWE_Key mlwe_get_RNS_key_from_array(uint64_t N, uint64_t r, uint64_t l, uint64_t *array,
-                                         RNS_Base base, double sigma)
-{
-    RNS_MLWE_Key res = mlwe_alloc_RNS_key(N, r, l, base, sigma);
-    for (size_t j = 0; j < r; j++)
-    {
-        for (size_t i = 0; i < N; i++)
-            res->s[j]->coeffs[i] = array[j * N + i];
-        polynomial_to_RNS(res->s_RNS[j], res->s[j]);
-    }
-    return res;
-}
-
-RNS_MLWE mlwe_alloc_RNS_sample(uint64_t N, uint64_t r, uint64_t mask, RNS_Base base)
-{
-    RNS_MLWE res;
-    res = (RNS_MLWE)safe_malloc(sizeof(*res));
-    res->a = polynomial_new_RNS_polynomial_array(r, N, mask, base);
-    res->b = polynomial_new_RNS_polynomial(N, mask, base);
+    arith_new(ring, &res->b);
     res->r = r;
+    res->ring = ring;
     return res;
 }
 
-RNSc_MLWE mlwe_alloc_RNSc_sample(uint64_t N, uint64_t r, uint64_t mask, RNS_Base base)
-{
-    return (RNSc_MLWE)mlwe_alloc_RNS_sample(N, r, mask, base);
-}
+ArithDomain mlwe_domain(MLWE c) { return c->b.domain; }
 
 void mlwe_copy_array(RNS_MLWE *out, RNS_MLWE *in, uint64_t size)
 {
@@ -90,21 +57,12 @@ void mlwe_copy_array(RNS_MLWE *out, RNS_MLWE *in, uint64_t size)
 
 RNS_MLWE *mlwe_create_copy_array(RNS_MLWE *in, uint64_t size)
 {
-    RNS_MLWE *res = mlwe_alloc_RNS_sample_array(size, in[0]->b->base->N, in[0]->r,
-                                                in[0]->b->rns_mask, in[0]->b->base);
-    mlwe_copy_array(res, in, size);
-    return res;
-}
-
-RNS_MLWE *mlwe_alloc_RNS_sample_array(uint64_t size, uint64_t N, uint64_t r, uint64_t mask,
-                                      RNS_Base base)
-{
-    RNS_MLWE *res;
-    res = (RNS_MLWE *)safe_malloc(size * sizeof(*res));
+    RNS_MLWE *res = (RNS_MLWE *)safe_malloc(size * sizeof(*res));
     for (size_t i = 0; i < size; i++)
     {
-        res[i] = mlwe_alloc_RNS_sample(N, r, mask, base);
+        res[i] = mlwe_alloc_sample(in[0]->ring, in[0]->r);
     }
+    mlwe_copy_array(res, in, size);
     return res;
 }
 
@@ -114,7 +72,7 @@ RNS_MLWE *mlwe_alloc_RNS_sample_array2(uint64_t size, RNS_MLWE c)
     res = (RNS_MLWE *)safe_malloc(size * sizeof(*res));
     for (size_t i = 0; i < size; i++)
     {
-        res[i] = mlwe_alloc_RNS_sample(c->b->base->N, c->r, c->b->rns_mask, c->b->base);
+        res[i] = mlwe_alloc_sample(c->ring, c->r);
     }
     return res;
 }
@@ -130,8 +88,12 @@ void free_RNS_mlwe_array(uint64_t size, RNS_MLWE *v)
 
 void free_RNS_mlwe_sample(RNS_MLWE c)
 {
-    free_RNS_polynomial_array(c->r, c->a);
-    free_RNS_polynomial(c->b);
+    for (size_t i = 0; i < c->r; i++)
+    {
+        arith_free(c->ring, &c->a[i]);
+    }
+    arith_free(c->ring, &c->b);
+    free(c->a);
     free(c);
 }
 
@@ -139,58 +101,57 @@ void mlwe_copy_RNS_sample(RNS_MLWE out, RNS_MLWE in)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_copy_RNS_polynomial(out->a[i], in->a[i]);
+        arith_copy(out->ring, &out->a[i], &in->a[i]);
     }
-    polynomial_copy_RNS_polynomial(out->b, in->b);
+    arith_copy(out->ring, &out->b, &in->b);
 }
 
-void mlwe_copy_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in)
-{
-    mlwe_copy_RNS_sample((RNS_MLWE)out, (RNS_MLWE)in);
-}
+void mlwe_copy_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in) { mlwe_copy_RNS_sample(out, in); }
 
-void free_mlwe_RNS_sample(void *p)
-{
-    const RNS_MLWE pp = (RNS_MLWE)p;
-    free_RNS_polynomial_array(pp->r, pp->a);
-    free_RNS_polynomial(pp->b);
-    free(pp);
-}
+void free_mlwe_RNS_sample(void *p) { free_RNS_mlwe_sample((RNS_MLWE)p); }
 
 void mlwe_RNS_sample_of_zero(RNS_MLWE out, RNS_MLWE_Key key)
 {
-    polynomial_gen_gaussian_RNSc_polynomial((RNSc_Polynomial)(out->b), key->sigma);
-    polynomial_RNSc_to_RNS(out->b, (RNSc_Polynomial)out->b);
+    arith_sample_gaussian(out->ring, &out->b, key->sigma);
+    arith_to_mul(out->ring, &out->b);
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_gen_random_RNSc_polynomial((RNSc_Polynomial)out->a[i]);
-        polynomial_RNSc_to_RNS(out->a[i], (RNSc_Polynomial)out->a[i]);
-        polynomial_mul_addto_RNS_polynomial(out->b, key->s_RNS[i], out->a[i]);
+        arith_sample_uniform(out->ring, &out->a[i]);
+        arith_to_mul(out->ring, &out->a[i]);
+        arith_mul_addto(out->ring, &out->b, &key->s[i], &out->a[i]);
     }
 }
 
 void mlwe_RNSc_sample_of_zero(RNSc_MLWE out, RNS_MLWE_Key key)
 {
-    mlwe_RNS_sample_of_zero((RNS_MLWE)out, key);
-    mlwe_RNS_to_RNSc(out, (RNS_MLWE)out);
+    mlwe_RNS_sample_of_zero(out, key);
+    mlwe_RNS_to_RNSc(out, out);
 }
 
 void mlwe_scale_RNSc_mlwe(RNSc_MLWE c, uint64_t scale)
 {
     for (size_t i = 0; i < c->r; i++)
     {
-        polynomial_scale_RNSc_polynomial(c->a[i], c->a[i], scale);
+        arith_scale_int(c->ring, &c->a[i], &c->a[i], scale);
     }
-    polynomial_scale_RNSc_polynomial(c->b, c->b, scale);
+    arith_scale_int(c->ring, &c->b, &c->b, scale);
 }
 
-void mlwe_scale_RNS_mlwe_RNS(RNS_MLWE c, uint64_t *scale)
+// One value per component is the implementation-neutral way to name a
+// scalar; the ring turns it into whatever it multiplies by.
+void mlwe_scale_RNS_mlwe_RNS(RNS_MLWE c, const uint64_t *per_component)
 {
+    ArithScalar scale;
+    if (arith_scalar_new(c->ring, per_component, &scale) != ARITH_OK)
+    {
+        return;
+    }
     for (size_t i = 0; i < c->r; i++)
     {
-        polynomial_scale_RNS_polynomial_RNS(c->a[i], c->a[i], scale);
+        arith_scale_by(c->ring, &c->a[i], &c->a[i], scale);
     }
-    polynomial_scale_RNS_polynomial_RNS(c->b, c->b, scale);
+    arith_scale_by(c->ring, &c->b, &c->b, scale);
+    arith_scalar_free(c->ring, &scale);
 }
 
 // out += in*scale
@@ -198,99 +159,88 @@ void mlwe_scale_RNS_mlwe_addto(RNS_MLWE out, RNS_MLWE in, uint64_t scale)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_scale_addto_RNS_polynomial(out->a[i], in->a[i], scale);
+        arith_scale_addto(out->ring, &out->a[i], &in->a[i], scale);
     }
-    polynomial_scale_addto_RNS_polynomial(out->b, in->b, scale);
+    arith_scale_addto(out->ring, &out->b, &in->b, scale);
 }
 
-void mlwe_RNSc_sample(RNSc_MLWE out, RNS_MLWE_Key key, RNSc_Polynomial m)
+void mlwe_RNSc_sample(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m)
 {
-    assert(m->rns_mask == out->b->rns_mask);
     mlwe_RNSc_sample_of_zero(out, key);
-    polynomial_add_RNSc_polynomial(out->b, out->b, m);
+    arith_add(out->ring, &out->b, &out->b, m);
 }
 
-void mlwe_RNS_phase(RNS_Polynomial out, RNS_MLWE in, RNS_MLWE_Key key)
+void mlwe_RNS_phase(ArithElement *out, RNS_MLWE in, RNS_MLWE_Key key)
 {
-    polynomial_mul_RNS_polynomial(out, in->a[0], key->s_RNS[0]);
+    arith_mul(in->ring, out, &in->a[0], &key->s[0]);
     for (size_t i = 1; i < in->r; i++)
     {
-        polynomial_mul_addto_RNS_polynomial(out, in->a[i], key->s_RNS[i]);
+        arith_mul_addto(in->ring, out, &in->a[i], &key->s[i]);
     }
 
-    polynomial_sub_RNS_polynomial(out, in->b, out);
+    arith_sub(in->ring, out, &in->b, out);
 }
 
-void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, RNS_Polynomial poly)
+void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_mul_RNS_polynomial(out->a[i], in->a[i], poly);
+        arith_mul(out->ring, &out->a[i], &in->a[i], poly);
     }
-    polynomial_mul_RNS_polynomial(out->b, in->b, poly);
+    arith_mul(out->ring, &out->b, &in->b, poly);
 }
 
-void mlwe_RNS_mul_addto_by_poly(RNS_MLWE out, RNS_MLWE in, RNS_Polynomial poly)
+void mlwe_RNS_mul_addto_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_mul_addto_RNS_polynomial(out->a[i], in->a[i], poly);
+        arith_mul_addto(out->ring, &out->a[i], &in->a[i], poly);
     }
-    polynomial_mul_addto_RNS_polynomial(out->b, in->b, poly);
+    arith_mul_addto(out->ring, &out->b, &in->b, poly);
 }
 
-void mlwe_RNS_mul_subto_by_poly(RNS_MLWE out, RNS_MLWE in, RNS_Polynomial poly)
+void mlwe_RNS_mul_subto_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_mul_subto_RNS_polynomial(out->a[i], in->a[i], poly);
+        arith_mul_subto(out->ring, &out->a[i], &in->a[i], poly);
     }
-    polynomial_mul_subto_RNS_polynomial(out->b, in->b, poly);
+    arith_mul_subto(out->ring, &out->b, &in->b, poly);
 }
 
 RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key)
 {
-    RNSc_MLWE res = (RNSc_MLWE)mlwe_alloc_RNS_sample(key->N, key->r, key->l, key->s_RNS[0]->base);
+    RNSc_MLWE res = mlwe_alloc_sample(key->ring, key->r);
     mlwe_RNSc_sample_of_zero(res, key);
     return res;
 }
 
 RNS_MLWE mlwe_new_RNS_sample_of_zero(RNS_MLWE_Key key)
 {
-    RNS_MLWE res = mlwe_alloc_RNS_sample(key->N, key->r, key->l, key->s_RNS[0]->base);
+    RNS_MLWE res = mlwe_alloc_sample(key->ring, key->r);
     mlwe_RNS_sample_of_zero(res, key);
-    return res;
-}
-
-RNS_MLWE mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask, RNS_Base base)
-{
-    RNS_MLWE res = mlwe_alloc_RNS_sample(N, r, mask, base);
-    mlwe_RNS_trivial_sample_of_zero(res);
     return res;
 }
 
 void mlwe_RNS_trivial_sample_of_zero(RNS_MLWE out)
 {
-    for (size_t i = 0; i < out->a[0]->base->l; i++)
+    const ArithDomain d = arith_mul_domain(out->ring);
+    for (size_t j = 0; j < out->r; j++)
     {
-        for (size_t j = 0; j < out->r; j++)
-        {
-            memset(out->a[j]->coeffs[i], 0, sizeof(uint64_t) * out->a[j]->base->N);
-        }
-        memset(out->b->coeffs[i], 0, sizeof(uint64_t) * out->b->base->N);
+        arith_zero_in(out->ring, &out->a[j], d);
     }
+    arith_zero_in(out->ring, &out->b, d);
 }
 
 void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                 uint64_t lvl)
 {
-    RNSc_MLWE tmp = (RNSc_MLWE)mlwe_alloc_RNS_sample(out->a[0]->base->N, out->r,
-                                                     out->a[0]->rns_mask, out->a[0]->base);
+    RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, out->r);
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_RNSc_permute(tmp->a[i], in->a[i], gen);
+        arith_permute(out->ring, &tmp->a[i], &in->a[i], gen);
     }
-    polynomial_RNSc_permute(tmp->b, in->b, gen);
+    arith_permute(out->ring, &tmp->b, &in->b, gen);
     mlwe_RNSc_GHS_hybrid_keyswitch(out, tmp, ksk, lvl);
     free_mlwe_RNS_sample(tmp);
 }
@@ -298,8 +248,7 @@ void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_M
 void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                         uint64_t size, uint64_t lvl)
 {
-    RNSc_MLWE tmp = (RNSc_MLWE)mlwe_alloc_RNS_sample(out->a[0]->base->N, out->r,
-                                                     out->a[0]->rns_mask, out->a[0]->base);
+    RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, out->r);
     mlwe_copy_RNSc_sample(tmp, in);
     for (size_t i = 0; i < size; i++)
     {
@@ -312,7 +261,7 @@ void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS
 
 void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl)
 {
-    const uint64_t log_N = (uint64_t)log2(in->a[0]->base->N);
+    const uint64_t log_N = (uint64_t)log2(in->ring->N);
     uint64_t *gens = (uint64_t *)malloc(log_N * sizeof(uint64_t));
     for (size_t i = 1; i <= log_N; i++)
         gens[i - 1] = (1ULL << (log_N - i + 1)) + 1;
@@ -324,65 +273,65 @@ void mlwe_add_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_add_RNSc_polynomial(out->a[i], in1->a[i], in2->a[i]);
+        arith_add(out->ring, &out->a[i], &in1->a[i], &in2->a[i]);
     }
-    polynomial_add_RNSc_polynomial(out->b, in1->b, in2->b);
+    arith_add(out->ring, &out->b, &in1->b, &in2->b);
 }
 
 void mlwe_add_RNS_sample(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_add_RNS_polynomial(out->a[i], in1->a[i], in2->a[i]);
+        arith_add(out->ring, &out->a[i], &in1->a[i], &in2->a[i]);
     }
-    polynomial_add_RNS_polynomial(out->b, in1->b, in2->b);
+    arith_add(out->ring, &out->b, &in1->b, &in2->b);
 }
 
 void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, RNSc_Polynomial in2)
 {
-    polynomial_add_RNSc_polynomial(out->b, in1->b, in2);
+    arith_add(out->ring, &out->b, &in1->b, in2);
 }
 
 void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, RNSc_Polynomial in2)
 {
-    polynomial_sub_RNSc_polynomial(out->b, in1->b, in2);
+    arith_sub(out->ring, &out->b, &in1->b, in2);
 }
 
 void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, RNS_Polynomial in2)
 {
-    polynomial_add_RNS_polynomial(out->b, in1->b, in2);
+    arith_add(out->ring, &out->b, &in1->b, in2);
 }
 
 void mlwe_RNS_sub_polynomial(RNS_MLWE out, RNS_MLWE in1, RNS_Polynomial in2)
 {
-    polynomial_sub_RNS_polynomial(out->b, in1->b, in2);
+    arith_sub(out->ring, &out->b, &in1->b, in2);
 }
 
 void mlwe_sub_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_sub_RNSc_polynomial(out->a[i], in1->a[i], in2->a[i]);
+        arith_sub(out->ring, &out->a[i], &in1->a[i], &in2->a[i]);
     }
-    polynomial_sub_RNSc_polynomial(out->b, in1->b, in2->b);
+    arith_sub(out->ring, &out->b, &in1->b, &in2->b);
 }
 
 void mlwe_RNSc_mul_by_xai(RNSc_MLWE out, RNSc_MLWE in, uint64_t a)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_RNSc_mul_by_xai(out->a[i], in->a[i], a);
+        arith_mul_by_monomial(out->ring, &out->a[i], &in->a[i], a, 0);
     }
-    polynomial_RNSc_mul_by_xai(out->b, in->b, a);
+    arith_mul_by_monomial(out->ring, &out->b, &in->b, a, 0);
 }
 
 void mlwe_RNSc_mul_by_xai_minus1(RNSc_MLWE out, RNSc_MLWE in, uint64_t a)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_RNSc_mul_by_xai_minus1(out->a[i], in->a[i], a);
+        arith_mul_by_monomial(out->ring, &out->a[i], &in->a[i], a, 1);
     }
-    polynomial_RNSc_mul_by_xai_minus1(out->b, in->b, a);
+    arith_mul_by_monomial(out->ring, &out->b, &in->b, a, 1);
 }
 
 void mlwe_addto_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in) { mlwe_add_RNSc_sample(out, out, in); }
@@ -391,18 +340,22 @@ void mlwe_RNSc_to_RNS(RNS_MLWE out, RNSc_MLWE in)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_RNSc_to_RNS(out->a[i], in->a[i]);
+        arith_copy(out->ring, &out->a[i], &in->a[i]);
+        arith_to_mul(out->ring, &out->a[i]);
     }
-    polynomial_RNSc_to_RNS(out->b, in->b);
+    arith_copy(out->ring, &out->b, &in->b);
+    arith_to_mul(out->ring, &out->b);
 }
 
 void mlwe_RNS_to_RNSc(RNSc_MLWE out, RNS_MLWE in)
 {
     for (size_t i = 0; i < out->r; i++)
     {
-        polynomial_RNS_to_RNSc(out->a[i], in->a[i]);
+        arith_copy(out->ring, &out->a[i], &in->a[i]);
+        arith_to_canonical(out->ring, &out->a[i]);
     }
-    polynomial_RNS_to_RNSc(out->b, in->b);
+    arith_copy(out->ring, &out->b, &in->b);
+    arith_to_canonical(out->ring, &out->b);
 }
 
 // GHS hybrid key switch. The product must accumulate in the ring the key
@@ -414,23 +367,23 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
     (void)lvl;
     assert(in != out);
     RNSc_MLWE acc = ksk->acc;
-    const uint64_t divide_mask = ksk->mask & ~in->b->rns_mask;
+    ArithRing target = in->ring;
 
     // compute -a_i^T * ksk_i. A NULL ksk->s[i] marks a component that keeps
     // the target key (e.g. the linear part during relinearization); it is
     // copied through below instead of being key-switched.
     mlwe_rns_ks_key_reset_acc(ksk);
-    mlwe_RNS_trivial_sample_of_zero((RNS_MLWE)acc);
+    mlwe_RNS_trivial_sample_of_zero(acc);
     for (size_t i = 0; i < in->r; i++)
     {
         if (ksk->s[i] != NULL)
         {
-            gadget_mul_subto_polynomial((RNS_MLWE)acc, ksk->s[i], in->a[i]);
+            gadget_mul_subto_polynomial(acc, ksk->s[i], &in->a[i]);
         }
     }
     // convert to RNSc and rescale to in's ring
-    mlwe_RNS_to_RNSc(acc, (RNS_MLWE)acc);
-    mlwe_round_division_RNSc(acc, divide_mask);
+    mlwe_RNS_to_RNSc(acc, acc);
+    mlwe_round_division(acc, target);
 
     // Fold in the components that keep the target key. These stay in the base
     // ring, so they are added *after* the rescale (never divided out). The k-th
@@ -440,11 +393,11 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
     {
         if (ksk->s[i] == NULL)
         {
-            polynomial_add_RNSc_polynomial(acc->a[keep_idx], acc->a[keep_idx], in->a[i]);
+            arith_add(acc->ring, &acc->a[keep_idx], &acc->a[keep_idx], &in->a[i]);
             keep_idx++;
         }
     }
-    polynomial_add_RNSc_polynomial(acc->b, acc->b, in->b);
+    arith_add(acc->ring, &acc->b, &acc->b, &in->b);
     mlwe_copy_RNSc_sample(out, acc);
 }
 
@@ -476,13 +429,11 @@ void mlwe_full_packing_keyswitch_scaled_rec(RNSc_MLWE *vec, uint64_t ell, RNS_ML
     mlwe_full_packing_keyswitch_scaled_rec(odd, ell - 1, ksks, lvl);
 
     RNSc_MLWE C_tilde = even[0];
-    uint64_t N = vec[0]->b->base->N;
-    uint64_t r = vec[0]->r;
-    RNS_Base base = vec[0]->b->base;
+    const uint64_t N = vec[0]->ring->N;
+    const uint64_t r = vec[0]->r;
 
-    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, vec[0]->b->rns_mask, base);
-    uint64_t extended_mask = ksks[ell - 1]->mask;
-    RNSc_MLWE tmp2 = mlwe_alloc_RNSc_sample(N, r, extended_mask, base);
+    RNSc_MLWE tmp = mlwe_alloc_sample(vec[0]->ring, r);
+    RNSc_MLWE tmp2 = mlwe_alloc_sample(ksks[ell - 1]->acc->ring, r);
 
     // tmp = odd[0] * X^(N>>ell)
     mlwe_RNSc_mul_by_xai(tmp, odd[0], N >> ell);
@@ -521,7 +472,7 @@ uint64_t mlwe_extended_rank(uint64_t r)
     return r * (r + 3) / 2;
 }
 
-void mlwe_tensor_product(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2)
+void mlwe_tensor_product(ArithElement *out, RNS_MLWE in1, RNS_MLWE in2)
 {
     // Symmetric tensor product of the two ciphertext vectors. With
     // phase(c) = b - sum_i a_i * s_i, the product of the two phases is
@@ -545,10 +496,10 @@ void mlwe_tensor_product(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2)
     {
         for (size_t j = i; j < r; j++)
         {
-            polynomial_mul_RNS_polynomial(out[k], in1->a[i], in2->a[j]);
+            arith_mul(in1->ring, &out[k], &in1->a[i], &in2->a[j]);
             if (i != j)
             {
-                polynomial_mul_addto_RNS_polynomial(out[k], in1->a[j], in2->a[i]);
+                arith_mul_addto(in1->ring, &out[k], &in1->a[j], &in2->a[i]);
             }
             k++;
         }
@@ -557,22 +508,19 @@ void mlwe_tensor_product(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2)
     // Linear slots: a1_i*b2 + b1*a2_i.
     for (size_t i = 0; i < r; i++)
     {
-        polynomial_mul_RNS_polynomial(out[k], in1->a[i], in2->b);
-        polynomial_mul_addto_RNS_polynomial(out[k], in1->b, in2->a[i]);
+        arith_mul(in1->ring, &out[k], &in1->a[i], &in2->b);
+        arith_mul_addto(in1->ring, &out[k], &in1->b, &in2->a[i]);
         k++;
     }
     assert(k == R);
 
     // Constant term.
-    polynomial_mul_RNS_polynomial(out[R], in1->b, in2->b);
+    arith_mul(in1->ring, &out[R], &in1->b, &in2->b);
 }
 
 void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk)
 {
-    uint64_t N = in1->b->base->N;
-    uint64_t r = in1->r;
-    uint64_t mask = in1->b->rns_mask;
-    RNS_Base base = in1->b->base;
+    const uint64_t r = in1->r;
 
     // The tensor product produces a rank-R ciphertext (R = r*(r+3)/2): R "a"
     // components O[0..R-1] plus the constant term O[R]. Lay it out over an MLWE
@@ -582,7 +530,7 @@ void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk
     {
         // No relinearization key: hand back the extended (rank-R) product.
         assert(out->r == R);
-        RNS_Polynomial *tensor = (RNS_Polynomial *)malloc((R + 1) * sizeof(RNS_Polynomial));
+        ArithElement *tensor = (ArithElement *)malloc((R + 1) * sizeof(ArithElement));
         for (size_t j = 0; j < R; j++)
         {
             tensor[j] = out->a[j];
@@ -598,8 +546,8 @@ void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk
     // (O[0..R-r-1]) and NULL for each of the r linear components (O[R-r..R-1]),
     // which keep the target key and are copied through by the key-switch.
     assert(out->r == r);
-    RNS_MLWE ext = mlwe_alloc_RNS_sample(N, R, mask, base);
-    RNS_Polynomial *tensor = (RNS_Polynomial *)malloc((R + 1) * sizeof(RNS_Polynomial));
+    RNS_MLWE ext = mlwe_alloc_sample(in1->ring, R);
+    ArithElement *tensor = (ArithElement *)malloc((R + 1) * sizeof(ArithElement));
     for (size_t j = 0; j < R; j++)
     {
         tensor[j] = ext->a[j];
@@ -608,24 +556,27 @@ void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk
     mlwe_tensor_product(tensor, in1, in2);
     free(tensor);
 
-    RNSc_MLWE ext_c = mlwe_alloc_RNSc_sample(N, R, mask, base);
+    RNSc_MLWE ext_c = mlwe_alloc_sample(in1->ring, R);
     mlwe_RNS_to_RNSc(ext_c, ext);
-    mlwe_RNSc_GHS_hybrid_keyswitch((RNSc_MLWE)out, ext_c, ksk, 0);
+    mlwe_RNSc_GHS_hybrid_keyswitch(out, ext_c, ksk, 0);
     // Restore the NTT representation callers expect from a product.
-    mlwe_RNSc_to_RNS(out, (RNSc_MLWE)out);
+    mlwe_RNSc_to_RNS(out, out);
 
     free_mlwe_RNS_sample(ext);
     free_mlwe_RNS_sample(ext_c);
 }
 
-void mlwe_round_division_RNSc(RNSc_MLWE out, uint64_t divide_mask)
+// Rescale every component down to `to`. Which primes leave is the ring's
+// business, not the caller's.
+void mlwe_round_division(RNSc_MLWE out, ArithRing to)
 {
-    if (divide_mask > 0)
+    if (out->ring == to)
     {
-        for (size_t j = 0; j < out->r; j++)
-        {
-            polynomial_round_division_RNSc_wo_free(out->a[j], divide_mask);
-        }
-        polynomial_round_division_RNSc_wo_free(out->b, divide_mask);
+        return;
     }
+    for (size_t j = 0; j < out->r; j++)
+    {
+        arith_round_division(out->ring, &out->a[j], to);
+    }
+    arith_round_division(out->ring, &out->b, to);
 }

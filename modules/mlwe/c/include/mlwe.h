@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <arith.h>
+#include <arith_generic.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -36,23 +37,35 @@ extern "C"
 
     typedef struct _RNS_MLWE_Key
     {
-        IntPolynomial *s;
-        RNS_Polynomial *s_RNS;
+        // The secret, one element per module component, held in the mul
+        // domain where every use of it multiplies.
+        ArithElement *s;
+        ArithRing ring;
         uint64_t N, l, r;
         double sigma;
     } *RNS_MLWE_Key;
 
-    typedef struct _RNS_MLWE
+    // A module-LWE sample: `r` mask components and a body, over one ring.
+    //
+    // One type, not a pair. The old RNS_MLWE and RNSc_MLWE were field-
+    // identical and differed only in the domain their name encoded, so the
+    // elements carry that themselves now. Every component of a sample is in
+    // the same domain: mlwe_domain reads it and the whole-sample conversions
+    // move all of them together.
+    typedef struct _MLWE
     {
-        RNS_Polynomial *a, b;
+        ArithElement *a, b;
         uint64_t r;
-    } *RNS_MLWE;
+        ArithRing ring;
+    } *MLWE;
 
-    typedef struct _RNSc_MLWE
-    {
-        RNSc_Polynomial *a, b;
-        uint64_t r;
-    } *RNSc_MLWE;
+    // The spellings the tree used before the two became one type. A signature
+    // still says which domain it expects, which the type no longer enforces.
+    typedef MLWE RNS_MLWE;
+    typedef MLWE RNSc_MLWE;
+
+    ArithDomain mlwe_domain(MLWE c);
+    MLWE mlwe_alloc_sample(ArithRing ring, uint64_t r);
 
     // A key-switch key: one gadget-decomposed key array per input component
     // (NULL marks a component that keeps the target key and passes through),
@@ -76,6 +89,7 @@ extern "C"
     void free_polynomial_array(uint64_t size, IntPolynomial *p);
     RNS_MLWE_Key mlwe_get_RNS_key_from_array(uint64_t N, uint64_t r, uint64_t l, uint64_t *array,
                                              RNS_Base base, double sigma);
+    RNS_MLWE_Key mlwe_alloc_key(ArithRing ring, uint64_t r, uint64_t l, double sigma);
     RNS_MLWE_Key mlwe_alloc_RNS_key(uint64_t N, uint64_t r, uint64_t l, RNS_Base base,
                                     double sigma);
     void free_RNS_mlwe_sample(RNS_MLWE c);
@@ -92,22 +106,22 @@ extern "C"
     RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key);
     RNS_MLWE mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask,
                                                  RNS_Base base);
-    void mlwe_RNS_phase(RNS_Polynomial out, RNS_MLWE in, RNS_MLWE_Key key);
+    void mlwe_RNS_phase(ArithElement *out, RNS_MLWE in, RNS_MLWE_Key key);
     void mlwe_RNSc_to_RNS(RNS_MLWE out, RNSc_MLWE in);
     void mlwe_RNS_to_RNSc(RNSc_MLWE out, RNS_MLWE in);
 
     void mlwe_RNS_trivial_sample_of_zero(RNS_MLWE out);
     void mlwe_copy_RNS_sample(RNS_MLWE out, RNS_MLWE in);
     void mlwe_copy_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in);
-    void mlwe_RNSc_sample(RNSc_MLWE out, RNS_MLWE_Key key, RNSc_Polynomial m);
-    void mlwe_scale_RNS_mlwe_RNS(RNS_MLWE c, uint64_t *scale);
+    void mlwe_RNSc_sample(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m);
+    void mlwe_scale_RNS_mlwe_RNS(RNS_MLWE c, const uint64_t *per_component);
     void mlwe_add_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2);
     void mlwe_add_RNS_sample(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2);
     void mlwe_sub_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2);
     void mlwe_RNSc_mul_by_xai(RNSc_MLWE out, RNSc_MLWE in, uint64_t a);
     void mlwe_RNSc_mul_by_xai_minus1(RNSc_MLWE out, RNSc_MLWE in, uint64_t a);
-    void mlwe_RNS_mul_addto_by_poly(RNS_MLWE out, RNS_MLWE in, RNS_Polynomial poly);
-    void mlwe_RNS_mul_subto_by_poly(RNS_MLWE out, RNS_MLWE in, RNS_Polynomial poly);
+    void mlwe_RNS_mul_addto_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly);
+    void mlwe_RNS_mul_subto_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly);
     void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                     uint64_t lvl);
     void mlwe_scale_RNSc_mlwe(RNSc_MLWE c, uint64_t scale);
@@ -119,7 +133,7 @@ extern "C"
     void free_RNS_mlwe_array(uint64_t size, RNS_MLWE *v);
     void free_mlwe_RNS_sample(void *p);
     void mlwe_scale_RNS_mlwe_addto(RNS_MLWE out, RNS_MLWE in, uint64_t scale);
-    void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, RNS_Polynomial poly);
+    void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly);
     void mlwe_RNSc_extract_lwe(uint64_t *out, RNSc_MLWE in, uint64_t idx);
     void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, RNSc_Polynomial in2);
     void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, RNSc_Polynomial in2);
@@ -129,7 +143,7 @@ extern "C"
     // Rank of the extended (not-yet-relinearized) product of two rank-r ciphertexts:
     // r*(r+1)/2 quadratic components plus r linear ones.
     uint64_t mlwe_extended_rank(uint64_t r);
-    void mlwe_tensor_product(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2);
+    void mlwe_tensor_product(ArithElement *out, RNS_MLWE in1, RNS_MLWE in2);
     void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk);
 
     RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l,
@@ -155,11 +169,11 @@ extern "C"
                                      uint64_t lvl);
     void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
                                             uint64_t lvl);
-    void mlwe_round_division_RNSc(RNSc_MLWE out, uint64_t divide_mask);
+    void mlwe_round_division(RNSc_MLWE out, ArithRing to);
 
     // gadget decomposition products
-    void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, RNSc_Polynomial poly);
-    void gadget_mul_subto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, RNSc_Polynomial poly);
+    void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly);
+    void gadget_mul_subto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly);
 
     void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
                                uint64_t special_primes);

@@ -68,16 +68,14 @@ static inline int pthread_barrier_wait(pthread_barrier_t *barrier)
 void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
                             RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes)
 {
-    uint64_t N = p0[0]->b->base->N;
-    uint64_t r = p0[0]->r;
-    uint64_t mask = p0[0]->b->rns_mask;
-    RNS_Base base = p0[0]->b->base;
+    const uint64_t r = p0[0]->r;
+    ArithRing ring = p0[0]->ring;
 
     // Allocate p1 array of size in_N
     RNS_MLWE *p1 = (RNS_MLWE *)malloc(in_N * sizeof(RNS_MLWE));
     for (size_t i = 0; i < in_N; i++)
     {
-        p1[i] = mlwe_alloc_RNS_sample(N, r, mask, base);
+        p1[i] = mlwe_alloc_sample(ring, r);
     }
 
     RNS_MLWE *p[2] = {p0, p1};
@@ -90,15 +88,14 @@ void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t 
 
         for (size_t j = 0; j < power; j++)
         {
-            mgsw_NCMUX_to_coeff(p[out_idx][j], (RNSc_MLWE)p[in_idx][j],
-                                (RNSc_MLWE)p[in_idx][in_N - power + j], e[i], ksk, ell,
-                                special_primes);
+            mgsw_NCMUX_to_coeff(p[out_idx][j], p[in_idx][j], p[in_idx][in_N - power + j], e[i], ksk,
+                                ell, special_primes);
         }
 
         for (size_t j = 0; j < in_N - power; j++)
         {
-            mgsw_CMUX_to_coeff(p[out_idx][j + power], (RNSc_MLWE)p[in_idx][j + power],
-                               (RNSc_MLWE)p[in_idx][j], e[i], ell, special_primes);
+            mgsw_CMUX_to_coeff(p[out_idx][j + power], p[in_idx][j + power], p[in_idx][j], e[i], ell,
+                               special_primes);
         }
         // _to_coeff variants already leave each output in coefficient form.
     }
@@ -155,15 +152,13 @@ void *monomial_mul_worker(void *arg)
         {
             if (k < power)
             {
-                mgsw_NCMUX_to_coeff(p[out_idx][k], (RNSc_MLWE)p[in_idx][k],
-                                    (RNSc_MLWE)p[in_idx][args->in_N - power + k], args->e[i],
-                                    args->ksk, args->ell, args->special_primes);
+                mgsw_NCMUX_to_coeff(p[out_idx][k], p[in_idx][k], p[in_idx][args->in_N - power + k],
+                                    args->e[i], args->ksk, args->ell, args->special_primes);
             }
             else
             {
-                mgsw_CMUX_to_coeff(p[out_idx][k], (RNSc_MLWE)p[in_idx][k],
-                                   (RNSc_MLWE)p[in_idx][k - power], args->e[i], args->ell,
-                                   args->special_primes);
+                mgsw_CMUX_to_coeff(p[out_idx][k], p[in_idx][k], p[in_idx][k - power], args->e[i],
+                                   args->ell, args->special_primes);
             }
         }
 
@@ -189,16 +184,14 @@ void gp25_RGSW_monomial_mul_mt(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64
         num_threads = in_N;
     }
 
-    uint64_t N = p0[0]->b->base->N;
-    uint64_t r = p0[0]->r;
-    uint64_t mask = p0[0]->b->rns_mask;
-    RNS_Base base = p0[0]->b->base;
+    const uint64_t r = p0[0]->r;
+    ArithRing ring = p0[0]->ring;
 
     // Allocate p1 array of size in_N
     RNS_MLWE *p1 = (RNS_MLWE *)malloc(in_N * sizeof(RNS_MLWE));
     for (size_t i = 0; i < in_N; i++)
     {
-        p1[i] = mlwe_alloc_RNS_sample(N, r, mask, base);
+        p1[i] = mlwe_alloc_sample(ring, r);
     }
 
     pthread_barrier_t barrier;
@@ -272,33 +265,32 @@ static void *suba_worker(void *arg)
     suba_args_t *A = (suba_args_t *)arg;
     const uint64_t N = A->N, twoN = 2 * N;
     const uint64_t r = A->p0[0]->r;
-    const uint64_t mask = A->p0[0]->b->rns_mask;
-    RNS_Base base = A->p0[0]->b->base;
+    ArithRing ring = A->p0[0]->ring;
 
-    RNSc_MLWE pax = mlwe_alloc_RNSc_sample(N, r, mask, base); /* p[k]*X^a (coeff)   */
-    RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, mask, base); /* pax*(X^m2a - 1)    */
-    RNS_MLWE ext = mlwe_alloc_RNS_sample(N, r, mask, base);   /* s_sign (X) tmp (NTT) */
-    RNS_MLWE pax_ntt = mlwe_alloc_RNS_sample(N, r, mask, base);
+    RNSc_MLWE pax = mlwe_alloc_sample(ring, r); /* p[k]*X^a (coeff)     */
+    RNSc_MLWE tmp = mlwe_alloc_sample(ring, r); /* pax*(X^m2a - 1)      */
+    RNS_MLWE ext = mlwe_alloc_sample(ring, r);  /* s_sign (X) tmp (NTT) */
+    RNS_MLWE pax_ntt = mlwe_alloc_sample(ring, r);
 
     for (size_t k = A->start_k; k < A->end_k; k++)
     {
-        RNSc_MLWE pk = (RNSc_MLWE)A->p0[k];
+        RNSc_MLWE pk = A->p0[k];
         const uint64_t ai = A->a[k];
         mlwe_RNSc_mul_by_xai(pax, pk, ai);                    /* pax = p[k] * X^a       */
         const uint64_t m2a = (twoN - (2 * ai) % twoN) % twoN; /* (-2a) mod 2N           */
         mlwe_RNSc_mul_by_xai_minus1(tmp, pax, m2a);           /* tmp = pax * (X^m2a - 1) */
         mgsw_external_product(ext, A->s_sign, tmp, A->ell,
                               A->special_primes); /* ext = s_sign (X) tmp */
-        mlwe_copy_RNS_sample(pax_ntt, (RNS_MLWE)pax);
-        mlwe_RNSc_to_RNS(pax_ntt, (RNSc_MLWE)pax_ntt); /* pax -> NTT for the add  */
+        mlwe_copy_RNS_sample(pax_ntt, pax);
+        mlwe_RNSc_to_RNS(pax_ntt, pax_ntt); /* pax -> NTT for the add  */
         for (size_t i = 0; i < r; i++)
-            polynomial_add_RNS_polynomial(ext->a[i], ext->a[i], pax_ntt->a[i]);
-        polynomial_add_RNS_polynomial(ext->b, ext->b, pax_ntt->b);
-        mlwe_RNS_to_RNSc((RNSc_MLWE)A->p0[k], ext); /* result (coeff) into p[k] */
+            arith_add(ring, &ext->a[i], &ext->a[i], &pax_ntt->a[i]);
+        arith_add(ring, &ext->b, &ext->b, &pax_ntt->b);
+        mlwe_RNS_to_RNSc(A->p0[k], ext); /* result (coeff) into p[k] */
     }
 
-    free_mlwe_RNS_sample((RNS_MLWE)pax);
-    free_mlwe_RNS_sample((RNS_MLWE)tmp);
+    free_mlwe_RNS_sample(pax);
+    free_mlwe_RNS_sample(tmp);
     free_mlwe_RNS_sample(ext);
     free_mlwe_RNS_sample(pax_ntt);
     return NULL;

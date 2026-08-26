@@ -6,7 +6,7 @@ from .impl.complex.complex import ComplexPolynomial, ComplexRing
 from .impl.field.field import ExtensionField, FieldElement
 from .impl.mp.multiprecision import Multiprecision
 from .impl.pmf.pseudo_mersenne import PseudoMersenneElement, PseudoMersenneField
-from .impl.rns.polynomial import RNSPolynomial, RNSRing, repr
+from .impl.rns.polynomial import RNSPolynomial, RNSRing, domain_of, repr
 from .number_theory import crt, gen_pseudo_mersenne_prime, is_prime
 from .registry import (
     backends,
@@ -43,6 +43,7 @@ __all__ = [
     "Spec",
     "backends",
     "crt",
+    "domain_of",
     "gen_pseudo_mersenne_prime",
     "implementations",
     "is_prime",

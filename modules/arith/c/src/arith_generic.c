@@ -73,6 +73,16 @@ ArithStatus arith_zero(ArithRing ring, ArithElement *out)
     return ring->vt->zero(ring, out);
 }
 
+ArithStatus arith_zero_in(ArithRing ring, ArithElement *out, ArithDomain domain)
+{
+    ArithStatus status = arith_zero(ring, out);
+    if (status == ARITH_OK)
+    {
+        out->domain = domain;
+    }
+    return status;
+}
+
 ArithStatus arith_to_mul(ArithRing ring, ArithElement *element)
 {
     if (element->domain == arith_mul_domain(ring))
