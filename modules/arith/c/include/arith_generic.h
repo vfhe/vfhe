@@ -235,8 +235,13 @@ extern "C"
     void arith_rns_ring_cache_clear(void);
     void arith_ring_free(ArithRing ring);
     // The RNS_Polynomial behind an element of an RNS ring, for the
-    // per-implementation code that needs the representation itself.
-    RNS_Polynomial arith_rns_polynomial(const ArithElement *element);
+    // per-implementation code that needs the representation itself. Inline
+    // because it is a cast: a backend file uses it in loops and should not
+    // depend on the linker inlining a call away.
+    static inline RNS_Polynomial arith_rns_polynomial(const ArithElement *element)
+    {
+        return (RNS_Polynomial)element->handle;
+    }
 
 #ifdef __cplusplus
 }
