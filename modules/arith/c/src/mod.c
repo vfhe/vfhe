@@ -3,7 +3,7 @@
 #include <arith.h>
 #include "arith_internal.h"
 
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
 
 /* The Barrett constants this engine's `modq` above expects. Sized so that the
    32-bit fast path's `x * m` cannot overflow 128 bits (m stays around 2^50 for

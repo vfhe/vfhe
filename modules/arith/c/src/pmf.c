@@ -9,7 +9,7 @@
  * no vector code here to guard. When the AVX-512 IFMA kernels arrive they go
  * behind a
  *
- *     #if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+ *     #if VFHE_HAVE_AVX512IFMA
  *
  * inside the public pmf_mul / pmf_add wrappers at the bottom, with the scalar
  * pmf_ref_* bodies left OUTSIDE it -- they must compile into every engine so the

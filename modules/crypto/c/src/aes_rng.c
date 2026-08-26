@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 // File adapted from MOSFHET
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AES__)
+#include <arith_config.h>
+
+#if VFHE_HAVE_AESNI
 
 #include <stdint.h>
 #include <stdbool.h>

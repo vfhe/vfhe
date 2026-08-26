@@ -3,7 +3,9 @@
 #ifndef __NTT_H__
 #define __NTT_H__
 
-#ifdef __AVX512IFMA__
+#include <arith_config.h>
+
+#if VFHE_HAVE_AVX512IFMA
 #include <immintrin.h>
 #endif
 #include <stdbool.h>
@@ -15,7 +17,7 @@
 #include <math.h>
 #include <pthread.h>
 
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
 typedef __m512i mp_vector_t;
 #else
 typedef uint64_t mp_vector_t;
@@ -136,7 +138,7 @@ extern "C"
         uint64_t N;
     } *IntPolynomial;
 
-#if defined(__AVX512IFMA__) && !defined(PORTABLE_BUILD) && !defined(PORTABLE)
+#if VFHE_HAVE_AVX512IFMA
     void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, __m512i ***out_ws,
                             __m512i ***out_w_precon);
     void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, __m512i ***out_ws,

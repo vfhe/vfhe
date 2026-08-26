@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 
 from vfhe.engine import ffi, lib
 
-if TYPE_CHECKING:
-    from .polynomial import Polynomial
+from .polynomial import Polynomial
+from .registry import register
+from .spec import Capability, Constraints, Spec
 
 
 class Multiprecision:
@@ -77,3 +78,22 @@ class Multiprecision:
             crt_consts["k"],
         )
         return res
+
+
+#: Base-2^52 limb vectors: the exchange representation between RNS residues
+#: and Python integers. A stateless service rather than a parent with its own
+#: elements, so it registers no element class.
+MP_LIMB = register(
+    Spec(
+        implementation="mp",
+        backend="limb52",
+        parent_cls=Multiprecision,
+        element_cls=None,
+        capabilities=Capability.CORE | Capability.EXACT | Capability.DOMAINS_COINCIDE,
+        constraints=Constraints(),
+    )
+)
+
+# One spec per class today, so it binds to the class; a class serving
+# several backends would set it per instance instead.
+Multiprecision.spec = MP_LIMB
