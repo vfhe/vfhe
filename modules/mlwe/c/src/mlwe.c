@@ -287,22 +287,22 @@ void mlwe_add_RNS_sample(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2)
     arith_add(out->ring, &out->b, &in1->b, &in2->b);
 }
 
-void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, RNSc_Polynomial in2)
+void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2)
 {
     arith_add(out->ring, &out->b, &in1->b, in2);
 }
 
-void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, RNSc_Polynomial in2)
+void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2)
 {
     arith_sub(out->ring, &out->b, &in1->b, in2);
 }
 
-void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, RNS_Polynomial in2)
+void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2)
 {
     arith_add(out->ring, &out->b, &in1->b, in2);
 }
 
-void mlwe_RNS_sub_polynomial(RNS_MLWE out, RNS_MLWE in1, RNS_Polynomial in2)
+void mlwe_RNS_sub_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2)
 {
     arith_sub(out->ring, &out->b, &in1->b, in2);
 }
@@ -366,13 +366,14 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
 {
     (void)lvl;
     assert(in != out);
-    RNSc_MLWE acc = ksk->acc;
+    // Scratch of its own: the key is shared across threads, so nothing
+    // hanging off it may be written.
+    RNSc_MLWE acc = mlwe_alloc_sample(ksk->ring, out->r);
     ArithRing target = in->ring;
 
     // compute -a_i^T * ksk_i. A NULL ksk->s[i] marks a component that keeps
     // the target key (e.g. the linear part during relinearization); it is
     // copied through below instead of being key-switched.
-    mlwe_rns_ks_key_reset_acc(ksk);
     mlwe_RNS_trivial_sample_of_zero(acc);
     for (size_t i = 0; i < in->r; i++)
     {
@@ -399,6 +400,7 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
     }
     arith_add(acc->ring, &acc->b, &acc->b, &in->b);
     mlwe_copy_RNSc_sample(out, acc);
+    free_mlwe_RNS_sample(acc);
 }
 
 RNS_MLWE_KS_Key mlwe_new_RNS_automorphism_key(RNS_MLWE_Key key, uint64_t gen)
@@ -433,7 +435,7 @@ void mlwe_full_packing_keyswitch_scaled_rec(RNSc_MLWE *vec, uint64_t ell, RNS_ML
     const uint64_t r = vec[0]->r;
 
     RNSc_MLWE tmp = mlwe_alloc_sample(vec[0]->ring, r);
-    RNSc_MLWE tmp2 = mlwe_alloc_sample(ksks[ell - 1]->acc->ring, r);
+    RNSc_MLWE tmp2 = mlwe_alloc_sample(ksks[ell - 1]->ring, r);
 
     // tmp = odd[0] * X^(N>>ell)
     mlwe_RNSc_mul_by_xai(tmp, odd[0], N >> ell);

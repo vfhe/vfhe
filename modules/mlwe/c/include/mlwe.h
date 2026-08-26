@@ -69,17 +69,17 @@ extern "C"
 
     // A key-switch key: one gadget-decomposed key array per input component
     // (NULL marks a component that keeps the target key and passes through),
-    // plus a scratch accumulator allocated in the key's own ring. The output
-    // of a key switch must accumulate in the ring the key lives in -- the
-    // caller's `out` is only guaranteed to be allocated for its own, narrower
-    // ring -- so the key carries a buffer that is. The accumulator makes a key
-    // stateful scratch space: one concurrent key switch per key.
+    // and the ring the key lives in. A key switch must accumulate in that
+    // ring -- the caller's `out` is only guaranteed to be allocated for its
+    // own, narrower one -- so it allocates its scratch there and copies the
+    // finished result out. The key stays immutable and therefore shareable:
+    // gp25 hands one key to every thread of a parallel bootstrap.
     typedef struct _RNS_MLWE_KS_Key
     {
         RNS_MLWE **s;
         uint64_t count;
         uint64_t mask;
-        RNSc_MLWE acc;
+        ArithRing ring;
     } *RNS_MLWE_KS_Key;
 
     // mlwe rns
@@ -135,10 +135,10 @@ extern "C"
     void mlwe_scale_RNS_mlwe_addto(RNS_MLWE out, RNS_MLWE in, uint64_t scale);
     void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly);
     void mlwe_RNSc_extract_lwe(uint64_t *out, RNSc_MLWE in, uint64_t idx);
-    void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, RNSc_Polynomial in2);
-    void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, RNSc_Polynomial in2);
-    void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, RNS_Polynomial in2);
-    void mlwe_RNS_sub_polynomial(RNS_MLWE out, RNS_MLWE in1, RNS_Polynomial in2);
+    void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
+    void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
+    void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2);
+    void mlwe_RNS_sub_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2);
 
     // Rank of the extended (not-yet-relinearized) product of two rank-r ciphertexts:
     // r*(r+1)/2 quadratic components plus r linear ones.
@@ -155,10 +155,6 @@ extern "C"
     // key-switch key, deriving the key's ring from its first real component
     // and allocating the accumulator in it.
     RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count);
-    // Restore the accumulator to the key's own ring; the rescale inside the
-    // hybrid key switch narrows it, the storage stays allocated for the full
-    // ring.
-    void mlwe_rns_ks_key_reset_acc(RNS_MLWE_KS_Key key);
     void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key);
     void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk,
                                         uint64_t lvl);

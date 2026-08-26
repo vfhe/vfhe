@@ -93,7 +93,8 @@ def test_packing_ksk():
 
 
 @pytest.mark.complete
-def test_sab(deterministic_prng):
+@pytest.mark.parametrize("threads", [1, 4])
+def test_sab(deterministic_prng, threads):
     # Bootstrapping is probabilistic; pin the C PRNG + Python RNG so this
     # exact-equality check is reproducible rather than flaky (seed chosen to
     # decrypt cleanly).
@@ -109,7 +110,11 @@ def test_sab(deterministic_prng):
 
     input_key, r_prec = rs_sparse_ternary_key(in_scheme, 17, 3.2, 8)
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
-    gp25 = GP25(out_scheme, threads=1)
+    # threads > 1 runs gp25's parallel monomial multiply, where one
+    # key-switch key is shared by every worker: anything the key switch
+    # wrote through that key would race, and the bootstrap would decrypt
+    # to garbage.
+    gp25 = GP25(out_scheme, threads=threads)
     sab_key = gp25.generate_sparse_ternary_key(input_key, output_key, 17, r_prec)
     sab_key.b_prec = msg_prec
 
