@@ -71,7 +71,7 @@ void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint6
     free_mlwe_RNS_sample(in1_NTT);
 }
 
-void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE **ksk,
+void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE_KS_Key ksk,
                 uint64_t ell, uint64_t special_primes)
 {
     uint64_t N = in1->b->base->N;
@@ -118,8 +118,8 @@ void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mg
     free_mlwe_RNS_sample(diff);
 }
 
-void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE **ksk,
-                         uint64_t ell, uint64_t special_primes)
+void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
+                         RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes)
 {
     uint64_t N = in1->b->base->N;
     uint64_t r = in1->r;

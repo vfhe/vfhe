@@ -543,7 +543,9 @@ class MLWE_Set:
                 x.to_NTT()
             tmp = ffi.new("void*[]", [i.obj for i in component])
             result_obj[j] = lib_rlwe.lib.mlwe_create_copy_array(tmp, ell)
-        self.obj = result_obj
+        # The key object copies the component-pointer array and carries the
+        # accumulator the key switch computes in, allocated in the key's ring.
+        self.obj = lib_rlwe.lib.mlwe_new_RNS_ks_key(result_obj, len(mlwe))
 
     # Turn an array of n-D MLWE_Set into a (n+1)-D MLWE_set
     @staticmethod

@@ -6,6 +6,7 @@ lib_sources += files(
     'c/src/lwe.c',
     'c/src/mgsw.c',
     'c/src/mlwe.c',
+    'c/src/mlwe_rns.c',
 )
 lib_includes += include_directories('c/include')
 header_files += files(

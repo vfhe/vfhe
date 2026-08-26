@@ -54,10 +54,19 @@ extern "C"
         uint64_t r;
     } *RNSc_MLWE;
 
+    // A key-switch key: one gadget-decomposed key array per input component
+    // (NULL marks a component that keeps the target key and passes through),
+    // plus a scratch accumulator allocated in the key's own ring. The output
+    // of a key switch must accumulate in the ring the key lives in -- the
+    // caller's `out` is only guaranteed to be allocated for its own, narrower
+    // ring -- so the key carries a buffer that is. The accumulator makes a key
+    // stateful scratch space: one concurrent key switch per key.
     typedef struct _RNS_MLWE_KS_Key
     {
         RNS_MLWE **s;
-        uint64_t ell;
+        uint64_t count;
+        uint64_t mask;
+        RNSc_MLWE acc;
     } *RNS_MLWE_KS_Key;
 
     // mlwe rns
@@ -99,7 +108,7 @@ extern "C"
     void mlwe_RNSc_mul_by_xai_minus1(RNSc_MLWE out, RNSc_MLWE in, uint64_t a);
     void mlwe_RNS_mul_addto_by_poly(RNS_MLWE out, RNS_MLWE in, RNS_Polynomial poly);
     void mlwe_RNS_mul_subto_by_poly(RNS_MLWE out, RNS_MLWE in, RNS_Polynomial poly);
-    void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE **ksk,
+    void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                     uint64_t lvl);
     void mlwe_scale_RNSc_mlwe(RNSc_MLWE c, uint64_t scale);
     void mlwe_RNSc_mod_switch(RNSc_MLWE c, uint64_t q);
@@ -121,20 +130,30 @@ extern "C"
     // r*(r+1)/2 quadratic components plus r linear ones.
     uint64_t mlwe_extended_rank(uint64_t r);
     void mlwe_tensor_product(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2);
-    void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE **ksk);
+    void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk);
 
     RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l,
                                              RNS_Base base, double sigma);
     void mlwe_copy_array(RNS_MLWE *out, RNS_MLWE *in, uint64_t size);
     RNS_MLWE *mlwe_create_copy_array(RNS_MLWE *in, uint64_t size);
 
-    void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE **ksk, uint64_t lvl);
-    void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE ***ksks,
+    // Wrap per-component gadget key arrays (borrowed, not deep-copied) into a
+    // key-switch key, deriving the key's ring from its first real component
+    // and allocating the accumulator in it.
+    RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count);
+    // Restore the accumulator to the key's own ring; the rescale inside the
+    // hybrid key switch narrows it, the storage stays allocated for the full
+    // ring.
+    void mlwe_rns_ks_key_reset_acc(RNS_MLWE_KS_Key key);
+    void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key);
+    void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk,
+                                        uint64_t lvl);
+    void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                             uint64_t size, uint64_t lvl);
-    void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE ***ksks, uint64_t lvl);
-    void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE **ksk,
+    void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl);
+    void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key ksk,
                                      uint64_t lvl);
-    void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE ***ksks,
+    void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
                                             uint64_t lvl);
     void mlwe_round_division_RNSc(RNSc_MLWE out, uint64_t divide_mask);
 
@@ -146,16 +165,16 @@ extern "C"
                                uint64_t special_primes);
     void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
                    uint64_t special_primes);
-    void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE **ksk,
+    void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE_KS_Key ksk,
                     uint64_t ell, uint64_t special_primes);
     void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                             uint64_t ell, uint64_t special_primes);
     void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
-                             RNS_MLWE **ksk, uint64_t ell, uint64_t special_primes);
+                             RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes);
     void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                                RNS_MLWE **ksk, uint64_t ell, uint64_t special_primes);
+                                RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes);
     void gp25_RGSW_monomial_mul_mt(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                                   RNS_MLWE **ksk, uint64_t ell, uint64_t special_primes,
+                                   RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
                                    uint64_t num_threads);
     void gp25_sub_a_mt(RNS_MLWE *p0, uint64_t in_N, uint64_t *a, RNS_MLWE *s_sign, uint64_t ell,
                        uint64_t special_primes, uint64_t N, uint64_t num_threads);

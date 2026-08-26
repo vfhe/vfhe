@@ -37,36 +37,6 @@ RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r
     return res;
 }
 
-LWE mlwe_extract_LWE(RNSc_MLWE in, uint64_t idx)
-{
-    const uint64_t N = in->a[0]->base->N;
-    const uint64_t l = rns_mask_to_l(in->a[0]->rns_mask);
-    const uint64_t r = in->r;
-    LWE res = lwe_alloc_sample(r * N, l, in->a[0]->base);
-
-    for (size_t j = 0; j < l; j++)
-    {
-        int g_idx = rns_mask_get_active_index(in->a[0]->rns_mask, j);
-        assert(g_idx >= 0);
-        Modulus mod = in->a[0]->base->mods[g_idx];
-
-        for (size_t k = 0; k < r; k++)
-        {
-            // Reverse and negate for negacyclic
-            for (size_t i = 0; i <= idx; i++)
-            {
-                res->a[j][k * N + i] = in->a[k]->coeffs[g_idx][idx - i];
-            }
-            for (size_t i = idx + 1; i < N; i++)
-            {
-                res->a[j][k * N + i] = negate_modq(in->a[k]->coeffs[g_idx][N + idx - i], mod->q);
-            }
-        }
-        res->b[j] = in->b->coeffs[g_idx][idx];
-    }
-    return res;
-}
-
 RNS_MLWE_Key mlwe_new_RNS_gaussian_key(uint64_t N, uint64_t r, uint64_t l, double key_sigma,
                                        RNS_Base base, double sigma)
 {
@@ -311,7 +281,7 @@ void mlwe_RNS_trivial_sample_of_zero(RNS_MLWE out)
     }
 }
 
-void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE **ksk,
+void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                 uint64_t lvl)
 {
     RNSc_MLWE tmp = (RNSc_MLWE)mlwe_alloc_RNS_sample(out->a[0]->base->N, out->r,
@@ -325,7 +295,7 @@ void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_M
     free_mlwe_RNS_sample(tmp);
 }
 
-void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE ***ksks,
+void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                         uint64_t size, uint64_t lvl)
 {
     RNSc_MLWE tmp = (RNSc_MLWE)mlwe_alloc_RNS_sample(out->a[0]->base->N, out->r,
@@ -340,100 +310,7 @@ void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE **
     free_mlwe_RNS_sample(tmp);
 }
 
-void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE **ksk, uint64_t lvl)
-{
-    (void)lvl;
-    const uint64_t N = out->b->base->N;
-    const uint64_t in_n = in[0]->n;
-    const uint64_t lwe_l = in[0]->l;
-
-    const uint64_t target_mask = out->b->rns_mask;
-    const uint64_t extended_mask = ksk[0][0]->b->rns_mask;
-    const uint64_t divide_mask = extended_mask & ~target_mask;
-
-    for (size_t i = 0; i < out->r; i++)
-    {
-        out->a[i]->rns_mask = extended_mask;
-    }
-    out->b->rns_mask = extended_mask;
-
-    mlwe_RNS_trivial_sample_of_zero(out);
-
-    RNSc_Polynomial tmp_poly =
-        (RNSc_Polynomial)polynomial_new_RNS_polynomial(N, target_mask, out->b->base);
-    RNSc_Polynomial tmp_poly_red =
-        (RNSc_Polynomial)polynomial_new_RNS_polynomial(N, extended_mask, out->b->base);
-    RNS_Polynomial tmp_rns =
-        (RNS_Polynomial)polynomial_new_RNS_polynomial(N, extended_mask, out->b->base);
-
-    for (size_t i = 0; i < in_n; i++)
-    {
-        for (size_t j = 0; j < tmp_poly->base->l; j++)
-        {
-            if (tmp_poly->rns_mask & (1ULL << j))
-            {
-                memset(tmp_poly->coeffs[j], 0, N * sizeof(uint64_t));
-            }
-        }
-
-        for (size_t limb = 0; limb < lwe_l; limb++)
-        {
-            int g_idx = rns_mask_get_active_index(target_mask, limb);
-            assert(g_idx >= 0);
-            for (size_t k = 0; k < size; k++)
-            {
-                tmp_poly->coeffs[g_idx][k] = in[k]->a[limb][i];
-            }
-        }
-
-        uint64_t ksk_idx = 0;
-        for (size_t j = 0; j < tmp_poly->base->l; j++)
-        {
-            if (tmp_poly->rns_mask & (1ULL << j))
-            {
-                polynomial_RNSc_mod_reduce_lifted(tmp_poly_red, tmp_poly, j);
-                polynomial_RNSc_to_RNS(tmp_rns, tmp_poly_red);
-                mlwe_RNS_mul_subto_by_poly(out, ksk[i][ksk_idx++], tmp_rns);
-            }
-        }
-    }
-
-    // body part: out->b += sum B_k X^k
-    for (size_t j = 0; j < tmp_poly->base->l; j++)
-    {
-        if (tmp_poly->rns_mask & (1ULL << j))
-        {
-            memset(tmp_poly->coeffs[j], 0, N * sizeof(uint64_t));
-        }
-    }
-    for (size_t limb = 0; limb < lwe_l; limb++)
-    {
-        int g_idx = rns_mask_get_active_index(target_mask, limb);
-        assert(g_idx >= 0);
-        for (size_t k = 0; k < size; k++)
-        {
-            tmp_poly->coeffs[g_idx][k] = in[k]->b[limb];
-        }
-    }
-
-    mlwe_RNS_to_RNSc((RNSc_MLWE)out, out);
-    if (divide_mask > 0)
-    {
-        for (size_t j = 0; j < out->r; j++)
-        {
-            polynomial_round_division_RNSc_wo_free((RNSc_Polynomial)out->a[j], divide_mask);
-        }
-        polynomial_round_division_RNSc_wo_free((RNSc_Polynomial)out->b, divide_mask);
-    }
-    polynomial_add_RNSc_polynomial((RNSc_Polynomial)out->b, (RNSc_Polynomial)out->b, tmp_poly);
-    mlwe_RNSc_to_RNS(out, (RNSc_MLWE)out);
-
-    free_RNS_polynomial(tmp_poly);
-    free_RNS_polynomial(tmp_poly_red);
-    free_RNS_polynomial(tmp_rns);
-}
-
-void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE ***ksks, uint64_t lvl)
+void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl)
 {
     const uint64_t log_N = (uint64_t)log2(in->a[0]->base->N);
     uint64_t *gens = (uint64_t *)malloc(log_N * sizeof(uint64_t));
@@ -528,22 +405,47 @@ void mlwe_RNS_to_RNSc(RNSc_MLWE out, RNS_MLWE in)
     polynomial_RNS_to_RNSc(out->b, in->b);
 }
 
-RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE_Key out_key, RNS_MLWE_Key in_key)
+// GHS hybrid key switch. The product must accumulate in the ring the key
+// lives in: `out` is only guaranteed to be allocated for its own, narrower
+// ring, so the key carries an accumulator that is, and only the finished
+// result -- already back in `in`'s ring -- reaches `out`.
+void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk, uint64_t lvl)
 {
-    (void)out_key;
-    (void)in_key;
-    assert(false); // not implemented
-    return NULL;
-}
+    (void)lvl;
+    assert(in != out);
+    RNSc_MLWE acc = ksk->acc;
+    const uint64_t divide_mask = ksk->mask & ~in->b->rns_mask;
 
-void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key)
-{
-    for (size_t i = 0; i < key->ell; i++)
+    // compute -a_i^T * ksk_i. A NULL ksk->s[i] marks a component that keeps
+    // the target key (e.g. the linear part during relinearization); it is
+    // copied through below instead of being key-switched.
+    mlwe_rns_ks_key_reset_acc(ksk);
+    mlwe_RNS_trivial_sample_of_zero((RNS_MLWE)acc);
+    for (size_t i = 0; i < in->r; i++)
     {
-        free_mlwe_RNS_sample(key->s[i]);
+        if (ksk->s[i] != NULL)
+        {
+            gadget_mul_subto_polynomial((RNS_MLWE)acc, ksk->s[i], in->a[i]);
+        }
     }
-    free(key->s);
-    free(key);
+    // convert to RNSc and rescale to in's ring
+    mlwe_RNS_to_RNSc(acc, (RNS_MLWE)acc);
+    mlwe_round_division_RNSc(acc, divide_mask);
+
+    // Fold in the components that keep the target key. These stay in the base
+    // ring, so they are added *after* the rescale (never divided out). The k-th
+    // pass-through a-component lands in acc->a[k]; in->b always passes through.
+    size_t keep_idx = 0;
+    for (size_t i = 0; i < in->r; i++)
+    {
+        if (ksk->s[i] == NULL)
+        {
+            polynomial_add_RNSc_polynomial(acc->a[keep_idx], acc->a[keep_idx], in->a[i]);
+            keep_idx++;
+        }
+    }
+    polynomial_add_RNSc_polynomial(acc->b, acc->b, in->b);
+    mlwe_copy_RNSc_sample(out, acc);
 }
 
 RNS_MLWE_KS_Key mlwe_new_RNS_automorphism_key(RNS_MLWE_Key key, uint64_t gen)
@@ -554,50 +456,7 @@ RNS_MLWE_KS_Key mlwe_new_RNS_automorphism_key(RNS_MLWE_Key key, uint64_t gen)
     return NULL;
 }
 
-void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE **ksk, uint64_t lvl)
-{
-    (void)lvl;
-    assert(in != out);
-    const uint64_t extended_mask = ksk[0][0]->b->rns_mask;
-    const uint64_t divide_mask = extended_mask & ~in->b->rns_mask;
-
-    for (size_t i = 0; i < out->r; i++)
-    {
-        out->a[i]->rns_mask = extended_mask;
-    }
-    out->b->rns_mask = extended_mask;
-
-    // compute -a_i^T * ksk_i. A NULL ksk[i] marks a component that keeps the
-    // target key (e.g. the linear part during relinearization); it is copied
-    // through below instead of being key-switched.
-    mlwe_RNS_trivial_sample_of_zero((RNS_MLWE)out);
-    for (size_t i = 0; i < in->r; i++)
-    {
-        if (ksk[i] != NULL)
-        {
-            gadget_mul_subto_polynomial((RNS_MLWE)out, ksk[i], in->a[i]);
-        }
-    }
-    // convert to RNSc and rescale to in's ring
-    mlwe_RNS_to_RNSc(out, (RNS_MLWE)out);
-    mlwe_round_division_RNSc(out, divide_mask);
-
-    // Fold in the components that keep the target key. These stay in the base
-    // ring, so they are added *after* the rescale (never divided out). The k-th
-    // pass-through a-component lands in out->a[k]; in->b always passes through.
-    size_t keep_idx = 0;
-    for (size_t i = 0; i < in->r; i++)
-    {
-        if (ksk[i] == NULL)
-        {
-            polynomial_add_RNSc_polynomial(out->a[keep_idx], out->a[keep_idx], in->a[i]);
-            keep_idx++;
-        }
-    }
-    polynomial_add_RNSc_polynomial(out->b, out->b, in->b);
-}
-
-void mlwe_full_packing_keyswitch_scaled_rec(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE ***ksks,
+void mlwe_full_packing_keyswitch_scaled_rec(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
                                             uint64_t lvl)
 {
     if (ell == 0)
@@ -622,7 +481,7 @@ void mlwe_full_packing_keyswitch_scaled_rec(RNSc_MLWE *vec, uint64_t ell, RNS_ML
     RNS_Base base = vec[0]->b->base;
 
     RNSc_MLWE tmp = mlwe_alloc_RNSc_sample(N, r, vec[0]->b->rns_mask, base);
-    uint64_t extended_mask = ksks[ell - 1][0][0]->b->rns_mask;
+    uint64_t extended_mask = ksks[ell - 1]->mask;
     RNSc_MLWE tmp2 = mlwe_alloc_RNSc_sample(N, r, extended_mask, base);
 
     // tmp = odd[0] * X^(N>>ell)
@@ -646,7 +505,7 @@ void mlwe_full_packing_keyswitch_scaled_rec(RNSc_MLWE *vec, uint64_t ell, RNS_ML
     free(odd);
 }
 
-void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE ***ksks,
+void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
                                         uint64_t lvl)
 {
     if (ell == 0)
@@ -708,7 +567,7 @@ void mlwe_tensor_product(RNS_Polynomial *out, RNS_MLWE in1, RNS_MLWE in2)
     polynomial_mul_RNS_polynomial(out[R], in1->b, in2->b);
 }
 
-void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE **ksk)
+void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk)
 {
     uint64_t N = in1->b->base->N;
     uint64_t r = in1->r;
