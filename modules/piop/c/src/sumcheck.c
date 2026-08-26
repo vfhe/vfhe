@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
+#include "arith_generic.h"
 
 // -------------------------------------------------------------
-// Sumcheck prover kernels over dense-MLE (RNS_Polynomial) tables
+// Sumcheck prover kernels over dense-MLE tables of ring elements
 // -------------------------------------------------------------
 // Libra-style evaluation-basis prover: per round, accumulate the round
 // polynomial's evaluations from the table pairs (lo, hi) = (f|x=0, f|x=1)
@@ -17,126 +18,127 @@
 // challenge is binding the round variable — mle_dense_poly_evaluate* in
 // mle.c, not duplicated here.
 
-static void sumcheck_round_accumulate(RNS_Polynomial g0, RNS_Polynomial g1, RNS_Polynomial lo,
-                                      RNS_Polynomial hi)
+static void sumcheck_round_accumulate(ArithRing ring, ArithElement *g0, ArithElement *g1,
+                                      const ArithElement *lo, const ArithElement *hi)
 {
-    polynomial_add_RNS_polynomial(g0, g0, lo);
-    polynomial_add_RNS_polynomial(g1, g1, hi);
+    arith_add(ring, g0, g0, lo);
+    arith_add(ring, g1, g1, hi);
 }
 
-void sumcheck_round_pairs(RNS_Polynomial g0, RNS_Polynomial g1, RNS_Polynomial *table,
+void sumcheck_round_pairs(ArithRing ring, ArithElement *g0, ArithElement *g1, ArithElement *table,
                           uint64_t size)
 {
-    polynomial_RNS_zero(g0);
-    polynomial_RNS_zero(g1);
+    arith_zero_in(ring, g0, arith_mul_domain(ring));
+    arith_zero_in(ring, g1, arith_mul_domain(ring));
     for (uint64_t i = 0; i < size / 2; i++)
     {
-        sumcheck_round_accumulate(g0, g1, table[2 * i], table[2 * i + 1]);
+        sumcheck_round_accumulate(ring, g0, g1, &table[2 * i], &table[2 * i + 1]);
     }
 }
 
-void sumcheck_round_halves(RNS_Polynomial g0, RNS_Polynomial g1, RNS_Polynomial *table,
+void sumcheck_round_halves(ArithRing ring, ArithElement *g0, ArithElement *g1, ArithElement *table,
                            uint64_t size)
 {
-    polynomial_RNS_zero(g0);
-    polynomial_RNS_zero(g1);
+    arith_zero_in(ring, g0, arith_mul_domain(ring));
+    arith_zero_in(ring, g1, arith_mul_domain(ring));
     for (uint64_t i = 0; i < size / 2; i++)
     {
-        sumcheck_round_accumulate(g0, g1, table[i], table[i + size / 2]);
+        sumcheck_round_accumulate(ring, g0, g1, &table[i], &table[i + size / 2]);
     }
 }
 
-void sumcheck_round(RNS_Polynomial g0, RNS_Polynomial g1, RNS_Polynomial *table, uint64_t size,
-                    uint64_t eval_var_idx)
+void sumcheck_round(ArithRing ring, ArithElement *g0, ArithElement *g1, ArithElement *table,
+                    uint64_t size, uint64_t eval_var_idx)
 {
     uint64_t stride = 1ULL << eval_var_idx;
-    polynomial_RNS_zero(g0);
-    polynomial_RNS_zero(g1);
+    arith_zero_in(ring, g0, arith_mul_domain(ring));
+    arith_zero_in(ring, g1, arith_mul_domain(ring));
     for (uint64_t i = 0; i < size / 2; i++)
     {
         uint64_t i_low = i & (stride - 1);
         uint64_t i_high = i >> eval_var_idx;
         uint64_t idx0 = i_low + (i_high << (eval_var_idx + 1));
-        sumcheck_round_accumulate(g0, g1, table[idx0], table[idx0 + stride]);
+        sumcheck_round_accumulate(ring, g0, g1, &table[idx0], &table[idx0 + stride]);
     }
 }
 
 // Degree-2 accumulation for one pair of each factor: g_out[0] += lo_f*lo_g,
 // g_out[1] += hi_f*hi_g, g_out[2] += (2*hi_f - lo_f)*(2*hi_g - lo_g) (the
 // evaluation at t = 2, extrapolated division-free).
-static void sumcheck_prod2_accumulate(RNS_Polynomial *g_out, RNS_Polynomial f_lo,
-                                      RNS_Polynomial f_hi, RNS_Polynomial g_lo, RNS_Polynomial g_hi,
-                                      RNS_Polynomial tmp1, RNS_Polynomial tmp2)
+static void sumcheck_prod2_accumulate(ArithRing ring, ArithElement *g_out, const ArithElement *f_lo,
+                                      const ArithElement *f_hi, const ArithElement *g_lo,
+                                      const ArithElement *g_hi, ArithElement *tmp1,
+                                      ArithElement *tmp2)
 {
-    polynomial_mul_addto_RNS_polynomial(g_out[0], f_lo, g_lo);
-    polynomial_mul_addto_RNS_polynomial(g_out[1], f_hi, g_hi);
-    polynomial_scale_RNS_polynomial(tmp1, f_hi, 2);
-    polynomial_sub_RNS_polynomial(tmp1, tmp1, f_lo);
-    polynomial_scale_RNS_polynomial(tmp2, g_hi, 2);
-    polynomial_sub_RNS_polynomial(tmp2, tmp2, g_lo);
-    polynomial_mul_addto_RNS_polynomial(g_out[2], tmp1, tmp2);
+    arith_mul_addto(ring, &g_out[0], f_lo, g_lo);
+    arith_mul_addto(ring, &g_out[1], f_hi, g_hi);
+    arith_scale_int(ring, tmp1, f_hi, 2);
+    arith_sub(ring, tmp1, tmp1, f_lo);
+    arith_scale_int(ring, tmp2, g_hi, 2);
+    arith_sub(ring, tmp2, tmp2, g_lo);
+    arith_mul_addto(ring, &g_out[2], tmp1, tmp2);
 }
 
-void sumcheck_prod2_round_pairs(RNS_Polynomial *g_out, RNS_Polynomial *tf, RNS_Polynomial *tg,
-                                uint64_t size)
+void sumcheck_prod2_round_pairs(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                                ArithElement *tg, uint64_t size)
 {
-    RNS_Base base = tf[0]->base;
-    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(base->N, tf[0]->rns_mask, base);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, tg[0]->rns_mask, base);
+    ArithElement tmp1, tmp2;
+    arith_new_like(ring, &tf[0], &tmp1);
+    arith_new_like(ring, &tg[0], &tmp2);
 
-    polynomial_RNS_zero(g_out[0]);
-    polynomial_RNS_zero(g_out[1]);
-    polynomial_RNS_zero(g_out[2]);
+    arith_zero_in(ring, &g_out[0], arith_mul_domain(ring));
+    arith_zero_in(ring, &g_out[1], arith_mul_domain(ring));
+    arith_zero_in(ring, &g_out[2], arith_mul_domain(ring));
     for (uint64_t i = 0; i < size / 2; i++)
     {
-        sumcheck_prod2_accumulate(g_out, tf[2 * i], tf[2 * i + 1], tg[2 * i], tg[2 * i + 1], tmp1,
-                                  tmp2);
+        sumcheck_prod2_accumulate(ring, g_out, &tf[2 * i], &tf[2 * i + 1], &tg[2 * i],
+                                  &tg[2 * i + 1], &tmp1, &tmp2);
     }
 
-    free_RNS_polynomial(tmp1);
-    free_RNS_polynomial(tmp2);
+    arith_free(ring, &tmp1);
+    arith_free(ring, &tmp2);
 }
 
-void sumcheck_prod2_round_halves(RNS_Polynomial *g_out, RNS_Polynomial *tf, RNS_Polynomial *tg,
-                                 uint64_t size)
+void sumcheck_prod2_round_halves(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                                 ArithElement *tg, uint64_t size)
 {
-    RNS_Base base = tf[0]->base;
-    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(base->N, tf[0]->rns_mask, base);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, tg[0]->rns_mask, base);
+    ArithElement tmp1, tmp2;
+    arith_new_like(ring, &tf[0], &tmp1);
+    arith_new_like(ring, &tg[0], &tmp2);
 
-    polynomial_RNS_zero(g_out[0]);
-    polynomial_RNS_zero(g_out[1]);
-    polynomial_RNS_zero(g_out[2]);
+    arith_zero_in(ring, &g_out[0], arith_mul_domain(ring));
+    arith_zero_in(ring, &g_out[1], arith_mul_domain(ring));
+    arith_zero_in(ring, &g_out[2], arith_mul_domain(ring));
     for (uint64_t i = 0; i < size / 2; i++)
     {
-        sumcheck_prod2_accumulate(g_out, tf[i], tf[i + size / 2], tg[i], tg[i + size / 2], tmp1,
-                                  tmp2);
+        sumcheck_prod2_accumulate(ring, g_out, &tf[i], &tf[i + size / 2], &tg[i], &tg[i + size / 2],
+                                  &tmp1, &tmp2);
     }
 
-    free_RNS_polynomial(tmp1);
-    free_RNS_polynomial(tmp2);
+    arith_free(ring, &tmp1);
+    arith_free(ring, &tmp2);
 }
 
-void sumcheck_prod2_round(RNS_Polynomial *g_out, RNS_Polynomial *tf, RNS_Polynomial *tg,
+void sumcheck_prod2_round(ArithRing ring, ArithElement *g_out, ArithElement *tf, ArithElement *tg,
                           uint64_t size, uint64_t eval_var_idx)
 {
     uint64_t stride = 1ULL << eval_var_idx;
-    RNS_Base base = tf[0]->base;
-    RNS_Polynomial tmp1 = polynomial_new_RNS_polynomial(base->N, tf[0]->rns_mask, base);
-    RNS_Polynomial tmp2 = polynomial_new_RNS_polynomial(base->N, tg[0]->rns_mask, base);
+    ArithElement tmp1, tmp2;
+    arith_new_like(ring, &tf[0], &tmp1);
+    arith_new_like(ring, &tg[0], &tmp2);
 
-    polynomial_RNS_zero(g_out[0]);
-    polynomial_RNS_zero(g_out[1]);
-    polynomial_RNS_zero(g_out[2]);
+    arith_zero_in(ring, &g_out[0], arith_mul_domain(ring));
+    arith_zero_in(ring, &g_out[1], arith_mul_domain(ring));
+    arith_zero_in(ring, &g_out[2], arith_mul_domain(ring));
     for (uint64_t i = 0; i < size / 2; i++)
     {
         uint64_t i_low = i & (stride - 1);
         uint64_t i_high = i >> eval_var_idx;
         uint64_t idx0 = i_low + (i_high << (eval_var_idx + 1));
-        sumcheck_prod2_accumulate(g_out, tf[idx0], tf[idx0 + stride], tg[idx0], tg[idx0 + stride],
-                                  tmp1, tmp2);
+        sumcheck_prod2_accumulate(ring, g_out, &tf[idx0], &tf[idx0 + stride], &tg[idx0],
+                                  &tg[idx0 + stride], &tmp1, &tmp2);
     }
 
-    free_RNS_polynomial(tmp1);
-    free_RNS_polynomial(tmp2);
+    arith_free(ring, &tmp1);
+    arith_free(ring, &tmp2);
 }
