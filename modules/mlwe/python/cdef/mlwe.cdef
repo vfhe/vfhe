@@ -24,15 +24,18 @@ typedef struct _LWE {
   RNS_Base base;
 } *LWE;
 
-typedef struct _RNS_MLWE {
-  RNS_Polynomial *a;
-  RNS_Polynomial b;
+// One sample type: the domain lives in the element, not in the type name.
+typedef struct _MLWE {
+  ArithElement *a;
+  ArithElement b;
   uint64_t r;
-} *RNS_MLWE;
+  ArithRing ring;
+} *MLWE;
+typedef MLWE RNS_MLWE;
 
 typedef struct _RNS_MLWE_Key {
-  IntPolynomial *s;
-  RNS_Polynomial *s_RNS;
+  ArithElement *s;
+  ArithRing ring;
   uint64_t N;
   uint64_t l;
   uint64_t r;
@@ -60,8 +63,8 @@ void *mlwe_create_copy_array(void *in, uint64_t size);
 void free_mlwe_RNS_sample(void *p);
 void free_mlwe_RNS_key(void *key);
 
-void mlwe_RNSc_sample(void *out, void *key, void *m);
-void mlwe_RNS_phase(void *out, void *in, void *key);
+void mlwe_RNSc_sample(void *out, void *key, ArithElement *m);
+void mlwe_RNS_phase(ArithElement *out, void *in, void *key);
 void mlwe_RNSc_to_RNS(void *out, void *in);
 void mlwe_RNS_to_RNSc(void *out, void *in);
 void mlwe_copy_RNS_sample(void *out, void *in);
@@ -70,22 +73,22 @@ void *mlwe_new_RNSc_sample_of_zero(void *key);
 void *mlwe_new_RNS_sample_of_zero(void *key);
 void *mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask, void *base);
 
-void mlwe_RNS_mul_addto_by_poly(void *out, void *in, void *poly);
-void mlwe_RNS_mul_subto_by_poly(void *out, void *in, void *poly);
-void mlwe_RNS_mul_by_poly(void *out, void *in, void *poly);
-void mlwe_scale_RNS_mlwe_RNS(void *c, uint64_t *scale);
+void mlwe_RNS_mul_addto_by_poly(void *out, void *in, ArithElement *poly);
+void mlwe_RNS_mul_subto_by_poly(void *out, void *in, ArithElement *poly);
+void mlwe_RNS_mul_by_poly(void *out, void *in, ArithElement *poly);
+void mlwe_scale_RNS_mlwe_RNS(void *c, uint64_t *per_component);
 void mlwe_add_RNSc_sample(void *out, void *in1, void *in2);
 void mlwe_sub_RNSc_sample(void *out, void *in1, void *in2);
 void mlwe_RNSc_mul_by_xai(void *out, void *in, uint64_t a);
 void mlwe_RNSc_mul_by_xai_minus1(void *out, void *in, uint64_t a);
-void mlwe_add_RNSc_polynomial(void *out, void *in1, void *in2);
-void mlwe_sub_RNSc_polynomial(void *out, void *in1, void *in2);
-void mlwe_RNS_add_polynomial(void *out, void *in1, void *in2);
-void mlwe_RNS_sub_polynomial(void *out, void *in1, void *in2);
-void mlwe_round_division_RNSc(void *out, uint64_t divide_mask);
+void mlwe_add_RNSc_polynomial(void *out, void *in1, ArithElement *in2);
+void mlwe_sub_RNSc_polynomial(void *out, void *in1, ArithElement *in2);
+void mlwe_RNS_add_polynomial(void *out, void *in1, ArithElement *in2);
+void mlwe_RNS_sub_polynomial(void *out, void *in1, ArithElement *in2);
+void mlwe_round_division(void *out, void *to);
 
 void *mlwe_extract_LWE(void *in, uint64_t idx);
-void *mlwe_new_RNS_ks_key(void **s, uint64_t count);
+void *mlwe_new_RNS_ks_key(void *s, uint64_t count);
 void free_mlwe_RNS_ks_key(void *key);
 void mlwe_full_packing_keyswitch(void *out, void *in, uint64_t size, void *ksk, uint64_t lvl);
 void mlwe_full_packing_keyswitch_scaled(void *vec, uint64_t ell, void *ksks, uint64_t lvl);
@@ -94,7 +97,7 @@ void mlwe_automorphism_RNSc_GHS(void *out, void *in, uint64_t gen, void *ksk, ui
 void mlwe_partial_trace(void *out, void *in, uint64_t *gens, void *ksks, uint64_t size, uint64_t lvl);
 void mlwe_trace(void *out, void *in, void *ksks, uint64_t lvl);
 uint64_t mlwe_extended_rank(uint64_t r);
-void mlwe_tensor_product(void *out, void *in1, void *in2);
+void mlwe_tensor_product(ArithElement *out, void *in1, void *in2);
 void mlwe_multiply(void *out, void *in1, void *in2, void *ksk);
 
 // --- mgsw ---

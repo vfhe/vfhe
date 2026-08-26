@@ -180,6 +180,10 @@ extern "C"
     void arith_free(ArithRing ring, ArithElement *element);
     ArithStatus arith_copy(ArithRing ring, ArithElement *out, const ArithElement *in);
     ArithStatus arith_zero(ArithRing ring, ArithElement *out);
+    // Zero, labelled as being in `domain`. A ring homomorphism sends 0 to 0,
+    // so the zero element is the same in both domains and may be claimed as
+    // either without converting.
+    ArithStatus arith_zero_in(ArithRing ring, ArithElement *out, ArithDomain domain);
 
     ArithStatus arith_to_mul(ArithRing ring, ArithElement *element);
     ArithStatus arith_to_canonical(ArithRing ring, ArithElement *element);
