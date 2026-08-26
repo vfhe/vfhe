@@ -27,6 +27,10 @@ typedef struct _RNS_Polynomial {
 // --- misc ---
 void *safe_aligned_malloc(uint64_t size);
 
+// --- generic arithmetic rings ---
+void *arith_rns_ring_get(uint64_t N, uint64_t rns_mask, void *base);
+void arith_rns_ring_cache_clear(void);
+
 // --- RNS base / base conversion ---
 void *new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t count);
 void rns_base_extend_with_primes(void *base, uint64_t *new_primes, uint64_t count);
