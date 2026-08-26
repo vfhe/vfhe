@@ -77,6 +77,14 @@ extern "C"
         ArithDomain domain;
     } ArithElement;
 
+    // A ring element used as a multiplier, in the implementation's own form:
+    // one residue per prime for RNS, a single value where the ring is not a
+    // product. Built and released through arith_scalar_*, never by hand.
+    typedef struct
+    {
+        void *handle;
+    } ArithScalar;
+
     // One table per (implementation, backend), built once and shared by every
     // ring of that kind. A slot left NULL answers ARITH_UNIMPLEMENTED.
     typedef struct
@@ -107,6 +115,43 @@ extern "C"
                                  const ArithElement *b);
         ArithStatus (*scale_int)(ArithRing ring, ArithElement *out, const ArithElement *a,
                                  uint64_t scale);
+        ArithStatus (*mul_subto)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                 const ArithElement *b);
+        ArithStatus (*scale_addto)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                   uint64_t scale);
+        ArithStatus (*scale_by)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                ArithScalar scale);
+
+        // quotient-polynomial-ring group (ARITH_CAP_QUOTIENT_POLY_RING)
+        ArithStatus (*permute)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                               uint64_t gen);
+        // out = a * X^power; `minus_one` subtracts a as well, which is the
+        // fused form the gadget decomposition wants.
+        ArithStatus (*mul_by_monomial)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                       uint64_t power, int minus_one);
+
+        // sampling group (ARITH_CAP_SAMPLING)
+        ArithStatus (*sample_uniform)(ArithRing ring, ArithElement *out);
+        ArithStatus (*sample_gaussian)(ArithRing ring, ArithElement *out, double sigma);
+        // Load `count` integers into an element -- the implementation-neutral
+        // way in, since an integer array means the same thing to every
+        // representation. The resulting domain is whichever one the
+        // implementation loads into (RNS fuses the forward transform, so it
+        // lands in the mul domain); it is recorded in the element, and a
+        // caller wanting a particular domain converts, which costs nothing
+        // when it is already there.
+        ArithStatus (*from_int_array)(ArithRing ring, ArithElement *out, const uint64_t *values,
+                                      uint64_t count);
+
+        // tower group (ARITH_CAP_TOWER); `to` is the destination ring, never a
+        // set of primes: which primes leave is the implementation's business.
+        ArithStatus (*round_division)(ArithRing ring, ArithElement *element, ArithRing to);
+        ArithStatus (*mod_reduce_lifted)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                         ArithRing from);
+
+        // scalars
+        ArithStatus (*scalar_new)(ArithRing ring, const uint64_t *per_component, ArithScalar *out);
+        void (*scalar_free)(ArithRing ring, ArithScalar *scalar);
     } ArithMethods;
 
     // A ring instance: its method table, and the implementation's own
@@ -149,6 +194,29 @@ extern "C"
                                 const ArithElement *b);
     ArithStatus arith_scale_int(ArithRing ring, ArithElement *out, const ArithElement *a,
                                 uint64_t scale);
+    ArithStatus arith_mul_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                const ArithElement *b);
+    ArithStatus arith_scale_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  uint64_t scale);
+    ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
+                               ArithScalar scale);
+
+    ArithStatus arith_permute(ArithRing ring, ArithElement *out, const ArithElement *a,
+                              uint64_t gen);
+    ArithStatus arith_mul_by_monomial(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                      uint64_t power, int minus_one);
+
+    ArithStatus arith_sample_uniform(ArithRing ring, ArithElement *out);
+    ArithStatus arith_sample_gaussian(ArithRing ring, ArithElement *out, double sigma);
+    ArithStatus arith_from_int_array(ArithRing ring, ArithElement *out, const uint64_t *values,
+                                     uint64_t count);
+
+    ArithStatus arith_round_division(ArithRing ring, ArithElement *element, ArithRing to);
+    ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                        ArithRing from);
+
+    ArithStatus arith_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out);
+    void arith_scalar_free(ArithRing ring, ArithScalar *scalar);
 
     // --- the RNS implementation ---------------------------------------------
 
@@ -156,6 +224,11 @@ extern "C"
     // ring borrows the base, which outlives every ring built on it, and must
     // be released with arith_ring_free.
     ArithRing arith_rns_ring_new(uint64_t N, uint64_t rns_mask, RNS_Base base);
+    // The shared ring for these parameters, created on first ask and kept for
+    // the life of the process. Prefer this to arith_rns_ring_new wherever the
+    // ring outlives the call, so no caller has to own it.
+    ArithRing arith_rns_ring_get(uint64_t N, uint64_t rns_mask, RNS_Base base);
+    void arith_rns_ring_cache_clear(void);
     void arith_ring_free(ArithRing ring);
     // The RNS_Polynomial behind an element of an RNS ring, for the
     // per-implementation code that needs the representation itself.
