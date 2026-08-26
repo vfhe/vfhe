@@ -19,11 +19,6 @@ typedef struct
 
 static RNSParams *params_of(ArithRing ring) { return (RNSParams *)ring->params; }
 
-RNS_Polynomial arith_rns_polynomial(const ArithElement *element)
-{
-    return (RNS_Polynomial)element->handle;
-}
-
 static ArithStatus rns_new(ArithRing ring, ArithElement *out)
 {
     RNSParams *params = params_of(ring);

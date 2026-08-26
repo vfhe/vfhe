@@ -14,33 +14,38 @@
 static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
                                   int subtract)
 {
-    ArithRing key_ring = ksk[0]->ring;
-    const uint64_t mask = arith_rns_polynomial(poly)->rns_mask;
+    // This file knows the representation, so it calls the RNS entry points
+    // rather than routing through the dispatcher: nothing here would gain from
+    // a ring it cannot have. Only the per-ciphertext multiply below stays
+    // generic -- that operation belongs to mlwe.c, over r+1 whole elements.
+    RNS_Polynomial source = arith_rns_polynomial(poly);
+    RNS_Polynomial key = arith_rns_polynomial(&ksk[0]->b);
+    const uint64_t mask = source->rns_mask;
 
-    ArithElement tmp;
-    arith_new(key_ring, &tmp);
+    RNSc_Polynomial tmp =
+        (RNSc_Polynomial)polynomial_new_RNS_polynomial(key->base->N, key->rns_mask, key->base);
+    ArithElement factor = {tmp, ARITH_DOMAIN_MUL};
+
     uint64_t ksk_idx = 0;
-    for (size_t j = 0; j < arith_rns_polynomial(&out->b)->base->l; j++)
+    for (size_t j = 0; j < key->base->l; j++)
     {
         if (mask & (1ULL << j))
         {
             // The j-th residue lifted to the key's ring, then transformed so
             // the multiply below is pointwise.
-            polynomial_RNSc_mod_reduce_lifted((RNSc_Polynomial)arith_rns_polynomial(&tmp),
-                                              (RNSc_Polynomial)arith_rns_polynomial(poly), j);
-            tmp.domain = ARITH_DOMAIN_CANONICAL;
-            arith_to_mul(key_ring, &tmp);
+            polynomial_RNSc_mod_reduce_lifted(tmp, (RNSc_Polynomial)source, j);
+            polynomial_RNSc_to_RNS((RNS_Polynomial)tmp, tmp);
             if (subtract)
             {
-                mlwe_RNS_mul_subto_by_poly(out, ksk[ksk_idx++], &tmp);
+                mlwe_RNS_mul_subto_by_poly(out, ksk[ksk_idx++], &factor);
             }
             else
             {
-                mlwe_RNS_mul_addto_by_poly(out, ksk[ksk_idx++], &tmp);
+                mlwe_RNS_mul_addto_by_poly(out, ksk[ksk_idx++], &factor);
             }
         }
     }
-    arith_free(key_ring, &tmp);
+    free_RNS_polynomial(tmp);
 }
 
 void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly)
