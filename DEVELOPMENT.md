@@ -14,10 +14,12 @@ modules/<mod>/                     one folder per module
   python/src/vfhe/<mod>/           Python package source (physical namespace layout)
     __init__.py                    thin: re-exports the module's public API
     <impl>.py                      implementation; talks to C via `from vfhe.misc.libvfhe import ffi, lib`
+    impl/<name>/                   one subpackage per arithmetic implementation, where a module has several (arith)
   python/cdef/<mod>.cdef           Python-facing ABI: hand-written cffi decls (opaque handles)
   python/test/                     pytest suite (public-API characterization tests)
   c/include/                       public C headers (umbrella <mod>.h)
-  c/src/                           pure C kernels
+  c/src/                           pure C kernels; grouped in subdirectories where a module has many (arith)
+  c/src/<file>_rns.c               the part of <file> that needs one representation; <file>.c stays generic
   c/test/                          C unit tests (plain assert/main() or Unity)
   c/fuzz/                          optional libFuzzer harnesses (fuzzed in CI)
   proto/                           optional protobuf schema for this module
@@ -157,8 +159,11 @@ The test matrix has two orthogonal axes, and every entry point names both:
 **Test sources are engine-invariant.** One C API, one set of test files, N
 implementations behind the ISA macros: the same C tests and the same pytest
 suite run against every engine, so the engine is a *build parameter*, never a
-test parameter. A test that genuinely applies to a single engine asks which
-one is loaded (`vfhe_engine_active()` in C, `active_engine()` in Python)
+test parameter. (An arithmetic *implementation* or *backend* is the opposite:
+chosen per object at runtime, so it is a legitimate `parametrize` argument —
+see `modules/arith/python/test/test_spec.py`.) A test that genuinely applies
+to a single engine asks which one is loaded
+(`vfhe_engine_active()` in C, `active_engine()` in Python)
 rather than living in a separate suite. Comprehensive testing means
 filling every suite x engine cell that exists for the platform — which is
 exactly what CI's job list is.
