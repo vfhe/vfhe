@@ -63,6 +63,18 @@ extern "C"
 
     typedef struct _ArithRing *ArithRing;
 
+    // Which compiled-in implementation a ring is, as a tag the dispatcher can
+    // switch on. The switch arms are direct calls, which LTO inlines across
+    // translation units (the method table's function pointers it cannot);
+    // DYNAMIC -- deliberately the zero value -- means "not compiled in here":
+    // such a ring dispatches through its method table, which is how a backend
+    // loaded at runtime plugs in.
+    typedef enum
+    {
+        ARITH_IMPL_DYNAMIC = 0,
+        ARITH_IMPL_RNS = 1,
+    } ArithImpl;
+
     // An element handle. The implementation owns the storage behind `handle`;
     // `domain` is the caller-visible half, because generic code must know
     // which domain an element is in to route an operation.
@@ -154,13 +166,16 @@ extern "C"
         void (*scalar_free)(ArithRing ring, ArithScalar *scalar);
     } ArithMethods;
 
-    // A ring instance: its method table, and the implementation's own
-    // parameters behind `params`.
+    // A ring instance: its implementation tag, its method table, and the
+    // implementation's own parameters behind `params`. The tag is the hot
+    // dispatch path; the table answers introspection (names, capabilities)
+    // and serves rings the switch does not know.
     struct _ArithRing
     {
         const ArithMethods *vt;
         void *params;
         uint64_t N;
+        ArithImpl impl;
     };
 
     // --- the generic interface modules call ---------------------------------
