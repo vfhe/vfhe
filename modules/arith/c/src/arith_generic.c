@@ -2,12 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <arith_generic.h>
 
+#include "arith_dispatch.h"
+
 // The generic half of the interface: capability answers, and the dispatch
-// that routes an operation to the ring's method table after checking the
+// that routes an operation to the ring's implementation after checking the
 // domain rules every implementation shares.
 //
-// One indirect call per operation, each of which is at least O(N) of work in
-// the implementation. Nothing here runs per coefficient.
+// Dispatch is a switch on the ring's tag with the method table as its
+// default. The switch arms are direct calls, which LTO inlines across
+// translation units at this build's -O3 -- a function pointer it cannot,
+// once a second table exists -- so compiled-in implementations cost nothing
+// at the boundary, and a ring the switch does not know (a backend loaded at
+// runtime) still works through its table. Either way it is one dispatch per
+// whole-element operation; nothing here runs per coefficient.
 
 const char *arith_implementation(ArithRing ring) { return ring->vt->implementation; }
 
@@ -29,48 +36,60 @@ ArithDomain arith_mul_domain(ArithRing ring)
     return ARITH_DOMAIN_MUL;
 }
 
-// A slot the implementation left out computes nothing; say so rather than
-// dereferencing NULL, so a caller that checks gets a usable answer and one
-// that does not gets a crash at the call rather than corrupt data later.
-#define ARITH_REQUIRE_SLOT(ring, slot)                                                             \
-    do                                                                                             \
-    {                                                                                              \
-        if ((ring)->vt->slot == NULL)                                                              \
+// Route one operation: the tagged implementations by direct call, everything
+// else through the method table, where a NULL slot answers ARITH_UNIMPLEMENTED
+// rather than being dereferenced. A statement expression (gnu11), so wrappers
+// that stamp the result's domain afterwards can use the status.
+#define ARITH_DISPATCH(ring, slot, ...)                                                            \
+    __extension__({                                                                                \
+        ArithStatus dispatched_;                                                                   \
+        switch ((ring)->impl)                                                                      \
         {                                                                                          \
-            return ARITH_UNIMPLEMENTED;                                                            \
+        case ARITH_IMPL_RNS:                                                                       \
+            dispatched_ = arith_rns_##slot(__VA_ARGS__);                                           \
+            break;                                                                                 \
+        default:                                                                                   \
+            dispatched_ =                                                                          \
+                (ring)->vt->slot == NULL ? ARITH_UNIMPLEMENTED : (ring)->vt->slot(__VA_ARGS__);    \
+            break;                                                                                 \
         }                                                                                          \
-    } while (0)
+        dispatched_;                                                                               \
+    })
 
 ArithStatus arith_new(ArithRing ring, ArithElement *out)
 {
-    ARITH_REQUIRE_SLOT(ring, new_element);
-    return ring->vt->new_element(ring, out);
+    return ARITH_DISPATCH(ring, new_element, ring, out);
 }
 
 ArithStatus arith_new_like(ArithRing ring, const ArithElement *model, ArithElement *out)
 {
-    ARITH_REQUIRE_SLOT(ring, new_like);
-    return ring->vt->new_like(ring, model, out);
+    return ARITH_DISPATCH(ring, new_like, ring, model, out);
 }
 
 void arith_free(ArithRing ring, ArithElement *element)
 {
-    if (ring->vt->free_element != NULL)
+    switch (ring->impl)
     {
-        ring->vt->free_element(ring, element);
+    case ARITH_IMPL_RNS:
+        arith_rns_free_element(ring, element);
+        break;
+    default:
+        if (ring->vt->free_element != NULL)
+        {
+            ring->vt->free_element(ring, element);
+        }
+        break;
     }
 }
 
 ArithStatus arith_copy(ArithRing ring, ArithElement *out, const ArithElement *in)
 {
-    ARITH_REQUIRE_SLOT(ring, copy);
-    return ring->vt->copy(ring, out, in);
+    return ARITH_DISPATCH(ring, copy, ring, out, in);
 }
 
 ArithStatus arith_zero(ArithRing ring, ArithElement *out)
 {
-    ARITH_REQUIRE_SLOT(ring, zero);
-    return ring->vt->zero(ring, out);
+    return ARITH_DISPATCH(ring, zero, ring, out);
 }
 
 ArithStatus arith_zero_in(ArithRing ring, ArithElement *out, ArithDomain domain)
@@ -89,8 +108,7 @@ ArithStatus arith_to_mul(ArithRing ring, ArithElement *element)
     {
         return ARITH_OK;
     }
-    ARITH_REQUIRE_SLOT(ring, to_mul);
-    return ring->vt->to_mul(ring, element);
+    return ARITH_DISPATCH(ring, to_mul, ring, element);
 }
 
 ArithStatus arith_to_canonical(ArithRing ring, ArithElement *element)
@@ -99,8 +117,7 @@ ArithStatus arith_to_canonical(ArithRing ring, ArithElement *element)
     {
         return ARITH_OK;
     }
-    ARITH_REQUIRE_SLOT(ring, to_canonical);
-    return ring->vt->to_canonical(ring, element);
+    return ARITH_DISPATCH(ring, to_canonical, ring, element);
 }
 
 // Addition and subtraction are defined in either domain, but only between
@@ -123,8 +140,7 @@ ArithStatus arith_add(ArithRing ring, ArithElement *out, const ArithElement *a,
     {
         return status;
     }
-    ARITH_REQUIRE_SLOT(ring, add);
-    status = ring->vt->add(ring, out, a, b);
+    status = ARITH_DISPATCH(ring, add, ring, out, a, b);
     out->domain = a->domain;
     return status;
 }
@@ -137,8 +153,7 @@ ArithStatus arith_sub(ArithRing ring, ArithElement *out, const ArithElement *a,
     {
         return status;
     }
-    ARITH_REQUIRE_SLOT(ring, sub);
-    status = ring->vt->sub(ring, out, a, b);
+    status = ARITH_DISPATCH(ring, sub, ring, out, a, b);
     out->domain = a->domain;
     return status;
 }
@@ -164,8 +179,7 @@ ArithStatus arith_mul(ArithRing ring, ArithElement *out, const ArithElement *a,
     {
         return status;
     }
-    ARITH_REQUIRE_SLOT(ring, mul);
-    status = ring->vt->mul(ring, out, a, b);
+    status = ARITH_DISPATCH(ring, mul, ring, out, a, b);
     out->domain = arith_mul_domain(ring);
     return status;
 }
@@ -182,8 +196,7 @@ ArithStatus arith_mul_addto(ArithRing ring, ArithElement *out, const ArithElemen
     {
         return ARITH_BAD_DOMAIN;
     }
-    ARITH_REQUIRE_SLOT(ring, mul_addto);
-    return ring->vt->mul_addto(ring, out, a, b);
+    return ARITH_DISPATCH(ring, mul_addto, ring, out, a, b);
 }
 
 ArithStatus arith_scale_int(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -193,8 +206,7 @@ ArithStatus arith_scale_int(ArithRing ring, ArithElement *out, const ArithElemen
     {
         return ARITH_BAD_DOMAIN;
     }
-    ARITH_REQUIRE_SLOT(ring, scale_int);
-    ArithStatus status = ring->vt->scale_int(ring, out, a, scale);
+    ArithStatus status = ARITH_DISPATCH(ring, scale_int, ring, out, a, scale);
     out->domain = a->domain;
     return status;
 }
@@ -213,8 +225,7 @@ ArithStatus arith_mul_subto(ArithRing ring, ArithElement *out, const ArithElemen
     {
         return ARITH_BAD_DOMAIN;
     }
-    ARITH_REQUIRE_SLOT(ring, mul_subto);
-    return ring->vt->mul_subto(ring, out, a, b);
+    return ARITH_DISPATCH(ring, mul_subto, ring, out, a, b);
 }
 
 ArithStatus arith_scale_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -225,8 +236,7 @@ ArithStatus arith_scale_addto(ArithRing ring, ArithElement *out, const ArithElem
     {
         return status;
     }
-    ARITH_REQUIRE_SLOT(ring, scale_addto);
-    return ring->vt->scale_addto(ring, out, a, scale);
+    return ARITH_DISPATCH(ring, scale_addto, ring, out, a, scale);
 }
 
 ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -236,8 +246,7 @@ ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement
     {
         return ARITH_BAD_DOMAIN;
     }
-    ARITH_REQUIRE_SLOT(ring, scale_by);
-    ArithStatus status = ring->vt->scale_by(ring, out, a, scale);
+    ArithStatus status = ARITH_DISPATCH(ring, scale_by, ring, out, a, scale);
     out->domain = a->domain;
     return status;
 }
@@ -251,8 +260,7 @@ ArithStatus arith_permute(ArithRing ring, ArithElement *out, const ArithElement 
     {
         return ARITH_BAD_DOMAIN;
     }
-    ARITH_REQUIRE_SLOT(ring, permute);
-    ArithStatus status = ring->vt->permute(ring, out, a, gen);
+    ArithStatus status = ARITH_DISPATCH(ring, permute, ring, out, a, gen);
     out->domain = ARITH_DOMAIN_CANONICAL;
     return status;
 }
@@ -264,24 +272,21 @@ ArithStatus arith_mul_by_monomial(ArithRing ring, ArithElement *out, const Arith
     {
         return ARITH_BAD_DOMAIN;
     }
-    ARITH_REQUIRE_SLOT(ring, mul_by_monomial);
-    ArithStatus status = ring->vt->mul_by_monomial(ring, out, a, power, minus_one);
+    ArithStatus status = ARITH_DISPATCH(ring, mul_by_monomial, ring, out, a, power, minus_one);
     out->domain = ARITH_DOMAIN_CANONICAL;
     return status;
 }
 
 ArithStatus arith_sample_uniform(ArithRing ring, ArithElement *out)
 {
-    ARITH_REQUIRE_SLOT(ring, sample_uniform);
-    ArithStatus status = ring->vt->sample_uniform(ring, out);
+    ArithStatus status = ARITH_DISPATCH(ring, sample_uniform, ring, out);
     out->domain = ARITH_DOMAIN_CANONICAL;
     return status;
 }
 
 ArithStatus arith_sample_gaussian(ArithRing ring, ArithElement *out, double sigma)
 {
-    ARITH_REQUIRE_SLOT(ring, sample_gaussian);
-    ArithStatus status = ring->vt->sample_gaussian(ring, out, sigma);
+    ArithStatus status = ARITH_DISPATCH(ring, sample_gaussian, ring, out, sigma);
     out->domain = ARITH_DOMAIN_CANONICAL;
     return status;
 }
@@ -289,10 +294,9 @@ ArithStatus arith_sample_gaussian(ArithRing ring, ArithElement *out, double sigm
 ArithStatus arith_from_int_array(ArithRing ring, ArithElement *out, const uint64_t *values,
                                  uint64_t count)
 {
-    ARITH_REQUIRE_SLOT(ring, from_int_array);
     // The implementation reports the domain it loaded into; overriding it here
     // would label the element with a representation it is not in.
-    return ring->vt->from_int_array(ring, out, values, count);
+    return ARITH_DISPATCH(ring, from_int_array, ring, out, values, count);
 }
 
 // Tower moves are defined on the canonical form: they divide and round the
@@ -303,8 +307,7 @@ ArithStatus arith_round_division(ArithRing ring, ArithElement *element, ArithRin
     {
         return ARITH_BAD_DOMAIN;
     }
-    ARITH_REQUIRE_SLOT(ring, round_division);
-    return ring->vt->round_division(ring, element, to);
+    return ARITH_DISPATCH(ring, round_division, ring, element, to);
 }
 
 ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -314,22 +317,28 @@ ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const Ari
     {
         return ARITH_BAD_DOMAIN;
     }
-    ARITH_REQUIRE_SLOT(ring, mod_reduce_lifted);
-    ArithStatus status = ring->vt->mod_reduce_lifted(ring, out, a, from);
+    ArithStatus status = ARITH_DISPATCH(ring, mod_reduce_lifted, ring, out, a, from);
     out->domain = ARITH_DOMAIN_CANONICAL;
     return status;
 }
 
 ArithStatus arith_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out)
 {
-    ARITH_REQUIRE_SLOT(ring, scalar_new);
-    return ring->vt->scalar_new(ring, per_component, out);
+    return ARITH_DISPATCH(ring, scalar_new, ring, per_component, out);
 }
 
 void arith_scalar_free(ArithRing ring, ArithScalar *scalar)
 {
-    if (ring->vt->scalar_free != NULL)
+    switch (ring->impl)
     {
-        ring->vt->scalar_free(ring, scalar);
+    case ARITH_IMPL_RNS:
+        arith_rns_scalar_free(ring, scalar);
+        break;
+    default:
+        if (ring->vt->scalar_free != NULL)
+        {
+            ring->vt->scalar_free(ring, scalar);
+        }
+        break;
     }
 }

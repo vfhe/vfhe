@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include <arith_generic.h>
+
+#include "arith_dispatch.h"
 #include <misc.h>
 
 // RNS as an implementation of the generic arithmetic interface.
@@ -19,7 +21,7 @@ typedef struct
 
 static RNSParams *params_of(ArithRing ring) { return (RNSParams *)ring->params; }
 
-static ArithStatus rns_new(ArithRing ring, ArithElement *out)
+ArithStatus arith_rns_new_element(ArithRing ring, ArithElement *out)
 {
     RNSParams *params = params_of(ring);
     out->handle = polynomial_new_RNS_polynomial(ring->N, params->rns_mask, params->base);
@@ -30,7 +32,7 @@ static ArithStatus rns_new(ArithRing ring, ArithElement *out)
 // The model's own mask, not the ring's: an element may hold a subset of the
 // ring's primes, and a temporary is only useful if it matches the operand it
 // will be combined with.
-static ArithStatus rns_new_like(ArithRing ring, const ArithElement *model, ArithElement *out)
+ArithStatus arith_rns_new_like(ArithRing ring, const ArithElement *model, ArithElement *out)
 {
     RNS_Polynomial source = arith_rns_polynomial(model);
     out->handle = polynomial_new_RNS_polynomial(source->base->N, source->rns_mask, source->base);
@@ -39,7 +41,7 @@ static ArithStatus rns_new_like(ArithRing ring, const ArithElement *model, Arith
     return out->handle == NULL ? ARITH_UNIMPLEMENTED : ARITH_OK;
 }
 
-static void rns_free(ArithRing ring, ArithElement *element)
+void arith_rns_free_element(ArithRing ring, ArithElement *element)
 {
     (void)ring;
     if (element->handle != NULL)
@@ -50,7 +52,7 @@ static void rns_free(ArithRing ring, ArithElement *element)
     }
 }
 
-static ArithStatus rns_copy(ArithRing ring, ArithElement *out, const ArithElement *in)
+ArithStatus arith_rns_copy(ArithRing ring, ArithElement *out, const ArithElement *in)
 {
     (void)ring;
     polynomial_copy_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(in));
@@ -58,7 +60,7 @@ static ArithStatus rns_copy(ArithRing ring, ArithElement *out, const ArithElemen
     return ARITH_OK;
 }
 
-static ArithStatus rns_zero(ArithRing ring, ArithElement *out)
+ArithStatus arith_rns_zero(ArithRing ring, ArithElement *out)
 {
     (void)ring;
     polynomial_RNS_zero(arith_rns_polynomial(out));
@@ -71,7 +73,7 @@ static ArithStatus rns_zero(ArithRing ring, ArithElement *out)
 // Both conversions are in place: for RNS the two domains share one buffer.
 // That is an RNS property, not a promise of the interface -- see the note on
 // ArithElement in arith_generic.h.
-static ArithStatus rns_to_mul(ArithRing ring, ArithElement *element)
+ArithStatus arith_rns_to_mul(ArithRing ring, ArithElement *element)
 {
     (void)ring;
     RNS_Polynomial p = arith_rns_polynomial(element);
@@ -80,7 +82,7 @@ static ArithStatus rns_to_mul(ArithRing ring, ArithElement *element)
     return ARITH_OK;
 }
 
-static ArithStatus rns_to_canonical(ArithRing ring, ArithElement *element)
+ArithStatus arith_rns_to_canonical(ArithRing ring, ArithElement *element)
 {
     (void)ring;
     RNS_Polynomial p = arith_rns_polynomial(element);
@@ -94,8 +96,8 @@ static ArithStatus rns_to_canonical(ArithRing ring, ArithElement *element)
 // entry points are casts onto these. An implementation whose mul domain has a
 // different element type -- complex doubles under an FFT -- needs two kernels
 // here; RNS does not.
-static ArithStatus rns_add(ArithRing ring, ArithElement *out, const ArithElement *a,
-                           const ArithElement *b)
+ArithStatus arith_rns_add(ArithRing ring, ArithElement *out, const ArithElement *a,
+                          const ArithElement *b)
 {
     (void)ring;
     polynomial_add_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
@@ -103,8 +105,8 @@ static ArithStatus rns_add(ArithRing ring, ArithElement *out, const ArithElement
     return ARITH_OK;
 }
 
-static ArithStatus rns_sub(ArithRing ring, ArithElement *out, const ArithElement *a,
-                           const ArithElement *b)
+ArithStatus arith_rns_sub(ArithRing ring, ArithElement *out, const ArithElement *a,
+                          const ArithElement *b)
 {
     (void)ring;
     polynomial_sub_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
@@ -112,8 +114,8 @@ static ArithStatus rns_sub(ArithRing ring, ArithElement *out, const ArithElement
     return ARITH_OK;
 }
 
-static ArithStatus rns_mul(ArithRing ring, ArithElement *out, const ArithElement *a,
-                           const ArithElement *b)
+ArithStatus arith_rns_mul(ArithRing ring, ArithElement *out, const ArithElement *a,
+                          const ArithElement *b)
 {
     (void)ring;
     polynomial_mul_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
@@ -121,8 +123,8 @@ static ArithStatus rns_mul(ArithRing ring, ArithElement *out, const ArithElement
     return ARITH_OK;
 }
 
-static ArithStatus rns_mul_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
-                                 const ArithElement *b)
+ArithStatus arith_rns_mul_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                const ArithElement *b)
 {
     (void)ring;
     polynomial_mul_addto_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
@@ -130,8 +132,8 @@ static ArithStatus rns_mul_addto(ArithRing ring, ArithElement *out, const ArithE
     return ARITH_OK;
 }
 
-static ArithStatus rns_scale_int(ArithRing ring, ArithElement *out, const ArithElement *a,
-                                 uint64_t scale)
+ArithStatus arith_rns_scale_int(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                uint64_t scale)
 {
     (void)ring;
     // Scaling by an integer is linear too, so one kernel serves both domains.
@@ -139,8 +141,8 @@ static ArithStatus rns_scale_int(ArithRing ring, ArithElement *out, const ArithE
     return ARITH_OK;
 }
 
-static ArithStatus rns_mul_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
-                                 const ArithElement *b)
+ArithStatus arith_rns_mul_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                const ArithElement *b)
 {
     (void)ring;
     polynomial_mul_subto_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
@@ -148,8 +150,8 @@ static ArithStatus rns_mul_subto(ArithRing ring, ArithElement *out, const ArithE
     return ARITH_OK;
 }
 
-static ArithStatus rns_scale_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
-                                   uint64_t scale)
+ArithStatus arith_rns_scale_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  uint64_t scale)
 {
     (void)ring;
     polynomial_scale_addto_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
@@ -157,8 +159,8 @@ static ArithStatus rns_scale_addto(ArithRing ring, ArithElement *out, const Arit
     return ARITH_OK;
 }
 
-static ArithStatus rns_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
-                                ArithScalar scale)
+ArithStatus arith_rns_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
+                               ArithScalar scale)
 {
     (void)ring;
     polynomial_scale_RNS_polynomial_RNS(arith_rns_polynomial(out), arith_rns_polynomial(a),
@@ -166,8 +168,8 @@ static ArithStatus rns_scale_by(ArithRing ring, ArithElement *out, const ArithEl
     return ARITH_OK;
 }
 
-static ArithStatus rns_permute(ArithRing ring, ArithElement *out, const ArithElement *a,
-                               uint64_t gen)
+ArithStatus arith_rns_permute(ArithRing ring, ArithElement *out, const ArithElement *a,
+                              uint64_t gen)
 {
     (void)ring;
     polynomial_RNSc_permute((RNSc_Polynomial)arith_rns_polynomial(out),
@@ -175,8 +177,8 @@ static ArithStatus rns_permute(ArithRing ring, ArithElement *out, const ArithEle
     return ARITH_OK;
 }
 
-static ArithStatus rns_mul_by_monomial(ArithRing ring, ArithElement *out, const ArithElement *a,
-                                       uint64_t power, int minus_one)
+ArithStatus arith_rns_mul_by_monomial(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                      uint64_t power, int minus_one)
 {
     (void)ring;
     RNSc_Polynomial z = (RNSc_Polynomial)arith_rns_polynomial(out);
@@ -192,14 +194,14 @@ static ArithStatus rns_mul_by_monomial(ArithRing ring, ArithElement *out, const 
     return ARITH_OK;
 }
 
-static ArithStatus rns_sample_uniform(ArithRing ring, ArithElement *out)
+ArithStatus arith_rns_sample_uniform(ArithRing ring, ArithElement *out)
 {
     (void)ring;
     polynomial_gen_random_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(out));
     return ARITH_OK;
 }
 
-static ArithStatus rns_sample_gaussian(ArithRing ring, ArithElement *out, double sigma)
+ArithStatus arith_rns_sample_gaussian(ArithRing ring, ArithElement *out, double sigma)
 {
     (void)ring;
     polynomial_gen_gaussian_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(out), sigma);
@@ -208,8 +210,8 @@ static ArithStatus rns_sample_gaussian(ArithRing ring, ArithElement *out, double
 
 // The integer polynomial is the implementation-neutral carrier; RNS reduces it
 // per prime on the way in.
-static ArithStatus rns_from_int_array(ArithRing ring, ArithElement *out, const uint64_t *values,
-                                      uint64_t count)
+ArithStatus arith_rns_from_int_array(ArithRing ring, ArithElement *out, const uint64_t *values,
+                                     uint64_t count)
 {
     IntPolynomial tmp = polynomial_new_int_polynomial(ring->N);
     memcpy(tmp->coeffs, values, count * sizeof(uint64_t));
@@ -223,7 +225,7 @@ static ArithStatus rns_from_int_array(ArithRing ring, ArithElement *out, const u
 
 // Which primes leave is derived from the two rings, not asked of the caller:
 // the destination's mask says what stays.
-static ArithStatus rns_round_division(ArithRing ring, ArithElement *element, ArithRing to)
+ArithStatus arith_rns_round_division(ArithRing ring, ArithElement *element, ArithRing to)
 {
     const uint64_t divide_mask = params_of(ring)->rns_mask & ~params_of(to)->rns_mask;
     polynomial_round_division_RNSc_wo_free((RNSc_Polynomial)arith_rns_polynomial(element),
@@ -233,8 +235,8 @@ static ArithStatus rns_round_division(ArithRing ring, ArithElement *element, Ari
 
 // `from` is a single-prime ring: its residue is lifted to every prime of this
 // one. rns_mask_get_active_index recovers which prime that is.
-static ArithStatus rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
-                                         ArithRing from)
+ArithStatus arith_rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                        ArithRing from)
 {
     (void)ring;
     const int idx = rns_mask_get_active_index(params_of(from)->rns_mask, 0);
@@ -249,7 +251,7 @@ static ArithStatus rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, cons
 
 // One residue per prime the ring holds, in the base's row order, which is what
 // the per-prime kernels index by.
-static ArithStatus rns_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out)
+ArithStatus arith_rns_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out)
 {
     RNSParams *params = params_of(ring);
     const uint64_t rows = rns_mask_to_l(params->rns_mask);
@@ -259,7 +261,7 @@ static ArithStatus rns_scalar_new(ArithRing ring, const uint64_t *per_component,
     return ARITH_OK;
 }
 
-static void rns_scalar_free(ArithRing ring, ArithScalar *scalar)
+void arith_rns_scalar_free(ArithRing ring, ArithScalar *scalar)
 {
     (void)ring;
     free(scalar->handle);
@@ -271,30 +273,30 @@ static const ArithMethods RNS_NTT_METHODS = {
     .backend = "ntt",
     .capabilities = ARITH_CAP_CORE | ARITH_CAP_QUOTIENT_POLY_RING | ARITH_CAP_TOWER |
                     ARITH_CAP_SAMPLING | ARITH_CAP_EXACT,
-    .new_element = rns_new,
-    .new_like = rns_new_like,
-    .free_element = rns_free,
-    .copy = rns_copy,
-    .zero = rns_zero,
-    .to_mul = rns_to_mul,
-    .to_canonical = rns_to_canonical,
-    .add = rns_add,
-    .sub = rns_sub,
-    .mul = rns_mul,
-    .mul_addto = rns_mul_addto,
-    .scale_int = rns_scale_int,
-    .mul_subto = rns_mul_subto,
-    .scale_addto = rns_scale_addto,
-    .scale_by = rns_scale_by,
-    .permute = rns_permute,
-    .mul_by_monomial = rns_mul_by_monomial,
-    .sample_uniform = rns_sample_uniform,
-    .sample_gaussian = rns_sample_gaussian,
-    .from_int_array = rns_from_int_array,
-    .round_division = rns_round_division,
-    .mod_reduce_lifted = rns_mod_reduce_lifted,
-    .scalar_new = rns_scalar_new,
-    .scalar_free = rns_scalar_free,
+    .new_element = arith_rns_new_element,
+    .new_like = arith_rns_new_like,
+    .free_element = arith_rns_free_element,
+    .copy = arith_rns_copy,
+    .zero = arith_rns_zero,
+    .to_mul = arith_rns_to_mul,
+    .to_canonical = arith_rns_to_canonical,
+    .add = arith_rns_add,
+    .sub = arith_rns_sub,
+    .mul = arith_rns_mul,
+    .mul_addto = arith_rns_mul_addto,
+    .scale_int = arith_rns_scale_int,
+    .mul_subto = arith_rns_mul_subto,
+    .scale_addto = arith_rns_scale_addto,
+    .scale_by = arith_rns_scale_by,
+    .permute = arith_rns_permute,
+    .mul_by_monomial = arith_rns_mul_by_monomial,
+    .sample_uniform = arith_rns_sample_uniform,
+    .sample_gaussian = arith_rns_sample_gaussian,
+    .from_int_array = arith_rns_from_int_array,
+    .round_division = arith_rns_round_division,
+    .mod_reduce_lifted = arith_rns_mod_reduce_lifted,
+    .scalar_new = arith_rns_scalar_new,
+    .scalar_free = arith_rns_scalar_free,
 };
 
 // Rings are shared and never freed, the same contract the RNS base they borrow
@@ -353,6 +355,7 @@ ArithRing arith_rns_ring_new(uint64_t N, uint64_t rns_mask, RNS_Base base)
     ring->vt = &RNS_NTT_METHODS;
     ring->params = params;
     ring->N = N;
+    ring->impl = ARITH_IMPL_RNS;
     return ring;
 }
 
