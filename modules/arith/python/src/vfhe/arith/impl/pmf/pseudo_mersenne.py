@@ -54,6 +54,23 @@ def _layout(bits: int) -> tuple[int, int]:
     return limbs, _LIMB_BITS * limbs - bits
 
 
+def is_pseudo_mersenne(modulus: int) -> bool:
+    """Whether ``modulus`` is a pseudo-Mersenne the kernels here cover.
+
+    True when ``modulus = 2^n - c`` needs a supported limb count and the fold
+    constant ``c << shift`` fits one 52-bit limb -- the structural test
+    `Field` applies before routing a modulus to this implementation.
+    Primality is not checked; the constructor does that.
+    """
+    bits = modulus.bit_length()
+    limbs = -(-bits // _LIMB_BITS)
+    if limbs not in _SUPPORTED_LIMBS:
+        return False
+    shift = _LIMB_BITS * limbs - bits
+    c = (1 << bits) - modulus
+    return (c << shift) >> _LIMB_BITS == 0
+
+
 def _pack_into(buf, value: int, limbs: int) -> None:
     """Write ``value`` into ``buf`` as ``limbs`` 52-bit limbs, zeroing the rest."""
     for i in range(limbs):
@@ -70,25 +87,31 @@ def _unpack(buf, limbs: int) -> int:
 class PseudoMersenneField(Field):
     """F_p for a pseudo-Mersenne prime, with the kernels in C."""
 
-    def __init__(self, prime: int) -> None:
+    def __init__(self, modulus: int, degree: int = 1) -> None:
         """
         Build the field for an explicit prime.
 
-        Rejects a prime whose bit-length has no kernel, and one whose fold
-        constant ``e = c << shift`` does not fit a 52-bit limb. Primality is
-        checked with ``number_theory.is_prime``, a fixed-base probable-prime
-        test -- adequate for primes from our own generator, not a defence
-        against a hostile ``p``.
+        ``degree`` exists for interface uniformity with `Field`; this
+        implementation serves only prime fields, so any value but 1 is
+        rejected. Rejects a prime whose bit-length has no kernel, and one
+        whose fold constant ``e = c << shift`` does not fit a 52-bit limb.
+        Primality is checked with ``number_theory.is_prime``, a fixed-base
+        probable-prime test -- adequate for primes from our own generator,
+        not a defence against a hostile ``p``.
         """
-        if not isinstance(prime, int) or isinstance(prime, bool):
-            raise TypeError(f"prime must be an int, not {type(prime).__name__}")
-        if prime <= 2:
-            raise ValueError(f"prime={prime} must exceed 2")
+        if degree != 1:
+            raise ValueError(
+                f"pmf implements only prime fields; degree={degree} is not supported"
+            )
+        if not isinstance(modulus, int) or isinstance(modulus, bool):
+            raise TypeError(f"modulus must be an int, not {type(modulus).__name__}")
+        if modulus <= 2:
+            raise ValueError(f"modulus={modulus} must exceed 2")
 
-        self.bits = prime.bit_length()
+        self.bits = modulus.bit_length()
         self.limbs, self.shift = _layout(self.bits)
-        self.prime = prime
-        self.c = (1 << self.bits) - prime
+        self.prime = modulus
+        self.c = (1 << self.bits) - modulus
         self.lanes = _LANES
 
         # The bound that actually matters is on the fold constant, not on c.
@@ -100,8 +123,8 @@ class PseudoMersenneField(Field):
                 f"c << {self.shift} = {self.fold} would not fit a 52-bit limb; "
                 f"for n={self.bits} the reduction needs c < 2**{c_bits}"
             )
-        if not is_prime(prime):
-            raise ValueError(f"prime={prime} is not prime")
+        if not is_prime(modulus):
+            raise ValueError(f"modulus={modulus} is not prime")
 
         params = lib.pmf_new_params(self.bits, self.c)
         if params == ffi.NULL:

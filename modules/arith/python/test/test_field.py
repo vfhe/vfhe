@@ -22,8 +22,8 @@ def schoolbook_mul(a, b, prime, w, d):
 @pytest.mark.parametrize("d", [1, 2, 4, 8])
 def test_field_arithmetic(d):
     w = 3
-    field = Field(PRIME, w, d)
-    rng = random.Random(42)  # noqa: S311 - test data, not a key
+    field = Field(PRIME, d, w)
+    rng = random.Random(42)
 
     # Random lists of coefficients
     a_coeffs = [rng.randint(0, PRIME - 1) for _ in range(d)]
@@ -68,8 +68,8 @@ def test_field_arithmetic(d):
 @pytest.mark.parametrize("d", [2, 4, 8])
 def test_field_inversion(d):
     w = 3
-    field = Field(PRIME, w, d)
-    rng = random.Random(1337)  # noqa: S311 - test data, not a key
+    field = Field(PRIME, d, w)
+    rng = random.Random(1337)
 
     # Generate a random non-zero element
     while True:
@@ -87,7 +87,7 @@ def test_field_inversion(d):
 def test_field_sampling_and_hashing():
     d = 4
     w = 3
-    field = Field(PRIME, w, d)
+    field = Field(PRIME, d, w)
 
     a = FieldElement(field)
     a.sample_random(SEED)
@@ -118,7 +118,7 @@ def test_field_sampling_varies_within_one_element():
     value repeated d times.
     """
     d = 8
-    field = Field(PRIME, 3, d)
+    field = Field(PRIME, d, 3)
     a = FieldElement(field)
     a.sample_random(SEED)
     coeffs = [a.value[i] for i in range(d)]
