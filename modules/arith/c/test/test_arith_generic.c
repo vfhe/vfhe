@@ -413,6 +413,35 @@ void test_the_shared_ring_is_shared(void)
     TEST_ASSERT_TRUE(again != arith_rns_ring_get(TEST_N, 0x3, base));
 }
 
+/* Dispatch is a switch on the ring's tag with the method table as its
+ * default. A ring whose tag the switch does not know -- a backend loaded at
+ * runtime -- must behave identically through the table, so run a real
+ * computation both ways and compare. */
+void test_an_unknown_tag_dispatches_through_the_table(void)
+{
+    ArithElement a, b, fast, fallback;
+    arith_new(ring, &a);
+    arith_new(ring, &b);
+    arith_new(ring, &fast);
+    arith_new(ring, &fallback);
+    fill(arith_rns_polynomial(&a), 88);
+    fill(arith_rns_polynomial(&b), 89);
+    a.domain = b.domain = ARITH_DOMAIN_MUL;
+
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_mul(ring, &fast, &a, &b));
+
+    ring->impl = ARITH_IMPL_DYNAMIC; /* pretend it was loaded at runtime */
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_mul(ring, &fallback, &a, &b));
+    ring->impl = ARITH_IMPL_RNS;
+
+    assert_same(arith_rns_polynomial(&fast), arith_rns_polynomial(&fallback));
+
+    arith_free(ring, &a);
+    arith_free(ring, &b);
+    arith_free(ring, &fast);
+    arith_free(ring, &fallback);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -434,5 +463,6 @@ int main(void)
     RUN_TEST(test_from_int_array_reduces_per_prime);
     RUN_TEST(test_round_division_to_a_smaller_ring);
     RUN_TEST(test_the_shared_ring_is_shared);
+    RUN_TEST(test_an_unknown_tag_dispatches_through_the_table);
     return UNITY_END();
 }
