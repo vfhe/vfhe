@@ -18,9 +18,8 @@ extern "C"
     // the ring it was handed. A module that needs the representation itself --
     // per-coefficient access, per-prime kernels -- does not get a finer
     // interface here, it keeps that code in its own per-implementation file.
-    // That boundary is what keeps the dispatch cost negligible: one indirect
-    // call per whole-element operation, which is O(N) or O(N log N) of work,
-    // and none inside a loop over coefficients.
+    // So every entry point below acts on whole elements: one dispatch per
+    // O(N) or O(N log N) of work, and none inside a loop over coefficients.
 
     // Which representation an element currently holds.
     //
@@ -63,12 +62,11 @@ extern "C"
 
     typedef struct _ArithRing *ArithRing;
 
-    // Which compiled-in implementation a ring is, as a tag the dispatcher can
-    // switch on. The switch arms are direct calls, which LTO inlines across
-    // translation units (the method table's function pointers it cannot);
-    // DYNAMIC -- deliberately the zero value -- means "not compiled in here":
-    // such a ring dispatches through its method table, which is how a backend
-    // loaded at runtime plugs in.
+    // Which implementation a ring is, as a tag the dispatcher switches on so
+    // the call to it is direct. DYNAMIC is the zero value and means the
+    // switch has no arm for this ring: it dispatches through the method table
+    // instead, which is how a backend loaded at runtime plugs in. A ring must
+    // carry the tag matching the table it was built with.
     typedef enum
     {
         ARITH_IMPL_DYNAMIC = 0,
