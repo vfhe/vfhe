@@ -12,17 +12,31 @@ from ...spec import Capability, Constraints, Spec
 
 
 class ExtensionField(Field):
-    def __init__(self, prime: int, w: int, d: int) -> None:
-        self.prime = prime
-        self.w = w
-        self.d = d
+    """F_(p^d) as F_p[x]/(x^d - w), with scalar 64-bit coefficient kernels."""
+
+    def __init__(self, modulus: int, degree: int = 1, w: int | None = None) -> None:
+        """
+        Build F_(modulus^degree) with defining polynomial ``x^degree - w``.
+
+        ``w`` must make ``x^degree - w`` irreducible over F_modulus, which is
+        the caller's responsibility -- it is not verified here. For
+        ``degree=1`` no defining polynomial exists and ``w`` is ignored;
+        for higher degrees it is required.
+        """
+        if degree > 1 and w is None:
+            raise TypeError(
+                f"degree={degree} needs w, with x^{degree} - w irreducible"
+            )
+        self.prime = modulus
+        self.w = 0 if w is None else w
+        self.d = degree
         # A Field is pure modular arithmetic, so the modulus is all it needs.
-        self.mod = lib.mod_new(prime)
+        self.mod = lib.mod_new(modulus)
 
         # Precompute constants
-        self.zero = FieldElement(self, [0] * d)
-        self.one = FieldElement(self, [1] + [0] * (d - 1))
-        self.two = FieldElement(self, [2] + [0] * (d - 1))
+        self.zero = FieldElement(self, [0] * degree)
+        self.one = FieldElement(self, [1] + [0] * (degree - 1))
+        self.two = FieldElement(self, [2] + [0] * (degree - 1))
         self.inv_two = self.two.inverse()
 
     @property

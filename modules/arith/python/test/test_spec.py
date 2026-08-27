@@ -94,14 +94,14 @@ class TestCapabilities:
         assert ring.mul_domain() is Domain.MUL
 
     def test_field(self):
-        field = Field(PRIME, 7, 4)
+        field = Field(PRIME, 4, 7)
         assert not field.supports(Capability.QUOTIENT_POLY_RING)
         assert not field.supports(Capability.TOWER)
         assert field.domains_coincide
         assert field.mul_domain() is Domain.CANONICAL
 
     def test_require_names_the_missing_flag(self):
-        field = Field(PRIME, 7, 4)
+        field = Field(PRIME, 4, 7)
         with pytest.raises(TypeError, match="QUOTIENT_POLY_RING"):
             field.require(Capability.QUOTIENT_POLY_RING)
 
@@ -114,7 +114,7 @@ class TestExceptionalSetSize:
         assert ring.exceptional_set_size == min(ring.primes) ** ring.split_degree
 
     def test_field_is_the_whole_field(self):
-        field = Field(PRIME, 7, 4)
+        field = Field(PRIME, 4, 7)
         assert field.exceptional_set_size == PRIME**4
 
     def test_pseudo_mersenne_is_the_whole_field(self):
@@ -123,7 +123,7 @@ class TestExceptionalSetSize:
 
     def test_domains_are_arith_parents(self):
         assert isinstance(Ring(256, 300, split_degree=1), ArithParent)
-        assert isinstance(Field(PRIME, 7, 4), ArithParent)
+        assert isinstance(Field(PRIME, 4, 7), ArithParent)
 
 
 class TestConversions:
@@ -159,7 +159,7 @@ def test_mlwe_refuses_a_domain_without_the_ring_capabilities():
     from vfhe.mlwe import MLWE_Scheme
 
     with pytest.raises(TypeError, match="QUOTIENT_POLY_RING"):
-        MLWE_Scheme(Field(PRIME, 7, 4))
+        MLWE_Scheme(Field(PRIME, 4, 7))
 
 
 class TestHierarchy:
@@ -177,7 +177,7 @@ class TestHierarchy:
         assert isinstance(poly, Polynomial)
 
     def test_field_builds_the_default_implementation(self):
-        field = Field(PRIME, 7, 4)
+        field = Field(PRIME, 4, 7)
         assert type(field) is ExtensionField
         assert isinstance(field, Field)
 
@@ -186,6 +186,27 @@ class TestHierarchy:
         assert isinstance(pmf, Field)
         # the generic |A| answer comes from the shared base
         assert pmf.exceptional_set_size == pmf.order == pmf.prime
+
+    def test_field_defaults_to_degree_one(self):
+        field = Field(PRIME)
+        assert type(field) is ExtensionField
+        assert field.order == PRIME
+
+    def test_field_routes_a_large_pseudo_mersenne_to_pmf(self):
+        prime = PseudoMersenneField.generate(260, two_adicity=8).prime
+        field = Field(prime)
+        assert type(field) is PseudoMersenneField
+        assert field.order == prime
+
+    def test_field_rejects_a_large_modulus_no_backend_covers(self):
+        # >64 bits but not pseudo-Mersenne: pmf does not apply, field cannot.
+        with pytest.raises(LookupError, match="prime_bits=201"):
+            Field(2**200 + 5)
+
+    def test_pmf_rejects_an_extension_degree(self):
+        prime = PseudoMersenneField.generate(260, two_adicity=8).prime
+        with pytest.raises(ValueError, match="degree=2"):
+            Field(prime, 2, implementation="pmf")
 
     def test_implementation_keyword_names_the_subclass(self):
         assert type(Ring(256, 300, split_degree=1, implementation="rns")) is RNSRing

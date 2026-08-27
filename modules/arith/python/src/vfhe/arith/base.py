@@ -134,18 +134,47 @@ class Polynomial(metaclass=_ImplementationDispatch):
 
 
 class Field(ArithParent, metaclass=_ImplementationDispatch):
-    """A finite field, independent of how its elements are stored.
+    """A finite field F_(p^d).
 
-    ``Field(...)`` builds the default implementation (the extension field over
-    a `Modulus`); pass ``implementation=`` / ``backend=`` to name another.
+    ``Field(modulus, degree=1, ...)`` builds a concrete implementation. The
+    first two parameters are the ones every implementation takes:
+
+    - ``modulus`` -- the prime p.
+    - ``degree`` -- the extension degree d; 1 (the default) is the prime
+      field F_p. Some implementations serve only ``degree=1``.
+
+    Anything after them is implementation-specific -- the extension field,
+    for instance, takes ``w`` defining ``x**degree - w``.
+
+    Left unnamed, the implementation is chosen from the parameters: a
+    ``degree``-1 modulus above 64 bits that is a pseudo-Mersenne prime the
+    ``pmf`` kernels cover resolves to ``pmf``; everything else resolves to
+    ``field``, the extension field over a `Modulus`. Pass ``implementation=``
+    / ``backend=`` to name one explicitly; either way the modulus width is
+    checked against the resolved backend's constraints.
+
     Subclasses provide `order`; what holds for every field lives here.
     """
 
     @staticmethod
     def _concrete(
-        implementation: str | None, backend: str | None, *args, **kwargs
+        implementation: str | None,
+        backend: str | None,
+        modulus: int | None = None,
+        degree: int = 1,
+        *args,
+        **kwargs,
     ) -> type:
-        return resolve(implementation or "field", backend).parent_cls
+        bits = modulus.bit_length() if isinstance(modulus, int) else None
+        if implementation is None:
+            implementation = "field"
+            if degree == 1 and bits is not None and bits > 64:
+                # Imported here: impl modules import this one at load time.
+                from .impl.pmf.pseudo_mersenne import is_pseudo_mersenne
+
+                if is_pseudo_mersenne(modulus):
+                    implementation = "pmf"
+        return resolve(implementation, backend, prime_bits=bits).parent_cls
 
     @property
     @abstractmethod
