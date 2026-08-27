@@ -8,12 +8,11 @@
 // An engine is one whole build of the tree for one ISA level: its flags come
 // from tools/_engines.py, and the portable engine additionally defines
 // PORTABLE_BUILD. Each macro below is therefore "the compiler offers this ISA
-// AND this is not the portable engine" — the portable engine must compile the
+// AND this is not the portable engine": the portable engine must compile the
 // scalar path even on a host whose compiler would accept the intrinsics.
 //
-// Use `#if VFHE_HAVE_x`, never `#ifdef`: every macro is always defined, so a
-// misspelling is a compile error under -Wundef rather than a silently
-// disabled kernel.
+// Every macro is always defined, to 0 or 1. Test them with `#if`, not
+// `#ifdef`, which would be true for all of them.
 //
 // A translation unit guarded by one of these still needs its ISA header
 // (<immintrin.h>) included behind an architecture check, since the header
