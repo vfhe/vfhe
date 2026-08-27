@@ -155,6 +155,6 @@ FIELD_SCALAR = register(
     )
 )
 
-# One spec per class today, so it binds to the class; a class serving
-# several backends would set it per instance instead.
+# `spec` binds to the class because each class here serves exactly one; a
+# class serving several must set it per instance instead.
 ExtensionField.spec = FIELD_SCALAR

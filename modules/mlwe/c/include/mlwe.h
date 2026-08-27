@@ -47,11 +47,11 @@ extern "C"
 
     // A module-LWE sample: `r` mask components and a body, over one ring.
     //
-    // One type, not a pair. The old RNS_MLWE and RNSc_MLWE were field-
-    // identical and differed only in the domain their name encoded, so the
-    // elements carry that themselves now. Every component of a sample is in
-    // the same domain: mlwe_domain reads it and the whole-sample conversions
-    // move all of them together.
+    // Every component of a sample is in the same domain, which the elements
+    // themselves carry: `mlwe_domain` reads it, and the whole-sample
+    // conversions move all of them together. A caller that puts components in
+    // different domains breaks that invariant, and the arithmetic will refuse
+    // them.
     typedef struct _MLWE
     {
         ArithElement *a, b;
@@ -59,8 +59,9 @@ extern "C"
         ArithRing ring;
     } *MLWE;
 
-    // The spellings the tree used before the two became one type. A signature
-    // still says which domain it expects, which the type no longer enforces.
+    // Aliases that let a signature say which domain it expects its argument
+    // in. They are the same type, so this is documentation, not enforcement:
+    // check `mlwe_domain` where it matters.
     typedef MLWE RNS_MLWE;
     typedef MLWE RNSc_MLWE;
 

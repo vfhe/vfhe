@@ -8,13 +8,10 @@
 // that routes an operation to the ring's implementation after checking the
 // domain rules every implementation shares.
 //
-// Dispatch is a switch on the ring's tag with the method table as its
-// default. The switch arms are direct calls, which LTO inlines across
-// translation units at this build's -O3 -- a function pointer it cannot,
-// once a second table exists -- so compiled-in implementations cost nothing
-// at the boundary, and a ring the switch does not know (a backend loaded at
-// runtime) still works through its table. Either way it is one dispatch per
-// whole-element operation; nothing here runs per coefficient.
+// Dispatch is a switch on the ring's tag, with the method table as the
+// default arm. Both routes must compute the same thing: a ring reached
+// either way is the same ring. One dispatch per whole-element operation;
+// nothing here runs per coefficient.
 
 const char *arith_implementation(ArithRing ring) { return ring->vt->implementation; }
 
@@ -36,10 +33,10 @@ ArithDomain arith_mul_domain(ArithRing ring)
     return ARITH_DOMAIN_MUL;
 }
 
-// Route one operation: the tagged implementations by direct call, everything
-// else through the method table, where a NULL slot answers ARITH_UNIMPLEMENTED
-// rather than being dereferenced. A statement expression (gnu11), so wrappers
-// that stamp the result's domain afterwards can use the status.
+// Route one operation: a tagged implementation by direct call, anything else
+// through the method table, where a NULL slot answers ARITH_UNIMPLEMENTED
+// rather than being dereferenced. A statement expression (gnu11) so that
+// wrappers which stamp the result's domain afterwards can read the status.
 #define ARITH_DISPATCH(ring, slot, ...)                                                            \
     __extension__({                                                                                \
         ArithStatus dispatched_;                                                                   \
