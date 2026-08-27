@@ -111,7 +111,7 @@ def test_explicit_hash_callable_and_missing_hash_method():
 
 
 def test_library_leaf_types():
-    field = Field((1 << 61) - 1, 3, 4)
+    field = Field((1 << 61) - 1, 4, 3)
     elements = [FieldElement(field, [i + 1, i + 2, i + 3, i + 4]) for i in range(8)]
     tree = Merkle(elements)  # FieldElement.hash() satisfies the contract
     assert Merkle.verify(tree.root, 4, tree.open(4), elements[4])
