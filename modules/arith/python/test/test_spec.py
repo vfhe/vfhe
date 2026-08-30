@@ -12,6 +12,7 @@ from vfhe.arith import (
     Constraints,
     Domain,
     ExtensionField,
+    ExtensionFieldVector,
     Field,
     Multiprecision,
     Polynomial,
@@ -47,6 +48,12 @@ def test_every_implementation_is_registered():
 def test_class_carries_its_spec(cls, key):
     assert cls.spec.key == key
     assert registered()[key].parent_cls is cls
+
+
+def test_a_spec_declares_its_vector_type_or_none():
+    assert ExtensionField.spec.vector_cls is ExtensionFieldVector
+    # An implementation without one says so rather than omitting the slot.
+    assert PseudoMersenneField.spec.vector_cls is None
 
 
 def test_resolve_picks_the_only_backend():

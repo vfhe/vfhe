@@ -136,6 +136,43 @@ int field_ext_is_equal(const uint64_t *a, const uint64_t *b, uint64_t d);
 void field_base_conversion(uint64_t *out, const uint64_t *in,
                            uint64_t source_component, uint64_t target_component,
                            uint64_t d, uint64_t poly_size, const uint64_t *w_i, void *mod);
+
+// --- vectors of field elements ---
+// n elements as d coefficient planes: element i is coeffs[j][i] over j. Python
+// owns the buffers (aligned64) and fills this struct; the planes must be
+// field_vec_padded_length(n) words with the padding reduced, which is what lets
+// the kernels run the tuned eltwise path with no tail. arith.h states the full
+// contract.
+typedef struct _FieldVector {
+    uint64_t **coeffs;
+    uint64_t n;
+    uint64_t allocated_n;
+    uint64_t d;
+    uint64_t w;
+    void *mod;
+} *FieldVector;
+uint64_t field_vec_padded_length(uint64_t n);
+void field_vec_add(FieldVector out, const FieldVector a, const FieldVector b);
+void field_vec_sub(FieldVector out, const FieldVector a, const FieldVector b);
+void field_vec_neg(FieldVector out, const FieldVector a);
+void field_vec_add_scalar(FieldVector out, const FieldVector a, const uint64_t *s);
+void field_vec_sub_scalar(FieldVector out, const FieldVector a, const uint64_t *s);
+void field_vec_scalar_sub(FieldVector out, const uint64_t *s, const FieldVector a);
+void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b);
+void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s);
+void field_vec_sum(uint64_t *out, const FieldVector a);
+int field_vec_inv(FieldVector out, const FieldVector a);
+void field_vec_get_element(uint64_t *out, const FieldVector a, uint64_t index);
+void field_vec_set_element(FieldVector out, uint64_t index, const uint64_t *value);
+void field_vec_set_range(FieldVector out, uint64_t start, const uint64_t *values, uint64_t count);
+void field_vec_get_range(uint64_t *out, const FieldVector a, uint64_t start, uint64_t count);
+void field_vec_copy(FieldVector out, const FieldVector a);
+void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVector a);
+int field_vec_is_equal(const FieldVector a, const FieldVector b);
+void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len);
+void field_vec_hash(uint8_t *out, const FieldVector a);
+uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stride);
+void field_vec_hash_elements(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride);
 void ntt_free_plan(void *plan);
 uint64_t inverse_mod_eea(uint64_t a, uint64_t p);
 

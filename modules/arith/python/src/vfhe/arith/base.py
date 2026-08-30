@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from abc import ABC, ABCMeta, abstractmethod
 
-from .registry import resolve
+from .registry import registered, resolve
 from .spec import Capability, Domain, Spec
 
 
@@ -186,3 +186,108 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         """|A| for any field is its order: every nonzero difference of two
         field elements is invertible, so the whole field is exceptional."""
         return self.order
+
+
+class FieldVector(metaclass=_ImplementationDispatch):
+    """Many elements of one `Field`, held together in one buffer.
+
+    A vector exists because a length-n operation costs one call into C
+    instead of n: the kernels see whole arrays, so they vectorize across
+    elements and the per-element boundary crossing disappears. Prefer it to a
+    Python list of elements wherever the same operation applies to all of
+    them.
+
+    ``FieldVector(field, n)`` builds n zeros and ``FieldVector(field,
+    values)`` builds from a sequence; either way the class comes from the
+    field's spec, so a vector is always matched to its field's
+    implementation and a caller never names the concrete class. A field whose
+    implementation has no vector type raises TypeError.
+
+    An implementation must provide the operations whose cost is the point --
+    elementwise ``+ - *``, broadcast against a single element, `scale`,
+    `sum`, and the movement and encoding it needs. The rest have a default
+    here, written once against those: correct for any implementation, and
+    replaceable by one that can do better.
+
+    Vectors are mutable through `__setitem__`, so they are not hashable;
+    `hash` is the digest of the contents, as on an element. Every arithmetic
+    operation returns a fresh vector rather than writing into an operand.
+    """
+
+    @staticmethod
+    def _concrete(
+        implementation: str | None, backend: str | None, field=None, *args, **kwargs
+    ) -> type:
+        vector_cls = field.spec.vector_cls
+        if vector_cls is None:
+            raise TypeError(
+                f"{field.spec} has no vector type; "
+                f"registered implementations with one: "
+                f"{[str(s) for s in registered().values() if s.vector_cls]}"
+            )
+        return vector_cls
+
+    #: A vector holds elements, so it cannot be a dict key: `hash` below is a
+    #: digest of the contents, not an identity.
+    __hash__ = None
+
+    def __pow__(self, exponent: int):
+        """Elementwise ``self ** exponent`` by square-and-multiply.
+
+        The exponent is a plain integer, not reduced modulo the group order.
+        Negative exponents are not accepted: invert first, which is one batch
+        inversion rather than n.
+        """
+        if not isinstance(exponent, int) or isinstance(exponent, bool):
+            raise TypeError(f"exponent must be an int, not {type(exponent).__name__}")
+        if exponent < 0:
+            raise ValueError("negative exponent; call inverse() first")
+        result = type(self)(self.field, [self.field.one] * len(self))
+        base = self.copy()
+        while exponent > 0:
+            if exponent & 1:
+                result = result * base
+            exponent >>= 1
+            if exponent:
+                base = base * base
+        return result
+
+    def inverse(self):
+        """The elementwise inverse, by Montgomery's trick.
+
+        One inversion plus three multiplications per element, rather than n
+        inversions: the prefix products are formed, the last is inverted, and
+        a reverse sweep peels each factor back off. Raises ValueError if any
+        element is zero.
+        """
+        n = len(self)
+        if n == 0:
+            return type(self)(self.field, 0)
+        elements = self.to_list()
+        prefix = []
+        running = self.field.one
+        for element in elements:
+            running = running * element
+            prefix.append(running)
+        running = running.inverse()  # raises for a zero anywhere in the product
+        inverses = [None] * n
+        for i in range(n - 1, 0, -1):
+            inverses[i] = running * prefix[i - 1]
+            running = running * elements[i]
+        inverses[0] = running
+        return type(self)(self.field, inverses)
+
+    @staticmethod
+    def concat(vectors: list):
+        """One vector holding every element of `vectors`, in order."""
+        if not vectors:
+            raise ValueError("concat needs at least one vector")
+        field = vectors[0].field
+        for vector in vectors:
+            if vector.field != field:
+                raise ValueError("cannot concatenate vectors over different fields")
+        return type(vectors[0])(field, [e for v in vectors for e in v])
+
+    def query(self, indices):
+        """The elements at `indices`, gathered into a new vector."""
+        return type(self)(self.field, [self[i] for i in indices])

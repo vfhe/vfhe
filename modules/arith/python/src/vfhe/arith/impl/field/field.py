@@ -24,9 +24,7 @@ class ExtensionField(Field):
         for higher degrees it is required.
         """
         if degree > 1 and w is None:
-            raise TypeError(
-                f"degree={degree} needs w, with x^{degree} - w irreducible"
-            )
+            raise TypeError(f"degree={degree} needs w, with x^{degree} - w irreducible")
         self.prime = modulus
         self.w = 0 if w is None else w
         self.d = degree
@@ -67,8 +65,10 @@ class FieldElement:
             self.value = value
 
     def __add__(self, other: FieldElement) -> FieldElement:
+        # NotImplemented, not TypeError: it is what lets the reflected operand
+        # take its turn, so `element + vector` reaches the vector's __radd__.
         if not isinstance(other, FieldElement):
-            raise TypeError("Can only add FieldElement")
+            return NotImplemented
         res_val = ffi.new("uint64_t[]", self.field.d)
         lib.field_ext_add(
             res_val, self.value, other.value, self.field.d, self.field.prime
@@ -77,7 +77,7 @@ class FieldElement:
 
     def __sub__(self, other: FieldElement) -> FieldElement:
         if not isinstance(other, FieldElement):
-            raise TypeError("Can only subtract FieldElement")
+            return NotImplemented
         res_val = ffi.new("uint64_t[]", self.field.d)
         lib.field_ext_sub(
             res_val, self.value, other.value, self.field.d, self.field.prime
@@ -91,7 +91,7 @@ class FieldElement:
 
     def __mul__(self, other: FieldElement) -> FieldElement:
         if not isinstance(other, FieldElement):
-            raise TypeError("Can only multiply FieldElement")
+            return NotImplemented
         res_val = ffi.new("uint64_t[]", self.field.d)
         lib.field_ext_mul(
             res_val,
@@ -150,6 +150,9 @@ class FieldElement:
         return not self.__eq__(other)
 
 
+# Imported here, at the bottom: the vector module imports FieldElement above.
+from .vector import ExtensionFieldVector  # noqa: E402
+
 #: A degree-d extension of F_p by scalar modular arithmetic. Its elements are
 #: scalars, so it carries no quotient-polynomial-ring or tower operations, and
 #: its two domains are the same representation.
@@ -159,6 +162,7 @@ FIELD_SCALAR = register(
         backend="scalar",
         parent_cls=ExtensionField,
         element_cls=FieldElement,
+        vector_cls=ExtensionFieldVector,
         capabilities=(
             Capability.CORE
             | Capability.SAMPLING
