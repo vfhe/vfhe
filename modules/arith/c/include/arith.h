@@ -210,6 +210,82 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
                                uint64_t target_component, uint64_t d, uint64_t poly_size,
                                const uint64_t *w_i, Modulus mod);
 
+    // vectors of field elements
+    //
+    // n elements of F_p[x]/(x^d - w) held as d coefficient planes: element i is
+    // (coeffs[0][i], ..., coeffs[d-1][i]). Splitting the coefficients apart is
+    // what lets every arithmetic kernel below be a handful of mod_eltwise_*
+    // calls over contiguous length-n runs, one per plane, rather than n calls
+    // over a d-word element.
+    //
+    // The layout contract, which the caller allocating a FieldVector must meet:
+    //
+    // - Each plane is field_vec_padded_length(n) words and is 64-byte aligned,
+    //   because the tuned eltwise kernels process whole SIMD vectors with no
+    //   tail loop and load a plane as an __m512i.
+    // - Words n..allocated_n-1 are padding. They are read and written by the
+    //   arithmetic kernels, so they must hold values below q -- allocate zeroed
+    //   and they stay reduced -- but they carry no meaning: everything that
+    //   reads a value (sum, equality, hashing, element access) stops at n.
+    // - Every coefficient of a live element is in [0, q).
+    //
+    // Arithmetic outputs may alias their inputs. The movement operations
+    // (copy, split_even_odd, get/set) may not.
+    typedef struct _FieldVector
+    {
+        uint64_t **coeffs; // d planes of allocated_n words
+        uint64_t n;        // elements the caller gave meaning to
+        uint64_t allocated_n;
+        uint64_t d;
+        uint64_t w;  // the extension is F_p[x]/(x^d - w)
+        Modulus mod; // borrowed; must outlive the vector
+    } *FieldVector;
+
+    // Words a plane must hold for a vector of n elements: n rounded up to the
+    // eltwise kernels' vector length. The single source of that number.
+    uint64_t field_vec_padded_length(uint64_t n);
+
+    void field_vec_add(FieldVector out, const FieldVector a, const FieldVector b);
+    void field_vec_sub(FieldVector out, const FieldVector a, const FieldVector b);
+    void field_vec_neg(FieldVector out, const FieldVector a);
+    // Broadcast against one element `s`, which is d coefficients.
+    void field_vec_add_scalar(FieldVector out, const FieldVector a, const uint64_t *s);
+    void field_vec_sub_scalar(FieldVector out, const FieldVector a, const uint64_t *s);
+    void field_vec_scalar_sub(FieldVector out, const uint64_t *s, const FieldVector a);
+    // Elementwise (Hadamard) product, and the product with one element.
+    void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b);
+    void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s);
+    // Sum of the first n elements, into d coefficients.
+    void field_vec_sum(uint64_t *out, const FieldVector a);
+    // Elementwise inverse by Montgomery's trick: one inversion and three
+    // multiplications per element. Returns 0 without writing `out` if any of the
+    // first n elements is zero, 1 otherwise.
+    int field_vec_inv(FieldVector out, const FieldVector a);
+    // Transpose between the planes and one d-word element.
+    void field_vec_get_element(uint64_t *out, const FieldVector a, uint64_t index);
+    void field_vec_set_element(FieldVector out, uint64_t index, const uint64_t *value);
+    // Bulk transpose of `count` consecutive elements laid out d coefficients at
+    // a time, so building a vector costs one call rather than `count`.
+    void field_vec_set_range(FieldVector out, uint64_t start, const uint64_t *values,
+                             uint64_t count);
+    void field_vec_get_range(uint64_t *out, const FieldVector a, uint64_t start, uint64_t count);
+    void field_vec_copy(FieldVector out, const FieldVector a);
+    // Deinterleave: even gets elements 0, 2, 4, ... and odd gets 1, 3, 5, ....
+    // `a->n` must be even and each output must hold a->n / 2 elements.
+    void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVector a);
+    int field_vec_is_equal(const FieldVector a, const FieldVector b);
+    // Uniform elements from a seed. One draw stream covers the whole vector, so
+    // no two coefficients repeat by construction.
+    void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len);
+    // BLAKE3 over the elements in index order, 32 bytes.
+    void field_vec_hash(uint8_t *out, const FieldVector a);
+    // One digest per window of `group` elements starting every `stride` indices:
+    // window k covers elements k * stride .. k * stride + group - 1, and the
+    // count is the number of whole windows that fit. `out` takes 32 bytes each.
+    uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stride);
+    void field_vec_hash_elements(uint8_t *out, const FieldVector a, uint64_t group,
+                                 uint64_t stride);
+
     // pseudo-Mersenne prime field
     //
     // F_p for p = 2^n - c with small c (the Crandall/pseudo-Mersenne family). An

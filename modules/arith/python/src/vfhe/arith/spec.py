@@ -106,13 +106,16 @@ class Spec:
 
     ``parent_cls`` is the class the resolver instantiates; ``element_cls`` is
     the type of its elements, or None where an implementation has no separate
-    element type.
+    element type. ``vector_cls`` is the type holding many elements in one
+    buffer, or None where the implementation offers no such type -- its
+    presence is what tells a caller vectors are available at all.
     """
 
     implementation: str
     backend: str
     parent_cls: type
     element_cls: type | None = None
+    vector_cls: type | None = None
     capabilities: Capability = Capability.CORE
     constraints: Constraints = field(default_factory=Constraints)
     #: Preference among backends of one implementation, best first; the
