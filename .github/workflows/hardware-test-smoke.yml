@@ -34,6 +34,9 @@ jobs:
     container:
       image: ghcr.io/vfhe/vfhe-hardware:latest # zizmor: ignore[unpinned-images]
     timeout-minutes: 30
+    permissions:
+      contents: read # checkout
+      packages: read # pull the job container from this registry
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

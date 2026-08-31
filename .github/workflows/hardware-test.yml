@@ -26,6 +26,9 @@ jobs:
       # ASan's fixed shadow mapping needs the ASLR entropy of a host process.
       options: --privileged
     timeout-minutes: 120
+    permissions:
+      contents: read # checkout
+      packages: read # pull the job container from this registry
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
