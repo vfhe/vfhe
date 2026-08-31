@@ -63,7 +63,7 @@ rfc3986==2.0.0
 rich==15.0.0
 ruff==0.16.1
 setuptools-scm==10.2.1
-setuptools==83.0.0
+setuptools==84.0.0
 tomli_w==1.2.0
 tox==4.60.1
 twine==7.0.0
