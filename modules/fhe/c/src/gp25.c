@@ -270,7 +270,7 @@ typedef struct
 static void *suba_worker(void *arg)
 {
     suba_args_t *A = (suba_args_t *)arg;
-    const uint64_t N = A->N, twoN = 2 * N;
+    const uint64_t N = A->N, two_n = 2 * N;
     const uint64_t r = A->p0[0]->r;
     const uint64_t mask = A->p0[0]->b->rns_mask;
     incNTT ntt = A->p0[0]->b->ntt;
@@ -284,9 +284,9 @@ static void *suba_worker(void *arg)
     {
         RNSc_MLWE pk = (RNSc_MLWE)A->p0[k];
         const uint64_t ai = A->a[k];
-        mlwe_RNSc_mul_by_xai(pax, pk, ai);                    /* pax = p[k] * X^a       */
-        const uint64_t m2a = (twoN - (2 * ai) % twoN) % twoN; /* (-2a) mod 2N           */
-        mlwe_RNSc_mul_by_xai_minus1(tmp, pax, m2a);           /* tmp = pax * (X^m2a - 1) */
+        mlwe_RNSc_mul_by_xai(pax, pk, ai);                       /* pax = p[k] * X^a       */
+        const uint64_t m2a = (two_n - (2 * ai) % two_n) % two_n; /* (-2a) mod 2N           */
+        mlwe_RNSc_mul_by_xai_minus1(tmp, pax, m2a);              /* tmp = pax * (X^m2a - 1) */
         mgsw_external_product(ext, A->s_sign, tmp, A->ell,
                               A->special_primes); /* ext = s_sign (X) tmp */
         mlwe_copy_RNS_sample(pax_ntt, (RNS_MLWE)pax);

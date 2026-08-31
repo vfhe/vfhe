@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from vfhe.arith.complex import ComplexPolynomial, ComplexRing
-from vfhe.misc.libvfhe import ffi
+from vfhe.engine import ffi
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, Polynomial, Ring, repr
 
 
@@ -36,9 +36,8 @@ class CKKS_Scheme(MLWE_Scheme):
 
     def encode(self, values: list[complex | float]) -> Polynomial:
         """Encodes a list of complex/float values into a Polynomial in the ciphertext ring."""
-        assert len(values) == self.ring.N // 2, (
-            f"Expected {self.ring.N // 2} values, got {len(values)}"
-        )
+        if not (len(values) == self.ring.N // 2):
+            raise ValueError(f"Expected {self.ring.N // 2} values, got {len(values)}")
         # Create a ComplexPolynomial and populate it with values
         c_poly = ComplexPolynomial(self.complex_ring)
         c_poly.from_array(values)
@@ -135,7 +134,8 @@ class CKKS_Scheme(MLWE_Scheme):
         """
         lvl = ciphertext.lvl
         next_lvl = lvl + 1
-        assert next_lvl < len(self.rings), "no lower level to rescale into"
+        if not (next_lvl < len(self.rings)):
+            raise ValueError("no lower level to rescale into")
 
         current_ring = ciphertext.ring
         next_ring = self.rings[next_lvl]
@@ -152,9 +152,8 @@ class CKKS_Scheme(MLWE_Scheme):
         Rescale from level (lvl) to (lvl+1) as planned in the residue system.
         """
         level = ct.lvl
-        assert level < len(self.rings) - 1, (
-            "Cannot rescale a ciphertext at the last level"
-        )
+        if not (level < len(self.rings) - 1):
+            raise ValueError("Cannot rescale a ciphertext at the last level")
 
         start_ring = ct.ring
         end_ring = self.rings[level + 1]
@@ -226,12 +225,10 @@ class CKKS_Ciphertext(MLWE):
 
     def __mul__(self, other) -> CKKS_Ciphertext:
         if isinstance(other, CKKS_Ciphertext):
-            assert self.scheme == other.scheme, (
-                "Cannot multiply ciphertexts from different schemes"
-            )
-            assert self.ell == other.ell, (
-                "Cannot multiply ciphertexts at different levels"
-            )
+            if not (self.scheme == other.scheme):
+                raise ValueError("Cannot multiply ciphertexts from different schemes")
+            if not (self.ell == other.ell):
+                raise ValueError("Cannot multiply ciphertexts at different levels")
 
             base_prod = super().__mul__(other)
             prod = CKKS_Ciphertext(self.scheme, lvl=base_prod.lvl)

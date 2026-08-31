@@ -13,5 +13,5 @@ LWE / Module-LWE and MGSW over the `vfhe.arith` ring.
 - `mgsw.py`: `MGSW_Scheme` / `MGSW` with the external product and the
   `CMUX` / `NCMUX` gates that the bootstraps in `vfhe.fhe` build on.
 
-`c/src/` holds the kernels (`lwe.c`, `mlwe.c`, `mgsw.c`); `python/cdef/mlwe.cdef`
+`c/src/` holds the kernels (`gadget.c`, `lwe.c`, `mgsw.c`, `mlwe.c`); `python/cdef/mlwe.cdef`
 declares their ABI.

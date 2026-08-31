@@ -5,5 +5,19 @@ option(
     'fuzz',
     type: 'boolean',
     value: false,
-    description: 'build only the instrumented kernel archives, nothing Python: what a fuzzing container needs (no Python headers, no protobuf toolchain)',
+    description: 'build the instrumented kernel archive and its harnesses alone: no Python headers, no protobuf toolchain, no tests',
+)
+
+option(
+    'fuzz_engine',
+    type: 'string',
+    value: '',
+    description: 'with -Dfuzz=true, the one engine to build, and required there: a session fuzzes exactly one',
+)
+
+option(
+    'fuzz_link_args',
+    type: 'string',
+    value: '',
+    description: 'with -Dfuzz=true, the \$LIB_FUZZING_ENGINE ClusterFuzzLite sets: the C++ library supplying main()',
 )

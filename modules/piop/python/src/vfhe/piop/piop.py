@@ -394,7 +394,7 @@ class Protocol:
     transcripts. An empty tuple means pure Python always.
     """
 
-    reduces_from: type[Relation] = None
+    reduces_from: type[Relation] | None = None
     reduces_to: tuple[type[Relation], ...] = ()
     batching: bool = False
     supported_domains: tuple[type, ...] = ()
@@ -483,6 +483,7 @@ class Transcript:
     def _consume(self, label: str) -> None:
         """Take the next message of the replayed proof, which must be the
         one the verifier is asking for."""
+        assert self._proof is not None
         if self._read >= len(self._proof):
             raise Rejection(f"proof exhausted; verifier expected {label!r}")
         expected, value = self._proof.messages[self._read]
@@ -646,6 +647,7 @@ class Party:
         terminal = []
         while worklist:
             stmt = worklist.pop(0)
+            assert self.iop is not None
             protocol = self.iop.protocol_for(stmt.relation)
             if protocol is None:
                 terminal.append(stmt)
@@ -698,6 +700,7 @@ class Verifier(Party):
         responsibility: draw a challenge only after writing the round
         message it answers, so the transcript order stays canonical.
         """
+        assert self.iop is not None
         entry = self.iop.transcript.entries.get(label)
         if entry is not None and entry.done():
             return entry.result()
@@ -726,6 +729,7 @@ class Verifier(Party):
         party may call it, and a Fiat-Shamir verifier overrides both
         samplers to derive from the transcript instead.
         """
+        assert self.iop is not None
         entry = self.iop.transcript.entries.get(label)
         if entry is not None and entry.done():
             return entry.result()
@@ -736,7 +740,11 @@ class Verifier(Party):
     def _draw_challenge(self, label: str):
         """Where a domain challenge's value comes from: fresh randomness
         here; the transcript chain in the Fiat-Shamir subtype (fs.py)."""
-        return self.iop.domain.random_exceptional()
+        assert self.iop is not None
+        domain = self.iop.domain
+        if domain is None:
+            raise RuntimeError("this IOP has no domain")
+        return domain.random_exceptional()
 
     def _draw_bits(self, label: str, nbytes: int) -> bytes:
         """Where a bit-string challenge's value comes from (see above)."""

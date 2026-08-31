@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 name: Set up dev environment
-description: Python and the pinned dev dependency group, the preamble CI jobs share.
+description: Python and the pinned dev dependency group; shared by the preamble of CI jobs.
 
 inputs:
   groups:
     description: Dependency groups to install; empty installs the interpreter alone.
-    required: false
-    default: dev
+    required: true
   pip-cache:
     description: Restore pip's cache; false where a build must resolve fresh.
     required: false
@@ -36,11 +35,11 @@ runs:
       if: inputs.groups != ''
       shell: bash
       env:
-        GROUPS: ${{ inputs.groups }}
+        DEPENDENCY_GROUPS: ${{ inputs.groups }}
         MARKER: ${{ runner.temp }}/vfhe-deps-${{ steps.python.outputs.python-version }}-${{ inputs.groups }}
         PIP_CONSTRAINT: ci-constraints-requirements.txt
       run: |
         if [ ! -e "$MARKER" ]; then
-          make deps GROUPS="$GROUPS"
+          make deps DEPENDENCY_GROUPS="$DEPENDENCY_GROUPS"
           touch "$MARKER"
         fi

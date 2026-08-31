@@ -1,35 +1,44 @@
 # SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-#
-# Copyright and licensing for the files that cannot say it themselves: a comment
-# would break them, or a tool writes them. Everything else carries its own
-# header, which is what the spdx-header hook enforces.
 version = 1
 
-# Formats with no comment syntax at all, plus the two git and pyenv read
-# verbatim: a leading `#` would become part of the value they parse.
+# No comment syntax
 [[annotations]]
 path = [
+    "**/.gitkeep",
+    "**/py.typed",
+    ".gitmessage",
     ".gitmodules",
     ".python-version",
-    ".github/gitleaks.json",
-    ".sde.json",
     ".zenodo.json",
-    ".github/tests/fixtures/*.json",
-    "**/py.typed",
-    "**/.gitkeep",
+    "external/adapted.cdx.json",
+    "external/blake3/blake3.cdx.json",
 ]
 SPDX-FileCopyrightText = "2026 The vFHE Authors"
 SPDX-License-Identifier = "Apache-2.0"
 
-# A legal notice is reproduced verbatim; nothing is inserted into it.
 [[annotations]]
-path = "NOTICE"
+path = ["docs/*.md", "README.md"]
 SPDX-FileCopyrightText = "2026 The vFHE Authors"
 SPDX-License-Identifier = "Apache-2.0"
 
-# Build output that the interpreter writes beside the sources it compiled.
 [[annotations]]
-path = "**/__pycache__/**"
+path = "docs/CODE_OF_CONDUCT.md"
+SPDX-FileCopyrightText = "2026 The vFHE Authors"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# GitHub surfaces these raw to contributors
+[[annotations]]
+path = [
+    ".github/CODEOWNERS",
+    ".github/ISSUE_TEMPLATE/*.yml",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+]
+SPDX-FileCopyrightText = "2026 Alin-Petru Roșu <rosualinpetru@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
+# Legal notice reproduced verbatim
+[[annotations]]
+path = "NOTICE"
 SPDX-FileCopyrightText = "2026 The vFHE Authors"
 SPDX-License-Identifier = "Apache-2.0"

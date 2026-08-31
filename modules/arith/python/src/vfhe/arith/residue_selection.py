@@ -212,7 +212,8 @@ def search_log_residues_minq0(
             log_moduli_chain, log_search_range, max_modulus
         )
         if log_top_residues is not None:
-            assert residue_indices_chain is not None
+            if not (residue_indices_chain is not None):
+                raise RuntimeError("residue_indices_chain is not None")
             return log_top_residues, residue_indices_chain
         log_q0 += 1
         if log_q0 > log_q0_max:

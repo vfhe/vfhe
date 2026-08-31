@@ -1,5 +1,3 @@
-<!-- SPDX-FileCopyrightText: 2026 Alin-Petru Roșu -->
-<!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe
 
 [![PyPI](https://img.shields.io/pypi/v/vfhe)](https://pypi.org/project/vfhe/)
@@ -13,24 +11,12 @@ The vFHE library: a library for Zero-Knowledge Proofs, (verifiable) Fully Homomo
 
 > ❗ **Warning:** This is a pre-release version of the library and is subject to breaking changes. ❗
 
+Using vFHE starts at [Installing](#installing) and continues in
+[`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md); changing
+it starts at
+[`DEVELOPMENT.md`](https://github.com/vfhe/vfhe/blob/main/docs/DEVELOPMENT.md).
+
 ---
-
-## Modules
-
-Each module is a self-contained folder under `modules/`. A module is
-**Python-facing** (ships a `python/` package + a `cdef` exposing its C to
-Python) or **internal C-only** (contributes compiled kernels used by other
-modules, no Python symbols).
-
-| Module | Kind | What it provides |
-|---|---|---|
-| `arith` | Python-facing | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: incomplete NTTs, complex FFTs, general multiprecision, and basic number theory procedures |
-| `misc` | Python-facing | The native handle (`ffi`/`lib`/`libvfhe`) plus the internal C utilities: BLAKE3-seeded PRNG, AES-CTR RNG, aligned allocation, mod-switching helpers |
-| `mlwe` | Python-facing | LWE / Module-LWE and MGSW: key generation, encryption, key-switching, arithmetic, and ring morphisms |
-| `fhe` | Python-facing | Schemes on top of `mlwe`: CKKS (encode/encrypt/rescale/rotate/multiply), CGGI16 functional bootstrap, GP25 sparse-amortized bootstrap |
-| `piop` | Python-facing | Sketch of IOP prover/verifier framework (currently under development) |
-| `circuit` | Python-facing | Arithmetic circuits (protobuf wire format) and their polynomial export to `arith` (currently under development) |
-| `compiler`, `polycom`, `snark`, `vfhe` | placeholder | reserved for the compiler frontend, polynomial commitments, the SNARK layer, and the top-level assembly (currently under development) |
 
 ## Installing
 
@@ -40,15 +26,14 @@ Supported platforms: Linux and macOS (POSIX only), on x86_64 and arm64.
 pip install vfhe
 ```
 
-vFHE ships one **engine** per instruction-set level it has kernels for —
-today the **portable** one that runs on any CPU, and **avx512ifma** for
-x86_64 with AVX-512 IFMA — and **picks one when you import it**: on a
-machine with AVX-512 IFMA you get the SIMD kernels, AES-NI, and BLAKE3
-SIMD; anywhere else, the portable engine. An install carries every engine
-its architecture can run, so it is safe to move between machines of that
-architecture. Wheels cover Linux x86_64/arm64 and macOS arm64; elsewhere
-pip builds the same install from the sdist, which needs a C compiler
-(clang/gcc) and bundles the BLAKE3 sources, so no submodules are required.
+vFHE ships one **engine** per instruction-set level it has kernels for:
+**portable** (any CPU), **avx512ifma** (x86_64 with AVX-512 IFMA), and
+**neon** (arm64). An install carries every engine its architecture can run
+and picks the best one at import, so it moves freely between machines of
+that architecture. Wheels cover Linux x86_64/arm64 and macOS arm64;
+elsewhere pip builds the same install from the sdist, which needs a C
+compiler (clang/gcc) and bundles the BLAKE3 sources, so no submodules are
+required.
 
 > **Choosing the compiler** (sdist builds only). The build uses your
 > interpreter's compiler by default (no configuration needed). To pick a
@@ -59,9 +44,15 @@ pip builds the same install from the sdist, which needs a C compiler
 > CC=gcc-14 pip install --no-binary vfhe vfhe
 > ```
 
-> **What did I get?** `python -m vfhe.info` prints the version, the engine
-> this CPU selected, anything faster it could have run, and the platform —
-> the whole environment a bug report needs.
+> **What did I get?** `python -m vfhe.info` prints the whole environment a
+> bug report needs:
+>
+> ```text
+> vfhe      0.0.3
+> engine    neon (this CPU can also run: portable)
+> python    3.14.5 CPython
+> platform  macOS-26.6.2-arm64-arm-64bit-Mach-O
+> ```
 >
 > **Pinning the engine.** `VFHE_ENGINE=<name>` overrides the CPU probe at
 > import and refuses if this CPU cannot run that engine. Pinning a slower
@@ -90,31 +81,51 @@ these attestations at `https://pypi.org/project/vfhe/#files`.
 ## Usage
 
 A walkthrough of encrypted computation with CKKS is in
-[`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/USAGE.md);
-[`smoke/ckks.py`](https://github.com/vfhe/vfhe/blob/main/smoke/ckks.py) is its
-runnable form. More examples will be added as the library continues to be developed.
+[`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md);
+[`test/smoke/cases/ckks.py`](https://github.com/vfhe/vfhe/blob/main/test/smoke/cases/ckks.py)
+is its runnable form.
 
 ---
 
+## Modules
+
+Each module is a self-contained folder under `modules/`. A module is
+**Python-facing** (ships a `python/` package + a `cdef` exposing its C to
+Python) or **internal C-only** (contributes compiled kernels used by other
+modules, no Python symbols). A Python-facing module's public API is its
+`__init__` re-exports.
+
+| Module | Kind | What it provides |
+|---|---|---|
+| `arith` | Python-facing | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: incomplete NTTs, complex FFTs, general multiprecision, and basic number theory procedures |
+| `util` | Python-facing | The native handle (`ffi`/`lib`), the engine picker and CPU probe, `vfhe.info`, runtime C compilation (`vfhe.dynamic_extensions`), and the C substrate (aligned allocation, mod switching) |
+| `crypto` | internal C-only | Randomness: BLAKE3-seeded PRNG, AES-CTR RNG, Box-Muller sampling |
+| `mlwe` | Python-facing | LWE / Module-LWE and MGSW: key generation, encryption, key-switching, arithmetic, and ring morphisms |
+| `fhe` | Python-facing | Schemes on top of `mlwe`: CKKS (encode/encrypt/rescale/rotate/multiply), CGGI16 functional bootstrap, GP25 sparse-amortized bootstrap |
+| `piop` | Python-facing | Sketch of IOP prover/verifier framework (currently under development) |
+| `polycom` | Python-facing | Basefold polynomial commitments over a foldable Reed-Solomon code (currently under development) |
+| `circuit` | Python-facing | Arithmetic circuits (protobuf wire format) and their polynomial export to `arith` (currently under development) |
+| `vfhe` | placeholder | the top-level assembly that will tie the modules together |
+
+Still to come, each its own module when it has code: a circuit compiler
+frontend lowering programs to GKR circuits, and the SNARK layer over the PIOP
+and its commitments.
+
 ## Development
 
-The development guide, covering the repository layout, the build system, testing,
-coverage, and CI, is in
-[`DEVELOPMENT.md`](https://github.com/vfhe/vfhe/blob/main/DEVELOPMENT.md).
-The avx512ifma engine is tested even without AVX-512 IFMA hardware:
-`make test ENGINE=avx512ifma` runs the suites on it, natively on IFMA machines and under the
-[Intel Software Development Emulator](https://www.intel.com/content/www/us/en/download/684897/intel-software-development-emulator.html)
-elsewhere (x86_64 Linux; CI runs it on every pull request).
+The development guide — repository layout, build system, testing, coverage,
+and CI — is
+[`DEVELOPMENT.md`](https://github.com/vfhe/vfhe/blob/main/docs/DEVELOPMENT.md).
 Contribution expectations are in
-[`CONTRIBUTING.md`](https://github.com/vfhe/vfhe/blob/main/CONTRIBUTING.md).
+[`CONTRIBUTING.md`](https://github.com/vfhe/vfhe/blob/main/docs/CONTRIBUTING.md).
 
 ---
 
 ## Authors
 
-See [`AUTHORS.md`](https://github.com/vfhe/vfhe/blob/main/AUTHORS.md); how the
+See [`AUTHORS.md`](https://github.com/vfhe/vfhe/blob/main/docs/AUTHORS.md); how the
 project is run is in
-[`GOVERNANCE.md`](https://github.com/vfhe/vfhe/blob/main/GOVERNANCE.md).
+[`GOVERNANCE.md`](https://github.com/vfhe/vfhe/blob/main/docs/GOVERNANCE.md).
 
 Maintainers can be reached at <maintainers@vfhe.ai>.
 

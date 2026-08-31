@@ -5,8 +5,8 @@ description: Run the Python suites for one engine, optionally emulated, sanitize
 
 inputs:
   coverage:
-    description: "1 instruments the build and uploads this engine's leg."
-    default: "0"
+    description: "true instruments the build and uploads this engine's coverage data."
+    default: "false"
   emulate:
     description: "1 runs it under the emulator the registry names for that engine."
     default: "0"
@@ -14,14 +14,14 @@ inputs:
     description: Engine the extension is built for.
     required: true
   python-version:
-    description: Interpreter the leg runs on; empty takes the repo pin.
+    description: Interpreter this job runs on; empty takes the repo pin.
     default: ""
   sanitize:
     description: meson's -Db_sanitize; none is the release shape a wheel carries.
     default: none
   suites:
     description: Depth - fast (subset) or complete (all).
-    default: fast
+    required: true
 
 runs:
   using: composite
@@ -39,28 +39,20 @@ runs:
     - name: Run Python suites
       shell: bash
       env:
-        ASAN_OPTIONS: detect_leaks=0 # CPython's own allocations would report as leaks
         COVERAGE: ${{ inputs.coverage }}
         EMULATE: ${{ inputs.emulate }}
         ENGINE: ${{ inputs.engine }}
         SANITIZE: ${{ inputs.sanitize }}
         SUITES: ${{ inputs.suites }}
       run: |
-        # ASan must enter before the interpreter; macOS has no LD_PRELOAD.
-        if [ "$SANITIZE" != "none" ] && [ "$RUNNER_OS" = "Linux" ]; then
-          LD_PRELOAD=$(gcc -print-file-name=libasan.so)
-          export LD_PRELOAD
-        fi
         make test ENGINE="$ENGINE" SUITES="$SUITES" EMULATE="$EMULATE" \
           VFHE_SANITIZE="$SANITIZE" VFHE_COVERAGE="$COVERAGE"
     # ------------------------------------------------------------- measure ---
-    - name: Upload Python coverage leg
-      if: inputs.coverage == '1'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - name: Upload Python coverage
+      if: inputs.coverage == 'true'
+      uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
       with:
-        if-no-files-found: error
-        include-hidden-files: true
-        name: leg-python-${{ inputs.engine }}
-        overwrite: true
-        path: .coverage/legs
-        retention-days: 7
+        directory: build/meson-logs
+        disable_search: false
+        fail_ci_if_error: false
+        use_oidc: true

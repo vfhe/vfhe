@@ -1,7 +1,5 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
-# SPDX-License-Identifier: Apache-2.0
 blank_issues_enabled: false
 contact_links:
   - name: Getting help
-    url: https://github.com/vfhe/vfhe/blob/main/SUPPORT.md
+    url: https://github.com/vfhe/vfhe/blob/main/docs/SUPPORT.md
     about: Questions, private security reports, and which versions are supported.

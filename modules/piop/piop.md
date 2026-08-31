@@ -171,7 +171,7 @@ composition") composes reductions over products. Both directions occur:
   random linear combination ([XZZPS19, §2.3], crediting Chiesa–Forbes–
   Spooner).
 
-```
+```text
 Relation_Zero ────(zerocheck, sample r)──▶ Relation_Sum
 Relation_Sum ─────(sumcheck, n rounds)───▶ Relation_Eval
 Relation_SumProd ─(sumcheckprod)─────────▶ Relation_Eval × … × Relation_Eval

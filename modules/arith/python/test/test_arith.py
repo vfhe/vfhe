@@ -20,7 +20,7 @@ from vfhe.arith import (
 )
 
 N = 16
-rng = random.Random(0xC0FFEE)
+rng = random.Random(0xC0FFEE)  # noqa: S311 - test data, not a key
 
 
 @pytest.fixture

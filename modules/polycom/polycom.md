@@ -70,7 +70,7 @@ Def. 3.2]: from a base `[n0, k0]` code `C_0` and diagonal twist vectors
 `t_l`, the level-`l` code `C_l` (dimension `k0·2^l`, length `n0·2^l`)
 encodes `m = (m_e, m_o)` as
 
-```
+```text
 Enc_l(m) = ( Enc_{l-1}(m_e) + t_l ∘ Enc_{l-1}(m_o),
              Enc_{l-1}(m_e) - t_l ∘ Enc_{l-1}(m_o) )
 ```
@@ -79,7 +79,7 @@ so a codeword of `m` folds, position-wise and with only `t_l` known, into a
 codeword of `m_e + r·m_o` for any challenge `r` — in the paper's indexing,
 where the `±` partners sit half a codeword apart:
 
-```
+```text
 pi'[j] = pi[j + n] + (t_l[j] + r) · (pi[j] - pi[j + n]) / (2·t_l[j]).
 ```
 

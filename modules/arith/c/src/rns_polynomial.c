@@ -1,8 +1,36 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
-#include "misc.h"
+#include "util.h"
+#include <crypto.h>
 #include <blake3.h>
+
+// Computes (Z_q[i](Q/q[i]))**-1, for i in [0,l)
+void compute_RNS_Qhat_array(uint64_t *out, uint64_t *p, uint64_t l)
+{
+    for (size_t i = 0; i < l; i++)
+    {
+        out[i] = 1;
+        for (size_t j = 0; j < l; j++)
+        {
+            if (i != j)
+            {
+                const uint64_t inv = inverse_mod(p[j], p[i]);
+                out[i] = (uint64_t)(((unsigned __int128)out[i] * inv) % p[i]);
+            }
+        }
+    }
+}
+
+NTT_proc *new_ntt_list(uint64_t *primes, uint64_t N, uint64_t l)
+{
+    NTT_proc *ntt = (NTT_proc *)safe_malloc(sizeof(NTT_proc) * l);
+    for (size_t i = 0; i < l; i++)
+    {
+        ntt[i] = ntt_new_proc(N, primes[i]);
+    }
+    return ntt;
+}
 
 incNTT new_incomplete_ntt_list(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l)
 {

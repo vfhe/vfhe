@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
+#include <inttypes.h>
 #include <arith.h>
-#include <misc.h>
+#include <util.h>
+#include <crypto.h>
 
 #if !defined(__AVX512IFMA__) || defined(PORTABLE_BUILD) || defined(PORTABLE)
 static inline uint64_t madd52lo(uint64_t a, uint64_t b, uint64_t c)
@@ -410,7 +412,7 @@ void print_MPScalar(MPScalar x)
     printf("0x");
     for (int64_t i = x->d - 1; i >= 0; i--)
     {
-        printf("%013lx", x->digits[i]);
+        printf("%013" PRIx64, x->digits[i]);
     }
     printf("\n");
 #endif

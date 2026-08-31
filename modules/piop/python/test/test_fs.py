@@ -277,6 +277,7 @@ def test_solo_prover_cannot_read():
 
     class _ReadingSumcheck(Sumcheck):
         async def prove(self, prover, statements):
+            assert prover.iop is not None
             await prover.iop.transcript.read("nobody/will/write/this")
             return await super().prove(prover, statements)
 

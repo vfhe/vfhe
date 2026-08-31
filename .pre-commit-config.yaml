@@ -3,7 +3,6 @@
 default_install_hook_types: [pre-commit, commit-msg]
 
 repos:
-  # Any file: hygiene, and what must never enter the history.
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -17,7 +16,6 @@ repos:
       - id: check-toml
       - id: check-json
 
-  # Every file states its copyright and licence, by header or by REUSE.toml.
   - repo: https://github.com/fsfe/reuse-tool
     rev: v6.2.0
     hooks:
@@ -27,8 +25,11 @@ repos:
     rev: v2.4.3
     hooks:
       - id: codespell
+        # Surnames from the literature that codespell reads as typos.
+        args: [--ignore-words-list=bootle]
+        # Manual only, so a prose typo never blocks a merge: `make spellcheck`.
+        stages: [manual]
 
-  # Python and C, by the versions the dev dependency group pins.
   - repo: local
     hooks:
       - id: ruff-check
@@ -36,14 +37,19 @@ repos:
         entry: ruff check
         language: system
         types_or: [python, pyi]
-        require_serial: true
 
       - id: ruff-format
         name: ruff format
         entry: ruff format --check
         language: system
         types_or: [python, pyi]
-        require_serial: true
+
+      - id: notes-test
+        name: release notes
+        entry: tools/release/notes/test.sh
+        language: script
+        pass_filenames: false
+        always_run: true
 
       - id: clang-format
         name: clang-format
@@ -60,8 +66,8 @@ repos:
     rev: v0.49.1
     hooks:
       - id: markdownlint
+        exclude: ^\.github/PULL_REQUEST_TEMPLATE\.md$
 
-  # The CI configuration: its schema, then its semantics, then its security.
   - repo: https://github.com/python-jsonschema/check-jsonschema
     rev: 0.37.4
     hooks:
@@ -69,6 +75,14 @@ repos:
       - id: check-dependabot
       - id: check-github-issue-forms
       - id: check-github-issue-config
+      - id: check-jsonschema
+        name: Validate CycloneDX SBOMs
+        files: ^external/.*\.cdx\.json$
+        args:
+          [
+            --schemafile,
+            "https://raw.githubusercontent.com/CycloneDX/specification/1.6.1/schema/bom-1.6.schema.json",
+          ]
       - id: check-citation-file-format
 
   - repo: https://github.com/rhysd/actionlint
@@ -78,19 +92,21 @@ repos:
 
   - repo: local
     hooks:
-      - id: ci-scripts
-        name: replay the CI decision scripts against fixtures
-        entry: python .github/tests/ci_scripts.py
+      - id: vendored-sbom
+        name: BLAKE3 SBOM fits the submodule
+        entry: external/blake3/check_freeze.sh
         language: system
-        pass_filenames: false
         always_run: true
+        pass_filenames: false
+
+  - repo: local
+    hooks:
       - id: zizmor
         name: zizmor
         entry: zizmor --no-progress --persona=pedantic
         language: system
         files: ^\.github/(workflows/.*|actions/.*/action)\.ya?ml$
 
-  # The commit message, which is a different stage: `git commit -s`.
   - repo: local
     hooks:
       - id: dco-signoff
