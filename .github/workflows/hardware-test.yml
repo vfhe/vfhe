@@ -35,6 +35,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Trust the checkout
+        # The container runs as root over a workspace owned by the runner user,
+        # so git refuses the checkout as unsafely owned; meson dist reads that
+        # failure as "no VCS" and abandons the sdist. '*', not the workspace
+        # path, because meson dist archives the submodules too, each its own repo.
+        run: git config --global --add safe.directory '*'
       - name: Run C suites natively
         uses: ./.github/actions/test-c
         with:
