@@ -13,6 +13,10 @@ inputs:
   engine:
     description: Engine to build and test.
     required: true
+  pip-cache:
+    description: Forwarded to setup-dev; false in a job container.
+    required: false
+    default: "true"
   sanitize:
     description: meson's -Db_sanitize; none is the release shape.
     default: none
@@ -25,6 +29,7 @@ runs:
       uses: ./.github/actions/setup-dev
       with:
         groups: test
+        pip-cache: ${{ inputs.pip-cache }}
     - name: Set up Intel SDE
       if: inputs.emulate == '1'
       uses: ./.github/actions/setup-sde

@@ -8,7 +8,8 @@ inputs:
     description: Dependency groups to install; empty installs the interpreter alone.
     required: true
   pip-cache:
-    description: Restore pip's cache; false where a build must resolve fresh.
+    description: Restore pip's cache; false in a job container, whose HOME pip
+      refuses to own, and where a build must resolve fresh.
     required: false
     default: "true"
   python-version:

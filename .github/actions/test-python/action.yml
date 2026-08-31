@@ -13,6 +13,10 @@ inputs:
   engine:
     description: Engine the extension is built for.
     required: true
+  pip-cache:
+    description: Forwarded to setup-dev; false in a job container.
+    required: false
+    default: "true"
   python-version:
     description: Interpreter this job runs on; empty takes the repo pin.
     default: ""
@@ -32,6 +36,7 @@ runs:
       with:
         groups: test
         python-version: ${{ inputs.python-version }}
+        pip-cache: ${{ inputs.pip-cache }}
     - name: Set up Intel SDE
       if: inputs.emulate == '1'
       uses: ./.github/actions/setup-sde
