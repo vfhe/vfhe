@@ -9,7 +9,7 @@ external/. Each retains its own copyright and license.
   Upstream: https://github.com/BLAKE3-team/BLAKE3
   License:  triple-licensed CC0-1.0 / Apache-2.0 / Apache-2.0-with-LLVM-exception,
             used here under Apache-2.0.
-            See external/blake3/LICENSE_A2, LICENSE_A2LLVM, LICENSE_CC0.
+            See external/blake3/blake3/LICENSE_A2, LICENSE_A2LLVM, LICENSE_CC0.
   Usage:    the c/ sources are compiled into the native extension
             (_vfhe_native) and shipped in released sdists. Internal
             only; never exposed on the Python API.
@@ -22,18 +22,19 @@ external/. Each retains its own copyright and license.
 
 This product additionally contains code adapted or ported (not vendored) from
 the projects below. Unlike the submodules above, this code was integrated, in
-places function by function, into larger source files of the arith and misc
-modules, so it has no separate directory. Both projects are Apache-2.0 licensed,
-matching this project's license.
+places function by function, into larger source files across the arith, crypto
+and util modules, so it has no separate directory. Each entry states its own
+license.
 
 - MOSFHET  (FHE library)
   Upstream: https://github.com/antoniocgj/MOSFHET
   License:  Apache-2.0 (see upstream LICENSE).
-  Usage:    modules/misc/c/src/aes_rng.c is a near-verbatim adaptation of its
+  Usage:    modules/crypto/c/src/aes_rng.c is a near-verbatim adaptation of its
             AES-NI counter-mode PRNG. Beyond that, further routines
             (number-theoretic transform, modular arithmetic, and sampling
             helpers) were ported and adapted into larger files across
-            modules/arith and modules/misc. Compiled into the native extension.
+            modules/arith, modules/crypto and modules/util. Compiled into the
+            native extension.
 
 - uecm_modinv_64  (extended-Euclidean modular inverse)
   Upstream: a mersenneforum.org posting (uecm_modinv_64), per the in-source
@@ -41,12 +42,6 @@ matching this project's license.
   License:  not stated by the upstream posting; provenance under review by the authors.
   Usage:    inverse_mod_eea in modules/arith/c/src/number_theory.c. Compiled
             into the native extension.
-
-- OpenFHE  (FHE library)
-  Upstream: https://www.openfhe.org/
-  License:  BSD 2-Clause (see upstream LICENSE).
-  Usage:    the ModSwitch rounding operation (RoundqQ) in
-            modules/misc/c/src/misc_tp.c is adapted from OpenFHE. Compiled into the native extension.
 
 - Intel HEXL  (homomorphic-encryption acceleration library)
   Upstream: https://github.com/intel/hexl

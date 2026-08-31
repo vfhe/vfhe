@@ -6,7 +6,7 @@ import math
 from math import log2
 
 from vfhe.arith.polynomial import Polynomial, repr
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 from vfhe.mlwe.lwe import LWE, LWE_Key
 from vfhe.mlwe.mgsw import CMUX, MGSW, NCMUX, MGSW_Scheme
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, lib_rlwe
@@ -73,7 +73,8 @@ class GP25:
                     current = idx
                     r_diff = previous - current
 
-                    assert r_diff < r_max
+                    if not (r_diff < r_max):
+                        raise ValueError("r_diff < r_max")
                     sab.s[i].append(self.encrypt_bits(r_diff, r_prec, output_key))
                     sign_poly = Polynomial(self.ring).from_array(
                         [is_negative] + [0] * (self.ring.N - 1)
@@ -86,8 +87,10 @@ class GP25:
                     previous = current
                     cnt_h += 1
 
-            assert cnt_h == h
-            assert previous < r_max
+            if not (cnt_h == h):
+                raise ValueError("cnt_h == h")
+            if not (previous < r_max):
+                raise ValueError("previous < r_max")
             sab.s[i].append(self.encrypt_bits(previous, r_prec, output_key))
 
         ## generate additional keys
@@ -140,7 +143,8 @@ class GP25:
 
         if self.trace_repack:
             # 4. Repacking keyswitch with full_packing_keyswitch_scaled
-            assert sab_key.trace_repack_key is not None
+            if not (sab_key.trace_repack_key is not None):
+                raise RuntimeError("sab_key.trace_repack_key is not None")
             out_repacked = self.scheme.full_packing_keyswitch_scaled(
                 acc, sab_key.trace_repack_key
             )
@@ -154,7 +158,8 @@ class GP25:
             # 4. Repacking keyswitch
             # out_repacked is an MLWE sample
             lvl = 0
-            assert sab_key.packing_key is not None
+            if not (sab_key.packing_key is not None):
+                raise RuntimeError("sab_key.packing_key is not None")
             out_repacked = self.packing_keyswitch(extracted, sab_key.packing_key, lvl)
 
         # 5. HW reducing keyswitch
@@ -363,7 +368,8 @@ class GP25:
             "void*[]", [ffi.cast("void *", arr) for arr in c_mgsw_arrays]
         )
 
-        assert self.aut_minus1 is not None
+        if not (self.aut_minus1 is not None):
+            raise RuntimeError("self.aut_minus1 is not None")
         aut_minus1 = (
             self.aut_minus1
             if isinstance(self.aut_minus1, MLWE_Set)
@@ -401,7 +407,8 @@ class GP25:
     def NCMUX(self, in1: MLWE, in2: MLWE, selector: MGSW):
         # tmp = self.scheme.automorphism(in2, 2 * self.ring.N - 1, self.aut_minus1)
         # return self.CMUX(in1, tmp, selector)
-        assert self.aut_minus1 is not None
+        if not (self.aut_minus1 is not None):
+            raise RuntimeError("self.aut_minus1 is not None")
         return NCMUX(in1, in2, selector, self.aut_minus1)
 
     def sub_a(

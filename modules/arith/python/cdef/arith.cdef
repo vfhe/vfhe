@@ -22,8 +22,11 @@ typedef struct _RNS_Polynomial {
   uint64_t allocated_l;
 } *RNS_Polynomial;
 
-// --- misc ---
+// --- allocation ---
 void *safe_aligned_malloc(uint64_t size);
+// libc free, releasing safe_aligned_malloc'd (posix_memalign, 64B) buffers
+// that Python owns and hands to the kernels.
+void free(void *ptr);
 
 // --- ntt / base conversion ---
 void *new_incomplete_ntt_list(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t count);

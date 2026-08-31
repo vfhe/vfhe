@@ -2,15 +2,25 @@
 # SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-BUILD="$WORK/meson"
-HARNESSES="$SRC/vfhe/.clusterfuzzlite/build_c_fuzz_tests.py"
+TREE="$SRC/vfhe"
 
-ENGINE="$(python3 "$HARNESSES" --engine)"
+set -a
+# shellcheck source=/dev/null
+. "$TREE/.clusterfuzzlite/.env"
+set +a
 
-# The container has the tree but no git history, so freeze a version for
-# meson's project() the way an sdist does.
-[ -f "$SRC/vfhe/.version" ] || echo "0.0.0+fuzz" > "$SRC/vfhe/.version"
+meson setup "$WORK" "$TREE" \
+    --buildtype=plain \
+    -Dfuzz=true \
+    -Dfuzz_engine="$VFHE_ENGINE" \
+    -Dfuzz_link_args="$LIB_FUZZING_ENGINE"
 
-meson setup "$BUILD" "$SRC/vfhe" -Dfuzz=true
-meson compile -C "$BUILD" "vfhe_$ENGINE"
-python3 "$HARNESSES" "$BUILD/libvfhe_$ENGINE.a"
+meson compile -C "$WORK"
+
+for test in "$WORK"/*; do
+    if [ -f "$test" ] && [ -x "$test" ]; then
+        cp "$test" "$OUT/"
+    fi
+done
+
+ls "$OUT"

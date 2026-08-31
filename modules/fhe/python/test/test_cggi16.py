@@ -9,12 +9,8 @@ import random
 
 import pytest
 from vfhe.arith import Ring
-from vfhe.fhe import CGGI16
+from vfhe.fhe import CGGI16, mod_switch
 from vfhe.mlwe import LWE, LWE_Key, MLWE_Scheme
-
-
-def mod_switch(v, q, p):
-    return round((v * p) / q) % p
 
 
 @pytest.mark.complete
@@ -40,10 +36,10 @@ def test_functional_bootstrap(deterministic_prng):
     bk_key = cggi16.generate_bootstrap_key(input_lwe_key, output_key)
 
     lut_size = 1 << (msg_prec - 1)
-    lut = [random.randint(0, (1 << (msg_prec - 1)) - 1) for _ in range(lut_size)]
+    lut = [random.randint(0, (1 << (msg_prec - 1)) - 1) for _ in range(lut_size)]  # noqa: S311 - test data, not a key
     rlwe_tv = cggi16.LUT_packing(lut, lut_size, msg_prec)
 
-    msg_val = random.randint(0, lut_size - 1)
+    msg_val = random.randint(0, lut_size - 1)  # noqa: S311 - test data, not a key
     m_scaled = mod_switch(msg_val, 1 << msg_prec, in_ring.q_l)
     lwe_in = LWE(
         ring=in_ring, m=[m_scaled % q for q in in_ring.primes], key=input_lwe_key

@@ -3,7 +3,7 @@
 # vfhe.fhe public API re-exports.
 from .cggi16 import CGGI16, CGGI16_Key
 from .ckks import CKKS_Ciphertext, CKKS_Scheme
-from .gp25 import GP25, SAB_Key
+from .gp25 import GP25, SAB_Key, mod_switch
 
 __all__ = [
     "CGGI16",
@@ -12,4 +12,5 @@ __all__ = [
     "CKKS_Ciphertext",
     "CKKS_Scheme",
     "SAB_Key",
+    "mod_switch",
 ]

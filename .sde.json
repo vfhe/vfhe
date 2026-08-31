@@ -1,9 +1,0 @@
-{
-  "version": "10.8.0",
-  "tarball": "sde-external-10.8.0-2026-03-15-lin.tar.xz",
-  "sha256": "50b320cd226acef7a491f5b321fc1be3c3c7984f9e27a456e64894b5b0979dd3",
-  "urls": [
-    "https://downloadmirror.intel.com/915934/sde-external-10.8.0-2026-03-15-lin.tar.xz",
-    "https://github.com/petarpetrovt/setup-sde/releases/download/binaries/sde-external-10.8.0-2026-03-15-lin.tar.xz"
-  ]
-}

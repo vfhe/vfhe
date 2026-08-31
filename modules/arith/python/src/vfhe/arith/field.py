@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 
 
 class Field:
@@ -32,7 +32,8 @@ class FieldElement:
         if value is None:
             self.value = ffi.new("uint64_t[]", field.d)
         elif isinstance(value, (list, tuple)):
-            assert len(value) <= field.d
+            if not (len(value) <= field.d):
+                raise ValueError("len(value) <= field.d")
             self.value = ffi.new("uint64_t[]", field.d)
             for i, val in enumerate(value):
                 self.value[i] = val % field.prime

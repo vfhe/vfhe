@@ -18,13 +18,13 @@ concurrency:
 jobs:
   # ---------------------------------------------------------------- checks ---
 
-  static-checks:
-    name: Static Checks
-    uses: ./.github/workflows/static-checks.yml
+  lint:
+    name: Lint
+    uses: ./.github/workflows/lint.yml
 
-  code-scanning:
-    name: Code Scanning
-    uses: ./.github/workflows/code-scanning.yml
+  scan-vulnerability:
+    name: Scan Vulnerability
+    uses: ./.github/workflows/scan-vulnerability.yml
     permissions:
       actions: read # analyser reads this run's metadata
       contents: read # checkout
@@ -32,18 +32,23 @@ jobs:
 
   # ------------------------------------------------------------------ test ---
 
-  c-tests:
+  test-c:
     name: Test C (${{ matrix.engine }}, ${{ matrix.os }})
+    permissions:
+      contents: read # checkout
+      id-token: write # Codecov upload
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { coverage: "1", engine: portable, os: ubuntu-24.04 }
-          - { engine: portable, os: ubuntu-24.04-arm }
           - { engine: portable, os: macos-26 }
-          - { coverage: "1", emulate: "1", engine: avx512ifma, os: ubuntu-24.04 }
+          - { engine: portable, os: ubuntu-24.04, coverage: "true" }
+          - { engine: portable, os: ubuntu-24.04-arm }
+          - { engine: avx512ifma, os: ubuntu-24.04, coverage: "true", emulate: "1" }
+          - { engine: neon, os: macos-26 }
+          - { engine: neon, os: ubuntu-24.04-arm, coverage: "true" }
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -53,35 +58,31 @@ jobs:
       - name: Run C suites
         uses: ./.github/actions/test-c
         with:
-          coverage: ${{ matrix.coverage }}
-          emulate: ${{ matrix.emulate }}
+          coverage: ${{ matrix.coverage || 'false' }}
+          emulate: ${{ matrix.emulate || '0' }}
           engine: ${{ matrix.engine }}
 
-  python-tests:
+  test-python:
     name: Test Python (${{ matrix.engine }}, ${{ matrix.os }}, py${{ matrix.python }})
-    needs: [c-tests]
+    permissions:
+      contents: read # checkout
+      id-token: write # Codecov upload
+    needs: [test-c]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
+        engine: [portable]
+        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        exclude:
+          - { os: ubuntu-24.04, python: "3.14" }
         include:
-          - { engine: portable, os: macos-26, python: "3.10" }
-          - { engine: portable, os: macos-26, python: "3.11" }
-          - { engine: portable, os: macos-26, python: "3.12" }
-          - { engine: portable, os: macos-26, python: "3.13" }
-          - { engine: portable, os: macos-26, python: "3.14" }
-          - { engine: portable, os: ubuntu-24.04, python: "3.10" }
-          - { engine: portable, os: ubuntu-24.04, python: "3.11" }
-          - { engine: portable, os: ubuntu-24.04, python: "3.12" }
-          - { engine: portable, os: ubuntu-24.04, python: "3.13" }
-          - { coverage: "1", engine: portable, os: ubuntu-24.04, python: "3.14" }
-          - { engine: portable, os: ubuntu-24.04-arm, python: "3.10" }
-          - { engine: portable, os: ubuntu-24.04-arm, python: "3.11" }
-          - { engine: portable, os: ubuntu-24.04-arm, python: "3.12" }
-          - { engine: portable, os: ubuntu-24.04-arm, python: "3.13" }
-          - { engine: portable, os: ubuntu-24.04-arm, python: "3.14" }
-          - { coverage: "1", emulate: "1", engine: avx512ifma, os: ubuntu-24.04, python: "3.14" }
+          - { engine: portable, os: ubuntu-24.04, python: "3.14", coverage: "true" }
+          - { engine: avx512ifma, os: ubuntu-24.04, python: "3.14", coverage: "true", emulate: "1" }
+          - { engine: neon, os: macos-26, python: "3.14" }
+          - { engine: neon, os: ubuntu-24.04-arm, python: "3.14", coverage: "true" }
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -91,23 +92,33 @@ jobs:
       - name: Run Python suites
         uses: ./.github/actions/test-python
         with:
-          coverage: ${{ matrix.coverage }}
-          emulate: ${{ matrix.emulate }}
+          coverage: ${{ matrix.coverage || 'false' }}
+          emulate: ${{ matrix.emulate || '0' }}
           engine: ${{ matrix.engine }}
           python-version: ${{ matrix.python }}
           suites: complete
 
-  sanitized-tests:
-    name: Test Sanitized (${{ matrix.engine }}, ${{ matrix.os }})
+  test-sanitized:
+    name: Test Sanitized (${{ matrix.engine }}, ${{ matrix.os }}, ${{ matrix.sanitize }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { engine: portable, os: ubuntu-24.04 }
-          - { engine: portable, os: macos-26 }
-          # neon on arm64 runners when they exist: natively, or not at all
+          # No avx512ifma: a sanitized run under SDE is too slow to be worth it.
+          # One sanitizer per leg: together they cost over 170x on aarch64,
+          # where address alone costs 6x and undefined alone 1.4x.
+          - { engine: portable, os: macos-26, sanitize: address }
+          - { engine: portable, os: macos-26, sanitize: undefined }
+          - { engine: portable, os: ubuntu-24.04, sanitize: address }
+          - { engine: portable, os: ubuntu-24.04, sanitize: undefined }
+          - { engine: portable, os: ubuntu-24.04-arm, sanitize: address }
+          - { engine: portable, os: ubuntu-24.04-arm, sanitize: undefined }
+          - { engine: neon, os: macos-26, sanitize: address }
+          - { engine: neon, os: macos-26, sanitize: undefined }
+          - { engine: neon, os: ubuntu-24.04-arm, sanitize: address }
+          - { engine: neon, os: ubuntu-24.04-arm, sanitize: undefined }
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -118,64 +129,67 @@ jobs:
         uses: ./.github/actions/test-c
         with:
           engine: ${{ matrix.engine }}
-          sanitize: address,undefined
-      # macOS has no LD_PRELOAD, so a Python leg there would run uninstrumented.
+          sanitize: ${{ matrix.sanitize }}
+      # macOS has no LD_PRELOAD, so a Python job there would run uninstrumented.
       - name: Run Python suites sanitized
         if: runner.os == 'Linux'
         uses: ./.github/actions/test-python
         with:
           engine: ${{ matrix.engine }}
-          sanitize: address,undefined
+          sanitize: ${{ matrix.sanitize }}
           suites: fast
-
-  # -------------------------------------------------------------- coverage ---
-
-  coverage-summary:
-    name: Coverage Summary
-    needs: [c-tests, python-tests]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      actions: read # legs its jobs uploaded
-      contents: read # checkout
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Merge legs
-        uses: ./.github/actions/merge-coverage
 
   # ------------------------------------------------------------------ dist ---
 
-  artifacts:
-    name: Release Artifacts
-    uses: ./.github/workflows/release-artifacts.yml
+  release-build:
+    name: Release Build
+    uses: ./.github/workflows/release-build.yml
 
   # ----------------------------------------------------------------- smoke ---
 
-  smoke-tests:
-    name: Smoke Tests
-    needs: [artifacts]
-    uses: ./.github/workflows/smoke-tests.yml
+  test-smoke:
+    name: Test Smoke
+    needs: [release-build]
+    uses: ./.github/workflows/test-smoke.yml
+    with:
+      source: sdist
+
+  # -------------------------------------------------------------------- ok ---
+
+  ci-postsubmit-ok:
+    name: CI Postsubmit OK
+    if: always()
+    needs:
+      - lint
+      - release-build
+      - scan-vulnerability
+      - test-c
+      - test-python
+      - test-sanitized
+      - test-smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Assert pipeline passed
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
 
   # ----------------------------------------------------------------- alert ---
 
-  alert-channel:
-    name: Alert Channel
+  alert:
+    name: Alert
+    if: failure() && github.event_name != 'workflow_dispatch'
     needs:
-      [
-        artifacts,
-        code-scanning,
-        coverage-summary,
-        smoke-tests,
-        static-checks,
-        c-tests,
-        python-tests,
-        sanitized-tests,
-      ]
-    if: failure() && github.event_name == 'push'
-    uses: ./.github/workflows/alert-channel.yml
+      - lint
+      - release-build
+      - scan-vulnerability
+      - test-c
+      - test-python
+      - test-sanitized
+      - test-smoke
+    uses: ./.github/workflows/alert.yml
     permissions: {}
     secrets:
       zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

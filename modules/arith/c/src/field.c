@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <arith.h>
 #include <blake3.h>
-#include "misc.h"
+#include "util.h"
 
 // Helper functions for polynomial operations used in inversion
 static int poly_deg(const uint64_t *p, int n)

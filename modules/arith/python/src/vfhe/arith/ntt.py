@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import atexit
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 
 
 class NTT_Processor:
@@ -50,6 +50,12 @@ class NTT_Processor:
             params = self.lib.init_base_conversion_params(incNTT, in_mask, out_mask)
             self.conversion_params_cache[key] = params
         return self.conversion_params_cache[key]
+
+    def reset(self):
+        """Drop every pool, so a caller starts from no registered ring."""
+        self.cleanup()
+        for pool in (self.incNTTs, self.primes, self.prime_to_index):
+            pool.clear()
 
     def cleanup(self):
         for params in self.conversion_params_cache.values():

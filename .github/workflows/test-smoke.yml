@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Installs a distribution in a clean venv and runs smoke tests against it.
+name: Test Smoke
+
+on:
+  workflow_call:
+    inputs:
+      source:
+        description: sdist installs the artifact this run built; index installs a published one.
+        type: string
+        required: true
+      index:
+        description: Which index to install from, pypi or testpypi. Only read when source is index.
+        type: string
+        default: pypi
+      requirement:
+        description: What pip installs when source is index, like vfhe==1.2.3.
+        type: string
+        default: ""
+
+permissions:
+  contents: read # checkout
+
+jobs:
+  test-smoke:
+    name: Test Smoke (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm]
+        # Wheels are cheap per interpreter; an sdist compiles on each, so bounds only.
+        python: >-
+          ${{ fromJSON(inputs.source == 'index'
+          && '["3.10", "3.11", "3.12", "3.13", "3.14"]'
+          || '["3.10", "3.14"]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up dev environment
+        uses: ./.github/actions/setup-dev
+        with:
+          groups: smoke
+          python-version: ${{ matrix.python }}
+      - name: Download sdist
+        if: inputs.source == 'sdist'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist-sdist
+          path: dist
+      # Pinned per arch: x86 hosts vary, arm64 always has neon.
+      - name: Install and run smoke test
+        env:
+          DIST: ${{ inputs.source == 'sdist' && 'dist/*.tar.gz' || '' }}
+          INDEX: ${{ inputs.index }}
+          REQUIREMENT: ${{ inputs.requirement }}
+          VFHE_ENGINE: ${{ matrix.os == 'ubuntu-24.04' && 'portable' || 'neon' }}
+        run: make smoke DIST="$DIST" REQUIREMENT="$REQUIREMENT" INDEX="$INDEX"

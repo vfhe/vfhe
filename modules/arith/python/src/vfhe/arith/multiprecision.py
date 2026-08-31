@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from math import ceil, log2, prod
+from typing import TYPE_CHECKING
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 
-from .polynomial import Polynomial
+if TYPE_CHECKING:
+    from .polynomial import Polynomial
 
 
 class Multiprecision:
@@ -14,7 +16,7 @@ class Multiprecision:
         self.lib = lib
         try:
             self.vector_size = self.lib.get_mp_vector_size()
-        except Exception:
+        except AttributeError:
             self.vector_size = 1
 
     # --- readers (reconstruct Python ints from the base-2^52 digit arrays) ---
@@ -57,7 +59,8 @@ class Multiprecision:
         )
 
         m_val = 2**k // ql
-        assert m_val < 2**52
+        if not (m_val < 2**52):
+            raise ValueError("m_val < 2**52")
         m = self.load_small(m_val)
 
         return {"pw": pw, "q": q, "m": m, "k": k}

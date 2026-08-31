@@ -54,6 +54,11 @@ extern "C"
     } *incNTT;
 
     void incNTT_extend_with_primes(incNTT ntt, uint64_t *new_primes, uint64_t count);
+    // (Z_q[i](Q/q[i]))**-1 for i in [0,l): RNS, so it needs inverse_mod.
+    void compute_RNS_Qhat_array(uint64_t *out, uint64_t *p, uint64_t l);
+    NTT_proc *new_ntt_list(uint64_t *primes, uint64_t N, uint64_t l);
+    incNTT new_incomplete_ntt_list(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l);
+    uint64_t **incNTT_get_rou_matrix(incNTT ntt);
 
     static inline uint64_t rns_mask_to_l(uint64_t mask)
     {

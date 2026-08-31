@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from math import log2
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 
 from .polynomial import Polynomial, Ring, repr
 
@@ -135,7 +135,7 @@ class ComplexPolynomial:
         else:
             raise NotImplementedError(f"cannot scale by {type(other).__name__}")
 
-    def __setitem__(self, idx, val: float | complex):
+    def __setitem__(self, idx, val: complex):
         if type(val) is float or type(val) is int:
             self.obj[idx] = val
             self.obj[idx + self.ring.N] = 0.0

@@ -71,11 +71,13 @@ class FS_Verifier(Verifier):
     """
 
     def _derive(self, tag: bytes, label: str) -> bytes:
+        assert self.iop is not None
         transcript = self.iop.transcript
         return hash_bytes(transcript.state() + tag + label.encode())
 
     def _draw_challenge(self, label: str):
         seed = self._derive(b"challenge", label)
+        assert self.iop is not None
         domain = self.iop.domain
         derive = getattr(domain, "exceptional_from_seed", None)
         if callable(derive):

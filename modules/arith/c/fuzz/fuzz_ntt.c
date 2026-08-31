@@ -17,7 +17,7 @@
 #include <stdlib.h>
 
 #include <arith.h>
-#include <misc.h> /* safe_aligned_malloc: the SIMD kernels need 64-byte-aligned buffers */
+#include <util.h> /* safe_aligned_malloc: the SIMD kernels need 64-byte-aligned buffers */
 
 /* Little cursor over the fuzzer input; reads zero-padded once exhausted. */
 typedef struct

@@ -12,7 +12,7 @@ import operator
 from enum import Enum
 
 from vfhe.arith import Polynomial, Ring, repr
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 
 # Which basis a dense table is written in — a property of the table, not of
 # its domain class (piop.md §7).
@@ -148,6 +148,13 @@ class MLE:
         """The number of free variables; derived, so it cannot go stale."""
         return len(self.variables)
 
+    @property
+    def _ring(self) -> Ring:
+        """The ring of a ring-backed table; the kernel paths require one."""
+        if self.ring is None:
+            raise ValueError("this MLE has no ring backing")
+        return self.ring
+
     def _entry(self, item) -> Polynomial:
         """A ring-backed table entry: Polynomials are adopted as they are (so
         kernels can fill a freshly allocated table), integers are lifted to
@@ -155,7 +162,7 @@ class MLE:
         if isinstance(item, Polynomial):
             return item
         if isinstance(item, int):
-            return Polynomial(self.ring).from_array([item])
+            return Polynomial(self._ring).from_array([item])
         raise TypeError("Entries of a ring-backed table must be Polynomial or integer")
 
     def _set_table(self, entries: list) -> None:
@@ -168,8 +175,9 @@ class MLE:
         """A table with `src`'s variables and ring, holding `entries` (in
         `src`'s basis unless another is given)."""
         basis = src.basis if basis is None else basis
-        key = "coefficients" if basis is MLE_Basis.coeff else "evaluations"
-        return cls(ring=src.ring, variables=src.variables, **{key: entries})
+        if basis is MLE_Basis.coeff:
+            return cls(ring=src.ring, variables=src.variables, coefficients=entries)
+        return cls(ring=src.ring, variables=src.variables, evaluations=entries)
 
     @classmethod
     def eq(cls, ring: Ring, point: list, variables: list | None = None) -> MLE:
@@ -239,7 +247,7 @@ class MLE:
         linear, so they apply in either basis."""
         self.to_NTT()
         size = 1 << self.num_vars
-        new_table = [Polynomial(self.ring) for _ in range(size)]
+        new_table = [Polynomial(self._ring) for _ in range(size)]
         res = MLE._like(self, new_table)
         kernel(res.table_ptr, self.table_ptr, *args, size)
         mark_ntt(new_table)
@@ -318,7 +326,7 @@ class MLE:
         kernel pair differs only in the type of `val` (a ring element or a
         small integer); `tail` completes the chosen kernel's signature."""
         self.to_NTT()
-        new_table = [Polynomial(self.ring) for _ in range(1 << (self.num_vars - 1))]
+        new_table = [Polynomial(self._ring) for _ in range(1 << (self.num_vars - 1))]
         new_ptr = handle_array(new_table)
         if isinstance(val, Polynomial):
             val.to_NTT()

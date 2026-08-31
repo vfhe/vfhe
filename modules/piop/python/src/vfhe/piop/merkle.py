@@ -24,7 +24,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Callable, Sequence
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 
 # Node size, in bytes: BLAKE3's default output length.
 DIGEST_LEN = 32

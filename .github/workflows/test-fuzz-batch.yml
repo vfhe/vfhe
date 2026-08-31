@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Nightly ClusterFuzzLite sessions, corpus prunes and coverage reports, one job per engine.
+name: Test Fuzz Batch
+
+on:
+  schedule:
+    - cron: "45 0 * * *"
+
+env:
+  FUZZ_SECONDS: "3600"
+  PRUNE_SECONDS: "600"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read # checkout
+
+jobs:
+  # ------------------------------------------------------------------ fuzz ---
+
+  fuzz-batch:
+    name: Fuzz Batch (${{ matrix.engine }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 110
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        # No neon: ClusterFuzzLite's action images have no arm builds.
+        include:
+          - { engine: portable, runner: [ubuntu-24.04] }
+          - { engine: avx512ifma, runner: [self-hosted, Linux, X64, avx512ifma] }
+    permissions:
+      actions: read # gh-actions filestore keeps corpus in artifacts
+      contents: read # checkout
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: State the engine to fuzz
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: printf 'VFHE_ENGINE=%s\n' "$ENGINE" > .clusterfuzzlite/.env
+      - name: Build fuzzers
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: c
+      - name: Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          fuzz-seconds: ${{ env.FUZZ_SECONDS }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mode: batch
+          output-sarif: true
+      - name: Prune corpus
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          fuzz-seconds: ${{ env.PRUNE_SECONDS }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mode: prune
+          output-sarif: true
+      # Coverage does not fuzz: it replays the pruned corpus through a rebuild.
+      - name: Build fuzzers for coverage
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: c
+          sanitizer: coverage
+      - name: Generate coverage report
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mode: coverage
+          sanitizer: coverage
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert:
+    name: Alert
+    if: failure()
+    needs:
+      - fuzz-batch
+    uses: ./.github/workflows/alert.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

@@ -1,0 +1,50 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "bom-ref": "vfhe",
+      "type": "library",
+      "name": "vfhe"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "vendored:blake3",
+      "type": "library",
+      "name": "BLAKE3",
+      "version": "1.8.7",
+      "description": "Vendored C sources, compiled into the _vfhe_native extension (see NOTICE).",
+      "scope": "required",
+      "purl": "pkg:github/blake3-team/blake3@1.8.7",
+      "licenses": [
+        {
+          "expression": "CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/BLAKE3-team/BLAKE3"
+        }
+      ],
+      "pedigree": {
+        "commits": [
+          {
+            "uid": "f3149ec5bb5449af877ba20377a11008ff499fa2",
+            "url": "https://github.com/BLAKE3-team/BLAKE3/commit/f3149ec5bb5449af877ba20377a11008ff499fa2"
+          }
+        ]
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "vfhe",
+      "dependsOn": [
+        "vendored:blake3"
+      ]
+    }
+  ]
+}

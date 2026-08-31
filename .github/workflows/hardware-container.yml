@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Publishes the image the self-hosted jobs run in, when its definition changes.
+name: Hardware Container
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/hardware.Dockerfile]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: hardware-container
+  cancel-in-progress: false
+
+jobs:
+  # ------------------------------------------------------------------ build ---
+
+  hardware-container:
+    name: Hardware Container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read # checkout
+      packages: write # push to this repository's registry
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Log in to the registry
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .github
+          file: .github/hardware.Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}-hardware:latest
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert:
+    name: Alert
+    if: failure() && github.event_name != 'workflow_dispatch'
+    needs:
+      - hardware-container
+    uses: ./.github/workflows/alert.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

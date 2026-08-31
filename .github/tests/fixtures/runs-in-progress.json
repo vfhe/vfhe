@@ -1,9 +1,0 @@
-{
-  "workflow_runs": [
-    {
-      "name": "CI Postsubmit",
-      "conclusion": null,
-      "updated_at": "2026-08-01T00:00:00Z"
-    }
-  ]
-}

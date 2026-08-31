@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# `make lint` - every pre-commit hook over the whole tree, then pyright.
+name: Lint
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read # checkout
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Set up dev environment
+        uses: ./.github/actions/setup-dev
+        with:
+          groups: lint
+      - name: Run static checks
+        run: make lint

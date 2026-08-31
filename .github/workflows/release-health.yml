@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Whether what an index serves still installs and runs; pip resolves it anew each night.
+name: Release Health
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      index:
+        description: Which index to install from; the schedule always asks PyPI.
+        type: choice
+        options: [pypi, testpypi]
+        default: pypi
+      version:
+        description: Version to install; empty takes whatever the index serves now.
+        type: string
+        default: ""
+
+permissions:
+  contents: read # checkout
+
+concurrency:
+  group: release-health
+  cancel-in-progress: false
+
+jobs:
+  # ----------------------------------------------------------------- smoke ---
+
+  test-smoke:
+    name: Test Smoke
+    uses: ./.github/workflows/test-smoke.yml
+    permissions:
+      contents: read # checkout
+    with:
+      index: ${{ inputs.index || 'pypi' }}
+      requirement: vfhe${{ inputs.version && format('=={0}', inputs.version) || '' }}
+      source: index
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert:
+    name: Alert
+    if: failure() && github.event_name != 'workflow_dispatch'
+    needs:
+      - test-smoke
+    uses: ./.github/workflows/alert.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}
