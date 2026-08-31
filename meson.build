@@ -247,6 +247,9 @@ foreach fact : engine_facts
     # types under them.
     cargs_json = fact['cargs'].length() == 0 ? '[]' : '["' + '", "'.join(fact['cargs']) + '"]'
     sde_json = fact['sde'].length() == 0 ? '[]' : '["' + '", "'.join(fact['sde']) + '"]'
+    # A coverage-instrumented archive needs its compiler's gcov runtime, which
+    # only a link naming --coverage pulls in.
+    link_json = get_option('b_coverage') ? '["--coverage"]' : '[]'
     configure_file(
         output: 'engine-' + engine + '.json',
         command: [
@@ -255,7 +258,8 @@ foreach fact : engine_facts
             '  "engine": "' + engine + '",',
             '  "capability": ' + (fact['capability'] == '' ? 'null' : '"' + fact['capability'] + '"') + ',',
             '  "sde": ' + sde_json + ',',
-            '  "cargs": ' + cargs_json,
+            '  "cargs": ' + cargs_json + ',',
+            '  "link_args": ' + link_json,
             '}',
         ],
         capture: true,
