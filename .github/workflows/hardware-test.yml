@@ -41,6 +41,11 @@ jobs:
         # failure as "no VCS" and abandons the sdist. '*', not the workspace
         # path, because meson dist archives the submodules too, each its own repo.
         run: git config --global --add safe.directory '*'
+      - name: Set up dev environment
+        uses: ./.github/actions/setup-dev
+        with:
+          groups: smoke
+          pip-cache: false
       - name: Run C suites natively
         uses: ./.github/actions/test-c
         with:
