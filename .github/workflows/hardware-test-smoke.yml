@@ -46,6 +46,7 @@ jobs:
         uses: ./.github/actions/setup-dev
         with:
           groups: smoke
+          pip-cache: false
       - name: Install from the index and run smoke
         env:
           INDEX: ${{ inputs.index || 'pypi' }}

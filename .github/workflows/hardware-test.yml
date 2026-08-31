@@ -39,23 +39,27 @@ jobs:
         uses: ./.github/actions/test-c
         with:
           engine: avx512ifma
+          pip-cache: false
       - name: Run Python suites natively
         if: ${{ !cancelled() }}
         uses: ./.github/actions/test-python
         with:
           engine: avx512ifma
+          pip-cache: false
           suites: complete
       - name: Run C suites sanitized
         if: ${{ !cancelled() }}
         uses: ./.github/actions/test-c
         with:
           engine: avx512ifma
+          pip-cache: false
           sanitize: address,undefined
       - name: Run Python suites sanitized
         if: ${{ !cancelled() }}
         uses: ./.github/actions/test-python
         with:
           engine: avx512ifma
+          pip-cache: false
           sanitize: address,undefined
           suites: fast
       - name: Smoke test an installed package
