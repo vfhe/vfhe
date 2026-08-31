@@ -130,9 +130,9 @@ def _assemble_ffi(
         libraries=["m"],
         extra_objects=[str(archive)],
         # The engine flags must match the archive's: the headers' types
-        # depend on them.
+        # depend on them, and its link_args name what it needs to load.
         extra_compile_args=["-O3", "-std=gnu11", *engine["cargs"], *extra_compile_args],
-        extra_link_args=extra_link_args,
+        extra_link_args=[*engine["link_args"], *extra_link_args],
     )
     return ffi
 
