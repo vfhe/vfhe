@@ -346,6 +346,86 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // in: L limbs each below 2^52, not necessarily below p. out: canonical.
     void pmf_canonicalize(uint64_t *out, const uint64_t *in, PMFParams params);
 
+    // The canonical encoding: the value in fixed-width big-endian, exactly
+    // pmf_byte_length(params) bytes. It is the form the field is compared and
+    // hashed in, because it depends on neither the limb representation nor the
+    // padding lanes. pmf_from_bytes accepts only an encoding below p -- a value
+    // at or above it would have two encodings -- and returns 0 otherwise,
+    // leaving out untouched.
+    void pmf_to_bytes(uint8_t *out, const uint64_t *a, PMFParams params);
+    int pmf_from_bytes(uint64_t *out, const uint8_t *in, PMFParams params);
+    // BLAKE3 over the canonical encoding, 32 bytes.
+    void pmf_hash(uint8_t *out, const uint64_t *a, PMFParams params);
+    // Uniform in [0, p) from a seed, by rejection. Not constant-time: seeds are
+    // public values.
+    void pmf_sample_random(uint64_t *out, const uint8_t *seed, uint64_t seed_len, PMFParams params);
+
+    // vectors of pseudo-Mersenne elements
+    //
+    // n elements held as L limb planes: limb j of element i is limbs[j][i]. A
+    // single element fills one AVX-512 register with its own limbs, so every
+    // carry runs across lanes; a vector turns that inside out, putting one limb
+    // of PMF_LANES DIFFERENT elements in a register. Carries then travel between
+    // planes at a fixed lane and nothing crosses lanes, which is what makes the
+    // arithmetic worth more than a loop over the element kernels.
+    //
+    // The layout contract, which the caller allocating a PMFVector must meet:
+    //
+    // - Each plane is pmf_vec_padded_length(n) words and is 64-byte aligned, so
+    //   a group of PMF_LANES elements' limbs loads as one aligned __m512i.
+    // - Words n..allocated_n-1 are padding. The arithmetic reads and writes
+    //   them, so they must hold canonical elements -- allocate zeroed and they
+    //   stay canonical -- but they carry no meaning: everything that reads a
+    //   value (sum, equality, hashing, sampling, element access) stops at n.
+    // - Every live element is canonical, exactly as for a single element.
+    //
+    // Arithmetic outputs may alias their inputs. The movement operations (copy,
+    // split_even_odd, get/set) may not.
+    typedef struct _PMFVector
+    {
+        uint64_t **limbs; // L planes of allocated_n words
+        uint64_t n;       // elements the caller gave meaning to
+        uint64_t allocated_n;
+        PMFParams params; // borrowed; must outlive the vector
+    } *PMFVector;
+
+    // Words a plane must hold for a vector of n elements: n rounded up to the
+    // group width. The single source of that number.
+    uint64_t pmf_vec_padded_length(uint64_t n);
+
+    void pmf_vec_add(PMFVector out, const PMFVector a, const PMFVector b);
+    void pmf_vec_sub(PMFVector out, const PMFVector a, const PMFVector b);
+    void pmf_vec_neg(PMFVector out, const PMFVector a);
+    void pmf_vec_mul(PMFVector out, const PMFVector a, const PMFVector b);
+    // Broadcast against one element `s`, which is PMF_LANES words.
+    void pmf_vec_add_scalar(PMFVector out, const PMFVector a, const uint64_t *s);
+    void pmf_vec_sub_scalar(PMFVector out, const PMFVector a, const uint64_t *s);
+    void pmf_vec_scalar_sub(PMFVector out, const uint64_t *s, const PMFVector a);
+    void pmf_vec_scale(PMFVector out, const PMFVector a, const uint64_t *s);
+    // Sum of the first n elements, into one PMF_LANES-word element.
+    void pmf_vec_sum(uint64_t *out, const PMFVector a);
+    // Transpose between the planes and one PMF_LANES-word element buffer; the
+    // range forms move `count` consecutive elements laid out PMF_LANES words
+    // apart, so building a vector costs one call rather than `count`.
+    void pmf_vec_get_element(uint64_t *out, const PMFVector a, uint64_t index);
+    void pmf_vec_set_element(PMFVector out, uint64_t index, const uint64_t *value);
+    void pmf_vec_set_range(PMFVector out, uint64_t start, const uint64_t *values, uint64_t count);
+    void pmf_vec_get_range(uint64_t *out, const PMFVector a, uint64_t start, uint64_t count);
+    void pmf_vec_copy(PMFVector out, const PMFVector a);
+    // Deinterleave: even gets elements 0, 2, 4, ... and odd gets 1, 3, 5, ....
+    // `a->n` must be even and each output must hold a->n / 2 elements.
+    void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a);
+    int pmf_vec_is_equal(const PMFVector a, const PMFVector b);
+    // Uniform elements from a seed. One draw stream covers the whole vector.
+    void pmf_vec_sample_random(PMFVector out, const uint8_t *seed, uint64_t seed_len);
+    // BLAKE3 over the canonical encodings, in index order, 32 bytes.
+    void pmf_vec_hash(uint8_t *out, const PMFVector a);
+    // One digest per window of `group` elements starting every `stride` indices:
+    // window k covers elements k * stride .. k * stride + group - 1, and the
+    // count is the number of whole windows that fit. `out` takes 32 bytes each.
+    uint64_t pmf_vec_hash_count(const PMFVector a, uint64_t group, uint64_t stride);
+    void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint64_t stride);
+
     // complex polynomial
     double **load_rous_CT(double *rous_real, double *rous_imag, uint64_t size);
     void CT_NR(double *x, double **ws, uint64_t n);

@@ -17,6 +17,7 @@ from vfhe.arith import (
     Multiprecision,
     Polynomial,
     PseudoMersenneField,
+    PseudoMersenneVector,
     Ring,
     RNSPolynomial,
     RNSRing,
@@ -52,8 +53,9 @@ def test_class_carries_its_spec(cls, key):
 
 def test_a_spec_declares_its_vector_type_or_none():
     assert ExtensionField.spec.vector_cls is ExtensionFieldVector
+    assert PseudoMersenneField.spec.vector_cls is PseudoMersenneVector
     # An implementation without one says so rather than omitting the slot.
-    assert PseudoMersenneField.spec.vector_cls is None
+    assert RNSRing.spec.vector_cls is None
 
 
 def test_resolve_picks_the_only_backend():

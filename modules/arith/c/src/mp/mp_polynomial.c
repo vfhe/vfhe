@@ -2,24 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <inttypes.h>
 #include <arith.h>
-#include <util.h>
-#include <crypto.h>
-
-#if !VFHE_HAVE_AVX512IFMA
-static inline uint64_t madd52lo(uint64_t a, uint64_t b, uint64_t c)
-{
-    unsigned __int128 prod =
-        (unsigned __int128)(b & 0x000fffffffffffffULL) * (c & 0x000fffffffffffffULL);
-    return a + (uint64_t)(prod & 0x000fffffffffffffULL);
-}
-
-static inline uint64_t madd52hi(uint64_t a, uint64_t b, uint64_t c)
-{
-    unsigned __int128 prod =
-        (unsigned __int128)(b & 0x000fffffffffffffULL) * (c & 0x000fffffffffffffULL);
-    return a + (uint64_t)(prod >> 52);
-}
-#endif
+#include <misc.h>
+#include "kernels/ifma52.h"
 
 int get_mp_vector_size(void)
 {

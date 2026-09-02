@@ -21,6 +21,7 @@
  * a shared structure could hide a shared mistake in both.
  */
 #include <arith.h>
+#include <blake3.h>
 #include <inttypes.h>
 
 #include "arith_internal.h"
@@ -364,4 +365,123 @@ void pmf_canonicalize(uint64_t *out, const uint64_t *in, PMFParams params)
     T[params->limbs] = 0;
 
     pmf_ref_reduce_wide(out, T, params);
+}
+
+// --- encoding, hashing and sampling ---------------------------------------
+//
+// The canonical encoding is the value in fixed-width big-endian, exactly
+// params->nbytes bytes. Fixed width and big-endian together make it the form
+// two implementations of this field can be compared in, and the form a digest
+// covers -- a digest over the limbs instead would depend on the representation
+// and on the padding lanes.
+
+void pmf_to_bytes(uint8_t *out, const uint64_t *a, PMFParams params)
+{
+    const uint64_t nbytes = params->nbytes;
+
+    for (uint64_t i = 0; i < nbytes; i++)
+    {
+        // Byte i counting from the least significant end, written from the far
+        // end of the buffer so the result reads big-endian.
+        const uint64_t bit = i * 8;
+        const uint64_t limb = bit / PMF_LIMB_BITS;
+        const uint64_t offset = bit % PMF_LIMB_BITS;
+
+        uint64_t window = a[limb] >> offset;
+        // A byte can straddle two limbs, because 52 is not a multiple of 8.
+        if (offset > PMF_LIMB_BITS - 8 && limb + 1 < params->limbs)
+            window |= a[limb + 1] << (PMF_LIMB_BITS - offset);
+
+        out[nbytes - 1 - i] = (uint8_t)(window & 0xff);
+    }
+}
+
+int pmf_from_bytes(uint64_t *out, const uint8_t *in, PMFParams params)
+{
+    const uint64_t L = params->limbs, nbytes = params->nbytes;
+    uint64_t t[PMF_MAX_LIMBS] = {0};
+
+    for (uint64_t i = 0; i < nbytes; i++)
+    {
+        const uint64_t byte = in[nbytes - 1 - i];
+        const uint64_t bit = i * 8;
+        const uint64_t limb = bit / PMF_LIMB_BITS;
+        const uint64_t offset = bit % PMF_LIMB_BITS;
+
+        t[limb] |= (byte << offset) & PMF_LIMB_MASK;
+        if (offset > PMF_LIMB_BITS - 8)
+        {
+            const uint64_t spill = byte >> (PMF_LIMB_BITS - offset);
+            if (spill)
+            {
+                // Bits above the top limb mean the encoding exceeds 2^(52L),
+                // which is above p; there is nowhere to put them.
+                if (limb + 1 >= L)
+                    return 0;
+                t[limb + 1] |= spill;
+            }
+        }
+    }
+
+    // Only canonical encodings decode: a value at or above p has a second
+    // representation as itself minus p, and accepting both would break the
+    // one-value-one-encoding property the digest relies on.
+    for (uint64_t k = L; k-- > 0;)
+    {
+        if (t[k] != params->p[k])
+        {
+            if (t[k] > params->p[k])
+                return 0;
+            break;
+        }
+        if (k == 0)
+            return 0; // equal to p exactly
+    }
+
+    pmf_store(out, t, L);
+    return 1;
+}
+
+void pmf_hash(uint8_t *out, const uint64_t *a, PMFParams params)
+{
+    uint8_t encoded[PMF_MAX_LIMBS * 8];
+    blake3_hasher hasher;
+
+    pmf_to_bytes(encoded, a, params);
+    blake3_hasher_init(&hasher);
+    blake3_hasher_update(&hasher, encoded, params->nbytes);
+    blake3_hasher_finalize(&hasher, out, BLAKE3_OUT_LEN);
+}
+
+// Uniform in [0, p) from a seed, by rejection. `stream_offset` is where in the
+// XOF stream to start drawing, and is advanced past whatever was consumed, so
+// a caller sampling many elements keeps one stream rather than deriving a fresh
+// one per element.
+void pmf_sample_stream(uint64_t *out, blake3_hasher *hasher, uint64_t *stream_offset,
+                       PMFParams params)
+{
+    const uint64_t nbytes = params->nbytes;
+    // The bits above n in the top byte would put every draw out of range.
+    const uint8_t top_mask = (uint8_t)((1u << (8 - (nbytes * 8 - params->n))) - 1);
+    uint8_t buf[PMF_MAX_LIMBS * 8];
+
+    for (;;)
+    {
+        blake3_hasher_finalize_seek(hasher, *stream_offset, buf, nbytes);
+        *stream_offset += nbytes;
+        buf[0] &= top_mask;
+        // p > 2^(n-1), so at least half the masked draws land below it.
+        if (pmf_from_bytes(out, buf, params))
+            return;
+    }
+}
+
+void pmf_sample_random(uint64_t *out, const uint8_t *seed, uint64_t seed_len, PMFParams params)
+{
+    blake3_hasher hasher;
+    uint64_t offset = 0;
+
+    blake3_hasher_init_derive_key(&hasher, "pmf_sample_element");
+    blake3_hasher_update(&hasher, seed, seed_len);
+    pmf_sample_stream(out, &hasher, &offset, params);
 }
