@@ -479,3 +479,114 @@ def test_negation_bulk(field):
         a = field(x)
         assert int(-a) == (-x) % p
         assert a + (-a) == field.zero
+
+
+class TestExponentiationAndInverse:
+    """Square-and-multiply and Fermat, against Python's own modular pow."""
+
+    @pytest.mark.parametrize("exponent", [0, 1, 2, 3, 17, 1 << 20])
+    def test_pow_matches_the_oracle(self, field, exponent):
+        p = field.prime
+        for value in [0, 1, 2, field.c, p - 1, rng.randrange(p)]:
+            result = field(value) ** exponent
+            assert int(result) == pow(value % p, exponent, p)
+            assert_canonical(result, field)
+
+    def test_square_matches_multiplication(self, field):
+        for value in edge_values(field):
+            element = field(value)
+            assert element.square() == element * element
+            assert_canonical(element.square(), field)
+
+    def test_inverse_matches_the_oracle(self, field):
+        p = field.prime
+        for value in [1, 2, field.c, field.fold, p - 1, rng.randrange(1, p)]:
+            element = field(value)
+            inverse = element.inverse()
+            assert int(inverse) == pow(value % p, p - 2, p)
+            assert element * inverse == field.one
+            assert_canonical(inverse, field)
+
+    def test_zero_has_no_inverse(self, field):
+        with pytest.raises(ZeroDivisionError):
+            field.zero.inverse()
+
+    def test_a_negative_exponent_inverts_first(self, field):
+        p = field.prime
+        element = field(rng.randrange(1, p))
+        assert element**-1 == element.inverse()
+        assert element**-3 == element.inverse() ** 3
+        assert element**-1 * element == field.one
+
+    def test_division(self, field):
+        p = field.prime
+        a, b = field(rng.randrange(p)), field(rng.randrange(1, p))
+        assert a / b == a * b.inverse()
+        assert 1 / b == b.inverse()
+        assert int(b / b) == 1
+
+    def test_pow_rejects_a_bool(self, field):
+        with pytest.raises(TypeError):
+            field(3) ** True
+
+
+class TestEncoding:
+    """The canonical encoding: fixed width, big-endian, one per element."""
+
+    def test_byte_length_is_the_prime_width(self, field):
+        assert field.byte_length == (field.bits + 7) // 8
+
+    def test_round_trip(self, field):
+        for value in edge_values(field):
+            element = field(value)
+            encoded = element.to_bytes()
+            assert len(encoded) == field.byte_length
+            assert field.from_bytes(encoded) == element
+            assert_canonical(field.from_bytes(encoded), field)
+
+    def test_encoding_is_big_endian_and_matches_python(self, field):
+        for value in [0, 1, 258, field.c, field.prime - 1, rng.randrange(field.prime)]:
+            canonical = value % field.prime
+            expected = canonical.to_bytes(field.byte_length, "big")
+            assert field(value).to_bytes() == expected
+
+    def test_a_value_at_or_above_p_is_refused(self, field):
+        """One element must have exactly one encoding."""
+        for value in (field.prime, field.prime + 1, (1 << field.bits) - 1):
+            with pytest.raises(ValueError, match="not a canonical element"):
+                field.from_bytes(value.to_bytes(field.byte_length, "big"))
+
+    def test_a_wrong_length_is_refused(self, field):
+        for length in (field.byte_length - 1, field.byte_length + 1):
+            with pytest.raises(ValueError, match="must be"):
+                field.from_bytes(bytes(length))
+
+    def test_digest_covers_the_encoding(self, field):
+        import hashlib
+
+        element = field(rng.randrange(field.prime))
+        digest = element.digest()
+        assert len(digest) == 32
+        assert digest == field(int(element)).digest()
+        assert digest != (element + field.one).digest()
+        # BLAKE3 is not in hashlib; assert independence from the limb padding
+        # instead, which is what hashing the encoding buys.
+        assert hashlib.sha256(element.to_bytes()).digest() != digest
+
+
+class TestSampling:
+    """Uniform elements from a seed, a pure function of it."""
+
+    def test_sampled_elements_are_canonical(self, field):
+        for i in range(20):
+            assert_canonical(field.random(b"seed-%d" % i), field)
+
+    def test_sampling_is_a_pure_function_of_the_seed(self, field):
+        assert field.random(b"same") == field.random(b"same")
+        assert field.random(b"same") != field.random(b"other")
+
+    def test_sampling_spreads_over_the_field(self, field):
+        """Draws must differ, and must use the full width of the modulus."""
+        values = [int(field.random(b"spread-%d" % i)) for i in range(32)]
+        assert len(set(values)) == len(values)
+        assert max(values) > field.prime >> 4

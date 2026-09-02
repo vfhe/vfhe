@@ -4,6 +4,7 @@
 #define __ARITH_INTERNAL_H__
 
 #include <arith.h>
+#include <blake3.h>
 
 // Size-generic scalar declarations (mod_scalar.c / ntt_scalar.c). Compiled into
 // every engine: the vectorized kernels below need n >= 8 (element-wise) or
@@ -115,5 +116,12 @@ void pmf_ref_neg(uint64_t *out, const uint64_t *a, PMFParams params);
 void pmf_ref_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
 // T is limbs+1 words, each below 2^60, and is clobbered. Requires limbs >= 3.
 void pmf_ref_reduce_wide(uint64_t *out, uint64_t *T, PMFParams params);
+
+// One rejection-sampled element, drawn from `hasher`'s output stream starting at
+// *stream_offset, which is advanced past whatever the draw consumed. Internal so
+// that a caller sampling many elements -- the vector sampler -- keeps a single
+// stream instead of deriving one per element.
+void pmf_sample_stream(uint64_t *out, blake3_hasher *hasher, uint64_t *stream_offset,
+                       PMFParams params);
 
 #endif // __ARITH_INTERNAL_H__

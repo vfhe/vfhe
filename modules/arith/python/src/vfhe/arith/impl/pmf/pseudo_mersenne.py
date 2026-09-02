@@ -173,13 +173,32 @@ class PseudoMersenneField(Field):
         """Reduce an integer into the field."""
         return PseudoMersenneElement(self, value)
 
+    @property
+    def byte_length(self) -> int:
+        """Bytes in the canonical encoding of an element."""
+        return (self.bits + 7) // 8
+
     def random(self, seed: bytes) -> PseudoMersenneElement:
         """Sample a uniform element deterministically from ``seed``."""
-        raise NotImplementedError
+        buf = self._new_buffer()
+        lib.pmf_sample_random(buf, seed, len(seed), self._params)
+        return self._wrap(buf)
 
     def from_bytes(self, data: bytes) -> PseudoMersenneElement:
-        """Decode a canonical big-endian encoding of exactly ``byte_length`` bytes."""
-        raise NotImplementedError
+        """
+        Decode a canonical big-endian encoding of exactly ``byte_length`` bytes.
+
+        Rejects anything else: a wrong length, or a value at or above ``p``,
+        which would give one field element two encodings.
+        """
+        if len(data) != self.byte_length:
+            raise ValueError(
+                f"encoding must be {self.byte_length} bytes, got {len(data)}"
+            )
+        buf = self._new_buffer()
+        if lib.pmf_from_bytes(buf, data, self._params) == 0:
+            raise ValueError("encoding is not a canonical element of this field")
+        return self._wrap(buf)
 
     def root_of_unity(self, log_order: int) -> PseudoMersenneElement:
         """
@@ -320,7 +339,9 @@ class PseudoMersenneElement:
 
     def square(self) -> PseudoMersenneElement:
         """Equivalent to ``self * self``, via a kernel free to specialize."""
-        raise NotImplementedError
+        out = self.field._new_buffer()
+        lib.pmf_mul(out, self._buf, self._buf, self.field._params)
+        return self.field._wrap(out)
 
     def __pow__(self, exponent: int) -> PseudoMersenneElement:
         """
@@ -329,7 +350,18 @@ class PseudoMersenneElement:
         A negative exponent is Python-level sugar: it inverts first, so it costs
         two C calls rather than one.
         """
-        raise NotImplementedError
+        if not isinstance(exponent, int) or isinstance(exponent, bool):
+            raise TypeError(f"exponent must be an int, not {type(exponent).__name__}")
+        base = self.inverse() if exponent < 0 else self
+        exponent = abs(exponent)
+        result = self.field.one
+        while exponent:
+            if exponent & 1:
+                result = result * base
+            exponent >>= 1
+            if exponent:
+                base = base.square()
+        return result
 
     def inverse(self) -> PseudoMersenneElement:
         """
@@ -337,11 +369,16 @@ class PseudoMersenneElement:
 
         Raises ZeroDivisionError for zero.
         """
-        raise NotImplementedError
+        if not self:
+            raise ZeroDivisionError("zero has no inverse")
+        return self ** (self.field.prime - 2)
 
     def __truediv__(self, other: PseudoMersenneElement | int) -> PseudoMersenneElement:
         """Sugar for ``self * other.inverse()``; two C calls rather than one."""
-        raise NotImplementedError
+        divisor = self._coerce(other)
+        if divisor is None:
+            return NotImplemented
+        return self * divisor.inverse()
 
     def __rtruediv__(self, other: PseudoMersenneElement | int) -> PseudoMersenneElement:
         """
@@ -350,7 +387,10 @@ class PseudoMersenneElement:
         NOT symmetric: this is ``other * self.inverse()``, so the inverse is
         taken of ``self``, not of ``other``.
         """
-        raise NotImplementedError
+        dividend = self._coerce(other)
+        if dividend is None:
+            return NotImplemented
+        return dividend * self.inverse()
 
     def __eq__(self, other: object) -> bool:
         """
@@ -385,7 +425,9 @@ class PseudoMersenneElement:
 
     def to_bytes(self) -> bytes:
         """Canonical fixed-width big-endian encoding, ``byte_length`` bytes."""
-        raise NotImplementedError
+        out = ffi.new("uint8_t[]", self.field.byte_length)
+        lib.pmf_to_bytes(out, self._buf, self.field._params)
+        return bytes(ffi.buffer(out))
 
     def to_limbs(self) -> list[int]:
         """All ``_LANES`` words, padding included, for tests that pin the layout."""
@@ -399,7 +441,9 @@ class PseudoMersenneElement:
         independent of the representation and of the padding lanes, so the two
         engines cannot disagree.
         """
-        raise NotImplementedError
+        out = ffi.new("uint8_t[32]")
+        lib.pmf_hash(out, self._buf, self.field._params)
+        return bytes(out)
 
     def __repr__(self) -> str:
         """Unambiguous form: the hex value plus the modulus it lives in."""
@@ -413,6 +457,9 @@ class PseudoMersenneElement:
         return str(int(self))
 
 
+# Imported here, at the bottom: the vector module imports this one above.
+from .vector import PseudoMersenneVector  # noqa: E402
+
 #: F_p for p = 2^n - c, one element per vector register, scalar kernels in C.
 #: Its elements are field scalars, so there are no quotient-polynomial-ring or
 #: tower operations, and its canonical form is its only representation.
@@ -422,6 +469,7 @@ PMF_LIMB = register(
         backend="limb52",
         parent_cls=PseudoMersenneField,
         element_cls=PseudoMersenneElement,
+        vector_cls=PseudoMersenneVector,
         capabilities=(Capability.CORE | Capability.EXACT | Capability.DOMAINS_COINCIDE),
         constraints=Constraints(max_prime_bits=_LIMB_BITS * max(_SUPPORTED_LIMBS)),
     )

@@ -15,11 +15,12 @@ import random
 
 import pytest
 from vfhe.arith import (
+    ExtensionField,
     ExtensionFieldVector,
     Field,
     FieldElement,
     FieldVector,
-    PseudoMersenneField,
+    Spec,
 )
 
 PRIME = (1 << 61) - 1
@@ -53,9 +54,17 @@ class TestDispatch:
         assert isinstance(vector, FieldVector)
 
     def test_a_field_without_vectors_says_so(self):
-        pmf = PseudoMersenneField.generate(260, two_adicity=8)
+        """Both implementations have one today, so the refusal needs a stub."""
+
+        class _NoVectors:
+            spec = Spec(
+                implementation="field",
+                backend="_test_no_vectors",
+                parent_cls=ExtensionField,
+            )
+
         with pytest.raises(TypeError, match="has no vector type"):
-            FieldVector(pmf, 4)
+            FieldVector(_NoVectors(), 4)
 
     def test_vector_cls_is_on_the_spec(self):
         assert make_field().spec.vector_cls is ExtensionFieldVector

@@ -191,3 +191,40 @@ void pmf_neg(uint64_t *out, const uint64_t *a, void *params);
 void pmf_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
 int pmf_is_equal(const uint64_t *a, const uint64_t *b, void *params);
 void pmf_canonicalize(uint64_t *out, const uint64_t *in, void *params);
+void pmf_to_bytes(uint8_t *out, const uint64_t *a, void *params);
+int pmf_from_bytes(uint64_t *out, const uint8_t *in, void *params);
+void pmf_hash(uint8_t *out, const uint64_t *a, void *params);
+void pmf_sample_random(uint64_t *out, const uint8_t *seed, uint64_t seed_len, void *params);
+
+// --- vectors of pseudo-Mersenne elements ---
+// n elements as L limb planes: limb j of element i at limbs[j][i]. Python owns
+// the buffers (aligned64) and fills this struct; the planes must be
+// pmf_vec_padded_length(n) words with the padding canonical, which is what lets
+// the kernels run whole groups with no tail. arith.h states the full contract.
+typedef struct _PMFVector {
+    uint64_t **limbs;
+    uint64_t n;
+    uint64_t allocated_n;
+    void *params;
+} *PMFVector;
+uint64_t pmf_vec_padded_length(uint64_t n);
+void pmf_vec_add(PMFVector out, const PMFVector a, const PMFVector b);
+void pmf_vec_sub(PMFVector out, const PMFVector a, const PMFVector b);
+void pmf_vec_neg(PMFVector out, const PMFVector a);
+void pmf_vec_mul(PMFVector out, const PMFVector a, const PMFVector b);
+void pmf_vec_add_scalar(PMFVector out, const PMFVector a, const uint64_t *s);
+void pmf_vec_sub_scalar(PMFVector out, const PMFVector a, const uint64_t *s);
+void pmf_vec_scalar_sub(PMFVector out, const uint64_t *s, const PMFVector a);
+void pmf_vec_scale(PMFVector out, const PMFVector a, const uint64_t *s);
+void pmf_vec_sum(uint64_t *out, const PMFVector a);
+void pmf_vec_get_element(uint64_t *out, const PMFVector a, uint64_t index);
+void pmf_vec_set_element(PMFVector out, uint64_t index, const uint64_t *value);
+void pmf_vec_set_range(PMFVector out, uint64_t start, const uint64_t *values, uint64_t count);
+void pmf_vec_get_range(uint64_t *out, const PMFVector a, uint64_t start, uint64_t count);
+void pmf_vec_copy(PMFVector out, const PMFVector a);
+void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a);
+int pmf_vec_is_equal(const PMFVector a, const PMFVector b);
+void pmf_vec_sample_random(PMFVector out, const uint8_t *seed, uint64_t seed_len);
+void pmf_vec_hash(uint8_t *out, const PMFVector a);
+uint64_t pmf_vec_hash_count(const PMFVector a, uint64_t group, uint64_t stride);
+void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint64_t stride);
