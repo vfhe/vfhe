@@ -1,7 +1,43 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
-#include "misc.h"
+#include "util.h"
+#include <crypto.h>
+
+// Generates a sparse ternary array with Hamming Weight h, balanced (h/2 ones and h/2 negative ones)
+void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uint64_t q)
+{
+    memset(out, 0, sizeof(uint64_t) * size);
+    uint64_t hw = 0, val = 1, *rnd_buffer;
+    const uint64_t buffer_size = h * 10;
+    rnd_buffer = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * buffer_size);
+    while (hw < h)
+    {
+        generate_random_bytes(sizeof(uint64_t) * buffer_size, (uint8_t *)rnd_buffer);
+        array_mod_switch_from_2k(rnd_buffer, rnd_buffer, size, size, buffer_size);
+        uint64_t i = 0;
+        while (i < buffer_size && hw < h)
+        {
+            const uint64_t idx = rnd_buffer[i++];
+            if (out[idx])
+                continue;
+            out[idx] = (uint64_t)((q + (int64_t)val) % q);
+            val = -val;
+            hw++;
+        }
+    }
+    free(rnd_buffer);
+#ifndef NDEBUG
+    uint64_t hw_check = 0, sum_check = 0;
+    for (size_t i = 0; i < size; i++)
+    {
+        sum_check += out[i];
+        hw_check += (out[i] != 0);
+    }
+    assert(hw_check == h);
+    assert((sum_check % q) == 0);
+#endif
+}
 
 LWE_Key lwe_alloc_key(uint64_t n, uint64_t l, RNS_Base base)
 {

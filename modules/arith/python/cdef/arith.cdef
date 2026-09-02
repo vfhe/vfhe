@@ -24,8 +24,11 @@ typedef struct _RNS_Polynomial {
   uint64_t allocated_l;
 } *RNS_Polynomial;
 
-// --- misc ---
+// --- allocation ---
 void *safe_aligned_malloc(uint64_t size);
+// libc free, releasing safe_aligned_malloc'd (posix_memalign, 64B) buffers
+// that Python owns and hands to the kernels.
+void free(void *ptr);
 
 // --- generic arithmetic ---
 // A ring is opaque; only its address is handled here. An element is the
@@ -122,7 +125,7 @@ void mp_polynomial_from_RNS(void *out, void *in, MPScalar *PW, void *q, mp_vecto
 void mp_polynomial_to_RNSc(void *out, void *in);
 
 // --- field extensions ---
-void *mod_new(uint64_t q);
+Modulus mod_new(uint64_t q);
 void mod_free(void *mod);
 void field_ext_add(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q);
 void field_ext_sub(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q);
@@ -149,7 +152,7 @@ typedef struct _FieldVector {
     uint64_t allocated_n;
     uint64_t d;
     uint64_t w;
-    void *mod;
+    Modulus mod;
 } *FieldVector;
 uint64_t field_vec_padded_length(uint64_t n);
 void field_vec_add(FieldVector out, const FieldVector a, const FieldVector b);
@@ -181,8 +184,9 @@ uint64_t inverse_mod_eea(uint64_t a, uint64_t p);
 // AVX-512 phase can add members without moving the ABI. An element is
 // pmf_limbs() uint64 words of 52-bit limbs, little-endian, in a 64-byte-aligned
 // buffer of 8 lanes whose upper lanes are always zero.
-void *pmf_new_params(uint64_t n, uint64_t c);
-void pmf_free_params(void *params);
+typedef struct _PMFParams *PMFParams;
+PMFParams pmf_new_params(uint64_t n, uint64_t c);
+void pmf_free_params(PMFParams params);
 uint64_t pmf_limbs(void *params);
 uint64_t pmf_byte_length(void *params);
 void pmf_add(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
@@ -205,7 +209,7 @@ typedef struct _PMFVector {
     uint64_t **limbs;
     uint64_t n;
     uint64_t allocated_n;
-    void *params;
+    PMFParams params;
 } *PMFVector;
 uint64_t pmf_vec_padded_length(uint64_t n);
 void pmf_vec_add(PMFVector out, const PMFVector a, const PMFVector b);

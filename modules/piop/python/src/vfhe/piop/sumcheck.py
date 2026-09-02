@@ -24,7 +24,7 @@ from __future__ import annotations
 from fractions import Fraction
 
 from vfhe.arith import ArithParent, Polynomial, Ring
-from vfhe.misc.libvfhe import lib
+from vfhe.engine import lib
 
 from .mle import MLE, element_array, mark_ntt, native_table
 from .piop import (
@@ -142,6 +142,8 @@ class _SumcheckRounds(Protocol):
     ) -> list[Statement]:
         (statement,) = statements
         iop = prover.iop
+        if iop is None:
+            raise RuntimeError("this party is not bound to an IOP")
         factors = list(statement.oracles)
         originals = tuple(statement.oracles)
         label = self._label(statement)
@@ -161,6 +163,8 @@ class _SumcheckRounds(Protocol):
     ) -> list[Statement]:
         (statement,) = statements
         iop = verifier.iop
+        if iop is None:
+            raise RuntimeError("this party is not bound to an IOP")
         label = self._label(statement)
         claim = _value_of(statement.value)
         point = {}
@@ -215,7 +219,10 @@ class Sumcheck(_SumcheckRounds):
         stride-computed generic kernel (fallback)."""
         idx = 0 if var is None else f.variables.index(var)
         f.to_NTT()  # the kernels read RNS form; see MLE.to_NTT
-        g0, g1 = Polynomial(f.ring), Polynomial(f.ring)
+        ring = f.ring
+        if ring is None:
+            raise ValueError("a native round needs a ring-backed MLE")
+        g0, g1 = Polynomial(ring), Polynomial(ring)
         size = 1 << f.num_vars
         if idx == 0:
             lib.sumcheck_round_pairs(
@@ -329,7 +336,8 @@ class SumcheckProd(_SumcheckRounds):
                     else:
                         val = lo + t * (hi - lo)
                     prod = val if prod is None else prod * val
-                evals[t] = prod if evals[t] is None else evals[t] + prod
+                acc = evals[t]
+                evals[t] = prod if acc is None else acc + prod
         return tuple(evals)
 
     @staticmethod
@@ -342,7 +350,10 @@ class SumcheckProd(_SumcheckRounds):
         idx = 0 if var is None else f.variables.index(var)
         f.to_NTT()  # the kernels read RNS form; see MLE.to_NTT
         g.to_NTT()
-        evals = [Polynomial(f.ring) for _ in range(3)]
+        ring = f.ring
+        if ring is None:
+            raise ValueError("a native round needs a ring-backed MLE")
+        evals = [Polynomial(ring) for _ in range(3)]
         handles = element_array(evals)
         size = 1 << f.num_vars
         if idx == 0:

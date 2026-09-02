@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import atexit
 
-from vfhe.misc.libvfhe import ffi, lib
-
-from ... import state
+from vfhe.arith import state
+from vfhe.engine import ffi, lib
 
 
 class RNS_Base_Registry:

@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# The published package on real silicon: the only place the picker chooses avx512ifma.
+name: Hardware Test Smoke
+
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+    inputs:
+      index:
+        description: Which index to install from; the schedule always asks PyPI.
+        type: choice
+        options: [pypi, testpypi]
+        default: pypi
+      version:
+        description: Version to install; empty takes whatever the index serves now.
+        type: string
+        default: ""
+
+permissions:
+  contents: read # checkout
+
+concurrency:
+  group: hardware-smoke
+  cancel-in-progress: false
+
+jobs:
+  # ----------------------------------------------------------------- smoke ---
+
+  hardware-test-smoke:
+    name: Hardware Test Smoke (avx512ifma)
+    runs-on: [self-hosted, Linux, X64, avx512ifma]
+    container:
+      image: ghcr.io/vfhe/vfhe-hardware:latest # zizmor: ignore[unpinned-images]
+    timeout-minutes: 30
+    permissions:
+      contents: read # checkout
+      packages: read # pull the job container from this registry
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up dev environment
+        uses: ./.github/actions/setup-dev
+        with:
+          groups: smoke
+          pip-cache: false
+      - name: Install from the index and run smoke
+        env:
+          INDEX: ${{ inputs.index || 'pypi' }}
+          REQUIREMENT: vfhe${{ inputs.version && format('=={0}', inputs.version) || '' }}
+        run: make smoke REQUIREMENT="$REQUIREMENT" INDEX="$INDEX"
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert:
+    name: Alert
+    if: failure() && github.event_name != 'workflow_dispatch'
+    needs:
+      - hardware-test-smoke
+    uses: ./.github/workflows/alert.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

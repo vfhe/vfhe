@@ -3,7 +3,7 @@
 #ifndef __NTT_H__
 #define __NTT_H__
 
-#include <arith_config.h>
+#include <engine.h>
 
 #if VFHE_HAVE_AVX512IFMA
 #include <immintrin.h>
@@ -86,7 +86,13 @@ extern "C"
         uint64_t N, l;
     } *RNS_Base;
 
+    // Builds the base for `l` primes over transforms of length N / split_degree,
+    // with its moduli, plans, and root-of-unity rows.
+    RNS_Base new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l);
+    uint64_t **rns_base_get_rou_matrix(RNS_Base base);
     void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t count);
+    // (Z_q[i](Q/q[i]))**-1 for i in [0,l): RNS, so it needs inverse_mod.
+    void compute_RNS_Qhat_array(uint64_t *out, uint64_t *p, uint64_t l);
 
     // Releases a base and everything it owns: its moduli, its plans, and the
     // root-of-unity rows. Any NTT_Plan built elsewhere against one of these

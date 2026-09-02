@@ -38,7 +38,7 @@ def make_field(d=4):
 
 
 def random_elements(field, n, seed=42):
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311 - test data, not a key
     return [
         FieldElement(field, [rng.randrange(PRIME) for _ in range(field.d)])
         for _ in range(n)
@@ -431,7 +431,7 @@ class TestAliasingContract:
 
     @staticmethod
     def _call(kernel, *args):
-        from vfhe.misc.libvfhe import lib
+        from vfhe.engine import lib
 
         getattr(lib, kernel)(*args)
 
@@ -463,7 +463,7 @@ class TestAliasingContract:
 
 
 def test_padded_length_is_the_single_source_of_the_plane_size():
-    from vfhe.misc.libvfhe import lib
+    from vfhe.engine import lib
 
     for n in (0, 1, 7, 8, 9, 16, 13):
         padded = lib.field_vec_padded_length(n)

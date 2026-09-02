@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+# Hardware tests on the self-hosted runner; hosted runners can lack ISA undeterministically.
+name: Hardware Test
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
+
+permissions:
+  contents: read # checkout
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # a push is a record, not a race: never cancel one
+
+jobs:
+  # ------------------------------------------------------------------ test ---
+
+  test-hardware:
+    name: Test Hardware (avx512ifma)
+    runs-on: [self-hosted, Linux, X64, avx512ifma]
+    container:
+      image: ghcr.io/vfhe/vfhe-hardware:latest # zizmor: ignore[unpinned-images]
+      # ASan's fixed shadow mapping needs the ASLR entropy of a host process.
+      options: --privileged
+    timeout-minutes: 120
+    permissions:
+      contents: read # checkout
+      packages: read # pull the job container from this registry
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Trust the checkout
+        # The container runs as root over a workspace owned by the runner user,
+        # so git refuses the checkout as unsafely owned; meson dist reads that
+        # failure as "no VCS" and abandons the sdist. '*', not the workspace
+        # path, because meson dist archives the submodules too, each its own repo.
+        run: git config --global --add safe.directory '*'
+      - name: Set up dev environment
+        uses: ./.github/actions/setup-dev
+        with:
+          groups: smoke
+          pip-cache: false
+      - name: Run C suites natively
+        uses: ./.github/actions/test-c
+        with:
+          engine: avx512ifma
+          pip-cache: false
+      - name: Run Python suites natively
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/test-python
+        with:
+          engine: avx512ifma
+          pip-cache: false
+          suites: complete
+      - name: Run C suites sanitized
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/test-c
+        with:
+          engine: avx512ifma
+          pip-cache: false
+          sanitize: address,undefined
+      - name: Run Python suites sanitized
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/test-python
+        with:
+          engine: avx512ifma
+          pip-cache: false
+          sanitize: address,undefined
+          suites: fast
+      - name: Smoke test an installed package
+        if: ${{ !cancelled() }}
+        run: make smoke
+
+  # ----------------------------------------------------------------- alert ---
+
+  alert:
+    name: Alert
+    if: failure()
+    needs:
+      - test-hardware
+    uses: ./.github/workflows/alert.yml
+    permissions: {}
+    secrets:
+      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}

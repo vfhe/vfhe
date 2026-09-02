@@ -15,7 +15,6 @@
 
 #include <arith.h>
 #include <arith_generic.h>
-#include <misc.h>
 
 #include "unity.h"
 

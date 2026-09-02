@@ -6,7 +6,6 @@ import functools
 import math
 import operator
 import secrets
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from vfhe.arith import (
@@ -17,9 +16,11 @@ from vfhe.arith import (
     domain_of,
     repr,
 )
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from .lwe import LWE_Key
 
 # Ciphertext operations preserve the concrete ciphertext class of their input
@@ -138,7 +139,8 @@ class MLWE_Scheme:
         return -1
 
     def key_gen_sparse(self, h, sigma_err, ternary=True):
-        assert self.N * self.r >= h
+        if self.N * self.r < h:
+            raise ValueError("failed: self.N * self.r < h")
         key = [[0] * self.N for _ in range(self.r)]
         crt_h = 0
         sign = 1
@@ -160,8 +162,10 @@ class MLWE_Scheme:
         Returns the raw component lists (before wrapping in an ``MLWE_Set``) so
         callers such as relinearization can interleave NULL pass-through slots.
         """
-        assert self == key_out.scheme, "Scheme mismatch"
-        assert lvl is not None, "Level must be specified"
+        if self != key_out.scheme:
+            raise ValueError("Scheme mismatch")
+        if lvl is None:
+            raise ValueError("Level must be specified")
         result = []
         special_q = self.special_rings[lvl].modulus_ratio(self.rings[lvl])
         key_out_special = MLWE_Key(
@@ -235,9 +239,8 @@ class MLWE_Scheme:
             if isinstance(quad_polys, list)
             else self.quadratic_key_polys(quad_polys)
         )
-        assert len(quad_polys) == self.r * (self.r + 1) // 2, (
-            "expected one quadratic key per pair of key components"
-        )
+        if len(quad_polys) != self.r * (self.r + 1) // 2:
+            raise ValueError("expected one quadratic key per pair of key components")
         if lvl is not None:
             return self.gen_rlk_for_level(key_out, quad_polys, lvl)
         return [
@@ -252,7 +255,8 @@ class MLWE_Scheme:
         lvl: int | None = None,
     ):
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
-        assert self == key_out.scheme, "Scheme mismatch"
+        if self != key_out.scheme:
+            raise ValueError("Scheme mismatch")
         if lvl is not None:
             return self.gen_ksk_for_level(key_out, key_poly, lvl)
         return [
@@ -329,7 +333,8 @@ class MLWE_Scheme:
         # log_size is the packing depth (log2 of the vector length), based on the number of elements to pack
         log_size = int(math.log2(len(vec)))
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[vec[0].lvl]
-        assert (1 << log_size) == len(vec)
+        if 1 << log_size != len(vec):
+            raise ValueError("failed: 1 << log_size != len(vec)")
         for c in vec:
             c.to_coeff()
 
@@ -408,8 +413,10 @@ class MLWE_Scheme:
         Returns:
             A list of ``extended_rank + 1`` Polynomial objects.
         """
-        assert in1.ring == in2.ring, "Ciphertexts must be in the same ring"
-        assert in1.scheme.r == in2.scheme.r, "Ciphertexts must have the same rank"
+        if in1.ring != in2.ring:
+            raise ValueError("Ciphertexts must be in the same ring")
+        if in1.scheme.r != in2.scheme.r:
+            raise ValueError("Ciphertexts must have the same rank")
         in1.to_NTT()
         in2.to_NTT()
         out_polys = [Polynomial(in1.ring) for _ in range(self.extended_rank + 1)]
@@ -444,9 +451,12 @@ class MLWE_Scheme:
             A rank-r product when ``ksk`` is given, otherwise the extended
             product of rank :attr:`extended_rank` (with ``is_extended`` set).
         """
-        assert in1.ring == in2.ring, "Ciphertexts must be in the same ring"
-        assert in1.scheme == in2.scheme, "Ciphertexts must be from the same scheme"
-        assert in1.lvl == in2.lvl, "Ciphertexts must have the same level"
+        if in1.ring != in2.ring:
+            raise ValueError("Ciphertexts must be in the same ring")
+        if in1.scheme != in2.scheme:
+            raise ValueError("Ciphertexts must be from the same scheme")
+        if in1.lvl != in2.lvl:
+            raise ValueError("Ciphertexts must have the same level")
         in1.to_NTT()
         in2.to_NTT()
 
@@ -488,7 +498,8 @@ class MLWE_Key:
         scheme: MLWE_Scheme,
         ring: Ring | None = None,
     ):
-        assert len(key) == scheme.r
+        if len(key) != scheme.r:
+            raise ValueError("failed: len(key) != scheme.r")
         self.key = key
         self.scheme = scheme
         self.sigma_err = sigma_err
@@ -616,7 +627,7 @@ class MLWE:
     def ell(self) -> int:
         return self.ring.ell
 
-    def new_like(
+    def new_like(  # noqa: PYI019 - Self needs 3.11
         self: CtT,
         lvl: int | None = None,
         ring: Ring | None = None,
@@ -633,7 +644,7 @@ class MLWE:
         out = type(self)(
             self.scheme, lvl=self.lvl if lvl is None else lvl, ring=ring, rank=rank
         )
-        out._inherit(self)
+        out._inherit(self)  # noqa: SLF001 - same class
         return out
 
     def _inherit(self, other: MLWE) -> None:
@@ -660,8 +671,10 @@ class MLWE:
         self.repr = repr.coeff
 
     def multiply_poly(self, in_rlwe, in_poly):
-        assert in_rlwe.ring == in_poly.ring, "trying to mul things in different rings"
-        assert in_rlwe.repr == in_poly.repr == repr.ntt
+        if in_rlwe.ring != in_poly.ring:
+            raise ValueError("trying to mul things in different rings")
+        if not (in_rlwe.repr == in_poly.repr == repr.ntt):
+            raise ValueError("failed: not (in_rlwe.repr == in_poly.repr == repr.ntt)")
         lib_rlwe.lib.mlwe_RNS_mul_by_poly(self.obj, in_rlwe.obj, in_poly.as_element())
         self.repr = repr.ntt
 
@@ -672,18 +685,22 @@ class MLWE:
         self.repr = in_rlwe.repr
 
     def add_MLWE(self, in1, in2):
-        assert in1.repr == in2.repr
+        if in1.repr != in2.repr:
+            raise ValueError("failed: in1.repr != in2.repr")
         lib_rlwe.lib.mlwe_add_RNSc_sample(self.obj, in1.obj, in2.obj)
         self.repr = in1.repr
 
     def sub_MLWE(self, in1, in2):
-        assert in1.repr == in2.repr
+        if in1.repr != in2.repr:
+            raise ValueError("failed: in1.repr != in2.repr")
         lib_rlwe.lib.mlwe_sub_RNSc_sample(self.obj, in1.obj, in2.obj)
         self.repr = in1.repr
 
     def add_poly(self, in1: MLWE, in2: Polynomial):
-        assert in1.ring == in2.ring, "trying to add things in different rings"
-        assert in1.repr == in2.repr
+        if in1.ring != in2.ring:
+            raise ValueError("trying to add things in different rings")
+        if in1.repr != in2.repr:
+            raise ValueError("failed: in1.repr != in2.repr")
         if in1.repr == repr.ntt:
             lib_rlwe.lib.mlwe_RNS_add_polynomial(self.obj, in1.obj, in2.as_element())
         else:
@@ -691,7 +708,8 @@ class MLWE:
         self.repr = in1.repr
 
     def sub_poly(self, in1, in2):
-        assert in1.repr == in2.repr
+        if in1.repr != in2.repr:
+            raise ValueError("failed: in1.repr != in2.repr")
         if in1.repr == repr.ntt:
             lib_rlwe.lib.mlwe_RNS_sub_polynomial(self.obj, in1.obj, in2.as_element())
         else:
@@ -711,6 +729,8 @@ class MLWE:
         return res
 
     def get_a_digit(self, j: int, i: int) -> Polynomial:
+        if i != 0:
+            raise NotImplementedError(f"digit {i}; only the base limb is reduced")
         res = Polynomial(self.ring)
         # polynomial_RNSc_mod_reduce(out, in); reduces to the base RNS limb.
         lib_rlwe.lib.polynomial_RNSc_mod_reduce(res.obj, self.obj_a_i(j))
@@ -718,6 +738,8 @@ class MLWE:
         return res
 
     def get_b_digit(self, i: int) -> Polynomial:
+        if i != 0:
+            raise NotImplementedError(f"digit {i}; only the base limb is reduced")
         res = Polynomial(self.ring)
         lib_rlwe.lib.polynomial_RNSc_mod_reduce(res.obj, self.obj_b())
         res.repr = repr.coeff
@@ -741,7 +763,7 @@ class MLWE:
         lib_rlwe.lib.mlwe_copy_RNS_sample(self.obj, other.obj)
         self.repr = other.repr
 
-    def round_division(
+    def round_division(  # noqa: PYI019 - Self needs 3.11
         self: CtT, ring: Ring | None = None, lvl: int | None = None
     ) -> CtT:
         """Round-divide the ciphertext down into a smaller (quotient) ring.
@@ -752,15 +774,16 @@ class MLWE:
         ``self.lvl`` is set to the destination's index in ``scheme.rings`` (its
         level), not its prime count.
         """
-        assert (ring is None) != (lvl is None), "provide exactly one of ring or lvl"
+        if ring is None == lvl is None:
+            raise ValueError("provide exactly one of ring or lvl")
         if lvl is None:
-            assert ring is not None
+            if ring is None:
+                raise ValueError("failed: ring is None")
             lvl = self.scheme.level_of_ring(ring)
         else:
             ring = self.scheme.rings[lvl]
-        assert ring.is_quotient_ring(self.ring), (
-            "destination must be a quotient of the current ring"
-        )
+        if not (ring.is_quotient_ring(self.ring)):
+            raise ValueError("destination must be a quotient of the current ring")
         self.to_coeff()
         lib_rlwe.lib.mlwe_round_division(self.obj, ring.arith_ring)
         self.lvl = lvl
@@ -843,7 +866,10 @@ class MLWE:
         if isinstance(other, Polynomial):
             res = self.new_like()
             if other.ring != self.ring:
-                assert other.ring.is_quotient_ring(self.ring)
+                if not (other.ring.is_quotient_ring(self.ring)):
+                    raise ValueError(
+                        "failed: not (other.ring.is_quotient_ring(self.ring))"
+                    )
                 other_sr = other.base_extend(self.ring)
             else:
                 other_sr = other
@@ -853,9 +879,8 @@ class MLWE:
         elif type(other).__name__ == "MGSW":
             return other * self
         elif isinstance(other, MLWE):
-            assert self.scheme.rlk is not None, (
-                "Relinearization key (rlk) must be set in the scheme"
-            )
+            if self.scheme.rlk is None:
+                raise ValueError("Relinearization key (rlk) must be set in the scheme")
             return self.scheme.multiply(self, other, self.scheme.rlk)
         else:  # assuming other is a pointer to int
             res = self.new_like()

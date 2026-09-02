@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
-#include "misc.h"
+#include "util.h"
 
 // functions for vectors of RNS integers mod q
 

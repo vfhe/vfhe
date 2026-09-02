@@ -3,7 +3,7 @@
 #include <arith_generic.h>
 
 #include "arith_dispatch.h"
-#include <misc.h>
+#include <util.h>
 
 // RNS as an implementation of the generic arithmetic interface.
 //

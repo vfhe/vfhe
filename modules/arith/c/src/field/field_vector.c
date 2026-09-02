@@ -11,7 +11,8 @@
 #include <arith.h>
 #include <blake3.h>
 #include "arith_internal.h"
-#include "misc.h"
+#include "util.h"
+#include <crypto.h>
 
 uint64_t field_vec_padded_length(uint64_t n)
 {

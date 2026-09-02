@@ -113,7 +113,7 @@ class Ring(ArithParent, metaclass=_ImplementationDispatch):
 
     @staticmethod
     def _concrete(
-        implementation: str | None, backend: str | None, *args, **kwargs
+        implementation: str | None, backend: str | None, *_args, **_kwargs
     ) -> type:
         return resolve(implementation or "rns", backend).parent_cls
 
@@ -128,7 +128,7 @@ class Polynomial(metaclass=_ImplementationDispatch):
 
     @staticmethod
     def _concrete(
-        implementation: str | None, backend: str | None, ring=None, *args, **kwargs
+        _implementation: str | None, _backend: str | None, ring=None, *_args, **_kwargs
     ) -> type:
         return ring.spec.element_cls
 
@@ -162,8 +162,8 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         backend: str | None,
         modulus: int | None = None,
         degree: int = 1,
-        *args,
-        **kwargs,
+        *_args,
+        **_kwargs,
     ) -> type:
         bits = modulus.bit_length() if isinstance(modulus, int) else None
         if implementation is None:
@@ -216,7 +216,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
 
     @staticmethod
     def _concrete(
-        implementation: str | None, backend: str | None, field=None, *args, **kwargs
+        _implementation: str | None, _backend: str | None, field=None, *_args, **_kwargs
     ) -> type:
         vector_cls = field.spec.vector_cls
         if vector_cls is None:

@@ -14,12 +14,8 @@ import random
 
 import pytest
 from vfhe.arith import Polynomial, Ring
-from vfhe.fhe import GP25
+from vfhe.fhe import GP25, mod_switch
 from vfhe.mlwe import LWE, MLWE, LWE_Key, MLWE_Scheme
-
-
-def mod_switch(v, q, p):
-    return round((v * p) / q) % p
 
 
 def get_min_prec(key):
@@ -119,11 +115,12 @@ def test_sab(deterministic_prng, threads):
     sab_key.b_prec = msg_prec
 
     lut = [
-        random.randint(0, (1 << (msg_prec - 1)) - 1) for _ in range(1 << (msg_prec - 1))
+        random.randint(0, (1 << (msg_prec - 1)) - 1)  # noqa: S311 - test data, not a key
+        for _ in range(1 << (msg_prec - 1))
     ]
     rlwe_tv = gp25.sab_LUT_packing(lut, 1 << (msg_prec - 1), msg_prec)
 
-    poly_in = [random.randint(0, (1 << (msg_prec - 1)) - 1) for _ in range(in_N)]
+    poly_in = [random.randint(0, (1 << (msg_prec - 1)) - 1) for _ in range(in_N)]  # noqa: S311 - test data, not a key
     poly_scaled = [mod_switch(i, 1 << msg_prec, Rp.q_l) for i in poly_in]
     delta = in_ring.modulus_ratio(Rp, return_pointer=True)
     rlwe_in = in_scheme.sample(

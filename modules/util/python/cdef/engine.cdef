@@ -1,0 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of util: which engine this binary is, used by the runtime
+// "you could be faster" hint (see vfhe/engine/__init__.py). The rest of util is
+// internal support with no Python symbols.
+
+const char *vfhe_engine_active(void);

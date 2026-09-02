@@ -10,7 +10,7 @@
 
 #include <string.h>
 
-#include "misc.h"
+#include "util.h"
 
 // -------------------------------------------------------------
 // Reed-Solomon (foldable) code over R_q, per RNS prime

@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from math import log2
 
-from vfhe.misc.libvfhe import ffi, lib
-
 # The AVX-512 complex FFT casts these buffers to __m512d and uses aligned loads,
 # so they must be 64-byte aligned; more than cffi's default. Shared with the other
 # over-aligned wrappers rather than kept private here.
-from ..._alloc import aligned64 as _aligned64
-from ...registry import register
-from ...spec import Capability, Constraints, Spec
-from ..rns.polynomial import Polynomial, Ring, repr
+from vfhe.arith._alloc import aligned64 as _aligned64
+from vfhe.arith.impl.rns.polynomial import Polynomial, Ring, repr
+from vfhe.arith.registry import register
+from vfhe.arith.spec import Capability, Constraints, Spec
+from vfhe.engine import ffi, lib
 
 
 class ComplexRing:
@@ -132,7 +131,7 @@ class ComplexPolynomial:
         else:
             raise NotImplementedError(f"cannot scale by {type(other).__name__}")
 
-    def __setitem__(self, idx, val: float | complex):
+    def __setitem__(self, idx, val: complex):
         if type(val) is float or type(val) is int:
             self.obj[idx] = val
             self.obj[idx + self.ring.N] = 0.0

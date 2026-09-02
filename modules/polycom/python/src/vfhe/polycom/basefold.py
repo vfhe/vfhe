@@ -377,6 +377,8 @@ class BasefoldEval(Protocol):
         if not native_table(f) or f.variables != commitment.variables:
             raise TypeError("the opening does not match the commitment")
         iop = prover.iop
+        if iop is None:
+            raise RuntimeError("this party is not bound to an IOP")
         label = f"basefold{statement.path}"
         d = self.code.d
         zs = [statement.point[v] for v in commitment.variables]
@@ -386,7 +388,10 @@ class BasefoldEval(Protocol):
         words = {d: list(opening.word)}
         trees = {d: opening.tree}
         cur_f = f
-        cur_eq = MLE.eq(f.ring, zs, variables=f.variables)
+        f_ring = f.ring
+        if f_ring is None:
+            raise ValueError("basefold needs a ring-backed MLE")
+        cur_eq = MLE.eq(f_ring, zs, variables=f.variables)
         for s in range(d):
             var = cur_f.variables[0]
             evals = SumcheckProd.prod_round_evals([cur_f, cur_eq])
@@ -429,7 +434,11 @@ class BasefoldEval(Protocol):
         await statement.resolved()
         commitment = self._check_statement(statement)
         iop = verifier.iop
+        if iop is None:
+            raise RuntimeError("this party is not bound to an IOP")
         ring = iop.domain
+        if ring is None:
+            raise RuntimeError("this IOP has no domain")
         label = f"basefold{statement.path}"
         d = self.code.d
         zs = [statement.point[v] for v in commitment.variables]

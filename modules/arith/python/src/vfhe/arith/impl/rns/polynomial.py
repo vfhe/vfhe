@@ -7,12 +7,12 @@ import itertools
 import math
 from enum import Enum
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.arith.base import Polynomial, Ring
+from vfhe.arith.number_theory import crt, is_prime
+from vfhe.arith.registry import register
+from vfhe.arith.spec import Capability, Constraints, Spec
+from vfhe.engine import ffi, lib
 
-from ...base import Polynomial, Ring
-from ...number_theory import crt, is_prime
-from ...registry import register
-from ...spec import Capability, Constraints, Spec
 from .rns_base import registry
 
 
@@ -31,15 +31,17 @@ class RNSRing(Ring):
         prime_size: int | list[int] = 49,
         exceptional_set_size=128,
     ) -> None:
-        assert (
+        if not (
             (mod_size is not None)
             or (type(prime_size) is list)
             or (primes is not None)
             or (mask is not None)
-        ), "must provide mod_size, prime_size, primes, or mask"
+        ):
+            raise ValueError("must provide mod_size, prime_size, primes, or mask")
 
         if mask is not None:
-            assert primes is not None, "must provide primes when mask is given"
+            if primes is None:
+                raise ValueError("must provide primes when mask is given")
             temp_split_degree = split_degree
             if not temp_split_degree:
                 smallest_in_pool = min(math.ceil(math.log2(p)) for p in primes)
@@ -73,9 +75,10 @@ class RNSRing(Ring):
         self.lib = lib
 
         if primes:
-            assert len(primes) >= self.ell, (
-                f"not enough primes for quotient ring for size 2^{mod_size}"
-            )
+            if len(primes) < self.ell:
+                raise ValueError(
+                    f"not enough primes for quotient ring for size 2^{mod_size}"
+                )
             self.primes = primes[: self.ell]
         else:
             self.primes = self.gen_primes()
@@ -134,9 +137,8 @@ class RNSRing(Ring):
         return [[w[idx][k] for k in range(row_len)] for idx in self.prime_indices]
 
     def quotient_ring(self, mod_size=None, ell=None, mask=None):
-        assert (mod_size is not None) ^ (ell is not None) ^ (mask is not None), (
-            "must provide mod_size, ell, or mask"
-        )
+        if not ((mod_size is not None) ^ (ell is not None) ^ (mask is not None)):
+            raise ValueError("must provide mod_size, ell, or mask")
         if mod_size is not None:
             res = Ring(self.N, mod_size, self.split_degree, primes=self.primes)
         elif ell is not None:
@@ -156,9 +158,8 @@ class RNSRing(Ring):
         return parent.mask & self.mask == self.mask
 
     def modulus_ratio(self, other_ring: Ring, return_pointer: bool = False):
-        assert other_ring.is_quotient_ring(self), (
-            "other_ring must be a quotient ring of this ring"
-        )
+        if not (other_ring.is_quotient_ring(self)):
+            raise ValueError("other_ring must be a quotient ring of this ring")
 
         scaling_mask = self.mask & ~other_ring.mask
         delta_big_int = math.prod(
@@ -179,9 +180,11 @@ class RNSRing(Ring):
         if self == other:
             return self
         if self.ell > other.ell:
-            assert other.is_quotient_ring(self)
+            if not (other.is_quotient_ring(self)):
+                raise ValueError("failed: not (other.is_quotient_ring(self))")
             return other
-        assert self.is_quotient_ring(other)
+        if not (self.is_quotient_ring(other)):
+            raise ValueError("failed: not (self.is_quotient_ring(other))")
         return self
 
     def union(self, other: Ring) -> Ring:
@@ -193,9 +196,8 @@ class RNSRing(Ring):
         array is indexed by, so a caller never has to know how primes are
         numbered.
         """
-        assert self.N == other.N and self.split_degree == other.split_degree, (
-            "rings must share N and split_degree to be combined"
-        )
+        if self.N != other.N or self.split_degree != other.split_degree:
+            raise ValueError("rings must share N and split_degree to be combined")
         order = registry().prime_to_index[(self.N, self.split_degree)]
         primes = sorted(set(self.primes) | set(other.primes), key=lambda p: order[p])
         return type(self)(
@@ -239,7 +241,8 @@ class RNSRing(Ring):
                 scale_arr[idx] = value % self.primes[k]
         else:
             vals = list(value)
-            assert len(vals) == self.ell, f"expected {self.ell} values, got {len(vals)}"
+            if len(vals) != self.ell:
+                raise ValueError(f"expected {self.ell} values, got {len(vals)}")
             for k, idx in enumerate(self.prime_indices):
                 scale_arr[idx] = vals[k]
         return ffi.new("uint64_t[]", scale_arr)
@@ -250,8 +253,8 @@ class RNSRing(Ring):
     def random_gaussian_element(self, sigma, ntt=True):
         return Polynomial(self).sample_gaussian(sigma, ntt)
 
-    def random_exceptional(self, size="minimal", ntt=True):
-        return Polynomial(self).sample_exceptional(size, ntt)
+    def random_exceptional(self, ntt=True):
+        return Polynomial(self).sample_exceptional(ntt)
 
 
 repr = Enum("Polynomial Representation", ["empty", "ntt", "coeff"])
@@ -299,11 +302,12 @@ class RNSPolynomial(Polynomial):
         return self
 
     def fast_inverse(self):
-        assert self.repr == repr.ntt, "fast_inverse requires NTT representation"
+        if self.repr != repr.ntt:
+            raise ValueError("fast_inverse requires NTT representation")
         out = Polynomial(self.ring)
         rc = self.ring.lib.polynomial_RNS_inverse(out.obj, self.obj)
         if rc == -1:
-            raise AssertionError("polynomial_RNS_inverse: invalid ring parameters")
+            raise ValueError("polynomial_RNS_inverse: invalid ring parameters")
         if rc == -2:
             raise ValueError("polynomial_RNS_inverse: zero slot is not invertible")
         if rc != 0:
@@ -318,7 +322,8 @@ class RNSPolynomial(Polynomial):
 
     # def from_int(self, i:int) -> Polynomial:
     def multiply(self, in1, in2):
-        assert in1.repr == in2.repr == repr.ntt
+        if not (in1.repr == in2.repr == repr.ntt):
+            raise ValueError("failed: not (in1.repr == in2.repr == repr.ntt)")
         self.ring.lib.polynomial_mul_RNS_polynomial(self.obj, in1.obj, in2.obj)
         self.repr = in1.repr
 
@@ -329,7 +334,8 @@ class RNSPolynomial(Polynomial):
         self.repr = in1.repr
 
     def sub(self, in1, in2):
-        assert in1.repr == in2.repr
+        if in1.repr != in2.repr:
+            raise ValueError("failed: in1.repr != in2.repr")
         if in1.repr == repr.ntt:
             self.ring.lib.polynomial_sub_RNS_polynomial(self.obj, in1.obj, in2.obj)
         else:
@@ -337,7 +343,8 @@ class RNSPolynomial(Polynomial):
         self.repr = in1.repr
 
     def add(self, in1, in2):
-        assert in1.repr == in2.repr
+        if in1.repr != in2.repr:
+            raise ValueError("failed: in1.repr != in2.repr")
         if in1.repr == repr.ntt:
             self.ring.lib.polynomial_add_RNS_polynomial(self.obj, in1.obj, in2.obj)
         else:
@@ -345,7 +352,8 @@ class RNSPolynomial(Polynomial):
         self.repr = in1.repr
 
     def automorphism(self, gen):
-        assert gen < self.ring.N * 2
+        if gen >= self.ring.N * 2:
+            raise ValueError("failed: gen >= self.ring.N * 2")
         res = Polynomial(self.ring)
         self.to_coeff()
         self.ring.lib.polynomial_RNSc_permute(res.obj, self.obj, gen)
@@ -396,7 +404,7 @@ class RNSPolynomial(Polynomial):
             self.to_NTT()
         return self
 
-    def sample_exceptional(self, size="minimal", ntt=True):
+    def sample_exceptional(self, ntt=True):
         self.ring.lib.polynomial_gen_random_RNSc_polynomial(self.obj)
         self.ring.lib.polynomial_RNS_broadcast_slot(self.obj, self.obj, 0)
         self.repr = repr.ntt
@@ -409,7 +417,8 @@ class RNSPolynomial(Polynomial):
             out_ = Polynomial(ring)
         elif isinstance(out, Polynomial):
             out_: Polynomial = out
-        assert self.ring.is_quotient_ring(out_.ring), "Not a quotient ring"
+        if not (self.ring.is_quotient_ring(out_.ring)):
+            raise ValueError("Not a quotient ring")
         return self.lift_to(out=out_)
 
     def lift_to(
@@ -432,22 +441,24 @@ class RNSPolynomial(Polynomial):
         self, ring: Ring | None = None, out: Polynomial | None = None
     ) -> Polynomial:
         self.to_coeff()
-        assert out is not None or ring is not None, "Must provide ring or out"
+        if not (out is not None or ring is not None):
+            raise ValueError("Must provide ring or out")
         if out is None:
             out_ = Polynomial(ring)  # type: ignore
         else:
             out_: Polynomial = out
-        assert out_.ring.is_quotient_ring(self.ring), "Not a quotient ring"
+        if not (out_.ring.is_quotient_ring(self.ring)):
+            raise ValueError("Not a quotient ring")
         self.ring.lib.polynomial_RNSc_mod_reduce(out_.obj, self.obj)
         out_.repr = repr.coeff
         return out_
 
     # floor division, in-place
     def floor_division(self, ring: Ring):
-        assert ring.ell < self.ring.ell, "new ring is not smaller than the current one"
-        assert ring.is_quotient_ring(self.ring), (
-            "Not a quotient ring or contiguous RNS-component subset"
-        )
+        if ring.ell >= self.ring.ell:
+            raise ValueError("new ring is not smaller than the current one")
+        if not (ring.is_quotient_ring(self.ring)):
+            raise ValueError("Not a quotient ring or contiguous RNS-component subset")
         self.to_coeff()
         divide_mask = self.rns_mask & ~ring.mask
         self.ring.lib.polynomial_floor_division_RNSc_wo_free(self.obj, divide_mask)
@@ -456,10 +467,10 @@ class RNSPolynomial(Polynomial):
 
     # round division, in-place
     def round_division(self, ring: Ring):
-        assert ring.ell < self.ring.ell, "new ring is not smaller than the current one"
-        assert ring.is_quotient_ring(self.ring), (
-            "Not a quotient ring or contiguous RNS-component subset"
-        )
+        if ring.ell >= self.ring.ell:
+            raise ValueError("new ring is not smaller than the current one")
+        if not (ring.is_quotient_ring(self.ring)):
+            raise ValueError("Not a quotient ring or contiguous RNS-component subset")
         self.to_coeff()
         divide_mask = self.rns_mask & ~ring.mask
         self.ring.lib.polynomial_round_division_RNSc_wo_free(self.obj, divide_mask)
@@ -578,7 +589,7 @@ class RNSPolynomial(Polynomial):
         res.repr = self.repr
         return res
 
-    def decompose(self, base, small=False):
+    def decompose(self, base):
         res = []
         lst = self.get_polynomial()
         for _ in range(self.ring.bit_size // base):
@@ -619,7 +630,8 @@ class RNSPolynomial(Polynomial):
             res.repr = self.repr
         elif type(other) is list:
             res = Polynomial(self.ring)
-            assert len(other) == self.ring.ell
+            if len(other) != self.ring.ell:
+                raise ValueError("failed: len(other) != self.ring.ell")
             self.ring.lib.polynomial_scale_RNS_polynomial_RNS(
                 res.obj, self.obj, self.ring.scalar_array(other)
             )
@@ -645,7 +657,10 @@ class RNSPolynomial(Polynomial):
         elif type(other) is int:
             if other == 1:
                 return self
-            assert other < 2**self.ring.smallest_prime  # large scaling not implemented
+            if other >= 2**self.ring.smallest_prime:
+                raise ValueError(
+                    "failed: other >= 2**self.ring.smallest_prime"
+                )  # large scaling not implemented
             self.ring.lib.polynomial_scale_RNSc_polynomial(self.obj, self.obj, other)
         else:
             raise NotImplementedError(f"cannot scale by {type(other).__name__}")
@@ -659,7 +674,8 @@ class RNSPolynomial(Polynomial):
         and wrapped into the unsigned value cffi's ``uint64_t`` parameter takes,
         and why subtraction is just addition of the negation.
         """
-        assert -(2**63) <= other < 2**63, f"integer operand {other} exceeds int64"
+        if not (-(2**63) <= other < 2**63):
+            raise ValueError(f"integer operand {other} exceeds int64")
         wrapped = other & 0xFFFFFFFFFFFFFFFF
         if self.repr == repr.coeff:
             self.ring.lib.polynomial_RNSc_add_integer(out.obj, self.obj, wrapped)

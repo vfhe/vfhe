@@ -1,8 +1,47 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
-#include "misc.h"
+#include "util.h"
+#include <crypto.h>
 #include <blake3.h>
+
+// Computes (Z_q[i](Q/q[i]))**-1, for i in [0,l)
+void compute_RNS_Qhat_array(uint64_t *out, uint64_t *p, uint64_t l)
+{
+    for (size_t i = 0; i < l; i++)
+    {
+        out[i] = 1;
+        for (size_t j = 0; j < l; j++)
+        {
+            if (i != j)
+            {
+                const uint64_t inv = inverse_mod(p[j], p[i]);
+                out[i] = (uint64_t)(((unsigned __int128)out[i] * inv) % p[i]);
+            }
+        }
+    }
+}
+
+static Modulus *new_modulus_list(uint64_t *primes, uint64_t l)
+{
+    Modulus *mods = (Modulus *)safe_malloc(sizeof(Modulus) * l);
+    for (size_t i = 0; i < l; i++)
+    {
+        mods[i] = mod_new(primes[i]);
+    }
+    return mods;
+}
+
+// The plans borrow `mods`, so the caller keeps owning it and must outlive them.
+static NTT_Plan *new_ntt_plan_list(Modulus *mods, uint64_t N, uint64_t l)
+{
+    NTT_Plan *plans = (NTT_Plan *)safe_malloc(sizeof(NTT_Plan) * l);
+    for (size_t i = 0; i < l; i++)
+    {
+        plans[i] = ntt_new_plan(N, mods[i]);
+    }
+    return plans;
+}
 
 RNS_Base new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l)
 {

@@ -23,7 +23,7 @@ def schoolbook_mul(a, b, prime, w, d):
 def test_field_arithmetic(d):
     w = 3
     field = Field(PRIME, d, w)
-    rng = random.Random(42)
+    rng = random.Random(42)  # noqa: S311 - test data, not a key
 
     # Random lists of coefficients
     a_coeffs = [rng.randint(0, PRIME - 1) for _ in range(d)]
@@ -69,7 +69,7 @@ def test_field_arithmetic(d):
 def test_field_inversion(d):
     w = 3
     field = Field(PRIME, d, w)
-    rng = random.Random(1337)
+    rng = random.Random(1337)  # noqa: S311 - test data, not a key
 
     # Generate a random non-zero element
     while True:

@@ -5,14 +5,18 @@ description: Run the C unit tests for one engine, optionally emulated, sanitized
 
 inputs:
   coverage:
-    description: "1 instruments the build and uploads this engine's leg."
-    default: "0"
+    description: "true instruments the build and uploads this engine's coverage data."
+    default: "false"
   emulate:
     description: "1 runs it under the emulator the registry names for that engine."
     default: "0"
   engine:
     description: Engine to build and test.
     required: true
+  pip-cache:
+    description: Forwarded to setup-dev; false in a job container.
+    required: false
+    default: "true"
   sanitize:
     description: meson's -Db_sanitize; none is the release shape.
     default: none
@@ -25,6 +29,7 @@ runs:
       uses: ./.github/actions/setup-dev
       with:
         groups: test
+        pip-cache: ${{ inputs.pip-cache }}
     - name: Set up Intel SDE
       if: inputs.emulate == '1'
       uses: ./.github/actions/setup-sde
@@ -40,13 +45,11 @@ runs:
         make test ENGINE="$ENGINE" SUITES=c EMULATE="$EMULATE" \
           VFHE_SANITIZE="$SANITIZE" VFHE_COVERAGE="$COVERAGE"
     # ------------------------------------------------------------- measure ---
-    - name: Upload C coverage leg
-      if: inputs.coverage == '1'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+    - name: Upload C coverage
+      if: inputs.coverage == 'true'
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
       with:
-        if-no-files-found: error
-        include-hidden-files: true
-        name: leg-c-${{ inputs.engine }}
-        overwrite: true
-        path: .coverage/legs
-        retention-days: 7
+        directory: build/meson-logs
+        disable_search: false
+        fail_ci_if_error: false
+        use_oidc: true

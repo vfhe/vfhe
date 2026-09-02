@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-# Publishes a pre-release to TestPyPI; PyPI accepts bare X.Y.Z tags only.
+# Publishes a pre-release to TestPyPI.
 name: Release TestPyPI
 
 on:
@@ -8,10 +8,11 @@ on:
     inputs:
       version:
         description: Version of the distribution.
+        type: string
         required: true
 
 concurrency:
-  group: testpypi-release
+  group: ${{ github.workflow }}
   cancel-in-progress: false
 
 permissions: {}
@@ -22,47 +23,43 @@ jobs:
   validate:
     name: Validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 60
     permissions:
-      actions: read # statuses main recorded for this commit
+      checks: read # the check runs it waits on
       contents: read # checkout
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Assert dispatched from main
-        env:
-          REF: ${{ github.ref }}
-        run: |
-          if [ "$REF" != "refs/heads/main" ]; then
-            echo "::error::dispatch this workflow from main (got $REF)."; exit 1
-          fi
-      # PEP 440 subset: X.Y.Z with an optional aN/bN/rcN and optional .devN — where pre-releases live instead of PyPI.
-      - name: Assert well-formed version
+      - name: Check the version is a release or a candidate
         env:
           VERSION: ${{ inputs.version }}
-        run: |
-          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.dev[0-9]+)?$'; then
-            echo "::error::version '$VERSION' is not X.Y.Z[{a|b|rc}N][.devN]."; exit 1
-          fi
-      - name: Assert CI passed on main
-        uses: ./.github/actions/check-workflow-status
+        run: echo "$VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.dev[0-9]+)?'
+      - name: Wait for CI on main
+        uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
-          presence: required
-          workflow: CI Postsubmit
-      - name: Assert hardware tests passed on main
-        uses: ./.github/actions/check-workflow-status
+          ref: ${{ github.sha }}
+          check-name: CI Postsubmit OK
+          allowed-conclusions: success # a skipped check is not a passed one
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 30
+      - name: Wait for hardware tests on main
+        uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
-          presence: optional
-          workflow: Hardware Tests
+          ref: ${{ github.sha }}
+          check-regexp: ^Test Hardware
+          allowed-conclusions: success
+          fail-on-no-checks: false
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 30
 
   # ------------------------------------------------------------------ dist ---
 
-  artifacts:
-    name: Release Artifacts
+  release-build:
+    name: Release Build
     needs: [validate]
-    uses: ./.github/workflows/release-artifacts.yml
+    uses: ./.github/workflows/release-build.yml
     permissions:
       contents: read # checkout
     with:
@@ -72,7 +69,7 @@ jobs:
 
   publish:
     name: Publish
-    needs: [artifacts]
+    needs: [release-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
@@ -95,23 +92,34 @@ jobs:
 
   # ----------------------------------------------------------------- prove ---
 
-  smoke-tests:
-    name: Smoke Tests (TestPyPI)
+  test-smoke:
+    name: Test Smoke
     needs: [publish]
-    uses: ./.github/workflows/smoke-tests.yml
+    uses: ./.github/workflows/test-smoke.yml
     permissions:
       contents: read # checkout
     with:
       index: testpypi
       requirement: vfhe==${{ inputs.version }}
+      source: index
 
-  # ----------------------------------------------------------------- alert ---
-
-  alert-channel:
-    name: Alert Channel
-    needs: [artifacts, publish, smoke-tests, validate]
-    if: failure()
-    uses: ./.github/workflows/alert-channel.yml
-    permissions: {}
-    secrets:
-      zulip-api-key: ${{ secrets.ZULIP_API_KEY }}
+  verify-provenance:
+    name: Verify Provenance
+    needs: [publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      attestations: read # provenance published for this repository
+      contents: read # the attestation names this repository
+    steps:
+      - name: Verify what the index serves
+        shell: bash # for pipefail, so a failed curl is not masked by xargs
+        env:
+          API: https://test.pypi.org/pypi
+          GH_TOKEN: ${{ github.token }}
+          SIGNER: ${{ github.repository }}/.github/workflows/release-testpypi.yml
+          VERSION: ${{ inputs.version }}
+        run: |
+          curl -sS "$API/vfhe/$VERSION/json" | jq -r '.urls[].url' |
+            xargs curl -sSL --create-dirs --output-dir published --remote-name-all
+          gh attestation verify published/* --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER"

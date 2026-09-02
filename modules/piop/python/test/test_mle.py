@@ -182,7 +182,7 @@ def test_mle_survives_entry_inspection():
     def poisoned():
         f = MLE(ring=ring, variables=v, evaluations=list(range(1, 9)))
         f.table[3].get_polynomial()  # poison one entry
-        f.table[6] == 7  # noqa: B015 - and another, via __eq__
+        _ = f.table[6] == 7  # via __eq__, which poisons the entry
         return f
 
     clean = MLE(ring=ring, variables=v, evaluations=list(range(1, 9)))

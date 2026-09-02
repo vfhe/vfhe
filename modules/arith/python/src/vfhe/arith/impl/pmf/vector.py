@@ -14,10 +14,10 @@ The C side states the layout contract at the `PMFVector` declaration in
 
 from __future__ import annotations
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.arith._alloc import aligned64
+from vfhe.arith.base import FieldVector
+from vfhe.engine import ffi, lib
 
-from ..._alloc import aligned64
-from ...base import FieldVector
 from .pseudo_mersenne import _LANES, PseudoMersenneElement
 
 

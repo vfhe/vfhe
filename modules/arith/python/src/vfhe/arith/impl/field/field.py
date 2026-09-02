@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import contextlib
 
-from vfhe.misc.libvfhe import ffi, lib
-
-from ...base import Field
-from ...registry import register
-from ...spec import Capability, Constraints, Spec
+from vfhe.arith.base import Field
+from vfhe.arith.registry import register
+from vfhe.arith.spec import Capability, Constraints, Spec
+from vfhe.engine import ffi, lib
 
 
 class ExtensionField(Field):
@@ -53,7 +52,8 @@ class FieldElement:
         if value is None:
             self.value = ffi.new("uint64_t[]", field.d)
         elif isinstance(value, (list, tuple)):
-            assert len(value) <= field.d
+            if not (len(value) <= field.d):
+                raise ValueError("len(value) <= field.d")
             self.value = ffi.new("uint64_t[]", field.d)
             for i, val in enumerate(value):
                 self.value[i] = val % field.prime

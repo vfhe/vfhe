@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
+#include <inttypes.h>
 #include <arith.h>
-#include <misc.h>
+#include <util.h>
+#include <crypto.h>
 #include "kernels/ifma52.h"
 
 int get_mp_vector_size(void)
@@ -388,14 +390,14 @@ void print_MPScalar(MPScalar x)
     printf("0x");
     for (int64_t i = x->d - 1; i >= 0; i--)
     {
-        printf("%013lx", v_int[i * 8]);
+        printf("%013" PRIx64, v_int[i * 8]);
     }
     printf("\n");
 #else
     printf("0x");
     for (int64_t i = x->d - 1; i >= 0; i--)
     {
-        printf("%013lx", x->digits[i]);
+        printf("%013" PRIx64, x->digits[i]);
     }
     printf("\n");
 #endif

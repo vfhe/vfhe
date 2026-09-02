@@ -11,10 +11,10 @@ declaration in ``arith.h``; this module is what allocates buffers meeting it.
 
 from __future__ import annotations
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.arith._alloc import aligned64
+from vfhe.arith.base import FieldVector
+from vfhe.engine import ffi, lib
 
-from ..._alloc import aligned64
-from ...base import FieldVector
 from .field import FieldElement
 
 

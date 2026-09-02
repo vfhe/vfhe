@@ -4,7 +4,7 @@
 
 #include <blake3.h>
 
-#include "misc.h"
+#include "util.h"
 
 // -------------------------------------------------------------
 // Binary Merkle tree over BLAKE3 digests

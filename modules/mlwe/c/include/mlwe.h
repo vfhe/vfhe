@@ -8,6 +8,7 @@
 extern "C"
 {
 #endif
+    void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uint64_t q);
     /* LWE */
 
     typedef struct _LWE_Key

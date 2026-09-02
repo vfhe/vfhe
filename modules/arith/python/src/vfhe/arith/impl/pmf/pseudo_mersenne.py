@@ -23,13 +23,12 @@ None of this is constant-time: exponents and seeds are public values.
 
 from __future__ import annotations
 
-from vfhe.misc.libvfhe import ffi, lib
-
-from ..._alloc import aligned64
-from ...base import Field
-from ...number_theory import gen_pseudo_mersenne_prime, is_prime
-from ...registry import register
-from ...spec import Capability, Constraints, Spec
+from vfhe.arith._alloc import aligned64
+from vfhe.arith.base import Field
+from vfhe.arith.number_theory import gen_pseudo_mersenne_prime, is_prime
+from vfhe.arith.registry import register
+from vfhe.arith.spec import Capability, Constraints, Spec
+from vfhe.engine import ffi, lib
 
 _LIMB_BITS = 52
 _LIMB_MASK = (1 << _LIMB_BITS) - 1
@@ -132,7 +131,8 @@ class PseudoMersenneField(Field):
                 f"C rejected n={self.bits}, c={self.c}; see stderr for the reason"
             )
         self._params = ffi.gc(params, lib.pmf_free_params)
-        assert lib.pmf_limbs(self._params) == self.limbs
+        if lib.pmf_limbs(self._params) != self.limbs:
+            raise RuntimeError("C and Python disagree on the limb count")
 
         self.zero = self(0)
         self.one = self(1)

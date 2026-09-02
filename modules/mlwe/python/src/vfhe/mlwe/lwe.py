@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from vfhe.arith import Ring
+from typing import TYPE_CHECKING
+
 from vfhe.arith.number_theory import crt
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
+
+if TYPE_CHECKING:
+    from vfhe.arith import Ring
 
 
 class LibLWE:
@@ -47,7 +51,8 @@ class LWE_Key:
     def set_s(self, key: list[int]):
         # Note: key might be flattened RNS polynomials. For LWE extraction,
         # we usually only deal with l=1 or we set identical limbs.
-        assert len(key) == self.n
+        if not (len(key) == self.n):
+            raise ValueError("len(key) == self.n")
         s = ffi.cast("LWE_Key", self.obj).s  # uint64_t ** s
         for j in range(self.l):
             q_j = self.ring.primes[j]

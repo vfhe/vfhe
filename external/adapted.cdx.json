@@ -1,0 +1,96 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "bom-ref": "vfhe",
+      "type": "library",
+      "name": "vfhe"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "adapted:mosfhet",
+      "type": "library",
+      "name": "MOSFHET",
+      "description": "Adapted C sources, compiled into the native extension (see NOTICE).",
+      "scope": "required",
+      "purl": "pkg:github/antoniocgj/mosfhet",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/antoniocgj/MOSFHET"
+        }
+      ],
+      "pedigree": {
+        "notes": "src/rnd/aes_rng.c adapted near-verbatim into modules/crypto/c/src/aes_rng.c; NTT, modular-arithmetic and sampling routines adapted into larger files across modules/arith, modules/crypto and modules/util."
+      }
+    },
+    {
+      "bom-ref": "adapted:uecm-modinv-64",
+      "type": "library",
+      "name": "uecm_modinv_64",
+      "description": "Adapted C routine, compiled into the native extension (see NOTICE).",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "name": "not stated by the upstream posting; provenance under review by the authors"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "other",
+          "url": "https://www.mersenneforum.org/",
+          "comment": "a forum posting, per the in-source attribution in modules/arith/c/src/number_theory.c"
+        }
+      ],
+      "pedigree": {
+        "notes": "adapted into inverse_mod_eea in modules/arith/c/src/number_theory.c."
+      }
+    },
+    {
+      "bom-ref": "adapted:hexl",
+      "type": "library",
+      "name": "Intel HEXL",
+      "description": "Adapted kernel approaches, compiled into the native extension in x86-tuned builds (see NOTICE).",
+      "scope": "required",
+      "purl": "pkg:github/intel/hexl",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/intel/hexl"
+        }
+      ],
+      "pedigree": {
+        "notes": "AVX-512 Barrett-reduction and lazy-reduction NTT approaches adapted into the width-specialised kernels modules/arith/c/src/mod{32,50,64}.c and ntt{32,50,64}.c."
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "vfhe",
+      "dependsOn": [
+        "adapted:mosfhet",
+        "adapted:uecm-modinv-64",
+        "adapted:hexl"
+      ]
+    }
+  ]
+}

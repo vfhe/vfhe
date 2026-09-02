@@ -15,7 +15,7 @@ Three axes describe an arithmetic object in this library:
     are the same, the storage and kernels are not.
 ``engine``
     Which machine code runs. Chosen once per process by CPU capability
-    (``VFHE_ENGINE``, ``vfhe.misc.libvfhe.active_engine``) and not addressed
+    (``VFHE_ENGINE``, ``vfhe.engine.active_engine``) and not addressed
     here at all.
 """
 

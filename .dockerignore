@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+*.egg-info
+**/*.o
+**/*.py[cod]
+**/*.so
+**/.DS_Store
+.cache
+.claude
+.env*
+.idea
+.tox
+.venv
+.version
+.vscode
+**/__pycache__
+build
+coverage
+dist
+docs

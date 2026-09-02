@@ -33,7 +33,7 @@ from __future__ import annotations
 import contextlib
 
 from vfhe.arith import Polynomial, Ring
-from vfhe.misc.libvfhe import lib
+from vfhe.engine import lib
 from vfhe.piop.mle import element_array, mark_ntt
 
 

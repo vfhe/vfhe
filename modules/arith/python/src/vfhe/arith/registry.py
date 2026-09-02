@@ -11,10 +11,13 @@ binary operation may apply it silently.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .spec import Capability, Spec
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from .spec import Capability, Spec
 
 _SPECS: dict[tuple[str, str], Spec] = {}
 _CONVERSIONS: dict[tuple[tuple[str, str], tuple[str, str]], Conversion] = {}

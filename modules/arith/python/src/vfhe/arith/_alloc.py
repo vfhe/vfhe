@@ -12,7 +12,7 @@ This lives in its own module because the invariant is cross-cutting: two private
 copies of the allocator would be two things to keep in step.
 """
 
-from vfhe.misc.libvfhe import ffi, lib
+from vfhe.engine import ffi, lib
 
 aligned64 = ffi.new_allocator(
     alloc=lambda size: lib.safe_aligned_malloc(size),
