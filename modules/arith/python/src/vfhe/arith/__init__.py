@@ -7,6 +7,7 @@ from .impl.field.field import ExtensionField, FieldElement
 from .impl.field.vector import ExtensionFieldVector
 from .impl.mp.multiprecision import Multiprecision
 from .impl.pmf.pseudo_mersenne import PseudoMersenneElement, PseudoMersenneField
+from .impl.pmf.vector import PseudoMersenneVector
 from .impl.rns.polynomial import RNSPolynomial, RNSRing, domain_of, repr
 from .number_theory import crt, gen_pseudo_mersenne_prime, is_prime
 from .registry import (
@@ -40,6 +41,7 @@ __all__ = [
     "Polynomial",
     "PseudoMersenneElement",
     "PseudoMersenneField",
+    "PseudoMersenneVector",
     "RNSPolynomial",
     "RNSRing",
     "Ring",
