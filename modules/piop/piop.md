@@ -429,9 +429,12 @@ binding (§7), may sit at any position: each message has a kernel per pair
 layout (`sumcheck_round_pairs` / `_halves` and `sumcheck_prod2_round_pairs`
 / `_halves` for the LSB and MSB variables, plus the stride-computed
 `sumcheck_round` / `sumcheck_prod2_round` generic fallbacks), chosen by the
-round-eval helpers from the variable's position. Fields join
-`supported_domains` after the MLE layer moves to `vfhe.arith`;
-multithreaded kernels are roadmap.
+round-eval helpers from the variable's position. Over a `Field` the table
+is a single `vfhe.arith.FieldVector` and the same messages are a fixed
+number of whole-vector operations (`round_evals_vector`,
+`prod2_round_evals_vector`, gated on `mle.vector_table`) — arith's kernels
+rather than piop's, for the first variable only; other positions take the
+pure-Python path. Multithreaded kernels are roadmap.
 
 ## 6. Challenges and soundness
 
@@ -453,13 +456,12 @@ responsible for sampling from it. `vfhe.arith.Ring` already provisions this:
 its `exceptional_set_size` parameter picks the `split_degree` so the residue
 factors are large enough, and `Ring.random_exceptional()` /
 `Polynomial.sample_exceptional()` sample challenges. For `vfhe.arith.Field`
-the whole field is exceptional and uniform sampling suffices
-(`FieldElement.sample_random`; a `sample_exceptional` alias on both `Ring`
-and `Field` is planned so the piop module can stay domain-agnostic — future
-arith work). The `IOP` object holds the domain and delegates; no
+the whole field is exceptional and uniform sampling suffices, and
+`vfhe.arith.Field` spells it under the same names a `Ring` has
+(`random_exceptional`, `exceptional_from_seed`). The `IOP` object holds the domain and delegates; no
 `sampling_set` is ever carried by statements. Sampling happens in exactly one
 place — `Verifier.challenge`, which calls `domain.random_exceptional()`
-(the name `Ring` already has) — and per-protocol soundness accounting is a
+(the name both `Ring` and `Field` have) — and per-protocol soundness accounting is a
 protocol method —
 `Sumcheck.soundness_error` reports `d·n/|A|`, with `|A| =
 min(p_i)^split_degree` for a `Ring` and `p^d` for a `Field` (duck-typed until
@@ -551,14 +553,18 @@ common base could only promise an `evaluate` it cannot implement:
     what a code-based commitment encodes (`vfhe.polycom`).
   - **coefficient type** — with a `ring`, entries are
     `vfhe.arith.Polynomial` over that `Ring` and the `mle_dense_poly_*` C
-    kernels do the work; without one, entries are plain Python values (any
-    type with `+`/`*`, e.g. exact ints for reference-semantics tests) and
-    the folds run in Python.
+    kernels do the work; with a `field`, the table is one
+    `vfhe.arith.FieldVector` and the folds are whole-vector operations
+    (the first variable's bind is a split plus an interpolation; other
+    positions unpack to elements); without either, entries are plain Python
+    values (any type with `+`/`*`, e.g. exact ints for reference-semantics
+    tests) and the folds run in Python.
 
   The kernels are RNS routines *and* interpolate, so they need a ring
   **and** the evaluation basis: `native_table(f)` is that predicate, and it
-  — not `isinstance` — is what protocols gate native delegation on (§5).
-  `MLE.eq(ring, point)` builds the dense table of the equality
+  — not `isinstance` — is what protocols gate native delegation on (§5);
+  `vector_table(f)` is its field counterpart.
+  `MLE.eq(domain, point)` builds the dense table of the equality
   polynomial `eq̃(point, ·)` (the zerocheck reduction and basefold's
   virtual factor).
 - `SparseMLE` — a sparse map of hypercube evaluations (bookkeeping form:
@@ -646,11 +652,9 @@ therefore lives inside the PCS's evaluation protocol
    combination over the exceptional set or the BatchEval PIOP
    [CBBZ23, §3.8]; the driver already supports it.
 4. **Lookup relation**, reducing to a mix of Eval and Sum claims.
-5. **Field coefficient domains**: `MLE` already has one code path for
-   ring-backed and plain-Python coefficients (§7), so a `Field` domain needs
-   `vfhe.arith.Field` elements to satisfy the same `+`/`*` protocol plus a
-   `sample_exceptional` alias (§6); native kernels for them are a separate
-   step.
+5. **Field coefficient domains** are done (`MLE(field=...)`, the
+   whole-vector round messages, `Field`'s samplers); binding a variable
+   other than the first still unpacks the vector to elements.
 6. **A canonical byte encoding for proof messages**: `element_digest`
    hashes transcript values but does not serialize them, so a `Proof`
    holds live Python objects rather than an argument *string*

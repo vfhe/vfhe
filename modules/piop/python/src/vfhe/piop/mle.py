@@ -11,7 +11,7 @@ from __future__ import annotations
 import operator
 from enum import Enum
 
-from vfhe.arith import Polynomial, Ring, domain_of, repr
+from vfhe.arith import Field, FieldVector, Polynomial, Ring, domain_of, repr
 from vfhe.engine import ffi, lib
 
 # Which basis a dense table is written in — a property of the table, not of
@@ -101,6 +101,18 @@ def native_table(f) -> bool:
     return isinstance(f, MLE) and f.ring is not None and f.basis is MLE_Basis.eval
 
 
+def vector_table(f) -> bool:
+    """Whether `f` is a field-backed table in the evaluation basis.
+
+    Such a table is one `vfhe.arith.FieldVector`, so a protocol computes a
+    round message with a fixed number of whole-vector operations (split,
+    multiply, sum) instead of a loop over entries. Like `native_table`, the
+    evaluation basis is part of the contract: the round-message shortcuts
+    interpolate the (lo, hi) pairs, which is the evaluation-basis fold.
+    """
+    return isinstance(f, MLE) and f.field is not None and f.basis is MLE_Basis.eval
+
+
 class MLE:
     """A multilinear extension as a dense table of 2^n coefficients.
 
@@ -116,10 +128,13 @@ class MLE:
       `c_lo + r*c_hi` in the monomial one. `to_coefficients()` converts.
     - **coefficient type** — with a `ring`, entries are
       `vfhe.arith.Polynomial` over that `Ring` and the C kernels
-      (`mle_dense_poly_*`) do the work; without one, entries are plain
+      (`mle_dense_poly_*`) do the work; with a `field`, the table is one
+      `vfhe.arith.FieldVector` over that `Field` and every fold is a
+      handful of whole-vector operations; without either, entries are plain
       Python values (any type with `+` and `*`, e.g. ints) folded in Python.
       The kernels additionally require the evaluation basis, so
-      `native_table()`, not `isinstance`, is what protocols gate on.
+      `native_table()` / `vector_table()`, not `isinstance`, is what
+      protocols gate on.
 
     Variable order is generic: any variable may be bound at any position, in
     any order (`evaluate`). `_bind` dispatches on the variable's *position*
@@ -130,7 +145,8 @@ class MLE:
     `table` holds the entries (also keeping them alive across C calls) and
     `table_ptr` is the array of their handles the kernels take (None without
     a ring) — the two are always views of the same entries, replaced
-    together by `_set_table`.
+    together by `_set_table`. Over a field, `table` is the `FieldVector`
+    itself (indexable and iterable like the list it replaces).
     """
 
     def __init__(
@@ -140,6 +156,7 @@ class MLE:
         evaluations: list | None = None,
         coefficients: list | None = None,
         num_vars: int | None = None,
+        field: Field | None = None,
     ):
         if variables is not None:
             self.variables = list(variables)
@@ -149,16 +166,27 @@ class MLE:
             raise ValueError("Either variables or num_vars must be provided")
         if evaluations is not None and coefficients is not None:
             raise TypeError("pass evaluations or coefficients, not both")
+        if ring is not None and field is not None:
+            raise TypeError("pass ring or field, not both")
         self.ring = ring
+        self.field = field
         self.basis = MLE_Basis.coeff if coefficients is not None else MLE_Basis.eval
 
         size = 1 << self.num_vars
         entries = coefficients if coefficients is not None else evaluations
         if entries is None:
-            entries = [Polynomial(ring) for _ in range(size)] if ring else [0] * size
+            if ring is not None:
+                entries = [Polynomial(ring) for _ in range(size)]
+            elif field is not None:
+                entries = FieldVector(field, size)
+            else:
+                entries = [0] * size
         else:
             assert len(entries) == size, f"table length must be {size}"
-            entries = [self._entry(e) for e in entries] if ring else list(entries)
+            if ring is not None:
+                entries = [self._entry(e) for e in entries]
+            elif field is None:
+                entries = list(entries)
         self._set_table(entries)
 
     @property
@@ -183,8 +211,13 @@ class MLE:
             return Polynomial(self._ring).from_array([item])
         raise TypeError("Entries of a ring-backed table must be Polynomial or integer")
 
-    def _set_table(self, entries: list) -> None:
-        """Install a table and the handle array the kernels take with it."""
+    def _set_table(self, entries) -> None:
+        """Install a table and the handle array the kernels take with it.
+
+        Over a field the table is a `FieldVector`; a list of entries (elements
+        or ints) is packed into one."""
+        if self.field is not None and not isinstance(entries, FieldVector):
+            entries = FieldVector(self.field, list(entries))
         self.table = entries
         self.table_ptr = element_array(entries) if self.ring is not None else None
 
@@ -193,17 +226,29 @@ class MLE:
         """A table with `src`'s variables and ring, holding `entries` (in
         `src`'s basis unless another is given)."""
         basis = src.basis if basis is None else basis
+        domain = {"ring": src.ring, "field": src.field}
         if basis is MLE_Basis.coeff:
-            return cls(ring=src.ring, variables=src.variables, coefficients=entries)
-        return cls(ring=src.ring, variables=src.variables, evaluations=entries)
+            return cls(variables=src.variables, coefficients=entries, **domain)
+        return cls(variables=src.variables, evaluations=entries, **domain)
 
     @classmethod
-    def eq(cls, ring: Ring, point: list, variables: list | None = None) -> MLE:
+    def eq(cls, domain, point: list, variables: list | None = None) -> MLE:
         """The multilinear equality polynomial eq~(point, .) as a dense table:
         table[b] = prod_i (point_i * b_i + (1 - point_i) * (1 - b_i)), the
-        chi_w Lagrange basis of [Tha22, section 3.5]. `point` entries are
-        Polynomials (or ints, lifted to constants); entry i pairs with
-        variable i (the table's LSB-first order)."""
+        chi_w Lagrange basis of [Tha22, section 3.5]. `domain` is the Ring
+        or Field of the coefficients; `point` entries are its elements (or
+        ints, lifted to constants); entry i pairs with variable i (the
+        table's LSB-first order)."""
+        if variables is None:
+            variables = _default_variables(len(point))
+        if isinstance(domain, Field):
+            one = domain.one
+            table = FieldVector(domain, [one])
+            for z in point:
+                # Same doubling as below, on whole vectors.
+                table = type(table).concat([table * (one - z), table * z])
+            return cls(field=domain, variables=variables, evaluations=table)
+        ring = domain
         one = Polynomial(ring).from_array([1])
         table = [one]
         for z in point:
@@ -213,8 +258,6 @@ class MLE:
             # Appending variable i doubles the table: bit i = 0 keeps the
             # (1 - z_i) branch, bit i = 1 (the new MSB half) the z_i branch.
             table = [t * nz for t in table] + [t * z for t in table]
-        if variables is None:
-            variables = _default_variables(len(point))
         return cls(ring=ring, variables=variables, evaluations=table)
 
     def to_NTT(self) -> None:
@@ -241,6 +284,8 @@ class MLE:
         """A table whose entries can be reassigned without touching self's."""
         if self.ring is not None:
             return [p.copy() for p in self.table]
+        if self.field is not None:
+            return self.table.copy()
         return list(self.table)
 
     def to_coefficients(self) -> MLE:
@@ -250,6 +295,16 @@ class MLE:
         c_hi = e_hi - e_lo, c_lo = e_lo; self is left untouched."""
         if self.basis is MLE_Basis.coeff:
             return self.copy()
+        if self.field is not None:
+            # One round per variable on the whole vector: the LSB butterfly
+            # (even, odd - even), then the two halves concatenated -- which
+            # moves that variable to the MSB, so the next round's LSB is the
+            # next variable, and after num_vars rounds the order is restored.
+            table = self.table
+            for _ in range(self.num_vars):
+                even, odd = table.split_even_odd()
+                table = type(table).concat([even, odd - even])
+            return MLE._like(self, table, basis=MLE_Basis.coeff)
         coeffs = self._entries_copy()
         for i in range(self.num_vars):
             for lo, hi in _pair_indices(len(coeffs), i):
@@ -261,6 +316,7 @@ class MLE:
             raise TypeError(f"can only {op} MLE with MLE")
         assert self.variables == other.variables, "Variables must match"
         assert self.ring == other.ring, "Rings must match"
+        assert self.field == other.field, "Fields must match"
         assert self.basis is other.basis, "Bases must match"
 
     def _elementwise(self, kernel, *args) -> MLE:
@@ -280,6 +336,8 @@ class MLE:
         if self.ring is not None:
             other.to_NTT()
             return self._elementwise(kernel, other.table_ptr)
+        if self.field is not None:
+            return MLE._like(self, op(self.table, other.table))
         return MLE._like(
             self, [op(a, b) for a, b in zip(self.table, other.table, strict=True)]
         )
@@ -291,6 +349,8 @@ class MLE:
         return self._combine(other, operator.sub, lib.mle_dense_poly_sub)
 
     def scale(self, factor):
+        if self.field is not None:
+            return MLE._like(self, self.table * factor)
         if self.ring is None:
             return MLE._like(self, [c * factor for c in self.table])
         if isinstance(factor, Polynomial):
@@ -343,6 +403,15 @@ class MLE:
             return lo + val * (hi - lo)
         return lo + val * hi
 
+    def _python_entries(self) -> list:
+        """The table as a Python list, the operand of the pure-Python fold.
+        A field table is unpacked, so a layout the vector cannot express
+        (halves, strided pairs) still folds correctly, one element at a
+        time."""
+        if self.field is not None:
+            return self.table.to_list()
+        return self.table
+
     def _run_bind(self, poly_kernel, scalar_kernel, val, *tail) -> None:
         """Fold into a freshly allocated half-size table and install it. The
         kernel pair differs only in the type of `val` (a ring element or a
@@ -371,6 +440,14 @@ class MLE:
                 1 << (self.num_vars - 1),
             )
             return
+        if self.field is not None:
+            if self.basis is MLE_Basis.eval:
+                # One fused kernel pass: lo + val * (hi - lo) over the pairs.
+                self._set_table(self.table.fold(val))
+            else:
+                even, odd = self.table.split_even_odd()
+                self._set_table(even + odd * val)
+            return
         t = self.table
         self._set_table(
             [self._fold(lo, hi, val) for lo, hi in zip(t[0::2], t[1::2], strict=True)]
@@ -385,7 +462,7 @@ class MLE:
                 1 << (self.num_vars - 1),
             )
             return
-        t = self.table
+        t = self._python_entries()
         half = len(t) // 2
         self._set_table(
             [self._fold(lo, hi, val) for lo, hi in zip(t[:half], t[half:], strict=True)]
@@ -401,7 +478,7 @@ class MLE:
                 idx,
             )
             return
-        t = self.table
+        t = self._python_entries()
         self._set_table(
             [self._fold(t[lo], t[hi], val) for lo, hi in _pair_indices(len(t), idx)]
         )

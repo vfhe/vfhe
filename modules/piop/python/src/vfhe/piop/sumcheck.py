@@ -23,10 +23,10 @@ from __future__ import annotations
 
 from fractions import Fraction
 
-from vfhe.arith import ArithParent, Polynomial, Ring
+from vfhe.arith import ArithParent, Field, Polynomial, Ring
 from vfhe.engine import lib
 
-from .mle import MLE, element_array, mark_ntt, native_table
+from .mle import MLE, element_array, mark_ntt, native_table, vector_table
 from .piop import (
     IOP,
     Protocol,
@@ -62,12 +62,27 @@ def interpolate_evals(evals: tuple, r):
 
     Over a ring the Lagrange denominators are (products of) integers up to
     deg, inverted per RNS prime — sound because {0..deg} is an exceptional
-    set there [Sor22, fn. 12]. Over plain integers the division is exact
-    (g has integer coefficients), computed with Fractions.
+    set there [Sor22, fn. 12]. Over a field they are inverted in the field.
+    Over plain integers the division is exact (g has integer coefficients),
+    computed with Fractions.
     """
     k = len(evals) - 1
     if k == 1:  # linear: no division needed
         return evals[0] + r * (evals[1] - evals[0])
+    if not isinstance(evals[0], Polynomial | int) and hasattr(evals[0], "field"):
+        total = None
+        for t in range(k + 1):
+            num = None  # prod_{j != t} (r - j), a field element
+            denom = 1  # prod_{j != t} (t - j), a small integer
+            for j in range(k + 1):
+                if j == t:
+                    continue
+                factor = r - j
+                num = factor if num is None else num * factor
+                denom *= t - j
+            term = evals[t] * num * (r.field.one * denom).inverse()
+            total = term if total is None else total + term
+        return total
     if isinstance(evals[0], Polynomial):
         ring = evals[0].ring
         total = None
@@ -190,7 +205,7 @@ class Sumcheck(_SumcheckRounds):
     name = "sumcheck"
     reduces_from: type[Relation] = Relation_Sum
     reduces_to: tuple[type[Relation], ...] = (Relation_Eval,)
-    supported_domains: tuple[type, ...] = (Ring,)
+    supported_domains: tuple[type, ...] = (Ring, Field)
 
     @staticmethod
     def round_evals(f, var=None) -> tuple:
@@ -198,11 +213,22 @@ class Sumcheck(_SumcheckRounds):
         round variable `var` anywhere in f's variables (default: the first).
 
         The native/pure-Python decision is made here: a native table
-        delegates to the C kernels (round_evals_native), anything else sums
-        the hypercube in Python — identical messages either way."""
+        delegates to the C kernels (round_evals_native), a field-backed
+        table with the first variable as the round variable sums its two
+        halves as vectors (round_evals_vector), anything else sums the
+        hypercube in Python — identical messages either way."""
         if native_table(f):
             return Sumcheck.round_evals_native(f, var)
+        if vector_table(f) and (var is None or f.variables.index(var) == 0):
+            return Sumcheck.round_evals_vector(f)
         return Sumcheck._round_evals_python(f, var)
+
+    @staticmethod
+    def round_evals_vector(f: MLE) -> tuple:
+        """The whole-vector path of round_evals over the first variable:
+        g(0) and g(1) are the sums of the even and odd entries."""
+        even, odd = f.table.split_even_odd()
+        return (even.sum(), odd.sum())
 
     @staticmethod
     def _round_evals_python(f, var=None) -> tuple:
@@ -291,7 +317,7 @@ class SumcheckProd(_SumcheckRounds):
     name = "sumcheckprod"
     reduces_from: type[Relation] = Relation_SumProd
     reduces_to: tuple[type[Relation], ...] = (Relation_Eval,)
-    supported_domains: tuple[type, ...] = (Ring,)
+    supported_domains: tuple[type, ...] = (Ring, Field)
 
     @staticmethod
     def prod_round_evals(factors: list, var=None) -> tuple:
@@ -303,14 +329,36 @@ class SumcheckProd(_SumcheckRounds):
         lo + t*(hi - lo)).
 
         The native/pure-Python decision is made here: exactly two native
-        tables delegate to the C kernels (prod2_round_evals_native), anything
-        else runs the pure-Python path — identical messages either way. This
-        is the round building block for protocols that interleave product
-        sumcheck rounds with other messages (e.g. basefold in vfhe.polycom).
+        tables delegate to the C kernels (prod2_round_evals_native), two
+        field-backed tables over their first variable run as whole-vector
+        operations (prod2_round_evals_vector), anything else runs the
+        pure-Python path — identical messages either way. This is the round
+        building block for protocols that interleave product sumcheck rounds
+        with other messages (e.g. basefold in vfhe.polycom).
         """
         if len(factors) == 2 and all(native_table(f) for f in factors):
             return SumcheckProd.prod2_round_evals_native(factors[0], factors[1], var)
+        if (
+            len(factors) == 2
+            and all(vector_table(f) for f in factors)
+            and (var is None or factors[0].variables.index(var) == 0)
+        ):
+            return SumcheckProd.prod2_round_evals_vector(factors[0], factors[1])
         return SumcheckProd._prod_round_evals_python(factors, var)
+
+    @staticmethod
+    def prod2_round_evals_vector(f: MLE, g: MLE) -> tuple:
+        """The whole-vector path of prod_round_evals over the first variable
+        of two field-backed tables: with (lo, hi) the even and odd halves,
+        g(0) = sum lo_f lo_g, g(1) = sum hi_f hi_g and g(2) =
+        sum (2 hi_f - lo_f)(2 hi_g - lo_g), the t = 2 extrapolation."""
+        f_lo, f_hi = f.table.split_even_odd()
+        g_lo, g_hi = g.table.split_even_odd()
+        return (
+            (f_lo * g_lo).sum(),
+            (f_hi * g_hi).sum(),
+            ((f_hi * 2 - f_lo) * (g_hi * 2 - g_lo)).sum(),
+        )
 
     @staticmethod
     def _prod_round_evals_python(factors: list, var=None) -> tuple:
