@@ -469,3 +469,88 @@ def test_padded_length_is_the_single_source_of_the_plane_size():
         padded = lib.field_vec_padded_length(n)
         assert padded >= n and padded % 8 == 0 and padded - n < 8
         assert FieldVector(make_field(), n)._allocated_n == padded
+
+
+class TestNativeMovementAndFold:
+    """Interleave, concat, query and the fused fold, against the generic forms.
+
+    The generic forms are the base-class defaults written over `split_even_odd`
+    and element access; the native kernels must agree with them at every
+    length around the padding boundary, including the odd multiples of the
+    pair width where a half-length rounds up past the input's allocation.
+    """
+
+    rng = random.Random(0x5EED)  # noqa: S311 - test data, not a key
+
+    def values(self, field, n):
+        return [[self.rng.randrange(PRIME) for _ in range(field.d)] for _ in range(n)]
+
+    @pytest.mark.parametrize("n", [2, 8, 18, 26])
+    def test_interleave_inverts_split(self, n):
+        field = make_field()
+        vector = FieldVector(field, self.values(field, n))
+        even, odd = vector.split_even_odd()
+        assert FieldVector.interleave(even, odd) == vector
+        assert ExtensionFieldVector.interleave(even, odd) == vector
+
+    def test_interleave_rejects_mismatches(self):
+        field = make_field()
+        with pytest.raises(ValueError, match="length mismatch"):
+            FieldVector.interleave(FieldVector(field, 4), FieldVector(field, 5))
+        with pytest.raises(TypeError):
+            FieldVector.interleave(FieldVector(field, 4), [0] * 4)
+
+    def test_concat_matches_the_element_lists(self):
+        field = make_field()
+        parts = [self.values(field, n) for n in (5, 0, 8, 3)]
+        vectors = [FieldVector(field, part) for part in parts]
+        joined = FieldVector.concat(vectors)
+        assert len(joined) == 16
+        assert joined.to_list() == [e for v in vectors for e in v.to_list()]
+        assert FieldVector.concat(vectors[:1]) == vectors[0]
+        with pytest.raises(ValueError, match="at least one"):
+            FieldVector.concat([])
+        with pytest.raises(ValueError, match="different fields"):
+            FieldVector.concat([vectors[0], FieldVector(make_field(2), 3)])
+
+    def test_query_gathers_with_negative_indices(self):
+        field = make_field()
+        values = self.values(field, 9)
+        vector = FieldVector(field, values)
+        gathered = vector.query([8, 0, -1, 3, 3])
+        elements = vector.to_list()
+        assert gathered.to_list() == [elements[i] for i in (8, 0, 8, 3, 3)]
+        assert len(vector.query([])) == 0
+        with pytest.raises(IndexError):
+            vector.query([9])
+
+    @pytest.mark.parametrize("n", [2, 8, 18, 26, 50])
+    def test_fold_matches_the_split_formula(self, n):
+        field = make_field()
+        vector = FieldVector(field, self.values(field, n))
+        r = FieldElement(field, self.values(field, 1)[0])
+        even, odd = vector.split_even_odd()
+        expected = even + (odd - even).scale(r)
+        folded = vector.fold(r)
+        assert len(folded) == n // 2
+        assert folded == expected
+        assert folded.to_list() == [
+            e + r * (o - e) for e, o in zip(even.to_list(), odd.to_list(), strict=True)
+        ]
+        # ...and against the generic default, which is the formula itself.
+        assert FieldVector.fold(vector, r) == expected
+
+    def test_fold_accepts_an_int_and_needs_an_even_length(self):
+        field = make_field()
+        vector = FieldVector(field, self.values(field, 8))
+        assert vector.fold(5) == vector.fold(FieldElement(field, 5))
+        with pytest.raises(ValueError, match="odd"):
+            FieldVector(field, 5).fold(3)
+
+    def test_fold_leaves_the_padding_reduced(self):
+        field = make_field()
+        folded = FieldVector(field, self.values(field, 18)).fold(7)
+        for plane in folded._planes:
+            assert all(
+                plane[i] < PRIME for i in range(len(folded), folded._allocated_n)
+            )

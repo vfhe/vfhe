@@ -189,6 +189,8 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void mod_reduce_array_mp(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
                              Modulus mod);
 
+    // Returns NULL, explaining on stderr, when 2n does not divide q - 1, i.e.
+    // when the modulus has no primitive 2n-th root of unity.
     NTT_Plan ntt_new_plan(uint64_t n, Modulus mod);
     void ntt_free_plan(NTT_Plan plan);
 
@@ -279,6 +281,19 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // Deinterleave: even gets elements 0, 2, 4, ... and odd gets 1, 3, 5, ....
     // `a->n` must be even and each output must hold a->n / 2 elements.
     void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVector a);
+    // Interleave, the inverse of split_even_odd: out gets even[0], odd[0],
+    // even[1], odd[1], .... Both inputs hold out->n / 2 elements.
+    void field_vec_interleave(FieldVector out, const FieldVector even, const FieldVector odd);
+    // The `count` vectors one after another; out->n is the sum of their lengths.
+    void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count);
+    // out[i] = a[indices[i]] for i < count. Every index must be below a->n.
+    void field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices,
+                          uint64_t count);
+    // out[i] = a[2i] + r * (a[2i+1] - a[2i]) for i < a->n / 2, in one pass: the
+    // interpolation between adjacent pairs that binds one variable of a
+    // multilinear table. `r` is one element. `a->n` must be even, out must hold
+    // a->n / 2 elements with canonical padding, and may not alias a.
+    void field_vec_fold(FieldVector out, const FieldVector a, const uint64_t *r);
     int field_vec_is_equal(const FieldVector a, const FieldVector b);
     // Uniform elements from a seed. One draw stream covers the whole vector, so
     // no two coefficients repeat by construction.
@@ -421,6 +436,18 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // Deinterleave: even gets elements 0, 2, 4, ... and odd gets 1, 3, 5, ....
     // `a->n` must be even and each output must hold a->n / 2 elements.
     void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a);
+    // Interleave, the inverse of split_even_odd: out gets even[0], odd[0],
+    // even[1], odd[1], .... Both inputs hold out->n / 2 elements.
+    void pmf_vec_interleave(PMFVector out, const PMFVector even, const PMFVector odd);
+    // The `count` vectors one after another; out->n is the sum of their lengths.
+    void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count);
+    // out[i] = a[indices[i]] for i < count. Every index must be below a->n.
+    void pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
+    // out[i] = a[2i] + r * (a[2i+1] - a[2i]) for i < a->n / 2, in one pass: the
+    // interpolation between adjacent pairs that binds one variable of a
+    // multilinear table. `r` is one element. `a->n` must be even, out must hold
+    // a->n / 2 elements with canonical padding, and may not alias a.
+    void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r);
     int pmf_vec_is_equal(const PMFVector a, const PMFVector b);
     // Uniform elements from a seed. One draw stream covers the whole vector.
     void pmf_vec_sample_random(PMFVector out, const uint8_t *seed, uint64_t seed_len);
@@ -431,6 +458,48 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // count is the number of whole windows that fit. `out` takes 32 bytes each.
     uint64_t pmf_vec_hash_count(const PMFVector a, uint64_t group, uint64_t stride);
     void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint64_t stride);
+
+    // the negacyclic NTT over a pseudo-Mersenne field, on PMFVector planes
+    //
+    // The transform of F_p[X]/(X^n + 1) for n a power of two, in the basis
+    // arith's RNS transforms use: with psi the primitive 2n-th root of unity the
+    // plan was built from, the forward transform of a vector holding the
+    // coefficients of P in natural order leaves position j holding
+    // P(psi^(2*brv(j)+1)), brv reversing the log2(n) index bits (Cooley-Tukey,
+    // natural in, bit-reversed out). So positions 2i and 2i+1 hold P(x) and
+    // P(-x) for x = psi^(2*brv(i)+1). The inverse takes that order back to
+    // coefficients (Gentleman-Sande) and includes the 1/n scaling.
+    //
+    // The plan uses exactly the psi it is given and records it; which psi to
+    // use across lengths -- so that psi_{n/2} = psi_n^2 -- is the caller's
+    // convention (PseudoMersenneField.root_of_unity derives every root from the
+    // least quadratic non-residue, as the RNS plans do).
+    //
+    // `params` is borrowed: the plan must not outlive it. Immutable once built,
+    // so shareable across threads.
+    typedef struct _PMFNTTPlan
+    {
+        PMFParams params;
+        uint64_t n;
+        uint64_t logn;
+        uint64_t root_of_unity[PMF_LANES];     // psi, one element
+        uint64_t inv_root_of_unity[PMF_LANES]; // psi^-1
+        uint64_t inv_n[PMF_LANES];             // n^-1, applied by the inverse
+        uint64_t **ws_fwd;                     // L planes of n words: limb k of
+        uint64_t **ws_inv;                     // psi^i (psi^-i) at ws[k][brv(i)]
+    } *PMFNTTPlan;
+
+    // `root_of_unity` is one element (PMF_LANES words) that must be a primitive
+    // 2n-th root of unity, i.e. satisfy psi^n == -1. Returns NULL, explaining on
+    // stderr, if it is not or if n is not a power of two. Costs n scalar
+    // multiplications and 2 * n * L words of tables.
+    PMFNTTPlan pmf_ntt_new_plan(uint64_t n, const uint64_t *root_of_unity, PMFParams params);
+    void pmf_ntt_free_plan(PMFNTTPlan plan);
+    // In place on the vector's planes. `a->n` must equal `plan->n` and the
+    // vector must be over the plan's `params`. Every element, padding included,
+    // is canonical afterwards.
+    void pmf_vec_ntt_forward(PMFVector a, PMFNTTPlan plan);
+    void pmf_vec_ntt_inverse(PMFVector a, PMFNTTPlan plan);
 
     // complex polynomial
     double **load_rous_CT(double *rous_real, double *rous_imag, uint64_t size);

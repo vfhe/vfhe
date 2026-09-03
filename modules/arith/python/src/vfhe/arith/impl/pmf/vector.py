@@ -224,6 +224,60 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_split_even_odd(even._struct, odd._struct, self._struct)
         return even, odd
 
+    @staticmethod
+    def interleave(even, odd) -> PseudoMersenneVector:
+        """Even positions from `even`, odd from `odd`: the inverse of `split_even_odd`."""
+        if not isinstance(even, PseudoMersenneVector) or not isinstance(
+            odd, PseudoMersenneVector
+        ):
+            raise TypeError("interleave takes two PseudoMersenneVectors")
+        if even.field.prime != odd.field.prime:
+            raise ValueError("cannot interleave vectors over different fields")
+        if len(even) != len(odd):
+            raise ValueError(f"length mismatch: {len(even)} and {len(odd)}")
+        result = even._like(2 * len(even))
+        lib.pmf_vec_interleave(result._struct, even._struct, odd._struct)
+        return result
+
+    @staticmethod
+    def concat(vectors: list) -> PseudoMersenneVector:
+        """One vector holding every element of `vectors`, in order."""
+        vectors = list(vectors)
+        if not vectors:
+            raise ValueError("concat needs at least one vector")
+        first = vectors[0]
+        for vector in vectors:
+            if not isinstance(vector, PseudoMersenneVector):
+                raise TypeError(f"cannot concatenate a {type(vector).__name__}")
+            if vector.field.prime != first.field.prime:
+                raise ValueError("cannot concatenate vectors over different fields")
+        result = first._like(sum(len(v) for v in vectors))
+        parts = ffi.new("PMFVector[]", [v._struct for v in vectors])
+        lib.pmf_vec_concat(result._struct, parts, len(vectors))
+        return result
+
+    def query(self, indices) -> PseudoMersenneVector:
+        """The elements at `indices` (negative ones count from the end), gathered."""
+        indices = [self._checked_index(i) for i in indices]
+        result = self._like(len(indices))
+        if indices:
+            lib.pmf_vec_gather(
+                result._struct,
+                self._struct,
+                ffi.new("uint64_t[]", indices),
+                len(indices),
+            )
+        return result
+
+    def fold(self, r) -> PseudoMersenneVector:
+        """``self[2i] + r * (self[2i+1] - self[2i])`` per pair, in one kernel pass."""
+        if self._n % 2:
+            raise ValueError(f"length {self._n} is odd; cannot fold pairs")
+        element = self._coerce_element(r)
+        result = self._like(self._n // 2)
+        lib.pmf_vec_fold(result._struct, self._struct, element._buf)
+        return result
+
     def sample_random(self, seed: bytes) -> None:
         """Fill with uniform elements drawn from `seed`, in place."""
         lib.pmf_vec_sample_random(self._struct, seed, len(seed))

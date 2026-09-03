@@ -40,6 +40,24 @@ class ExtensionField(Field):
     def order(self) -> int:
         return self.prime**self.d
 
+    @property
+    def two_adicity(self) -> int:
+        """
+        The largest ``k`` with ``2^k`` dividing ``p - 1``.
+
+        A transform over this field's coefficient planes needs a primitive
+        2n-th root of unity in F_p, so ``log2(n) + 1`` at most this. It is 1
+        for many primes -- among them ``2^61 - 1`` -- and such a field admits
+        no transform of length above 1.
+        """
+        below = self.prime - 1
+        return (below & -below).bit_length() - 1
+
+    def _uniform_from_seed(self, seed: bytes) -> FieldElement:
+        element = FieldElement(self)
+        element.sample_random(seed)
+        return element
+
     def __del__(self) -> None:
         if getattr(self, "mod", None):
             with contextlib.suppress(Exception):  # lib may be torn down already
@@ -64,23 +82,53 @@ class FieldElement:
             # Assume it's a ffi cdata uint64_t[]
             self.value = value
 
-    def __add__(self, other: FieldElement) -> FieldElement:
-        # NotImplemented, not TypeError: it is what lets the reflected operand
-        # take its turn, so `element + vector` reaches the vector's __radd__.
-        if not isinstance(other, FieldElement):
+    def _coerce(self, other: object) -> FieldElement | None:
+        """
+        ``other`` as an element, or None if it cannot be one.
+
+        Accepts an element, or an int (excluding bool) reduced into the field.
+        Callers turn None into NotImplemented rather than a TypeError: it is
+        what lets the reflected operand take its turn, so `element + vector`
+        reaches the vector's __radd__.
+        """
+        if isinstance(other, FieldElement):
+            return other
+        if isinstance(other, int) and not isinstance(other, bool):
+            return FieldElement(self.field, other)
+        return None
+
+    def __add__(self, other: FieldElement | int) -> FieldElement:
+        rhs = self._coerce(other)
+        if rhs is None:
             return NotImplemented
         res_val = ffi.new("uint64_t[]", self.field.d)
         lib.field_ext_add(
-            res_val, self.value, other.value, self.field.d, self.field.prime
+            res_val, self.value, rhs.value, self.field.d, self.field.prime
         )
         return FieldElement(self.field, res_val)
 
-    def __sub__(self, other: FieldElement) -> FieldElement:
-        if not isinstance(other, FieldElement):
+    def __radd__(self, other: FieldElement | int) -> FieldElement:
+        """``other + self``; addition commutes, so this is `__add__`."""
+        return self.__add__(other)
+
+    def __sub__(self, other: FieldElement | int) -> FieldElement:
+        rhs = self._coerce(other)
+        if rhs is None:
             return NotImplemented
         res_val = ffi.new("uint64_t[]", self.field.d)
         lib.field_ext_sub(
-            res_val, self.value, other.value, self.field.d, self.field.prime
+            res_val, self.value, rhs.value, self.field.d, self.field.prime
+        )
+        return FieldElement(self.field, res_val)
+
+    def __rsub__(self, other: FieldElement | int) -> FieldElement:
+        """``other - self``: the operands reversed, not a delegation to `__sub__`."""
+        lhs = self._coerce(other)
+        if lhs is None:
+            return NotImplemented
+        res_val = ffi.new("uint64_t[]", self.field.d)
+        lib.field_ext_sub(
+            res_val, lhs.value, self.value, self.field.d, self.field.prime
         )
         return FieldElement(self.field, res_val)
 
@@ -89,19 +137,24 @@ class FieldElement:
         lib.field_ext_neg(res_val, self.value, self.field.d, self.field.prime)
         return FieldElement(self.field, res_val)
 
-    def __mul__(self, other: FieldElement) -> FieldElement:
-        if not isinstance(other, FieldElement):
+    def __mul__(self, other: FieldElement | int) -> FieldElement:
+        rhs = self._coerce(other)
+        if rhs is None:
             return NotImplemented
         res_val = ffi.new("uint64_t[]", self.field.d)
         lib.field_ext_mul(
             res_val,
             self.value,
-            other.value,
+            rhs.value,
             self.field.d,
             self.field.w,
             self.field.mod,
         )
         return FieldElement(self.field, res_val)
+
+    def __rmul__(self, other: FieldElement | int) -> FieldElement:
+        """``other * self``; multiplication commutes, so this is `__mul__`."""
+        return self.__mul__(other)
 
     def __pow__(self, exponent: int) -> FieldElement:
         res_val = ffi.new("uint64_t[]", self.field.d)

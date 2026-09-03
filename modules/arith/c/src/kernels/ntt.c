@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include <arith.h>
+#include <inttypes.h>
+
 #include "arith_internal.h"
 
 #if VFHE_HAVE_AVX512IFMA
@@ -275,6 +277,16 @@ NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
     // portable kernel's so both builds agree on the transform basis. Raise
     // successive candidates g = 2, 3, 4, ... to the (q-1)/2n power and keep the
     // first whose n-th power is -1 (order exactly 2n).
+    // Without 2n | q - 1 no such root exists and the search below would visit
+    // every residue of a 61-bit prime before giving up.
+    if ((q - 1) % (2 * n) != 0)
+    {
+        fprintf(stderr,
+                "ntt_new_plan: no primitive %" PRIu64 "-th root of unity modulo %" PRIu64
+                " (2n does not divide q - 1)\n",
+                2 * n, q);
+        return NULL;
+    }
     uint64_t root_of_unity = 0;
     for (uint64_t g = 2; g < q; g++)
     {

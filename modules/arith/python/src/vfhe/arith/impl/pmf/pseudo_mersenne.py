@@ -23,12 +23,17 @@ None of this is constant-time: exponents and seeds are public values.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from vfhe.arith._alloc import aligned64
 from vfhe.arith.base import Field
 from vfhe.arith.number_theory import gen_pseudo_mersenne_prime, is_prime
 from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
 from vfhe.engine import ffi, lib
+
+if TYPE_CHECKING:
+    from .ntt import PseudoMersenneNTT
 
 _LIMB_BITS = 52
 _LIMB_MASK = (1 << _LIMB_BITS) - 1
@@ -137,9 +142,27 @@ class PseudoMersenneField(Field):
         self.zero = self(0)
         self.one = self(1)
 
+        # Memoized on demand: the least quadratic non-residue, the roots of
+        # unity by order, and the transform plans by length.
+        self._non_residue: int | None = None
+        self._roots: dict[int, PseudoMersenneElement] = {}
+        self._plans: dict[int, PseudoMersenneNTT] = {}
+
     @property
     def order(self) -> int:
         return self.prime
+
+    @property
+    def two_adicity(self) -> int:
+        """
+        The largest ``k`` with ``2^k`` dividing ``p - 1``.
+
+        It bounds the roots of unity available: `root_of_unity` exists for
+        orders up to ``2^k``, and a negacyclic transform of length ``n``
+        needs order ``2n``, so the longest is ``2^(k - 1)``.
+        """
+        below = self.prime - 1
+        return (below & -below).bit_length() - 1
 
     @classmethod
     def generate(
@@ -178,11 +201,18 @@ class PseudoMersenneField(Field):
         """Bytes in the canonical encoding of an element."""
         return (self.bits + 7) // 8
 
-    def random(self, seed: bytes) -> PseudoMersenneElement:
-        """Sample a uniform element deterministically from ``seed``."""
+    def _uniform_from_seed(self, seed: bytes) -> PseudoMersenneElement:
         buf = self._new_buffer()
         lib.pmf_sample_random(buf, seed, len(seed), self._params)
         return self._wrap(buf)
+
+    def random(self, seed: bytes) -> PseudoMersenneElement:
+        """Sample a uniform element deterministically from ``seed``.
+
+        The same as `random_element` with a seed, which is the name shared by
+        every `Field`.
+        """
+        return self._uniform_from_seed(seed)
 
     def from_bytes(self, data: bytes) -> PseudoMersenneElement:
         """
@@ -204,13 +234,57 @@ class PseudoMersenneField(Field):
         """
         A primitive ``2^log_order``-th root of unity, memoized.
 
-        Derived from the least quadratic non-residue, so it needs no
-        factorization of ``p - 1``. Note that a generator of the full group
-        F_p^* is NOT offered: verifying one requires factoring ``p - 1``, which
-        is not feasible at these sizes, and an NTT needs only the 2-primary
-        subgroup. Raises ValueError for ``log_order`` above ``two_adicity``.
+        Derived from the least quadratic non-residue ``g`` as
+        ``g ** ((p - 1) / 2^log_order)``, so it needs no factorization of
+        ``p - 1``. Every order's root comes from that one ``g``, which ties
+        the roots of successive orders together by squaring:
+        ``root_of_unity(k - 1) == root_of_unity(k) ** 2``. That is the
+        convention arith's RNS transforms follow, and what lets a fold across
+        transform lengths line up.
+
+        Note that a generator of the full group F_p^* is NOT offered:
+        verifying one requires factoring ``p - 1``, which is not feasible at
+        these sizes, and an NTT needs only the 2-primary subgroup. Raises
+        ValueError for ``log_order`` above `two_adicity`.
         """
-        raise NotImplementedError
+        if not isinstance(log_order, int) or isinstance(log_order, bool):
+            raise TypeError(f"log_order must be an int, not {type(log_order).__name__}")
+        if not 0 <= log_order <= self.two_adicity:
+            raise ValueError(
+                f"no primitive 2^{log_order}-th root of unity: "
+                f"p - 1 has 2-adicity {self.two_adicity}"
+            )
+        root = self._roots.get(log_order)
+        if root is None:
+            exponent = (self.prime - 1) >> log_order
+            root = self(pow(self._quadratic_non_residue(), exponent, self.prime))
+            self._roots[log_order] = root
+        return root
+
+    def _quadratic_non_residue(self) -> int:
+        """The least quadratic non-residue, by Euler's criterion; memoized."""
+        if self._non_residue is None:
+            g = 2
+            while pow(g, (self.prime - 1) // 2, self.prime) != self.prime - 1:
+                g += 1
+            self._non_residue = g
+        return self._non_residue
+
+    def ntt_plan(self, n: int) -> PseudoMersenneNTT:
+        """
+        The negacyclic transform of length ``n`` over this field, one per length.
+
+        See `PseudoMersenneNTT` for the basis and output order, and for the
+        lengths a field admits.
+        """
+        plan = self._plans.get(n)
+        if plan is None:
+            # Imported here: the ntt module imports this one at load time.
+            from .ntt import PseudoMersenneNTT
+
+            plan = PseudoMersenneNTT(self, n)
+            self._plans[n] = plan
+        return plan
 
     def _wrap(self, buf) -> PseudoMersenneElement:
         """Adopt a C output buffer as an element, without copying."""

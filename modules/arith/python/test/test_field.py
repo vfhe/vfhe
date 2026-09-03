@@ -129,3 +129,48 @@ def test_field_sampling_varies_within_one_element():
     again = FieldElement(field)
     again.sample_random(SEED)
     assert [again.value[i] for i in range(d)] == coeffs
+
+
+class TestFieldSurface:
+    """What every `Field` offers regardless of implementation: int operands,
+    the 2-adicity, and the one sampler API a protocol calls."""
+
+    prime = (1 << 61) - 1
+
+    def test_int_operands_coerce_on_either_side(self):
+        field = Field(self.prime, 2, 3)
+        a = FieldElement(field, [5, 7])
+        assert a + 3 == a + FieldElement(field, 3)
+        assert 3 + a == a + 3
+        assert a - 3 == a - FieldElement(field, 3)
+        assert 3 - a == FieldElement(field, 3) - a
+        assert a * 4 == a * FieldElement(field, 4)
+        assert 4 * a == a * 4
+        assert a - 1 == a + (self.prime - 1)
+        assert a * 0 == field.zero
+
+    def test_bool_and_other_types_are_not_operands(self):
+        field = Field(self.prime, 2, 3)
+        a = FieldElement(field, [5, 7])
+        for bad in (True, 1.5, "x"):
+            with pytest.raises(TypeError):
+                a + bad
+            with pytest.raises(TypeError):
+                a * bad
+
+    def test_two_adicity(self):
+        assert Field(self.prime, 1).two_adicity == 1  # 2^61 - 2 = 2 * odd
+        k = Field(1073643521, 1).two_adicity  # the 30-bit NTT prime, q == 1 mod 2^11
+        assert k >= 11
+        assert (1073643521 - 1) % (1 << k) == 0
+        assert (1073643521 - 1) % (1 << (k + 1)) != 0
+
+    def test_uniform_sampler_api(self):
+        field = Field(self.prime, 2, 3)
+        seeded = field.random_element(b"seed")
+        assert seeded == field.random_element(b"seed")
+        assert seeded != field.random_element(b"other")
+        assert field.exceptional_from_seed(b"seed") == seeded
+        fresh = [field.random_element() for _ in range(4)]
+        assert len({tuple(e.value) for e in fresh}) == 4
+        assert isinstance(field.random_exceptional(), FieldElement)

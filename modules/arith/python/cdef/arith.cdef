@@ -171,6 +171,10 @@ void field_vec_set_range(FieldVector out, uint64_t start, const uint64_t *values
 void field_vec_get_range(uint64_t *out, const FieldVector a, uint64_t start, uint64_t count);
 void field_vec_copy(FieldVector out, const FieldVector a);
 void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVector a);
+void field_vec_interleave(FieldVector out, const FieldVector even, const FieldVector odd);
+void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count);
+void field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices, uint64_t count);
+void field_vec_fold(FieldVector out, const FieldVector a, const uint64_t *r);
 int field_vec_is_equal(const FieldVector a, const FieldVector b);
 void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len);
 void field_vec_hash(uint8_t *out, const FieldVector a);
@@ -227,8 +231,20 @@ void pmf_vec_set_range(PMFVector out, uint64_t start, const uint64_t *values, ui
 void pmf_vec_get_range(uint64_t *out, const PMFVector a, uint64_t start, uint64_t count);
 void pmf_vec_copy(PMFVector out, const PMFVector a);
 void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a);
+void pmf_vec_interleave(PMFVector out, const PMFVector even, const PMFVector odd);
+void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count);
+void pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
+void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r);
 int pmf_vec_is_equal(const PMFVector a, const PMFVector b);
 void pmf_vec_sample_random(PMFVector out, const uint8_t *seed, uint64_t seed_len);
 void pmf_vec_hash(uint8_t *out, const PMFVector a);
 uint64_t pmf_vec_hash_count(const PMFVector a, uint64_t group, uint64_t stride);
 void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint64_t stride);
+
+// --- the negacyclic NTT over a pseudo-Mersenne field ---
+// Opaque: Python supplies the root and keeps it, so nothing here is read back.
+typedef struct _PMFNTTPlan *PMFNTTPlan;
+PMFNTTPlan pmf_ntt_new_plan(uint64_t n, const uint64_t *root_of_unity, PMFParams params);
+void pmf_ntt_free_plan(PMFNTTPlan plan);
+void pmf_vec_ntt_forward(PMFVector a, PMFNTTPlan plan);
+void pmf_vec_ntt_inverse(PMFVector a, PMFNTTPlan plan);

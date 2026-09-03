@@ -175,6 +175,72 @@ void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVect
     }
 }
 
+void field_vec_interleave(FieldVector out, const FieldVector even, const FieldVector odd)
+{
+    for (uint64_t j = 0; j < out->d; j++)
+    {
+        uint64_t *plane = out->coeffs[j];
+        for (uint64_t i = 0; i < even->n; i++)
+        {
+            plane[2 * i] = even->coeffs[j][i];
+            plane[2 * i + 1] = odd->coeffs[j][i];
+        }
+    }
+}
+
+void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count)
+{
+    uint64_t at = 0;
+    for (uint64_t p = 0; p < count; p++)
+    {
+        for (uint64_t j = 0; j < out->d; j++)
+            memcpy(out->coeffs[j] + at, parts[p]->coeffs[j], parts[p]->n * sizeof(uint64_t));
+        at += parts[p]->n;
+    }
+}
+
+void field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices, uint64_t count)
+{
+    for (uint64_t j = 0; j < a->d; j++)
+        for (uint64_t i = 0; i < count; i++)
+            out->coeffs[j][i] = a->coeffs[j][indices[i]];
+}
+
+// Deinterleave into two scratch vectors of out's shape, then three whole-plane
+// operations: one allocation and no Python-visible intermediates. The scratch
+// planes are `half` words each, a multiple of the eltwise vector width, so each
+// stays 64-byte aligned inside the one block.
+void field_vec_fold(FieldVector out, const FieldVector a, const uint64_t *r)
+{
+    const uint64_t d = a->d, half = out->allocated_n;
+    // Pairs that exist in a's allocation; the rest of out's padding stays zero.
+    const uint64_t pairs = a->allocated_n / 2 < half ? a->allocated_n / 2 : half;
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(2 * d * half * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)malloc(2 * d * sizeof(uint64_t *));
+    struct _FieldVector even = *out, odd = *out;
+
+    memset(scratch, 0, 2 * d * half * sizeof(uint64_t));
+    even.coeffs = planes;
+    odd.coeffs = planes + d;
+    for (uint64_t j = 0; j < d; j++)
+    {
+        even.coeffs[j] = scratch + (2 * j) * half;
+        odd.coeffs[j] = scratch + (2 * j + 1) * half;
+        for (uint64_t i = 0; i < pairs; i++)
+        {
+            even.coeffs[j][i] = a->coeffs[j][2 * i];
+            odd.coeffs[j][i] = a->coeffs[j][2 * i + 1];
+        }
+    }
+
+    field_vec_sub(&odd, &odd, &even);
+    field_vec_scale(&odd, &odd, r);
+    field_vec_add(out, &even, &odd);
+
+    free(planes);
+    free(scratch);
+}
+
 int field_vec_is_equal(const FieldVector a, const FieldVector b)
 {
     if (a->n != b->n || a->d != b->d)

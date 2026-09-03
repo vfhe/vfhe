@@ -117,6 +117,17 @@ void pmf_ref_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams 
 // T is limbs+1 words, each below 2^60, and is clobbered. Requires limbs >= 3.
 void pmf_ref_reduce_wide(uint64_t *out, uint64_t *T, PMFParams params);
 
+// a^exp, with the exponent as `exp_limbs` little-endian 52-bit limbs (the form
+// PMFParams holds p in). Square-and-multiply over pmf_ref_mul.
+void pmf_ref_pow(uint64_t *out, const uint64_t *a, const uint64_t *exp, uint64_t exp_limbs,
+                 PMFParams params);
+
+// The scalar transform (pmf_ntt.c): the loops of pmf_vec_ntt_* over the element
+// kernels above, on `n` elements laid out PMF_LANES words apart, in place. Same
+// basis and order as the vector transform, and the oracle it is tested against.
+void pmf_ref_ntt_forward(uint64_t *a, PMFNTTPlan plan);
+void pmf_ref_ntt_inverse(uint64_t *a, PMFNTTPlan plan);
+
 // One rejection-sampled element, drawn from `hasher`'s output stream starting at
 // *stream_offset, which is advanced past whatever the draw consumed. Internal so
 // that a caller sampling many elements -- the vector sampler -- keeps a single

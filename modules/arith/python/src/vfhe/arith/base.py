@@ -15,6 +15,7 @@ object is an arithmetic domain at all.
 
 from __future__ import annotations
 
+import secrets
 from abc import ABC, ABCMeta, abstractmethod
 
 from .registry import registered, resolve
@@ -187,6 +188,36 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         field elements is invertible, so the whole field is exceptional."""
         return self.order
 
+    @abstractmethod
+    def _uniform_from_seed(self, seed: bytes):
+        """One uniform element, a pure function of ``seed``.
+
+        The single sampling primitive an implementation supplies; the public
+        samplers below are spelled once here in terms of it.
+        """
+
+    def random_element(self, seed: bytes | None = None):
+        """A uniform element of the field.
+
+        Deterministic from ``seed`` when one is given -- the same seed gives
+        the same element on every engine -- and drawn from fresh entropy
+        otherwise.
+        TODO: use prgn module to generate all randomness.
+        """
+        if seed is None:
+            seed = secrets.token_bytes(32)
+        return self._uniform_from_seed(seed)
+
+    def random_exceptional(self):
+        """A fresh element of the exceptional set, which for a field is the
+        whole field: a uniform element. The name a protocol verifier calls."""
+        return self.random_element()
+
+    def exceptional_from_seed(self, seed: bytes):
+        """The exceptional-set element a Fiat-Shamir transcript derives from
+        ``seed``: for a field, a uniform element."""
+        return self.random_element(seed)
+
 
 class FieldVector(metaclass=_ImplementationDispatch):
     """Many elements of one `Field`, held together in one buffer.
@@ -288,6 +319,32 @@ class FieldVector(metaclass=_ImplementationDispatch):
                 raise ValueError("cannot concatenate vectors over different fields")
         return type(vectors[0])(field, [e for v in vectors for e in v])
 
+    @staticmethod
+    def interleave(even, odd):
+        """The vector with `even` at the even positions and `odd` at the odd
+        ones: the inverse of `split_even_odd`. Both must have the same length."""
+        if not isinstance(even, FieldVector) or not isinstance(odd, FieldVector):
+            raise TypeError("interleave takes two vectors")
+        if len(even) != len(odd):
+            raise ValueError(f"length mismatch: {len(even)} and {len(odd)}")
+        if even.field != odd.field:
+            raise ValueError("cannot interleave vectors over different fields")
+        merged = [None] * (2 * len(even))
+        merged[0::2] = even.to_list()
+        merged[1::2] = odd.to_list()
+        return type(even)(even.field, merged)
+
     def query(self, indices):
         """The elements at `indices`, gathered into a new vector."""
         return type(self)(self.field, [self[i] for i in indices])
+
+    def fold(self, r):
+        """``even + r * (odd - even)`` over adjacent pairs, half the length.
+
+        Position ``i`` of the result is ``self[2i] + r * (self[2i+1] -
+        self[2i])``: the interpolation that binds the low variable of a
+        multilinear table to ``r``, or folds a codeword. ``r`` is one element
+        (or an int). Requires an even length.
+        """
+        even, odd = self.split_even_odd()
+        return even + (odd - even).scale(r)

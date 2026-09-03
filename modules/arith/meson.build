@@ -25,6 +25,7 @@ module = {
         'c/src/field/field_vector.c',
         'c/src/mp/mp_polynomial.c',
         'c/src/pmf/pmf.c',
+        'c/src/pmf/pmf_ntt.c',
         'c/src/pmf/pmf_vector.c',
         'c/src/rns/arith_rns.c',
         'c/src/rns/rns_polynomial.c',
@@ -42,5 +43,6 @@ module = {
         'c/test/test_mod.c',
         'c/test/test_ntt.c',
         'c/test/test_number_theory.c',
+        'c/test/test_pmf_ntt.c',
     ),
 }
