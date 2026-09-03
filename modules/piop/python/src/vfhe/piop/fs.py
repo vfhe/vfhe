@@ -14,7 +14,8 @@ deterministic (same statement, same protocols => byte-identical transcript).
 Domain challenges need a deterministic bytes -> exceptional-element map.
 Over a `Ring` this module derives one itself (`ring_exceptional_from_seed`);
 a domain may instead provide its own `exceptional_from_seed(seed)` method,
-which takes precedence (the future arith-side hook, and the test-stub one).
+which takes precedence -- every `vfhe.arith.Field` does (a uniform element
+of the field), and so does the test-stub domain.
 """
 
 from __future__ import annotations
