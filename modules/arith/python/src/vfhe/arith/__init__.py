@@ -6,6 +6,7 @@ from .impl.complex.complex import ComplexPolynomial, ComplexRing
 from .impl.field.field import ExtensionField, FieldElement
 from .impl.field.vector import ExtensionFieldVector
 from .impl.mp.multiprecision import Multiprecision
+from .impl.pmf.ntt import PseudoMersenneNTT
 from .impl.pmf.pseudo_mersenne import PseudoMersenneElement, PseudoMersenneField
 from .impl.pmf.vector import PseudoMersenneVector
 from .impl.rns.polynomial import RNSPolynomial, RNSRing, domain_of, repr
@@ -41,6 +42,7 @@ __all__ = [
     "Polynomial",
     "PseudoMersenneElement",
     "PseudoMersenneField",
+    "PseudoMersenneNTT",
     "PseudoMersenneVector",
     "RNSPolynomial",
     "RNSRing",

@@ -107,11 +107,24 @@ void test_ntt_negacyclic_convolution(void)
     }
 }
 
+void test_ntt_plan_refuses_a_modulus_without_the_root(void)
+{
+    /* 2^61 - 1: q - 1 has 2-adicity 1, so no length above 1 has a 2n-th root. */
+    Modulus mod = mod_new((1ULL << 61) - 1);
+    TEST_ASSERT_NULL(ntt_new_plan(64, mod));
+    TEST_ASSERT_NULL(ntt_new_plan(2, mod));
+    NTT_Plan plan = ntt_new_plan(1, mod);
+    TEST_ASSERT_NOT_NULL(plan);
+    ntt_free_plan(plan);
+    mod_free(mod);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_ntt_roundtrip_matrix);
     RUN_TEST(test_ntt_roundtrip_30bit);
     RUN_TEST(test_ntt_negacyclic_convolution);
+    RUN_TEST(test_ntt_plan_refuses_a_modulus_without_the_root);
     return UNITY_END();
 }

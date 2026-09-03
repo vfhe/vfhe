@@ -490,3 +490,76 @@ def test_the_codeword_fold_is_expressible_in_vector_operations(field):
     folded = hi_vec + coeff_vec * FieldVector(field, twists) + coeff_vec.scale(field(r))
 
     assert_vector(folded, expected, field)
+
+
+class TestNativeMovementAndFold:
+    """Interleave, concat, query and the fused fold, against the generic forms.
+
+    The lengths sit around the group width of 8 and include the odd multiples
+    of the pair width (18, 50) where the folded half-length pads past the
+    input's allocation, which is the boundary the pair loader has to respect.
+    """
+
+    @pytest.mark.parametrize("n", [2, 8, 18, 26])
+    def test_interleave_inverts_split(self, field, n):
+        vector = FieldVector(field, random_values(field, n, 40 + n))
+        even, odd = vector.split_even_odd()
+        assert FieldVector.interleave(even, odd) == vector
+        assert PseudoMersenneVector.interleave(even, odd) == vector
+
+    def test_interleave_rejects_mismatches(self, field):
+        with pytest.raises(ValueError, match="length mismatch"):
+            FieldVector.interleave(FieldVector(field, 4), FieldVector(field, 5))
+        with pytest.raises(TypeError):
+            FieldVector.interleave(FieldVector(field, 4), [0] * 4)
+
+    def test_concat_matches_the_element_lists(self, field):
+        parts = [random_values(field, n, 50 + n) for n in (5, 0, 8, 3)]
+        vectors = [FieldVector(field, part) for part in parts]
+        joined = FieldVector.concat(vectors)
+        assert_vector(joined, [x for part in parts for x in part], field)
+        assert FieldVector.concat(vectors[:1]) == vectors[0]
+        with pytest.raises(ValueError, match="at least one"):
+            FieldVector.concat([])
+        other = PseudoMersenneField.generate(312 if field.bits != 312 else 260)
+        with pytest.raises(ValueError, match="different fields"):
+            FieldVector.concat([vectors[0], FieldVector(other, 3)])
+
+    def test_query_gathers_with_negative_indices(self, field):
+        values = random_values(field, 9, 60)
+        vector = FieldVector(field, values)
+        gathered = vector.query([8, 0, -1, 3, 3])
+        assert_vector(gathered, [values[i] for i in (8, 0, 8, 3, 3)], field)
+        assert len(vector.query([])) == 0
+        with pytest.raises(IndexError):
+            vector.query([9])
+
+    @pytest.mark.parametrize("n", [2, 8, 18, 26, 50])
+    def test_fold_matches_the_split_formula(self, field, n):
+        p = field.prime
+        values = random_values(field, n, 70 + n)
+        r = rng.randrange(p)
+        vector = FieldVector(field, values)
+        folded = vector.fold(field(r))
+        expected = [
+            (values[2 * i] + r * (values[2 * i + 1] - values[2 * i])) % p
+            for i in range(n // 2)
+        ]
+        assert_vector(folded, expected, field)
+        # ...and against the generic default, which is the formula itself.
+        assert FieldVector.fold(vector, field(r)) == folded
+
+    def test_fold_accepts_an_int_and_needs_an_even_length(self, field):
+        vector = FieldVector(field, random_values(field, 8, 80))
+        assert vector.fold(5) == vector.fold(field(5))
+        with pytest.raises(ValueError, match="odd"):
+            FieldVector(field, 5).fold(3)
+
+    def test_fold_leaves_the_padding_canonical(self, field):
+        folded = FieldVector(field, random_values(field, 18, 81)).fold(7)
+        for index in range(len(folded), folded._allocated_n):
+            value = sum(
+                int(folded._planes[k][index]) << (LIMB_BITS * k)
+                for k in range(field.limbs)
+            )
+            assert value < field.prime
