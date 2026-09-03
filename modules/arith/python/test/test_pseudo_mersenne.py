@@ -590,3 +590,19 @@ class TestSampling:
         values = [int(field.random(b"spread-%d" % i)) for i in range(32)]
         assert len(set(values)) == len(values)
         assert max(values) > field.prime >> 4
+
+
+class TestUniformSamplerAPI:
+    """The sampler names shared by every `Field`, over the seeded kernel."""
+
+    def test_seeded_draws_are_pure_functions_of_the_seed(self, field):
+        seeded = field.random_element(b"seed")
+        assert seeded == field.random_element(b"seed") == field.random(b"seed")
+        assert seeded != field.random_element(b"other")
+        assert field.exceptional_from_seed(b"seed") == seeded
+        assert_canonical(seeded, field)
+
+    def test_unseeded_draws_are_fresh(self, field):
+        fresh = {int(field.random_element()) for _ in range(4)}
+        assert len(fresh) == 4
+        assert 0 <= int(field.random_exceptional()) < field.prime
