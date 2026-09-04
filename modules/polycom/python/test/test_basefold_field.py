@@ -1,14 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the basefold PCS over an extension field: the same scheme and
-Eval protocol as over R_q, run on FieldVector-backed tables and the field
-RS code. Honest runs accept (interactive, Fiat-Shamir, and prove/verify on
-an argument string), false claims and tampered messages are rejected, the
-compiled sumcheck -> basefold chain works, and every whole-codeword step
-stays a vector."""
+"""Tests for the basefold PCS over a field: the same scheme and Eval protocol
+as over R_q, run on FieldVector-backed tables and the field RS code. Honest
+runs accept (interactive, Fiat-Shamir, and prove/verify on an argument
+string), false claims and tampered messages are rejected, the compiled
+sumcheck -> basefold chain works, and every whole-codeword step stays a
+vector. Each case runs over both field implementations that have a transform
+-- an extension field and a pseudo-Mersenne one -- since they differ in the
+element and vector types the protocol carries as well as in the code."""
 
 import pytest
-from vfhe.arith import Field, FieldElement, FieldVector
+from vfhe.arith import Field, FieldVector, PseudoMersenneField
 from vfhe.piop import (
     IOP,
     MLE,
@@ -25,26 +27,27 @@ from vfhe.polycom import Basefold, BasefoldEval, FieldFoldableRS
 _PRIME, _W = 562949948178433, 5  # 50 bits, 2-adicity 20; x^2 - 5 irreducible
 
 
-def _setup(num_vars: int, k0: int, c: int, d: int):
-    field = Field(_PRIME, 2, _W)
+@pytest.fixture(params=["extension", "pseudo-mersenne"])
+def field(request):
+    if request.param == "extension":
+        return Field(_PRIME, 2, _W)
+    return PseudoMersenneField.generate(260, two_adicity=10)
+
+
+def _setup(field, num_vars: int, k0: int, c: int, d: int):
     scheme = Basefold(FieldFoldableRS(field, k0=k0, c=c, d=d))
     variables = [MLE_Variable(f"x{i}") for i in range(num_vars)]
     table = FieldVector(field, 1 << num_vars)
     table.sample_random(b"basefold-field-table")
     f = MLE(field=field, variables=variables, evaluations=table)
-    return field, scheme, f
-
-
-def _random(field, seed: bytes) -> FieldElement:
-    element = FieldElement(field)
-    element.sample_random(seed)
-    return element
+    return scheme, f
 
 
 def _claim(f: MLE, field):
     """A random evaluation point and f's true value there."""
     point = {
-        var: _random(field, f"point-{i}".encode()) for i, var in enumerate(f.variables)
+        var: field.random_element(f"point-{i}".encode())
+        for i, var in enumerate(f.variables)
     }
     value = f.evaluate(point, in_place=False).constant()
     return point, value
@@ -58,8 +61,8 @@ def _iop(field, scheme, commitment, opening, rep: int = 4, fiat_shamir=False) ->
     return iop
 
 
-def test_commit_then_eval_accepts():
-    field, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
+def test_commit_then_eval_accepts(field):
+    scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
     com, opening = scheme.commit(f)
     assert isinstance(opening.word, FieldVector) and len(opening.word) == 64
     assert len(com.root) == DIGEST_LEN and len(opening.tree) == 32
@@ -78,13 +81,14 @@ def test_commit_then_eval_accepts():
     ]
     assert f.num_vars == 4  # the shared opening is folded out of place
     # Round messages are field elements, the base table a field-backed MLE.
+    element_cls = type(field.one)
     g0 = iop.transcript.entries["basefold/g0"].result()
-    assert all(isinstance(e, FieldElement) for e in g0) and len(g0) == 3
+    assert all(isinstance(e, element_cls) for e in g0) and len(g0) == 3
     assert isinstance(iop.transcript.entries["basefold/h0"].result().table, FieldVector)
 
 
-def test_rejects_false_claim_and_wrong_point():
-    field, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
+def test_rejects_false_claim_and_wrong_point(field):
+    scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
     com, opening = scheme.commit(f)
     point, value = _claim(f, field)
     iop = _iop(field, scheme, com, opening)
@@ -92,17 +96,17 @@ def test_rejects_false_claim_and_wrong_point():
         Statement(Relation_Eval(), commitment=com, point=point, value=value + field.one)
     )
     other_point, _ = _claim(f, field)
-    other_point[f.variables[0]] = _random(field, b"elsewhere")
+    other_point[f.variables[0]] = field.random_element(b"elsewhere")
     iop = _iop(field, scheme, com, opening)
     assert not iop.run(
         Statement(Relation_Eval(), commitment=com, point=other_point, value=value)
     )
 
 
-def test_fiat_shamir_deterministic_and_prove_verify():
+def test_fiat_shamir_deterministic_and_prove_verify(field):
     from vfhe.piop import element_digest
 
-    field, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
+    scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
     com, opening = scheme.commit(f)
     point, value = _claim(f, field)
     stmt_fields = {"commitment": com, "point": point, "value": value}
@@ -128,12 +132,13 @@ def test_fiat_shamir_deterministic_and_prove_verify():
     )
 
 
-def test_commit_once_evaluate_many_and_open():
-    field, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
+def test_commit_once_evaluate_many_and_open(field):
+    scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
     com, opening = scheme.commit(f)
     for i in range(3):
         point = {
-            var: _random(field, bytes([i, j])) for j, var in enumerate(f.variables)
+            var: field.random_element(bytes([i, j]))
+            for j, var in enumerate(f.variables)
         }
         value = f.evaluate(point, in_place=False).constant()
         iop = _iop(field, scheme, com, opening)
@@ -146,8 +151,8 @@ def test_commit_once_evaluate_many_and_open():
     assert not scheme.open(com, other)
 
 
-def test_commit_requires_a_field_or_ring_table():
-    _, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
+def test_commit_requires_a_field_or_ring_table(field):
+    scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
     plain = MLE(variables=f.variables, evaluations=f.table.to_list())
     with pytest.raises(TypeError, match="ring- or field-backed"):
         scheme.commit(plain)
@@ -155,15 +160,15 @@ def test_commit_requires_a_field_or_ring_table():
         scheme.commit(f.to_coefficients())
 
 
-def test_all_variables_folded_and_deeper_code():
+def test_all_variables_folded_and_deeper_code(field):
     # kappa = 0: the base table is a single element; and d = 3 folds.
-    field, scheme, f = _setup(num_vars=3, k0=1, c=16, d=3)
+    scheme, f = _setup(field, num_vars=3, k0=1, c=16, d=3)
     com, opening = scheme.commit(f)
     point, value = _claim(f, field)
     assert _iop(field, scheme, com, opening).run(
         Statement(Relation_Eval(), commitment=com, point=point, value=value)
     )
-    field, scheme, f = _setup(num_vars=5, k0=4, c=4, d=3)
+    scheme, f = _setup(field, num_vars=5, k0=4, c=4, d=3)
     com, opening = scheme.commit(f)
     point, value = _claim(f, field)
     assert _iop(field, scheme, com, opening).run(
@@ -171,8 +176,8 @@ def test_all_variables_folded_and_deeper_code():
     )
 
 
-def test_sumcheck_then_basefold_pipeline():
-    field, scheme, f = _setup(num_vars=3, k0=2, c=8, d=2)
+def test_sumcheck_then_basefold_pipeline(field):
+    scheme, f = _setup(field, num_vars=3, k0=2, c=8, d=2)
     scheme.commit(f)
     total = f.table.sum()
 
@@ -201,23 +206,23 @@ def _replay_with_tamper(honest: IOP, field, scheme, stmt_fields, tamper):
     return iop.loop.run_until_complete(iop.verifier.verify(stmt))
 
 
-def _honest_run():
-    field, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
+def _honest_run(field):
+    scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
     com, opening = scheme.commit(f)
     point, value = _claim(f, field)
     honest = _iop(field, scheme, com, opening)
     fields = {"commitment": com, "point": point, "value": value}
     assert honest.run(Statement(Relation_Eval(), **fields))
-    return field, scheme, honest, fields
+    return scheme, honest, fields
 
 
-def test_replay_harness_accepts_an_untampered_transcript():
-    field, scheme, honest, fields = _honest_run()
+def test_replay_harness_accepts_an_untampered_transcript(field):
+    scheme, honest, fields = _honest_run(field)
     assert _replay_with_tamper(honest, field, scheme, fields, lambda _l, v: v)
 
 
-def test_rejects_tampered_round_root_and_base_table():
-    field, scheme, honest, fields = _honest_run()
+def test_rejects_tampered_round_root_and_base_table(field):
+    scheme, honest, fields = _honest_run(field)
 
     def bad_root(label, val):
         return bytes(DIGEST_LEN) if label == "basefold/pi1" else val
@@ -233,8 +238,8 @@ def test_rejects_tampered_round_root_and_base_table():
     assert not _replay_with_tamper(honest, field, scheme, fields, bad_table)
 
 
-def test_rejects_tampered_answer():
-    field, scheme, honest, fields = _honest_run()
+def test_rejects_tampered_answer(field):
+    scheme, honest, fields = _honest_run(field)
 
     def tamper(label, val):
         if label == "basefold/answers":
@@ -246,10 +251,10 @@ def test_rejects_tampered_answer():
     assert not _replay_with_tamper(honest, field, scheme, fields, tamper)
 
 
-def test_rejects_a_consistently_committed_wrong_fold():
+def test_rejects_a_consistently_committed_wrong_fold(field):
     # Every path verifies (the liar really built a tree over its codeword),
     # so only the fold-consistency check catches the wrong challenge.
-    field, scheme, honest, fields = _honest_run()
+    scheme, honest, fields = _honest_run(field)
     opening = scheme.openings[fields["commitment"]]
     d = scheme.code.d
     wrong_r = honest.transcript.entries["basefold/r0"].result() + field.one
