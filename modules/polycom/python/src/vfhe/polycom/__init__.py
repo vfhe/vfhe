@@ -9,12 +9,14 @@ from .basefold import (
     pair_digest,
 )
 from .code import FoldableRS
+from .field_code import FieldFoldableRS
 
 __all__ = [
     "Basefold",
     "BasefoldCommitment",
     "BasefoldEval",
     "BasefoldOpening",
+    "FieldFoldableRS",
     "FoldableRS",
     "pair_digest",
 ]

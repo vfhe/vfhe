@@ -14,8 +14,11 @@ machinery this module builds on is documented in `modules/piop/piop.md`.
 
 `vfhe.polycom` holds polynomial commitment schemes for the multilinear
 oracles of `vfhe.piop`. The first scheme is **basefold** [ZCF24] over
-`R_q = Z_q[X]/(X^N + 1)`: a code-based commitment whose evaluation proof is
-a sumcheck interleaved with codeword folds.
+`R_q = Z_q[X]/(X^N + 1)` or over a finite field: a code-based commitment
+whose evaluation proof is a sumcheck interleaved with codeword folds. The
+scheme and protocol are written once against the code's interface; the two
+codes (`FoldableRS` over `R_q`, `FieldFoldableRS` over a field, §2) carry
+everything representation-specific.
 
 The module follows the standard four-algorithm PCS syntax
 [ZCF24, Def. 8; BFS20]: `Basefold` is the scheme, `Basefold.commit` and
@@ -143,6 +146,22 @@ Three conventions to keep in mind:
   every level gets encoded, `n_0` included. Both are checked in the
   constructor.
 
+**The field code** (`field_code.py`, `c/src/rscode_field.c`) is the same
+construction over an `ExtensionField` `F_p[x]/(x^d - w)`, with the same
+interface: a codeword is one `vfhe.arith.FieldVector`, encoding runs
+arith's negacyclic NTT over the field's prime once per coefficient plane
+(the evaluation points lie in `F_p`, so encoding is `F_p`-linear and the
+extension structure never enters; the code is an RS code over `F_(p^d)`
+with points in `F_p`), and the twists are the same integers, lifted to
+elements for `fold_pair` and held as vectors for `fold` — which is then a
+split plus a handful of whole-vector operations. Merkle leaves come from
+the vector's own windowed digest (`hash_elements(group=2, stride=2)`), and
+the verifier recomputes a leaf as the digest of the two-element vector. The
+only bound is `2·n_d | p - 1`, i.e. `log2(n_d) + 1 <= field.two_adicity`,
+checked in the constructor. A pseudo-Mersenne field is not yet encodable
+here: arith now has a transform over it (`PseudoMersenneNTT`), and wiring
+it in is the roadmap item.
+
 `decode` is the encoder's other half: the inverse transform plus the
 degree check (coefficients above the dimension must vanish) that decides
 whether a vector is in the code. The evaluation protocol does not need it
@@ -250,9 +269,14 @@ evaluation point.
    reduction; `batching = True` on `BasefoldEval` itself, whose driver
    support already exists), and different-point claims reduce to
    common-point ones by sumcheck.
-2. **C kernel for the fold** (`fold_at` is still per-position Python over
-   `Polynomial`, one `Polynomial * list` scaling per entry); the encoder
-   and decoder are native already. Multithreading the per-prime,
+2. **Basefold over `PseudoMersenneField`**: `FieldFoldableRS` is written
+   against `FieldVector` and needs only a second transform provider, arith's
+   `PseudoMersenneNTT` (same basis and output order as the RNS transform);
+   `Basefold` itself needs nothing.
+3. **C kernel for the ring fold** (`fold_at` is still per-position Python
+   over `Polynomial`, one `Polynomial * list` scaling per entry; the field
+   fold is already whole-vector); the encoder and decoder are native
+   already. Multithreading the per-prime,
    per-coefficient-slot columns of `rs_encode` is the other easy win —
    they are independent transforms.
 

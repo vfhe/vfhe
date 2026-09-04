@@ -2,11 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the polycom engine: the Reed-Solomon code kernels
 // (polycom/c/src/rscode.c, prototyped in polycom/c/include/rscode.h).
-// Polynomial handles, handle-arrays and NTT-plan arrays are passed as
-// `void *` (cffi converts any pointer/array).
+// Polynomial handles, handle-arrays, NTT plans, moduli and FieldVector
+// structs are passed as `void *` (cffi converts any pointer/array).
 
 void *rs_new_plans(void *base, uint64_t rns_mask, uint64_t size);
 void rs_free_plans(void *plans, uint64_t count);
 uint64_t rs_plans_root(void *plans, uint64_t index);
 void rs_encode(void *out, void *in, uint64_t size, uint64_t degree, void *plans);
 int rs_decode(void *out, void *in, uint64_t size, uint64_t degree, void *plans);
+
+void *rs_field_new_plan(uint64_t size, void *mod);
+void rs_field_free_plan(void *plan);
+uint64_t rs_field_plan_root(void *plan);
+void rs_field_encode(void *out, void *in, void *plan);
+int rs_field_decode(void *out, void *in, void *plan);
