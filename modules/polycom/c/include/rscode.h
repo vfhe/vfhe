@@ -64,6 +64,31 @@ extern "C"
     int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degree,
                   NTT_Plan *plans);
 
+    // The same code over an extension field F_p[x]/(x^d - w), on FieldVector
+    // planes (rscode_field.c). The evaluation points lie in F_p, so the
+    // transform is F_p-linear and runs once per coefficient plane with a single
+    // plan over the field's modulus; the evaluation-point layout, and hence the
+    // fold, is the one described above. The message and codeword lengths are
+    // the vectors' `n`.
+
+    // A plan for codewords of length `size` over `mod`, which it borrows; NULL
+    // when p - 1 has no root of unity of order 2 * size (ntt_new_plan's answer).
+    NTT_Plan rs_field_new_plan(uint64_t size, Modulus mod);
+    void rs_field_free_plan(NTT_Plan plan);
+
+    // The 2*size-th root of unity the plan transforms with.
+    uint64_t rs_field_plan_root(NTT_Plan plan);
+
+    // out = the codeword of the message `in` (zero-padded to out->n). Out and
+    // in must not alias, and must have the same d.
+    void rs_field_encode(FieldVector out, const FieldVector in, NTT_Plan plan);
+
+    // The inverse transform plus the degree check: returns 1 when `in` is a
+    // codeword whose message has out->n coefficients, 0 otherwise. Writes the
+    // message to `out` when non-NULL (a failed check leaves it partially
+    // written); with `out` NULL, checks membership in the code of dimension 0.
+    int rs_field_decode(FieldVector out, const FieldVector in, NTT_Plan plan);
+
 #ifdef __cplusplus
 }
 #endif

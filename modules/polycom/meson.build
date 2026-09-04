@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 module = {
-    'sources': files('c/src/rscode_rns.c'),
+    'sources': files('c/src/rscode_rns.c', 'c/src/rscode_field.c'),
     'includes': [include_directories('c/include')],
     'headers': files('c/include/rscode.h'),
     'cdefs': files('python/cdef/polycom.cdef'),

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""The basefold polynomial commitment scheme [ZCF24] over R_q.
+"""The basefold polynomial commitment scheme [ZCF24] over R_q or a field.
 
 Structured as the standard four-algorithm PCS [ZCF24, Def. 8; BFS20]:
 `Basefold` is the scheme (Setup = choosing the code; `commit` and `open`
@@ -54,7 +54,7 @@ changing any message here.
 
 from __future__ import annotations
 
-from vfhe.arith import Polynomial, Ring
+from vfhe.arith import Field, Polynomial, Ring
 from vfhe.piop import (
     MLE,
     Merkle,
@@ -69,28 +69,35 @@ from vfhe.piop import (
     Verifier,
     element_digest,
 )
-from vfhe.piop.merkle import DIGEST_LEN, hash_bytes, leaf_digest
-from vfhe.piop.mle import native_table
+from vfhe.piop.merkle import DIGEST_LEN, hash_bytes
+from vfhe.piop.mle import native_table, vector_table
 from vfhe.piop.sumcheck import _exceptional_set_size, interpolate_evals
 
-from .code import FoldableRS
+from .code import FoldableRS, pair_digest  # noqa: F401  (pair_digest: public here)
+from .field_code import FieldFoldableRS
 
 
-def _element_hash(element: Polynomial):
-    """The element's own digest, dispatched through its class."""
-    return element.get_hash()
+def _committed_table(f) -> bool:
+    """Whether `f` is a table basefold can commit to: a dense evaluation-basis
+    MLE over a ring (Polynomial entries) or over a field (a FieldVector)."""
+    return native_table(f) or vector_table(f)
 
 
-def pair_digest(pair: tuple[Polynomial, Polynomial]) -> bytes:
-    """The Merkle leaf digest of one `±x` pair.
+def _domain_of(f):
+    """The Ring or Field of a committed table's coefficients."""
+    return f.ring if f.ring is not None else f.field
 
-    Both ring elements are hashed with their own `get_hash` and the two
-    digests hashed together, so the leaf binds the pair as an ordered unit.
-    `get_hash` hashes the NTT form and leaves the entry alone, so hashing a
-    codeword never disturbs it.
-    """
-    lo, hi = pair
-    return hash_bytes(leaf_digest(lo, _element_hash) + leaf_digest(hi, _element_hash))
+
+def _one(domain):
+    """The multiplicative identity of the domain, as one of its elements."""
+    if isinstance(domain, Field):
+        return domain.one
+    return Polynomial(domain).from_array([1])
+
+
+def _digest_leaf(leaf: bytes) -> bytes:
+    """The Merkle `hash=` for trees whose leaves are already digests."""
+    return leaf
 
 
 class BasefoldCommitment:
@@ -149,7 +156,8 @@ class BasefoldOpening:
 
 
 class Basefold:
-    """The basefold PCS over R_q [ZCF24, Def. 8]: this object is the scheme
+    """The basefold PCS [ZCF24, Def. 8] over the domain of its code — R_q
+    (`FoldableRS`) or a field (`FieldFoldableRS`): this object is the scheme
     (its `code` is the Setup output); `commit` / `open` below, and Eval is
     the `BasefoldEval` protocol, registered for `Relation_Eval`.
 
@@ -162,14 +170,16 @@ class Basefold:
     same convention that lets a verifier hold MLE oracles it may only query.
     """
 
-    def __init__(self, code: FoldableRS):
+    def __init__(self, code: FoldableRS | FieldFoldableRS):
         self.code = code
         self.commitments: dict[MLE, BasefoldCommitment] = {}
         self.openings: dict[BasefoldCommitment, BasefoldOpening] = {}
 
     def _check_polynomial(self, f) -> None:
-        if not native_table(f):
-            raise TypeError("basefold commits to ring-backed evaluation-basis MLEs")
+        if not _committed_table(f):
+            raise TypeError(
+                "basefold commits to ring- or field-backed evaluation-basis MLEs"
+            )
         if (1 << f.num_vars) != self.code.k_d:
             raise ValueError(
                 f"polynomial has 2^{f.num_vars} coefficients but the code "
@@ -178,9 +188,10 @@ class Basefold:
 
     def merkle_commit(self, word: list) -> Merkle:
         """The Merkle tree commitment to a codeword — the vector-commitment
-        step of the scheme, one leaf per `±x` pair; its `root` is what
-        travels (as the polynomial commitment or as a round message)."""
-        return Merkle(self.code.pair_leaves(word), hash=pair_digest)
+        step of the scheme, one leaf per `±x` pair (digested by the code,
+        `leaf_digests`); its `root` is what travels (as the polynomial
+        commitment or as a round message)."""
+        return Merkle(self.code.leaf_digests(word), hash=_digest_leaf)
 
     def commit(self, f: MLE) -> tuple[BasefoldCommitment, BasefoldOpening]:
         """Commit to f: encode, build the Merkle tree, return the root as the
@@ -237,7 +248,7 @@ class BasefoldEval(Protocol):
 
     reduces_from: type[Relation] = Relation_Eval
     reduces_to: tuple[type[Relation], ...] = ()
-    supported_domains: tuple[type, ...] = (Ring,)
+    supported_domains: tuple[type, ...] = (Ring, Field)
 
     def __init__(self, scheme: Basefold, rep: int = 32):
         if rep >= scheme.code.n0:
@@ -374,7 +385,7 @@ class BasefoldEval(Protocol):
                 "BasefoldOpening commit() returned"
             )
         f = opening.polynomial
-        if not native_table(f) or f.variables != commitment.variables:
+        if not _committed_table(f) or f.variables != commitment.variables:
             raise TypeError("the opening does not match the commitment")
         iop = prover.iop
         if iop is None:
@@ -385,13 +396,10 @@ class BasefoldEval(Protocol):
 
         # Codewords and their trees by level: level d was built at commit
         # time and only folded here; each fold's result is committed by root.
-        words = {d: list(opening.word)}
+        words = {d: opening.word}
         trees = {d: opening.tree}
         cur_f = f
-        f_ring = f.ring
-        if f_ring is None:
-            raise ValueError("basefold needs a ring-backed MLE")
-        cur_eq = MLE.eq(f_ring, zs, variables=f.variables)
+        cur_eq = MLE.eq(_domain_of(f), zs, variables=f.variables)
         for s in range(d):
             var = cur_f.variables[0]
             evals = SumcheckProd.prod_round_evals([cur_f, cur_eq])
@@ -436,8 +444,8 @@ class BasefoldEval(Protocol):
         iop = verifier.iop
         if iop is None:
             raise RuntimeError("this party is not bound to an IOP")
-        ring = iop.domain
-        if ring is None:
+        domain = iop.domain
+        if domain is None:
             raise RuntimeError("this IOP has no domain")
         label = f"basefold{statement.path}"
         d = self.code.d
@@ -459,17 +467,17 @@ class BasefoldEval(Protocol):
                 roots[d - s - 1] = await iop.transcript.read(f"{label}/pi{s + 1}")
 
         h0 = await iop.transcript.read(f"{label}/h0")
-        if not native_table(h0) or (1 << h0.num_vars) != self.code.k0:
+        if not _committed_table(h0) or (1 << h0.num_vars) != self.code.k0:
             raise Rejection(f"{label}: malformed base table")
 
         # Base sumcheck check: sum_b h0(b) * eq~(z, (r, b)) == claim, with
         # eq~ factored into the bound-variable scalar and the tail table
         # (built over h0's own variables — the pairing with z is positional).
-        one = Polynomial(ring).from_array([1])
+        one = _one(domain)
         eq_factor = one
         for z, r in zip(zs[:d], rs, strict=True):
             eq_factor = eq_factor * (z * r + (one - z) * (one - r))
-        eq_tail = MLE.eq(ring, zs[d:], variables=h0.variables)
+        eq_tail = MLE.eq(domain, zs[d:], variables=h0.variables)
         base = Statement(
             Relation_SumProd(),
             oracles=[h0, eq_tail.scale(eq_factor)],
@@ -493,7 +501,9 @@ class BasefoldEval(Protocol):
             for i, ((level, j), (pair, path)) in enumerate(
                 zip(steps, answer, strict=True)
             ):
-                if not Merkle.verify(roots[level], j, path, pair, hash=pair_digest):
+                if not Merkle.verify(
+                    roots[level], j, path, pair, hash=self.code.leaf_digest
+                ):
                     raise Rejection(
                         f"{label}: Merkle path rejected at level {level}, pair {j}"
                     )
