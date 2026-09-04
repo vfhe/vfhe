@@ -47,6 +47,23 @@ def _bit_reverse(i: int, bits: int) -> int:
     return out
 
 
+def _element_hash(element: Polynomial):
+    """The element's own digest, dispatched through its class."""
+    return element.get_hash()
+
+
+def pair_digest(pair: tuple[Polynomial, Polynomial]) -> bytes:
+    """The Merkle leaf digest of one `±x` pair.
+
+    Both ring elements are hashed with their own `get_hash` and the two
+    digests hashed together, so the leaf binds the pair as an ordered unit.
+    `get_hash` hashes the NTT form and leaves the entry alone, so hashing a
+    codeword never disturbs it.
+    """
+    lo, hi = pair
+    return hash_bytes(leaf_digest(lo, _element_hash) + leaf_digest(hi, _element_hash))
+
+
 class FoldableRS:
     """A depth-d foldable RS code over `ring`, with base dimension k0 and
     inverse rate c: level l encodes k0 * 2^l ring elements into
@@ -207,6 +224,14 @@ class FoldableRS:
         `±x` pair, so a single path authenticates both operands of a fold
         check ([ZCF24, Remark 9]'s packed leaves)."""
         return [self.pair_at(word, i) for i in range(len(word) // 2)]
+
+    def leaf_digest(self, pair: tuple[Polynomial, Polynomial]) -> bytes:
+        """The Merkle leaf digest of one `±x` pair (`pair_digest`)."""
+        return pair_digest(pair)
+
+    def leaf_digests(self, word: list) -> list[bytes]:
+        """The leaf digests of every `±x` pair of `word`."""
+        return [pair_digest(pair) for pair in self.pair_leaves(word)]
 
     def fold_at(self, word: list, r: Polynomial, level: int, i: int) -> Polynomial:
         """Position i of the fold of the level-`level` codeword `word` with
