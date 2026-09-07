@@ -30,9 +30,12 @@ extern "C"
 
     /* A modulus q together with everything needed to reduce modulo it: the
        Barrett constants (k, m, m52), the IFMA split of m the 50-bit kernels
-       multiply with, and the 2^52 / 2^104 residues the multiprecision path
-       folds with. This is all the modular-arithmetic kernels need -- `modq`,
-       `mul_modq` and every `mod_eltwise_*` take one of these and nothing else.
+       multiply with, the wide Barrett pair (`barr_lo` = floor(2^(bits(q)+62) / q)
+       and `prod_right_shift` = bits(q) - 2) that the radix-2^32 and radix-2^64
+       kernels reduce a product with, and the 2^52 / 2^104 residues the
+       multiprecision path folds with. This is all the modular-arithmetic
+       kernels need -- `modq`, `mul_modq` and every `mod_eltwise_*` take one of
+       these and nothing else.
 
        The constants depend on the engine's `modq` (mod.c vs mod_portable.c),
        so `mod_new` is defined next to it in each and is the single place they
@@ -45,6 +48,8 @@ extern "C"
         uint64_t m52;
         uint64_t ifma_barr_lo;
         uint64_t ifma_prod_right_shift;
+        uint64_t barr_lo;
+        uint64_t prod_right_shift;
         uint64_t mp_w1;
         uint64_t mp_w2;
     } *Modulus;
@@ -59,13 +64,21 @@ extern "C"
        `mod` is **borrowed**: whoever created the modulus owns it, and
        `ntt_free_plan` leaves it alone. That lets several plans over the same
        prime at different lengths -- which is exactly what polycom's per-level
-       codes are -- share one set of Barrett constants. */
+       codes are -- share one set of Barrett constants.
+
+       `shoup_shift` is the base-2 logarithm of the Shoup radix the twiddle
+       constants were precomputed at: 32, 52 or 64 on an engine with
+       vectorized transforms, and 0 for the scalar tables, which carry no
+       Shoup constants. It selects which kernel family may consume the tables,
+       so `ntt_forward` and `ntt_reverse` read it rather than re-deriving a
+       family from the modulus. */
     typedef struct _NTT_Plan
     {
         Modulus mod;
         uint64_t n;
         uint64_t root_of_unity;
         uint64_t inv_root_of_unity;
+        uint64_t shoup_shift;
         void **ws_fwd;
         void **w_precon_fwd;
         void **ws_inv;
@@ -138,17 +151,22 @@ extern "C"
         uint64_t N;
     } *IntPolynomial;
 
+    /* Twiddle tables for one transform length. `shoup_shift` is the radix the
+       per-twiddle Shoup constants are computed at, and must be the one the
+       kernel family that will read the tables reduces with -- see
+       NTT_Plan::shoup_shift. The portable engine builds scalar tables and
+       ignores it. */
 #if VFHE_HAVE_AVX512IFMA
-    void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, __m512i ***out_ws,
-                            __m512i ***out_w_precon);
-    void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, __m512i ***out_ws,
-                            __m512i ***out_w_precon);
+    void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t shoup_shift,
+                            __m512i ***out_ws, __m512i ***out_w_precon);
+    void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity,
+                            uint64_t shoup_shift, __m512i ***out_ws, __m512i ***out_w_precon);
     void ntt_free_precompute(__m512i **ws, __m512i **w_precon, uint64_t n);
 #else
-void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t ***out_ws,
-                        uint64_t ***out_w_precon);
-void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uint64_t ***out_ws,
-                        uint64_t ***out_w_precon);
+void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t shoup_shift,
+                        uint64_t ***out_ws, uint64_t ***out_w_precon);
+void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uint64_t shoup_shift,
+                        uint64_t ***out_ws, uint64_t ***out_w_precon);
 void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
 #endif
 

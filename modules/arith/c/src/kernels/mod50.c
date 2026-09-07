@@ -146,20 +146,41 @@ void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint6
     }
 }
 
+/* `scale` and `fma` multiply by a scalar that does not vary over the array,
+   and a fixed operand is what Shoup's form needs: precompute
+   s' = floor(s * 2^52 / q) once, and the reduction per element is a
+   multiply-high, a multiply and a subtract. The general two-varying-operand
+   Barrett that `mul` must use is not needed here. One 128-bit divide per call
+   sets s' up.
+
+   Both madd52 operands stay under 2^52 as the instruction requires: s and a
+   are below q < 2^50, and s' below 2^52 because s < q. The 52-bit mask is
+   exact because the value it truncates, s*a - q_hat*q, is in [0, 2q), which
+   one conditional subtract then brings into [0, q). */
+static inline __m512i shoup_mul_50(__m512i a, __m512i s, __m512i sp, __m512i q_vec,
+                                   __m512i neg_q_vec)
+{
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i low52b_mask = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i q_hat = _mm512_madd52hi_epu64(zero, sp, a);
+    const __m512i res = _mm512_and_epi64(
+        _mm512_madd52lo_epu64(_mm512_madd52lo_epu64(zero, s, a), q_hat, neg_q_vec), low52b_mask);
+    return _mm512_min_epu64(res, _mm512_sub_epi64(res, q_vec));
+}
+
 void mod_eltwise_scale_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
     const __m512i *inv = (const __m512i *)in;
     __m512i *outv = (__m512i *)out;
     const uint64_t s = modq(scale, mod);
     const __m512i v_s = _mm512_set1_epi64(s);
-    const __m512i zero = _mm512_setzero_si512();
+    const __m512i v_sp = _mm512_set1_epi64((uint64_t)(((unsigned __int128)s << 52) / mod->q));
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i neg_q_vec = _mm512_set1_epi64(-(int64_t)mod->q);
     const size_t n_vec = n / 8;
     for (size_t i = 0; i < n_vec; i++)
     {
-        __m512i v = inv[i];
-        __m512i v_prod_hi = _mm512_madd52hi_epu64(zero, v, v_s);
-        __m512i v_prod_lo = _mm512_madd52lo_epu64(zero, v, v_s);
-        outv[i] = _mm512_hexl_reduce_prod_50(v_prod_hi, v_prod_lo, mod);
+        outv[i] = shoup_mul_50(inv[i], v_s, v_sp, q_vec, neg_q_vec);
     }
 }
 
@@ -169,19 +190,14 @@ void mod_eltwise_fma_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n,
     const __m512i *inv = (const __m512i *)in;
     const uint64_t s = modq(scale, mod);
     const __m512i v_s = _mm512_set1_epi64(s);
-    const __m512i zero = _mm512_setzero_si512();
+    const __m512i v_sp = _mm512_set1_epi64((uint64_t)(((unsigned __int128)s << 52) / mod->q));
     const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i neg_q_vec = _mm512_set1_epi64(-(int64_t)mod->q);
     const size_t n_vec = n / 8;
     for (size_t i = 0; i < n_vec; i++)
     {
-        __m512i v = inv[i];
-        __m512i v_out = outv[i];
-        __m512i v_prod_hi = _mm512_madd52hi_epu64(zero, v, v_s);
-        __m512i v_prod_lo = _mm512_madd52lo_epu64(zero, v, v_s);
-        __m512i v_prod_reduced = _mm512_hexl_reduce_prod_50(v_prod_hi, v_prod_lo, mod);
-        __m512i res = _mm512_add_epi64(v_out, v_prod_reduced);
-        __m512i r2 = _mm512_sub_epi64(res, q_vec);
-        outv[i] = _mm512_min_epu64(res, r2);
+        __m512i res = _mm512_add_epi64(outv[i], shoup_mul_50(inv[i], v_s, v_sp, q_vec, neg_q_vec));
+        outv[i] = _mm512_min_epu64(res, _mm512_sub_epi64(res, q_vec));
     }
 }
 

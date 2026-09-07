@@ -192,22 +192,25 @@ static void ntt_CT_NR_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, 
     const uint64_t q = plan->mod->q;
     __m512i minus_q = _mm512_set1_epi64(-q);
     __m512i q2 = _mm512_set1_epi64(2 * q);
+    __m512i q_vec = _mm512_set1_epi64(q);
 
-    if (sub_n <= 1024)
+    if (sub_n <= NTT_LEAF_ELEMENTS)
     {
         size_t l = level;
         for (; (1ULL << (l - level + 3)) < sub_n; l++)
         {
-            const __m512i *wsv = ws[l];
-            const __m512i *ws_precon_v = w_precon[l];
+            /* A broadcast level stores one twiddle per butterfly group as a
+               scalar (see ntt_precompute_fwd), so a read broadcasts it. */
+            const uint64_t *wsb = (const uint64_t *)ws[l];
+            const uint64_t *wpb = (const uint64_t *)w_precon[l];
             const uint64_t t = sub_n >> (l - level + 4);
             size_t m = 1ULL << (l - level);
             size_t start_i = offset_i << (l - level);
             for (size_t i = 0; i < m; i++)
             {
                 const uint64_t slice = 2 * i * t;
-                const __m512i w_i = wsv[start_i + i];
-                const __m512i wp_i = ws_precon_v[start_i + i];
+                const __m512i w_i = _mm512_set1_epi64(wsb[start_i + i]);
+                const __m512i wp_i = _mm512_set1_epi64(wpb[start_i + i]);
                 for (size_t j = slice; j < slice + t; j++)
                 {
                     FwdButterfly64(&x[j], &x[j + t], w_i, wp_i, minus_q, q2);
@@ -258,6 +261,15 @@ static void ntt_CT_NR_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, 
                     FwdInterleaveT1(&x[slice], &x[slice + 1]);
                     FwdButterfly64(&x[slice], &x[slice + 1], w_i, wp_i, minus_q, q2);
                     FwdReInterleaveT1(&x[slice], &x[slice + 1]);
+                    /* Values are lazy in [0, 4q) between stages, and this is
+                       the last stage to touch these elements, so bring them
+                       home here rather than in a sweep of their own. */
+                    x[slice] = _mm512_min_epu64(x[slice], _mm512_sub_epi64(x[slice], q2));
+                    x[slice] = _mm512_min_epu64(x[slice], _mm512_sub_epi64(x[slice], q_vec));
+                    x[slice + 1] =
+                        _mm512_min_epu64(x[slice + 1], _mm512_sub_epi64(x[slice + 1], q2));
+                    x[slice + 1] =
+                        _mm512_min_epu64(x[slice + 1], _mm512_sub_epi64(x[slice + 1], q_vec));
                 }
             }
         }
@@ -265,8 +277,8 @@ static void ntt_CT_NR_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, 
     else
     {
         size_t t = sub_n >> 4;
-        const __m512i w_i = ws[level][offset_i];
-        const __m512i wp_i = w_precon[level][offset_i];
+        const __m512i w_i = _mm512_set1_epi64(((const uint64_t *)ws[level])[offset_i]);
+        const __m512i wp_i = _mm512_set1_epi64(((const uint64_t *)w_precon[level])[offset_i]);
         for (size_t j = 0; j < t; j++)
         {
             FwdButterfly64(&x[j], &x[j + t], w_i, wp_i, minus_q, q2);
@@ -285,18 +297,10 @@ void ntt_forward_64(uint64_t *out, uint64_t *in, NTT_Plan plan)
             out[i] = in[i];
         }
     }
+    /* The transform leaves every element in [0, q): the t = 1 tail stage
+       reduces as it finishes with them, so there is no closing sweep. */
     ntt_CT_NR_internal_64((__m512i *)out, (__m512i **)plan->ws_fwd, (__m512i **)plan->w_precon_fwd,
                           plan->n, 0, 0, plan);
-
-    const __m512i q_vec = _mm512_set1_epi64(plan->mod->q);
-    const __m512i q2_vec = _mm512_set1_epi64(2 * plan->mod->q);
-    for (size_t i = 0; i < plan->n / 8; i++)
-    {
-        __m512i v = ((__m512i *)out)[i];
-        v = _mm512_min_epu64(v, _mm512_sub_epi64(v, q2_vec));
-        v = _mm512_min_epu64(v, _mm512_sub_epi64(v, q_vec));
-        ((__m512i *)out)[i] = v;
-    }
 }
 
 static void ntt_GS_RN_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, uint64_t sub_n,
@@ -307,7 +311,7 @@ static void ntt_GS_RN_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, 
     __m512i minus_q = _mm512_set1_epi64(-q);
     __m512i q2 = _mm512_set1_epi64(2 * q);
 
-    if (sub_n <= 1024)
+    if (sub_n <= NTT_LEAF_ELEMENTS)
     {
         size_t l = 0;
         if (sub_n >= 16)
@@ -363,16 +367,17 @@ static void ntt_GS_RN_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, 
 
         for (; (1ULL << (l + is_top_level)) < sub_n; l++)
         {
-            const __m512i *wsv = ws[l];
-            const __m512i *ws_precon_v = w_precon[l];
+            // Broadcast level, stored as scalars -- see ntt_CT_NR_internal above.
+            const uint64_t *wsb = (const uint64_t *)ws[l];
+            const uint64_t *wpb = (const uint64_t *)w_precon[l];
             const uint64_t t = 1ULL << (l - 3);
             const uint64_t m_sub = sub_n >> (l + 1);
             size_t start_i = offset_i * m_sub;
             for (size_t i = 0; i < m_sub; i++)
             {
                 const uint64_t slice = 2 * i * t;
-                const __m512i w_i = wsv[start_i + i];
-                const __m512i wp_i = ws_precon_v[start_i + i];
+                const __m512i w_i = _mm512_set1_epi64(wsb[start_i + i]);
+                const __m512i wp_i = _mm512_set1_epi64(wpb[start_i + i]);
                 for (size_t j = slice; j < slice + t; j++)
                 {
                     InvButterfly64(&x[j], &x[j + t], w_i, wp_i, minus_q, q2);
@@ -383,13 +388,13 @@ static void ntt_GS_RN_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, 
         if (is_top_level)
         {
             size_t l_top = l;
-            const __m512i *wsv = ws[l_top];
+            const uint64_t *wsb = (const uint64_t *)ws[l_top];
             const uint64_t t = 1ULL << (l_top - 3);
             uint64_t inv_n_prime = barrett_factor_64(inv_n, q);
             __m512i v_inv_n = _mm512_set1_epi64(inv_n);
             __m512i v_inv_n_prime = _mm512_set1_epi64(inv_n_prime);
             __m512i q_vec = _mm512_set1_epi64(q);
-            uint64_t w = _mm_cvtsi128_si64(_mm512_castsi512_si128(wsv[0]));
+            uint64_t w = wsb[0];
             uint64_t inv_n_w = (uint64_t)(((unsigned __int128)inv_n * w) % q);
             uint64_t inv_n_w_prime = barrett_factor_64(inv_n_w, q);
             __m512i v_inv_n_w = _mm512_set1_epi64(inv_n_w);
@@ -414,8 +419,7 @@ static void ntt_GS_RN_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, 
             __m512i v_inv_n = _mm512_set1_epi64(inv_n);
             __m512i v_inv_n_prime = _mm512_set1_epi64(inv_n_prime);
             __m512i q_vec = _mm512_set1_epi64(q);
-            const __m512i w_i = ws[l_merge][offset_i];
-            uint64_t w = _mm_cvtsi128_si64(_mm512_castsi512_si128(w_i));
+            uint64_t w = ((const uint64_t *)ws[l_merge])[offset_i];
             uint64_t inv_n_w = (uint64_t)(((unsigned __int128)inv_n * w) % q);
             uint64_t inv_n_w_prime = barrett_factor_64(inv_n_w, q);
             __m512i v_inv_n_w = _mm512_set1_epi64(inv_n_w);
@@ -428,8 +432,8 @@ static void ntt_GS_RN_internal_64(__m512i *x, __m512i **ws, __m512i **w_precon, 
         }
         else
         {
-            const __m512i w_i = ws[l_merge][offset_i];
-            const __m512i wp_i = w_precon[l_merge][offset_i];
+            const __m512i w_i = _mm512_set1_epi64(((const uint64_t *)ws[l_merge])[offset_i]);
+            const __m512i wp_i = _mm512_set1_epi64(((const uint64_t *)w_precon[l_merge])[offset_i]);
             for (size_t j = 0; j < t; j++)
             {
                 InvButterfly64(&x[j], &x[j + t], w_i, wp_i, minus_q, q2);

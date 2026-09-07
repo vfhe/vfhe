@@ -34,6 +34,8 @@ Modulus mod_new(uint64_t q)
     res->m52 = (k - 52 >= 64) ? 0 : (m >> (k - 52));
     res->ifma_barr_lo = m & ((1ULL << 52) - 1);
     res->ifma_prod_right_shift = k - 52;
+    res->barr_lo = (uint64_t)(((unsigned __int128)1 << (q_bits + 62)) / q);
+    res->prod_right_shift = (uint64_t)q_bits - 2;
     res->mp_w1 = (uint64_t)(((unsigned __int128)1 << 52) % q);
     res->mp_w2 = (uint64_t)(((unsigned __int128)1 << 104) % q);
     return res;
@@ -127,17 +129,17 @@ void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Mo
         mod_eltwise_mul_gen(out, in1, in2, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_mul_32(out, in1, in2, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_mul_50(out, in1, in2, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_mul_64(out, in1, in2, n, mod);
+        break;
     }
 }
 
@@ -148,17 +150,17 @@ void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
         mod_eltwise_mul_addto_gen(out, in1, in2, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_mul_addto_32(out, in1, in2, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_mul_addto_50(out, in1, in2, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_mul_addto_64(out, in1, in2, n, mod);
+        break;
     }
 }
 
@@ -169,17 +171,17 @@ void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
         mod_eltwise_mul_subto_gen(out, in1, in2, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_mul_subto_32(out, in1, in2, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_mul_subto_50(out, in1, in2, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_mul_subto_64(out, in1, in2, n, mod);
+        break;
     }
 }
 
@@ -190,17 +192,17 @@ void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, 
         mod_eltwise_scale_gen(out, in, scale, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_scale_32(out, in, scale, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_scale_50(out, in, scale, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_scale_64(out, in, scale, n, mod);
+        break;
     }
 }
 
@@ -211,17 +213,17 @@ void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Mo
         mod_eltwise_fma_gen(out, in, scale, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_fma_32(out, in, scale, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_fma_50(out, in, scale, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_fma_64(out, in, scale, n, mod);
+        break;
     }
 }
 
@@ -232,17 +234,17 @@ void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64
         mod_eltwise_add_scalar_gen(out, in, scalar, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_add_scalar_32(out, in, scalar, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_add_scalar_50(out, in, scalar, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_add_scalar_64(out, in, scalar, n, mod);
+        break;
     }
 }
 
@@ -253,17 +255,17 @@ void mod_eltwise_sub_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64
         mod_eltwise_sub_scalar_gen(out, in, scalar, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_sub_scalar_32(out, in, scalar, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_sub_scalar_50(out, in, scalar, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_sub_scalar_64(out, in, scalar, n, mod);
+        break;
     }
 }
 
@@ -274,17 +276,17 @@ void mod_eltwise_negate(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
         mod_eltwise_negate_gen(out, in, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_negate_32(out, in, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_negate_50(out, in, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_negate_64(out, in, n, mod);
+        break;
     }
 }
 
@@ -295,17 +297,17 @@ void mod_eltwise_add(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Mo
         mod_eltwise_add_gen(out, in1, in2, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_add_32(out, in1, in2, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_add_50(out, in1, in2, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_add_64(out, in1, in2, n, mod);
+        break;
     }
 }
 
@@ -316,17 +318,17 @@ void mod_eltwise_sub(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Mo
         mod_eltwise_sub_gen(out, in1, in2, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_sub_32(out, in1, in2, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_sub_50(out, in1, in2, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_sub_64(out, in1, in2, n, mod);
+        break;
     }
 }
 
@@ -337,17 +339,17 @@ void mod_eltwise_reduce(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
         mod_eltwise_reduce_gen(out, in, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_reduce_32(out, in, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_reduce_50(out, in, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_reduce_64(out, in, n, mod);
+        break;
     }
 }
 
@@ -358,17 +360,17 @@ void mod_eltwise_reduce_signed(uint64_t *out, int64_t *in, uint64_t n, Modulus m
         mod_eltwise_reduce_signed_gen(out, in, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_eltwise_reduce_signed_32(out, in, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_eltwise_reduce_signed_50(out, in, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_eltwise_reduce_signed_64(out, in, n, mod);
+        break;
     }
 }
 
@@ -380,17 +382,17 @@ void mod_reduce_array_mp(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uin
         mod_reduce_array_mp_gen(out, in_high, in_low, n, mod);
         return;
     }
-    if (mod->q < (1ULL << 32))
+    switch (mod_shoup_shift(mod->q))
     {
+    case MOD_SHIFT_32:
         mod_reduce_array_mp_32(out, in_high, in_low, n, mod);
-    }
-    else if (mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         mod_reduce_array_mp_50(out, in_high, in_low, n, mod);
-    }
-    else
-    {
+        break;
+    default:
         mod_reduce_array_mp_64(out, in_high, in_low, n, mod);
+        break;
     }
 }
 
