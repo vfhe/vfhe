@@ -7,9 +7,12 @@
  */
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <arith.h>
 #include <util.h> /* safe_aligned_malloc: the SIMD kernels need 64-byte-aligned buffers */
+
+#include "arith_internal.h" /* MOD_SHIFT_*, mod_shoup_shift, the per-family kernels */
 
 #include "unity.h"
 
@@ -193,7 +196,7 @@ void test_modq_one_and_two_words(void)
 {
     /* The two-word path folds on the precomputed residues of 2^52 and 2^104 and
        shifts by k - 64, all of which move with the size of q -- so sweep it. */
-    const uint64_t bits[] = {10, 20, 30, 40, 50, 60, 62};
+    const uint64_t bits[] = {10, 20, 29, 30, 31, 49, 50, 60, 61};
     for (unsigned b = 0; b < sizeof(bits) / sizeof(*bits); b++)
     {
         const uint64_t q = next_special_prime(1ULL << bits[b], 1024, true);
@@ -227,7 +230,9 @@ void test_modq_one_and_two_words(void)
 
 void test_mod_eltwise_sweep(void)
 {
-    const uint64_t bits[] = {10, 20, 30, 40, 50, 60, 62};
+    /* next_special_prime returns a prime *above* 2^b, so 29/30 straddle the
+       radix-2^32 family's bound and 49/50 straddle the IFMA family's. */
+    const uint64_t bits[] = {10, 20, 29, 30, 31, 49, 50, 60, 61};
     for (unsigned i = 0; i < sizeof(bits) / sizeof(*bits); i++)
         check_ops(bits[i], 1024);
 }
@@ -237,12 +242,91 @@ void test_mod_eltwise_sweep(void)
    on the portable engine, where they are the whole implementation. */
 void test_mod_eltwise_sweep_scalar_path(void)
 {
-    const uint64_t bits[] = {10, 20, 30, 40, 50, 60, 62};
+    const uint64_t bits[] = {10, 20, 29, 30, 31, 49, 50, 60, 61};
     const uint64_t lengths[] = {1, 2, 4, 7};
     for (unsigned i = 0; i < sizeof(bits) / sizeof(*bits); i++)
         for (unsigned j = 0; j < sizeof(lengths) / sizeof(*lengths); j++)
             check_ops(bits[i], lengths[j]);
 }
+
+/* ---- the family the element-wise dispatchers pick ---- */
+
+#if VFHE_HAVE_AVX512IFMA
+/* Same construction as the transform's cross-family check, for the kernels
+   that carry no tables. A modulus every family accepts must give one answer
+   from all of them, and the family the dispatcher picks must be one that
+   accepts it -- stated from Harvey's 4q <= B rather than read back off the
+   dispatcher. */
+static bool family_admits(uint64_t q, uint64_t shift) { return q < (1ULL << (shift - 2)); }
+
+typedef void (*eltwise_mul_fn)(uint64_t *, uint64_t *, uint64_t *, uint64_t, Modulus);
+typedef void (*eltwise_scale_fn)(uint64_t *, uint64_t *, uint64_t, uint64_t, Modulus);
+
+void test_mod_eltwise_families_agree_where_they_overlap(void)
+{
+    const uint64_t shifts[] = {MOD_SHIFT_32, MOD_SHIFT_50, MOD_SHIFT_64};
+    const eltwise_mul_fn muls[] = {mod_eltwise_mul_32, mod_eltwise_mul_50, mod_eltwise_mul_64};
+    const eltwise_scale_fn scales[] = {mod_eltwise_scale_32, mod_eltwise_scale_50,
+                                       mod_eltwise_scale_64};
+    const eltwise_scale_fn fmas[] = {mod_eltwise_fma_32, mod_eltwise_fma_50, mod_eltwise_fma_64};
+    const uint64_t bits[] = {10, 20, 29, 30, 31, 49, 50, 60, 61};
+    const uint64_t n = 64;
+
+    for (unsigned b = 0; b < sizeof(bits) / sizeof(*bits); b++)
+    {
+        const uint64_t q = next_special_prime(1ULL << bits[b], 1024, true);
+        Modulus mod = mod_new(q);
+
+        TEST_ASSERT_TRUE_MESSAGE(family_admits(q, mod_shoup_shift(q)),
+                                 "element-wise dispatch chose a family that cannot hold this "
+                                 "modulus");
+
+        uint64_t *in1 = safe_aligned_malloc(n * sizeof(uint64_t));
+        uint64_t *in2 = safe_aligned_malloc(n * sizeof(uint64_t));
+        uint64_t *out = safe_aligned_malloc(n * sizeof(uint64_t));
+        uint64_t *first = safe_aligned_malloc(n * sizeof(uint64_t));
+        for (uint64_t i = 0; i < n; i++)
+        {
+            in1[i] = (0x9E3779B97F4A7C15ULL * (i + 1)) % q;
+            in2[i] = (0xC2B2AE3D27D4EB4FULL * (i + 3)) % q;
+        }
+        const uint64_t scalar = in2[1];
+
+        for (unsigned op = 0; op < 3; op++)
+        {
+            int have_first = 0;
+            for (unsigned k = 0; k < sizeof(shifts) / sizeof(*shifts); k++)
+            {
+                if (!family_admits(q, shifts[k]))
+                    continue;
+                if (op == 0)
+                    muls[k](out, in1, in2, n, mod);
+                else
+                {
+                    /* scale and fma read `out`, so seed it the same way each time */
+                    for (uint64_t i = 0; i < n; i++)
+                        out[i] = in2[i];
+                    (op == 1 ? scales[k] : fmas[k])(out, in1, scalar, n, mod);
+                }
+                if (have_first)
+                    TEST_ASSERT_EQUAL_UINT64_ARRAY(first, out, n);
+                else
+                {
+                    memcpy(first, out, n * sizeof(uint64_t));
+                    have_first = 1;
+                }
+            }
+            TEST_ASSERT_TRUE(have_first);
+        }
+
+        free(in1);
+        free(in2);
+        free(out);
+        free(first);
+        mod_free(mod);
+    }
+}
+#endif
 
 int main(void)
 {
@@ -250,5 +334,8 @@ int main(void)
     RUN_TEST(test_modq_one_and_two_words);
     RUN_TEST(test_mod_eltwise_sweep);
     RUN_TEST(test_mod_eltwise_sweep_scalar_path);
+#if VFHE_HAVE_AVX512IFMA
+    RUN_TEST(test_mod_eltwise_families_agree_where_they_overlap);
+#endif
     return UNITY_END();
 }

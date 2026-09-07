@@ -30,6 +30,12 @@ Modulus mod_new(uint64_t q)
     // left uninitialized.
     res->ifma_barr_lo = m & ((1ULL << 52) - 1);
     res->ifma_prod_right_shift = k - 52;
+    int q_bits = 0;
+    for (uint64_t t = q; t > 0; t >>= 1)
+        q_bits++;
+    // Unused by the scalar kernels; see the note above.
+    res->barr_lo = (uint64_t)(((unsigned __int128)1 << (q_bits + 62)) / q);
+    res->prod_right_shift = (uint64_t)q_bits - 2;
     res->mp_w1 = (uint64_t)(((unsigned __int128)1 << 52) % q);
     res->mp_w2 = (uint64_t)(((unsigned __int128)1 << 104) % q);
     return res;

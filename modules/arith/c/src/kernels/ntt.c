@@ -27,15 +27,13 @@ static uint64_t barrett_factor(uint64_t val, uint64_t q, uint64_t shift)
     return (uint64_t)(num / q);
 }
 
-void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, __m512i ***out_ws,
-                        __m512i ***out_w_precon)
+void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t shift,
+                        __m512i ***out_ws, __m512i ***out_w_precon)
 {
     const uint64_t q = mod->q;
     size_t logn = 0;
     while ((1ULL << logn) < n)
         logn++;
-
-    uint64_t shift = (q < (1ULL << 32)) ? 32 : (q < (1ULL << 50)) ? 52 : 64;
 
     uint64_t *rou = (uint64_t *)malloc(n * sizeof(uint64_t));
     rou[0] = 1;
@@ -50,18 +48,27 @@ void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, __m512i
     __m512i **w_precon = (__m512i **)malloc(logn * sizeof(__m512i *));
     size_t level = 0;
     size_t w_idx = 1;
+    /* Broadcast levels: one twiddle per butterfly group, so the level holds
+       `m` scalars and the kernel broadcasts each as it loads it. Storing the
+       eight-lane splat instead would cost 8x the bytes for nothing --
+       vpbroadcastq from an 8-byte slot is the same single uop as the 64-byte
+       load. The twiddle tables dominate the forward's working set, so this is
+       what keeps it near the L2 boundary at the top sizes.
+
+       Still 64-byte aligned: in a change whose whole subject is layout, the
+       allocation's alignment is part of the change. */
     for (; (1ULL << (level + 3)) < n; level++)
     {
         size_t m = 1ULL << level;
-        ws[level] = (__m512i *)_mm_malloc(m * sizeof(__m512i), 64);
-        w_precon[level] = (__m512i *)_mm_malloc(m * sizeof(__m512i), 64);
+        uint64_t *wsb = (uint64_t *)_mm_malloc(m * sizeof(uint64_t), 64);
+        uint64_t *wpb = (uint64_t *)_mm_malloc(m * sizeof(uint64_t), 64);
         for (size_t i = 0; i < m; i++)
         {
-            uint64_t w = rou[w_idx + i];
-            uint64_t wp = barrett_factor(w, q, shift);
-            ws[level][i] = _mm512_set1_epi64(w);
-            w_precon[level][i] = _mm512_set1_epi64(wp);
+            wsb[i] = rou[w_idx + i];
+            wpb[i] = barrett_factor(wsb[i], q, shift);
         }
+        ws[level] = (__m512i *)wsb;
+        w_precon[level] = (__m512i *)wpb;
         w_idx += m;
     }
     if (level < logn)
@@ -135,15 +142,13 @@ void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, __m512i
     *out_w_precon = w_precon;
 }
 
-void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, __m512i ***out_ws,
-                        __m512i ***out_w_precon)
+void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uint64_t shift,
+                        __m512i ***out_ws, __m512i ***out_w_precon)
 {
     const uint64_t q = mod->q;
     size_t logn = 0;
     while ((1ULL << logn) < n)
         logn++;
-
-    uint64_t shift = (q < (1ULL << 32)) ? 32 : (q < (1ULL << 50)) ? 52 : 64;
 
     uint64_t *rou = (uint64_t *)malloc(n * sizeof(uint64_t));
     rou[0] = 1;
@@ -235,18 +240,19 @@ void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, __m
         w_idx += m;
         level++;
     }
+    // Broadcast levels, stored as scalars -- see ntt_precompute_fwd.
     for (; level < logn; level++)
     {
         size_t m = n >> (level + 1);
-        ws[level] = (__m512i *)_mm_malloc(m * sizeof(__m512i), 64);
-        w_precon[level] = (__m512i *)_mm_malloc(m * sizeof(__m512i), 64);
+        uint64_t *wsb = (uint64_t *)_mm_malloc(m * sizeof(uint64_t), 64);
+        uint64_t *wpb = (uint64_t *)_mm_malloc(m * sizeof(uint64_t), 64);
         for (size_t i = 0; i < m; i++)
         {
-            uint64_t w = temp[w_idx + i];
-            uint64_t wp = barrett_factor(w, q, shift);
-            ws[level][i] = _mm512_set1_epi64(w);
-            w_precon[level][i] = _mm512_set1_epi64(wp);
+            wsb[i] = temp[w_idx + i];
+            wpb[i] = barrett_factor(wsb[i], q, shift);
         }
+        ws[level] = (__m512i *)wsb;
+        w_precon[level] = (__m512i *)wpb;
         w_idx += m;
     }
     free(rou);
@@ -270,6 +276,11 @@ void ntt_free_precompute(__m512i **ws, __m512i **w_precon, uint64_t n)
 }
 
 NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
+{
+    return ntt_new_plan_at_shift(n, mod, mod_shoup_shift(mod->q));
+}
+
+NTT_Plan ntt_new_plan_at_shift(uint64_t n, Modulus mod, uint64_t shoup_shift)
 {
     const uint64_t q = mod->q;
 
@@ -304,12 +315,15 @@ NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
     res->n = n;
     res->root_of_unity = root_of_unity;
     res->inv_root_of_unity = inv_root_of_unity;
+    res->shoup_shift = shoup_shift;
 
     if (n < NTT_MIN_VECTOR_LEN)
     {
         // No vectorized stage can run at this length, and the tables below would
         // be empty (they are sized n / 16). Build the scalar ones instead; the
-        // transforms and the free path branch on plan->n the same way.
+        // transforms and the free path branch on plan->n the same way. They
+        // carry no Shoup constants, which is what shift 0 records.
+        res->shoup_shift = 0;
         ntt_scalar_precompute(n, mod, root_of_unity, (uint64_t ***)&res->ws_fwd);
         ntt_scalar_precompute(n, mod, inv_root_of_unity, (uint64_t ***)&res->ws_inv);
         res->w_precon_fwd = NULL;
@@ -317,9 +331,9 @@ NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
         return res;
     }
 
-    ntt_precompute_fwd(n, mod, root_of_unity, (__m512i ***)&res->ws_fwd,
+    ntt_precompute_fwd(n, mod, root_of_unity, shoup_shift, (__m512i ***)&res->ws_fwd,
                        (__m512i ***)&res->w_precon_fwd);
-    ntt_precompute_inv(n, mod, inv_root_of_unity, (__m512i ***)&res->ws_inv,
+    ntt_precompute_inv(n, mod, inv_root_of_unity, shoup_shift, (__m512i ***)&res->ws_inv,
                        (__m512i ***)&res->w_precon_inv);
     return res;
 }
@@ -338,17 +352,19 @@ void ntt_forward(uint64_t *out, uint64_t *in, NTT_Plan plan)
         ntt_CT_NR_gen(out, ((uint64_t **)plan->ws_fwd)[0], plan);
         return;
     }
-    if (plan->mod->q < (1ULL << 32))
+    // The tables decide, not the modulus: plan->shoup_shift is the radix they
+    // were built at.
+    switch (plan->shoup_shift)
     {
+    case MOD_SHIFT_32:
         ntt_forward_32(out, in, plan);
-    }
-    else if (plan->mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         ntt_forward_50(out, in, plan);
-    }
-    else
-    {
+        break;
+    default:
         ntt_forward_64(out, in, plan);
+        break;
     }
 }
 
@@ -366,17 +382,19 @@ void ntt_reverse(uint64_t *out, uint64_t *in, NTT_Plan plan)
         ntt_GS_RN_gen(out, ((uint64_t **)plan->ws_inv)[0], plan);
         return;
     }
-    if (plan->mod->q < (1ULL << 32))
+    // The tables decide, not the modulus: plan->shoup_shift is the radix they
+    // were built at.
+    switch (plan->shoup_shift)
     {
+    case MOD_SHIFT_32:
         ntt_reverse_32(out, in, plan);
-    }
-    else if (plan->mod->q < (1ULL << 50))
-    {
+        break;
+    case MOD_SHIFT_50:
         ntt_reverse_50(out, in, plan);
-    }
-    else
-    {
+        break;
+    default:
         ntt_reverse_64(out, in, plan);
+        break;
     }
 }
 
