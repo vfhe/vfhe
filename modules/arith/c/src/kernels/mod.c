@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include <arith.h>
+#include <inttypes.h>
 #include "arith_internal.h"
 
 #if VFHE_HAVE_AVX512IFMA
@@ -11,6 +12,18 @@
    that is why each engine derives its own. */
 Modulus mod_new(uint64_t q)
 {
+    /* Every kernel family reduces from the lazy range [0, 4q), so it needs
+       4q <= B for its radix B, and the widest radix is 2^64. A larger modulus
+       has no family that can hold it and would be reduced with an overflowing
+       product. */
+    if (q >= (1ULL << 62))
+    {
+        fprintf(stderr,
+                "mod_new: modulus %" PRIu64 " is at or above 2^62, which no kernel can reduce\n",
+                q);
+        return NULL;
+    }
+
     int q_bits = 0;
     uint64_t temp_q = q;
     while (temp_q > 0)

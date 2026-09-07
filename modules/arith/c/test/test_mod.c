@@ -328,12 +328,32 @@ void test_mod_eltwise_families_agree_where_they_overlap(void)
 }
 #endif
 
+/* The widest modulus any family can hold is set by the lazy range: values live
+   in [0, 4q) between butterfly stages, so 4q must fit the reduction radix, and
+   the widest radix is 2^64. Above that there is no family to dispatch to, and
+   the failure would be a wrong value rather than a refusal. */
+void test_mod_new_refuses_a_modulus_no_family_can_hold(void)
+{
+    TEST_ASSERT_NULL(mod_new(1ULL << 62));
+    TEST_ASSERT_NULL(mod_new((1ULL << 63) - 1));
+    /* next_special_prime(1ULL << 62, ...) lands above the bound, which is how
+       a 63-bit prime used to reach the kernels. */
+    TEST_ASSERT_NULL(mod_new(next_special_prime(1ULL << 62, 1024, true)));
+
+    /* and the largest in-contract modulus is still accepted */
+    Modulus mod = mod_new(next_special_prime(1ULL << 61, 1024, true));
+    TEST_ASSERT_NOT_NULL(mod);
+    TEST_ASSERT_TRUE(mod->q < (1ULL << 62));
+    mod_free(mod);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_modq_one_and_two_words);
     RUN_TEST(test_mod_eltwise_sweep);
     RUN_TEST(test_mod_eltwise_sweep_scalar_path);
+    RUN_TEST(test_mod_new_refuses_a_modulus_no_family_can_hold);
 #if VFHE_HAVE_AVX512IFMA
     RUN_TEST(test_mod_eltwise_families_agree_where_they_overlap);
 #endif

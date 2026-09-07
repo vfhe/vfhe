@@ -29,7 +29,11 @@ from vfhe.arith import (
 )
 from vfhe.arith.registry import common_spec, register_conversion
 
-PRIME = 0xFFFFFFFF00000001
+# Under 2^62, which is as wide as the native kernels reduce: values are lazy in
+# [0, 4q) between stages, so 4q must fit the widest reduction radix. Nothing
+# here computes with it -- the assertions are about metadata and protocols --
+# but Field builds a native Modulus, which refuses anything wider.
+PRIME = (1 << 61) - 1
 
 
 def test_every_implementation_is_registered():
@@ -69,7 +73,7 @@ def test_resolve_rejects_an_unknown_implementation():
 
 
 def test_resolve_honours_a_prime_width_constraint():
-    # rns/ntt accepts 64-bit primes, so a 200-bit request has no backend.
+    # rns/ntt accepts primes up to 62 bits, so a 200-bit request has no backend.
     resolve("rns", prime_bits=49)
     with pytest.raises(LookupError, match="prime_bits=200"):
         resolve("rns", prime_bits=200)
