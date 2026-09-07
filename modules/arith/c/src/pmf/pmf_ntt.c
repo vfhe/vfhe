@@ -169,6 +169,7 @@ PMFNTTPlan pmf_ntt_new_plan(uint64_t n, const uint64_t *root_of_unity, PMFParams
     plan->params = params;
     plan->n = n;
     plan->logn = logn;
+    plan->limbs = params->limbs;
     memcpy(plan->root_of_unity, root_of_unity, sizeof(plan->root_of_unity));
     // psi^(2n) == 1, so psi^(2n-1) is its inverse.
     pmf_ref_pow_u64(plan->inv_root_of_unity, root_of_unity, 2 * n - 1, params);
@@ -187,8 +188,10 @@ void pmf_ntt_free_plan(PMFNTTPlan plan)
 {
     if (plan == NULL)
         return;
-    pmf_ntt_free_table(plan->ws_fwd, plan->params->limbs);
-    pmf_ntt_free_table(plan->ws_inv, plan->params->limbs);
+    // plan->limbs, not plan->params->limbs: the params are borrowed and may
+    // already be gone, since nothing orders one release before the other.
+    pmf_ntt_free_table(plan->ws_fwd, plan->limbs);
+    pmf_ntt_free_table(plan->ws_inv, plan->limbs);
     free(plan);
 }
 

@@ -30,6 +30,11 @@ class ExtensionField(Field):
         self.d = degree
         # A Field is pure modular arithmetic, so the modulus is all it needs.
         self.mod = lib.mod_new(modulus)
+        if self.mod == ffi.NULL:
+            raise ValueError(
+                f"modulus {modulus} is too wide for the native kernels; "
+                "see stderr for the bound"
+            )
 
         # Precompute constants
         self.zero = FieldElement(self, [0] * degree)
@@ -223,7 +228,9 @@ FIELD_SCALAR = register(
             | Capability.EXACT
             | Capability.DOMAINS_COINCIDE
         ),
-        constraints=Constraints(max_prime_bits=64),
+        # 62 bits, not 64: values are lazy in [0, 4q) between butterfly
+        # stages, so the widest reduction radix, 2^64, needs 4q <= 2^64.
+        constraints=Constraints(max_prime_bits=62),
     )
 )
 

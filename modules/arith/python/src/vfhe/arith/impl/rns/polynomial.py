@@ -754,7 +754,9 @@ RNS_NTT = register(
             | Capability.SAMPLING
             | Capability.EXACT
         ),
-        constraints=Constraints(max_prime_bits=64),
+        # 62 bits, not 64: values are lazy in [0, 4q) between butterfly
+        # stages, so the widest reduction radix, 2^64, needs 4q <= 2^64.
+        constraints=Constraints(max_prime_bits=62),
     )
 )
 

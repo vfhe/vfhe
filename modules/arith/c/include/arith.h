@@ -54,6 +54,11 @@ extern "C"
         uint64_t mp_w2;
     } *Modulus;
 
+    /* Returns NULL, explaining on stderr, for `q >= 2^62`. That is the widest
+       modulus any kernel family can hold: values are lazy in [0, 4q) between
+       butterfly stages, so the reduction radix must satisfy 4q <= B, and the
+       widest radix available is 2^64. The bound is the same on every engine,
+       so a modulus is either usable everywhere or refused everywhere. */
     Modulus mod_new(uint64_t q);
     void mod_free(Modulus mod);
 
@@ -487,13 +492,17 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // convention (PseudoMersenneField.root_of_unity derives every root from the
     // least quadratic non-residue, as the RNS plans do).
     //
-    // `params` is borrowed: the plan must not outlive it. Immutable once built,
-    // so shareable across threads.
+    // `params` is borrowed, so the plan must not be *used* after it: every
+    // transform reads it. Releasing the plan does not, though -- it carries its
+    // own `limbs` for that -- so a holder that cannot order the two teardowns
+    // (a garbage collector, say) is still safe. Immutable once built, so
+    // shareable across threads.
     typedef struct _PMFNTTPlan
     {
         PMFParams params;
         uint64_t n;
         uint64_t logn;
+        uint64_t limbs;                        // = params->limbs, so freeing needs nothing borrowed
         uint64_t root_of_unity[PMF_LANES];     // psi, one element
         uint64_t inv_root_of_unity[PMF_LANES]; // psi^-1
         uint64_t inv_n[PMF_LANES];             // n^-1, applied by the inverse
