@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from enum import Enum
 
 from .merkle import hash_bytes
 
@@ -60,12 +61,12 @@ def _hypercube(variables: list):
 
 
 def _hypercube_sum(f):
-    """sum_{b in {0,1}^n} f(b), unwrapped to a plain coefficient value."""
+    """sum_{b in {0,1}^n} f(b), as a plain coefficient value."""
     total = None
     for b in _hypercube(f.variables):
-        e = f.evaluate(b, in_place=False)
+        e = _constant(f.evaluate(b, in_place=False))
         total = e if total is None else total + e
-    return _constant(total)
+    return total
 
 
 def _chain(parts: list[bytes]) -> bytes:
@@ -123,6 +124,8 @@ def element_digest(value) -> bytes:
         return _chain(parts)
     if hasattr(value, "to_bytes"):  # e.g. a MerklePath
         return hash_bytes(b"opaque" + value.to_bytes())
+    if hasattr(value, "SerializeToString"):  # a protobuf message, e.g. a circuit
+        return hash_bytes(b"proto" + value.SerializeToString())
     if hasattr(value, "get_hash"):  # arith.Polynomial: four 64-bit words
         return _as_digest_bytes(value.get_hash())
     leaf_hash = getattr(value, "hash", None)
@@ -144,6 +147,59 @@ def _as_digest_bytes(value) -> bytes:
 
 class Rejection(Exception):
     """Raised by a protocol's verify half when a round check fails."""
+
+
+class OracleKind(Enum):
+    """What the verifier has of an oracle, which decides how an evaluation
+    claim on it is discharged (piop.md §4):
+
+    - `public`: the table itself (a wiring predicate, eq~, a public output);
+      the claim is terminal and the verifier evaluates it.
+    - `committed`: a commitment; a polynomial commitment scheme's protocol.
+    - `virtual`: a local definition over other oracles (`virtual.py`); the
+      claim is rewritten into claims on the constituents, free of charge.
+    - `implicit`: a definition with a hypercube sum (`virtual.py`); the
+      claim is instantiated into a Sum claim, then a sumcheck.
+    - `plain`: an oracle in the ideal model, which the verifier may query;
+      admissible only while no commitment scheme is registered.
+    """
+
+    public = "public"
+    committed = "committed"
+    virtual = "virtual"
+    implicit = "implicit"
+    plain = "plain"
+
+
+def oracle_kind(oracle, commitment=None) -> OracleKind:
+    """The kind of `oracle` (duck-typed: defined oracles carry `kind`, tables
+    carry `public`); a claim carrying a commitment is `committed`."""
+    if commitment is not None:
+        return OracleKind.committed
+    kind = getattr(oracle, "kind", None)
+    if isinstance(kind, OracleKind):
+        return kind
+    if getattr(oracle, "public", False):
+        return OracleKind.public
+    return OracleKind.plain
+
+
+def oracle_closure(oracles) -> list:
+    """Every oracle a claim on one of `oracles` can reach: the oracles
+    themselves and, through `dependencies()`, the constituents of the
+    defined ones, recursively. Identity-based; definitions are static and
+    public, so both parties compute the same closure."""
+    seen: dict[int, object] = {}
+    stack = list(oracles)
+    while stack:
+        o = stack.pop()
+        if id(o) in seen:
+            continue
+        seen[id(o)] = o
+        deps = getattr(o, "dependencies", None)
+        if callable(deps):
+            stack.extend(deps())
+    return list(seen.values())
 
 
 class Relation:
@@ -244,6 +300,18 @@ class Relation_Eval(Relation):
 
     name = "eval"
     fields = ("oracles", "commitment", "point", "value")
+
+    @staticmethod
+    def kind(statement: Statement) -> OracleKind:
+        """The kind of the oracle this claim is about (piop.md §4)."""
+        oracles = statement.oracles or ()
+        return oracle_kind(oracles[0] if oracles else None, statement.commitment)
+
+    @staticmethod
+    def subject(statement: Statement):
+        """The public handle claims are bundled on: the oracle, else the
+        commitment of an oracle-less claim."""
+        return statement.oracles[0] if statement.oracles else statement.commitment
 
     def check(self, statement: Statement) -> bool:
         if not statement.oracles:
@@ -381,9 +449,12 @@ class Protocol:
     statements are never sent — each party derives its own DAG from the
     common input and transcript.
 
-    `batching = True` declares a many-to-fewer reduction: the driver hands
-    the protocol every frontier statement of `reduces_from` in one
-    invocation instead of one at a time.
+    `batching = True` declares a bundle protocol, a many-to-fewer reduction
+    [KP23, Def. 4]: the driver hands it a bundle of statements in one
+    invocation instead of one at a time — every frontier statement of the
+    relation for most relations; for `Relation_Eval`, every claim on one
+    oracle, *after* every other frontier statement that could still emit a
+    claim on that oracle has been discharged (the parking rule, piop.md §5).
 
     `supported_domains` lists the coefficient-domain types (e.g. Ring) for
     which native (C) kernels exist — declarative metadata, not a dispatch
@@ -643,23 +714,64 @@ class Party:
         Both parties run this same deterministic traversal, so their DAGs,
         paths, and transcript labels agree.
         """
+        assert self.iop is not None
         worklist = [statement]
         terminal = []
         while worklist:
-            stmt = worklist.pop(0)
-            assert self.iop is not None
-            protocol = self.iop.protocol_for(stmt.relation)
+            stmt = self._next(worklist)
+            worklist.remove(stmt)
+            protocol = self.iop.protocol_for(stmt)
             if protocol is None:
                 terminal.append(stmt)
                 continue
             bundle = [stmt]
             if protocol.batching:
-                same = [s for s in worklist if type(s.relation) is type(stmt.relation)]
+                key = self._bundle_key(stmt)
+                same = [s for s in worklist if self._bundle_key(s) == key]
                 for s in same:
                     worklist.remove(s)
                 bundle += same
+                bundle.sort(key=lambda s: s.path)
             worklist.extend(await getattr(protocol, half)(self, bundle))
         return terminal
+
+    def _bundle_key(self, stmt: Statement) -> tuple:
+        """Statements a bundle protocol receives together: same relation
+        type and, for evaluation claims, the same oracle (or commitment)."""
+        if isinstance(stmt.relation, Relation_Eval):
+            return (type(stmt.relation), id(Relation_Eval.subject(stmt)))
+        return (type(stmt.relation),)
+
+    def _parked(self, stmt: Statement, worklist: list[Statement]) -> bool:
+        """The parking rule (piop.md §5): an evaluation claim headed for a
+        bundle protocol waits while any other frontier statement, outside
+        its own bundle, can still produce a claim on the same oracle — i.e.
+        has that oracle in its oracle closure. Definitions form a DAG and
+        non-Eval statements never park, so some statement is always ready.
+        """
+        assert self.iop is not None
+        if not isinstance(stmt.relation, Relation_Eval):
+            return False
+        protocol = self.iop.protocol_for(stmt)
+        if protocol is None or not protocol.batching:
+            return False
+        subject = Relation_Eval.subject(stmt)
+        key = self._bundle_key(stmt)
+        for other in worklist:
+            if other is stmt or self._bundle_key(other) == key:
+                continue
+            if any(
+                o is subject for o in oracle_closure(other.fields.get("oracles") or ())
+            ):
+                return True
+        return False
+
+    def _next(self, worklist: list[Statement]) -> Statement:
+        """The first frontier statement not parked, in worklist order."""
+        for stmt in worklist:
+            if not self._parked(stmt, worklist):
+                return stmt
+        raise RuntimeError("every frontier statement is parked (cyclic definitions?)")
 
 
 class Prover(Party):
@@ -806,7 +918,7 @@ class IOP:
         self.fiat_shamir = fiat_shamir
         self.solo = False  # set while one party runs without a counterparty
         self.transcript = Transcript(self)
-        self.protocols = {}  # type[Relation] -> Protocol
+        self.protocols = {}  # (type[Relation], OracleKind | None) -> Protocol
         self.prover = (prover or Prover)(self)
         if verifier is None:
             if fiat_shamir:
@@ -820,17 +932,39 @@ class IOP:
     def new_variable(self, name: str) -> Variable:
         return Variable(name, self)
 
-    def register(self, relation_type: type[Relation], protocol: Protocol) -> Protocol:
+    def register(
+        self,
+        relation_type: type[Relation],
+        protocol: Protocol,
+        kind: OracleKind | None = None,
+    ) -> Protocol:
         """Choose the protocol that discharges statements of `relation_type`.
 
         Relations without a registered protocol are terminal: the verifier
         decides them directly with the relation's own `check()`.
+
+        `Relation_Eval` is one relation with several discharges, keyed by
+        the kind of oracle the claim is about (`OracleKind`): register the
+        PCS protocol with no kind (the default, reached by committed and
+        plain oracles), `VirtualEval` for `OracleKind.virtual` and
+        `ImplicitEval` for `OracleKind.implicit`. A kind without its own
+        entry falls back to the default; claims on public oracles never
+        reach a protocol.
         """
-        self.protocols[relation_type] = protocol
+        self.protocols[(relation_type, kind)] = protocol
         return protocol
 
-    def protocol_for(self, relation: Relation) -> Protocol | None:
-        return self.protocols.get(type(relation))
+    def protocol_for(self, statement: Statement) -> Protocol | None:
+        """The protocol discharging `statement`, None if it is terminal."""
+        relation = statement.relation
+        if isinstance(relation, Relation_Eval):
+            kind = Relation_Eval.kind(statement)
+            if kind is OracleKind.public:
+                return None
+            exact = self.protocols.get((type(relation), kind))
+            if exact is not None:
+                return exact
+        return self.protocols.get((type(relation), None))
 
     def _bind(self, statement: Statement) -> None:
         """Seed the Fiat-Shamir chain with the claim being proven, so every

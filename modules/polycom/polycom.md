@@ -210,8 +210,14 @@ and the tree height.
 `iop.register(Relation_Eval, BasefoldEval(scheme, rep))` and every
 evaluation claim is proved against a commitment — the statement's own
 `commitment` field when set, else the scheme's record for the statement's
-oracle (a never-committed oracle is a `LookupError`). For a claim on `n` variables
-with a depth-`d` code (`k_d = 2^n`, `kappa = n - d` base variables):
+oracle (a never-committed oracle is a `LookupError`). It is a *bundle*
+protocol (`batching = True`, piop.md §5): the driver parks the claims on
+one committed oracle until no other frontier statement can produce
+another, then hands them over together, in path order — today each claim
+in the bundle is opened on its own (the `M = 1` case; the batched opening
+is roadmap), so the transcript is the concatenation of the runs below. For
+a claim on `n` variables with a depth-`d` code (`k_d = 2^n`, `kappa = n - d`
+base variables):
 
 1. **d interleaved rounds** (round `s`): the prover sends the degree-2
    round message of the product sumcheck `sum_b f(b)·eq~(z, b) == v` —
@@ -274,11 +280,11 @@ evaluation point.
 
 ## 4. Roadmap
 
-1. **Batched openings**: M evaluation claims at a common point batch into
-   one basefold run on a random linear combination (an `M -> 1` folding
-   reduction; `batching = True` on `BasefoldEval` itself, whose driver
-   support already exists), and different-point claims reduce to
-   common-point ones by sumcheck.
+1. **Batched openings**: `BasefoldEval` already receives every pending
+   claim on a commitment as one bundle (piop.md §5) and opens them one by
+   one; the step left is the protocol itself — different-point claims
+   reduced to a common point by sumcheck, then one basefold run on their
+   random linear combination (an `M -> 1` folding reduction).
 2. **C kernel for the ring fold** (`fold_at` is still per-position Python
    over `Polynomial`, one `Polynomial * list` scaling per entry; the field
    fold is already whole-vector); the encoder and decoder are native

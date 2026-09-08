@@ -249,6 +249,7 @@ class BasefoldEval(Protocol):
     reduces_from: type[Relation] = Relation_Eval
     reduces_to: tuple[type[Relation], ...] = ()
     supported_domains: tuple[type, ...] = (Ring, Field)
+    batching = True  # receives every pending claim on one commitment at once
 
     def __init__(self, scheme: Basefold, rep: int = 32):
         if rep >= scheme.code.n0:
@@ -364,7 +365,14 @@ class BasefoldEval(Protocol):
     async def prove(
         self, prover: Prover, statements: list[Statement]
     ) -> list[Statement]:
-        (statement,) = statements
+        # A bundle protocol (the driver parks and groups the claims on one
+        # oracle); until the batched opening lands, each claim is opened on
+        # its own — M = 1 runs in path order, identical on both sides.
+        for statement in statements:
+            await self._prove_one(prover, statement)
+        return []
+
+    async def _prove_one(self, prover: Prover, statement: Statement) -> None:
         await statement.resolved()
         commitment = self._check_statement(statement)
         opening = prover.witnesses.get(commitment)
@@ -433,12 +441,15 @@ class BasefoldEval(Protocol):
                 for q in queries
             ),
         )
-        return []
 
     async def verify(
         self, verifier: Verifier, statements: list[Statement]
     ) -> list[Statement]:
-        (statement,) = statements
+        for statement in statements:
+            await self._verify_one(verifier, statement)
+        return []
+
+    async def _verify_one(self, verifier: Verifier, statement: Statement) -> None:
         await statement.resolved()
         commitment = self._check_statement(statement)
         iop = verifier.iop
@@ -516,4 +527,3 @@ class BasefoldEval(Protocol):
                     raise Rejection(
                         f"{label}: fold check failed at level {level - 1}, position {j}"
                     )
-        return []
