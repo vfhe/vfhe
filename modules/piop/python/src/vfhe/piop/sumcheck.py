@@ -45,6 +45,15 @@ from .piop import (
 )
 
 
+def _prover_view(prover: Prover, f):
+    """The prover's working form of an oracle: a defined oracle resolves its
+    constituents to tables (`VirtualOracle.prover_view`), a table is itself."""
+    view = getattr(f, "prover_view", None)
+    if callable(view):
+        return view(prover.witnesses)
+    return f
+
+
 def _exceptional_set_size(domain) -> int | None:
     """|A| for the domain's exceptional set; None if the domain has no size.
 
@@ -159,8 +168,8 @@ class _SumcheckRounds(Protocol):
         iop = prover.iop
         if iop is None:
             raise RuntimeError("this party is not bound to an IOP")
-        factors = list(statement.oracles)
-        originals = tuple(statement.oracles)
+        factors = [_prover_view(prover, f) for f in statement.oracles]
+        originals = tuple(factors)
         label = self._label(statement)
         point = {}
         for i, var in enumerate(list(factors[0].variables)):
@@ -200,6 +209,11 @@ class Sumcheck(_SumcheckRounds):
     multilinear polynomial, so deg g_i = 1; the verifier checks
     g_i(0) + g_i(1) against the running claim, the challenge r_i is drawn
     from the domain's exceptional set, and the claim becomes g_i(r_i).
+
+    The oracle may also be a virtual oracle in products form (virtual.py):
+    the round message is then g_i at 0..degree, computed by the oracle's
+    own `round_evals`, and the final claim is an evaluation claim on the
+    virtual oracle, which `VirtualEval` reduces to its constituents.
     """
 
     name = "sumcheck"
@@ -221,6 +235,9 @@ class Sumcheck(_SumcheckRounds):
             return Sumcheck.round_evals_native(f, var)
         if vector_table(f) and (var is None or f.variables.index(var) == 0):
             return Sumcheck.round_evals_vector(f)
+        own = getattr(f, "round_evals", None)
+        if callable(own):  # a defined oracle in products form (virtual.py)
+            return own(var)
         return Sumcheck._round_evals_python(f, var)
 
     @staticmethod
@@ -271,12 +288,16 @@ class Sumcheck(_SumcheckRounds):
         return (g0, g1)
 
     def soundness_error(
-        self, statement: Statement, domain, degree: int = 1
+        self, statement: Statement, domain, degree: int | None = None
     ) -> float | None:
-        """degree * num_vars / |A| (piop.md §6); None if |A| is unknown."""
+        """degree * num_vars / |A| (piop.md §6); None if |A| is unknown. The
+        degree defaults to the oracle's (`degree` attribute of a defined
+        oracle in products form), else 1 (a multilinear table)."""
         size = _exceptional_set_size(domain)
         if size is None:
             return None
+        if degree is None:
+            degree = getattr(statement.oracles[0], "degree", 1)
         return degree * statement.num_vars / size
 
     def _round_message(self, factors: list, var) -> tuple:

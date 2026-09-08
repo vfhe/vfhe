@@ -22,10 +22,12 @@ quotient ring `R_q = Z_q[X]/(X^N + 1)` (`vfhe.arith.Ring` /
   to (`Relation`), the parties, and the asynchronous plumbing
   (`IOP`, `Value`, `Variable`).
 
-Concrete protocols (sumcheck and its product variant, §5) are built on top
-of these primitives inside this module; applications and compilations to
-succinct arguments belong to other modules — `vfhe.polycom` compiles the
-evaluation claims into commitment openings (§4).
+Concrete protocols (sumcheck and its product variant, §5; the free
+reduction of claims on defined oracles and the layer-by-layer proof of
+circuit satisfiability, §4) are built on top of these primitives inside
+this module; applications and compilations to succinct arguments belong to
+other modules — `vfhe.polycom` compiles the evaluation claims into
+commitment openings (§4).
 
 ## 2. Background: from IP to PIOP
 
@@ -139,9 +141,68 @@ starts from four relation kinds. In all of them `f` is (an MLE of) an
   the oracle. Commitment-only claims have no witness-free decider and must
   not be left terminal.
 
+- **`Relation_Circuit`** — index: a layered arithmetic circuit
+  (`vfhe.circuit`); instance `(W_in, output)`: the input oracle evaluates
+  under the circuit to the output oracle. Discharged by `GKR`
+  [GKR15; Tha22, §4.6] (`circuit.py`), which turns each gate layer into an
+  *implicit oracle* (below) defined by the layer identity
+  `W_{l+1}(z) = Σ_{x,y} add_l(z,x,y)(W_l(x) + W_l(y)) + mul_l(z,x,y) W_l(x) W_l(y)`
+  over public wiring predicates, and reduces the claim to one evaluation
+  claim on the output layer at a random point (soundness `s_out/|A|`,
+  §6); the rest of the proof is the framework's ordinary reduction of that
+  claim. It is a relation rather than a helper so that circuit
+  satisfiability can be a factor of a larger product of relations or the
+  target of another reduction.
+
 Further members of the toolbox (product-check, permutation-check, lookups
 [CBBZ23]) can be added as new `Relation` subclasses without touching
 `Statement`.
+
+### Oracle kinds
+
+`Relation_Eval` is one relation with several discharges, decided by *what
+the verifier has* of the oracle (`OracleKind`, `oracle_kind`):
+
+| kind | the verifier has | an evaluation claim on it |
+|---|---|---|
+| `public` (`MLE(public=True)`) | the table itself: a wiring predicate, `eq̃`, a public output | terminal — the verifier evaluates it |
+| `committed` | a commitment | the PCS protocol (`vfhe.polycom.BasefoldEval`) |
+| `virtual` (`VirtualOracle`) | a local definition over other oracles | `VirtualEval`: rewritten into claims on the constituents, no challenge, error 0 |
+| `implicit` (`ImplicitOracle`) | a definition with a hypercube sum | `ImplicitEval`: instantiated into a Sum claim, then the sumcheck |
+| `plain` | the oracle of the ideal model, which it may query | terminal, or the protocol registered without a kind |
+
+The two *defined* kinds (`virtual.py`) are one idea: an oracle given by a
+relation on other oracles instead of by a table. A **virtual oracle**
+[CBBZ23, §2.2; BCRSW19, Def. 4.6 ("rational constraints")] is
+`p*(x) = Σ_terms c · Π_j p_j(h_j(x))` — a sum of products of constituents,
+each read through a *variable map* `h_j` (a renaming of its variables,
+some possibly fixed to constants: how one oracle appears as both `W(x)` and
+`W(y)`, or as `W(p, 0)` and `W(p, 1)`). A query to it costs one query per
+constituent, so a claim `p*(x) = v` reduces for free: the prover sends the
+constituent values, the verifier evaluates the public constituents
+itself, checks the combination against `v`, and one claim per distinct
+(constituent, point) pair remains. An **implicit oracle** is
+`L(z) = Σ_{b} G(z, b)` for a virtual oracle `G` over the free variables
+`z` and the summed ones `b`; the verifier has nothing of `L` but this
+definition, and making `L(r)` explicit takes a sumcheck. The multilinear
+extension of a layer of gate values is of this second kind even when the
+gates are local, because extension does not commute with products
+(`W̃_l(r) ≠ W̃_{l+1}(r,0)·W̃_{l+1}(r,1)`): the `eq̃` factor is what makes
+`W_l(z) = Σ_p eq̃(z,p) W_{l+1}(p,0) W_{l+1}(p,1)` an identity [Tha13,
+§5.3.1]. (Jolt's code calls this second kind "virtual polynomials"; here
+"virtual" is HyperPlonk's word for the first.)
+
+`ImplicitEval` is a *bundle* protocol: the driver hands it every pending
+claim on one implicit oracle at once (§5), and it combines them by a random
+linear combination with one independent challenge per claim — the ring
+precedents [Sor22, Fig. 2, Lemma 11; CCCFGS25, Eqs. (19)–(20)] — into one
+Sum claim over `Σ_i α_i G(r_i, ·)`, itself a virtual oracle. Zero
+communication; soundness `(k−1)/|A|` for `k` claims. Binding a defined
+oracle is *symbolic* (a bound variable becomes a constant in the variable
+maps; no constituent is touched), so the claims that come out are about
+the original constituents at explicit points; the prover's sumcheck works
+on `prover_view`, the definition with every constituent resolved to a
+table (`Prover.witnesses` for implicit constituents) and folded in place.
 
 Each subclass implements `check(statement)`: the *ideal* (non-succinct)
 membership test that simply enumerates the hypercube or queries the oracle.
@@ -172,11 +233,14 @@ composition") composes reductions over products. Both directions occur:
   Spooner).
 
 ```text
+Relation_Circuit ─(GKR, sample r)────────▶ Relation_Eval (output layer) [× Relation_Eval (output)]
 Relation_Zero ────(zerocheck, sample r)──▶ Relation_Sum
 Relation_Sum ─────(sumcheck, n rounds)───▶ Relation_Eval
 Relation_SumProd ─(sumcheckprod)─────────▶ Relation_Eval × … × Relation_Eval
-Relation_Eval^k ──(batching, future)─────▶ Relation_Eval
-Relation_Eval ────(oracle query/opening)─▶ accepted / rejected
+Relation_Eval (virtual) ─(VirtualEval)──▶ Relation_Eval × … × Relation_Eval (constituents)
+Relation_Eval^k (implicit) ─(ImplicitEval, k challenges)─▶ Relation_Sum
+Relation_Eval^k (committed) ─(PCS, per claim today)──────▶ accepted / rejected
+Relation_Eval (public / plain) ─(oracle query)───────────▶ accepted / rejected
 ```
 
 The statements of one run therefore form a **DAG**: each statement records
@@ -257,20 +321,36 @@ transcript.
   Nothing else changes — same protocols, same transcript — and an FS run
   is fully deterministic: same statement, same registry ⇒ byte-identical
   transcript (the tests assert this end-to-end, basefold included).
-- **Registry.** `iop.register(relation_type, protocol)` chooses how
-  statements of a relation are discharged; relations without a registered
-  protocol are *terminal*. This keeps relations passive data and protocols
-  swappable (e.g. a batched sumcheck can replace the plain one without
-  touching relations or parties).
+- **Registry.** `iop.register(relation_type, protocol, kind=None)` chooses
+  how statements of a relation are discharged; relations without a
+  registered protocol are *terminal*. This keeps relations passive data and
+  protocols swappable (e.g. a batched sumcheck can replace the plain one
+  without touching relations or parties). For `Relation_Eval` the key also
+  carries the oracle kind (§4): the PCS protocol is registered without a
+  kind and receives committed and plain oracles, `VirtualEval` and
+  `ImplicitEval` are registered for theirs, and a kind without an entry
+  falls back to the default; claims on public oracles never reach a
+  protocol.
 - **Drivers.** Both parties run the same worklist loop over the DAG's
-  frontier: pop a statement, hand the registered protocol its bundle, push
-  the outputs; statements with no registered protocol are terminal. A
-  protocol with `batching = True` receives *all* frontier statements of its
-  relation in one invocation — a folding reduction `R^ℓ → R` [KP23, Def. 4]
-  needs no other machinery. The verifier then decides every terminal leaf
-  with its relation's own `check()` — for `Relation_Eval` that is exactly
-  one oracle query per claim. A protocol's `verify` half raises `Rejection`
-  on a failed round check, which the driver turns into a `False` verdict.
+  frontier: take the first statement that is not *parked*, hand the
+  registered protocol its bundle, push the outputs; statements with no
+  registered protocol are terminal. A protocol with `batching = True` is a
+  *bundle* protocol — a folding reduction `R^ℓ → R` [KP23, Def. 4] — and
+  receives, in one invocation, every frontier statement of its relation;
+  for `Relation_Eval`, every frontier claim on one oracle. Such a claim is
+  **parked** while any other frontier statement, outside its bundle, has
+  that oracle in its *oracle closure* (its oracles and, through the
+  definitions of the defined ones, their constituents, recursively): that
+  statement may still emit a claim on the same oracle, and the bundle
+  should hold them all. Closures are public and static, so both parties
+  park identically; definitions form a DAG and non-Eval statements never
+  park, so some statement is always ready. This is the two-phase
+  scheduling of staged provers (every evaluation claim accumulated, one
+  batched discharge) [CBBZ23, §3.8], done per oracle. The verifier then
+  decides every terminal leaf with its relation's own `check()` — for
+  `Relation_Eval` that is exactly one oracle query per claim. A protocol's
+  `verify` half raises `Rejection` on a failed round check, which the
+  driver turns into a `False` verdict.
 - **Run.** `iop.run(statement)` schedules both parties' coroutines on the
   IOP's event loop and returns the verifier's verdict. Each party drives
   its own *fork* of the root statement (same public content, fresh
@@ -566,7 +646,11 @@ common base could only promise an `evaluate` it cannot implement:
   `vector_table(f)` is its field counterpart.
   `MLE.eq(domain, point)` builds the dense table of the equality
   polynomial `eq̃(point, ·)` (the zerocheck reduction and basefold's
-  virtual factor).
+  virtual factor), marked `public`. `MLE(public=True)` marks a table both
+  parties hold (§4's oracle kinds): derived tables inherit the mark, a
+  combination of two tables is public only if both are. `rename(mapping)`
+  is a relabelled copy — the same polynomial read under other variable
+  names, which is how the prover holds `W(x)` and `W(y)` as two tables.
 - `SparseMLE` — a sparse map of hypercube evaluations (bookkeeping form:
   add / sub / scale only; `evaluate` raises).
 
@@ -594,6 +678,45 @@ native table, by slicing on the Python path). The layer is deliberately
 asyncio-free: variables are plain identifiers (`MLE_Variable`, or any
 hashable — *not* protocol futures), and evaluation points are always
 concrete values; anything unresolved is a Transcript / Statement concern.
+
+### `VirtualOracle` / `ImplicitOracle` (`virtual.py`)
+
+The two defined oracle kinds of §4, as objects with the oracle surface the
+rest of the module duck-types on (`variables`, `num_vars`, `evaluate`,
+`constant`, `digest`), plus `dependencies()` for the driver's closures and
+`prover_view(witnesses)` for the prover's sumcheck. A `VirtualOracle` is
+`(variables, constituents, terms, maps)`: `terms` is the products form
+`[(coeff, (j, …)), …]` and `maps[j]` sends each variable of constituent
+`j` to one of `variables` or to a constant; `VirtualOracle.product` and
+`VirtualOracle.linear` build the common shapes. An `ImplicitOracle` is
+`(variables, body, summed)` and `instantiate(point)` is the summed oracle
+of the Sum claim at that point. `evaluate` on either is symbolic (maps
+rewritten, constituents untouched); `constant()` on a fully bound one is
+the ideal decider, recursing through implicit constituents, and
+`ImplicitOracle.materialize` is the generic, slow prover table (a protocol
+that knows the structure, like `GKR`, computes the layer tables directly
+and records them in `Prover.witnesses`). The prover-side form
+(`prover_view`) computes round messages over the products form: per
+hypercube point, each factor at `t = 0..degree` from its two neighbours
+(`lo + t·(hi − lo)`), summed per term — the degree is the longest product,
+and factors over a subset of the variables are constant in the others.
+`VirtualEval` and `ImplicitEval` live in the same file.
+
+### `Relation_Circuit` / `GKR` (`circuit.py`)
+
+Circuit satisfiability over the protobuf circuits of `vfhe.circuit`
+(imported lazily), with the wiring tables of `vfhe.circuit.export` as
+public oracles: a table indexed `z‖x‖y` (y in the low bits) is the MLE over
+the variables `[y…, x…, z…]`, so the framework's LSB-first tables need no
+reordering. `GKR.layers` builds the chain of implicit layer oracles; the
+protocol draws the output point, computes (public output) or receives
+(otherwise, with a second claim on the output oracle) the value there, and
+emits the claim on the top layer. Everything below that is `ImplicitEval`
+→ sumcheck → `VirtualEval` per layer, the two claims per layer meeting in
+one bundle thanks to the parking rule, down to the input oracle. Dense
+wiring tables (`2^(s_out + 2 s_in)`) and the pure-Python product rounds
+(every layer has three factors, beyond the native `k = 2` kernel) make
+this the correctness-first path.
 
 ### `Merkle` (`merkle.py`)
 
@@ -644,13 +767,23 @@ therefore lives inside the PCS's evaluation protocol
    and Field domains once the MLE layer moves to `vfhe.arith`. The
    pure-Python fallbacks remain naive (per-round hypercube re-enumeration)
    by design — they are the reference semantics, not the fast path.
-2. **Zerocheck** (`Relation_Zero → Relation_Sum(Prod)` via `eq̃`): the
-   dense `eq̃` table exists (`MLE.eq`); a lazy/virtual-polynomial
-   form of `MLE` is still open.
-3. **Batching / folding** (`Relation_Eval^k → Relation_Eval`): a
-   `batching = True` protocol per [KP23, Def. 4], via random linear
-   combination over the exceptional set or the BatchEval PIOP
-   [CBBZ23, §3.8]; the driver already supports it.
+2. **Zerocheck** (`Relation_Zero → Relation_Sum` over the virtual oracle
+   `eq̃(r, ·)·f`): a small protocol now that defined oracles exist (§4);
+   a lazily evaluated `eq̃` factor (O(1) per query) would spare the dense
+   table.
+3. **Batching / folding**: done for claims on implicit oracles
+   (`ImplicitEval`, parking rule, §4–§5). Open for committed oracles: the
+   PCS bundle protocol still opens each claim on its own; a common-point
+   reduction plus a batched opening (BatchEval [CBBZ23, §3.8]) is the
+   `vfhe.polycom` roadmap. Sumcheck-side batching (one run for several
+   Sum claims) is a bundle variant of `Sumcheck` still to write.
+3a. **Defined-oracle follow-ups**: a general-`k` product kernel (every
+   circuit layer has three factors, so the native `k = 2` kernel covers
+   none of §4's sumchecks), products-form round messages in C, sparse
+   wiring predicates (`SparseMLE.evaluate`, the Libra two-phase prover
+   [XZZPS19, §3.3]) in place of the dense `2^(s_out + 2 s_in)` tables, and
+   the line-restriction 2-to-1 [Tha22, §4.5.2] should a single-point
+   opening ever pay.
 4. **Lookup relation**, reducing to a mix of Eval and Sum claims.
 5. **Field coefficient domains** are done (`MLE(field=...)`, the
    whole-vector round messages, `Field`'s samplers); binding a variable
@@ -668,6 +801,10 @@ therefore lives inside the PCS's evaluation protocol
 
 ## Bibliography
 
+- **[BCRSW19]** Eli Ben-Sasson, Alessandro Chiesa, Michael Riabzev, Nicholas
+  Spooner, Madars Virza, Nicholas P. Ward. *Aurora: Transparent Succinct
+  Arguments for R1CS*. EUROCRYPT 2019, LNCS 11476, pp. 103–128, Springer,
+  2019. ePrint 2018/828. <https://eprint.iacr.org/2018/828>
 - **[BCS16]** Eli Ben-Sasson, Alessandro Chiesa, Nicholas Spooner.
   *Interactive Oracle Proofs*. TCC 2016-B, LNCS 9986, pp. 31–60, Springer,
   2016. ePrint 2016/116. <https://eprint.iacr.org/2016/116>
