@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+rules:
+  # This audit wants GitHub's `uses: $/...` (July 2026), which actionlint
+  # through v1.7.12 rejects as malformed. Re-enable once actionlint knows it.
+  self-repository:
+    disable: true
