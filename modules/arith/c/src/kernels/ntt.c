@@ -317,6 +317,11 @@ NTT_Plan ntt_new_plan_at_shift(uint64_t n, Modulus mod, uint64_t shoup_shift)
     res->inv_root_of_unity = inv_root_of_unity;
     res->shoup_shift = shoup_shift;
 
+    res->ws_fwd32 = NULL;
+    res->w_precon_fwd32 = NULL;
+    res->ws_inv32 = NULL;
+    res->w_precon_inv32 = NULL;
+
     if (n < NTT_MIN_VECTOR_LEN)
     {
         // No vectorized stage can run at this length, and the tables below would
@@ -335,6 +340,10 @@ NTT_Plan ntt_new_plan_at_shift(uint64_t n, Modulus mod, uint64_t shoup_shift)
                        (__m512i ***)&res->w_precon_fwd);
     ntt_precompute_inv(n, mod, inv_root_of_unity, shoup_shift, (__m512i ***)&res->ws_inv,
                        (__m512i ***)&res->w_precon_inv);
+    /* A narrow prime gets the 32-bit-word tables as well as the 64-bit ones:
+       which of the two a call uses is decided by the buffer it is handed. */
+    if (ntt_w32_applies(n, q))
+        ntt_w32_precompute(res);
     return res;
 }
 
@@ -409,6 +418,7 @@ void ntt_free_plan(NTT_Plan plan)
     }
     ntt_free_precompute((__m512i **)plan->ws_fwd, (__m512i **)plan->w_precon_fwd, plan->n);
     ntt_free_precompute((__m512i **)plan->ws_inv, (__m512i **)plan->w_precon_inv, plan->n);
+    ntt_w32_free(plan);
     free(plan);
 }
 

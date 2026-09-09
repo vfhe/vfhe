@@ -11,6 +11,8 @@
  * equivalent to compare against.
  */
 #include <stdlib.h>
+
+#include "arith_internal.h" /* rns_row_is_narrow: row width is per prime */
 #include <string.h>
 
 #include <arith.h>
@@ -20,12 +22,17 @@
 #include "unity.h"
 
 #define TEST_N 64
-#define TEST_L 3
+#define TEST_L 4
 #define TEST_MASK ((1ULL << TEST_L) - 1)
 
 /* 49-bit NTT-friendly primes for N=64 with split_degree 1, as gen_primes
  * produces them: each is 1 mod 2N, so the transform exists. */
-static uint64_t PRIMES[TEST_L] = {0x1FFFFFFFFE281ULL, 0x1FFFFFFFFDB81ULL, 0x1FFFFFFFFD581ULL};
+/* Deliberately mixed width. The last prime is under RNS_NARROW_MAX_BITS, so
+   its row is stored as 32-bit words while the other three are 64-bit, and
+   every test below therefore runs over a ring whose rows are not all the same
+   width -- which is the case a whole-ring 32-bit backend could not express. */
+static uint64_t PRIMES[TEST_L] = {0x1FFFFFFFFE281ULL, 0x1FFFFFFFFDB81ULL, 0x1FFFFFFFFD581ULL,
+                                  0x3FFFFE81ULL};
 
 static RNS_Base base = NULL;
 static ArithRing ring = NULL;
@@ -42,6 +49,22 @@ void tearDown(void)
     ring = NULL;
 }
 
+/* One coefficient at a time. The library never does this -- it branches once
+ * per row -- but a test comparing against an oracle is not hot, and being able
+ * to name a single coefficient is what makes a failure readable. */
+static uint64_t coeff(RNS_Polynomial p, uint64_t i, uint64_t j)
+{
+    return rns_row_is_narrow(p->base, i) ? (uint64_t)p->rows32[i][j] : p->rows64[i][j];
+}
+
+static void set_coeff(RNS_Polynomial p, uint64_t i, uint64_t j, uint64_t v)
+{
+    if (rns_row_is_narrow(p->base, i))
+        p->rows32[i][j] = (uint32_t)v;
+    else
+        p->rows64[i][j] = v;
+}
+
 /* Deterministic contents, distinct per element, so a routing mistake that
  * swapped operands would show up as a mismatch rather than a coincidence. */
 static void fill(RNS_Polynomial p, uint64_t seed)
@@ -50,9 +73,10 @@ static void fill(RNS_Polynomial p, uint64_t seed)
     {
         for (uint64_t j = 0; j < TEST_N; j++)
         {
-            p->coeffs[i][j] =
+            set_coeff(
+                p, i, j,
                 (seed * 6364136223846793005ULL + j * 1442695040888963407ULL + i * 1013904223ULL) %
-                PRIMES[i];
+                    PRIMES[i]);
         }
     }
 }
@@ -61,7 +85,13 @@ static void assert_same(RNS_Polynomial expected, RNS_Polynomial actual)
 {
     for (uint64_t i = 0; i < TEST_L; i++)
     {
-        TEST_ASSERT_EQUAL_UINT64_ARRAY(expected->coeffs[i], actual->coeffs[i], TEST_N);
+        // compare values: a row's width is a property of its prime, so two
+        // elements of one ring agree on it, but the bytes are not comparable
+        // across widths
+        for (uint64_t j = 0; j < TEST_N; j++)
+        {
+            TEST_ASSERT_EQUAL_UINT64(coeff(expected, i, j), coeff(actual, i, j));
+        }
     }
 }
 
@@ -369,7 +399,7 @@ void test_from_int_array_reduces_per_prime(void)
     {
         for (uint64_t j = 0; j < TEST_N; j++)
         {
-            TEST_ASSERT_EQUAL_UINT64(values[j] % PRIMES[i], got->coeffs[i][j]);
+            TEST_ASSERT_EQUAL_UINT64(values[j] % PRIMES[i], coeff(got, i, j));
         }
     }
     arith_free(ring, &e);
@@ -398,7 +428,10 @@ void test_round_division_to_a_smaller_ring(void)
     {
         if (expected->rns_mask & (1ULL << i))
         {
-            TEST_ASSERT_EQUAL_UINT64_ARRAY(expected->coeffs[i], got->coeffs[i], TEST_N);
+            for (uint64_t j = 0; j < TEST_N; j++)
+            {
+                TEST_ASSERT_EQUAL_UINT64(coeff(expected, i, j), coeff(got, i, j));
+            }
         }
     }
     free_RNS_polynomial(expected);

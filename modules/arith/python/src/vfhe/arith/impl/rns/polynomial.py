@@ -20,6 +20,19 @@ def next_power_of_2(x):
     return 1 << math.ceil(math.log2(x))
 
 
+def _row(p, idx: int):
+    """Row ``idx`` of a native RNS polynomial, at the width its prime uses.
+
+    A prime under the native narrow bound stores its coefficients as 32-bit
+    words, and ``RNS_Base.narrow_mask`` is the only authority on which. Both
+    arrays are typed, so picking the wrong one is a type error on the C side
+    and a wrong value here; go through this rather than indexing directly.
+    """
+    if (p.base.narrow_mask >> idx) & 1:
+        return p.rows32[idx]
+    return p.rows64[idx]
+
+
 class RNSRing(Ring):
     def __init__(
         self,
@@ -531,7 +544,7 @@ class RNSPolynomial(Polynomial):
         p = ffi.cast("RNS_Polynomial", view.obj)
         values = []
         for idx in self.ring.prime_indices:
-            row = p.coeffs[idx]
+            row = _row(p, idx)
             values.append([row[k] for k in range(self.ring.N)])
         modMask = self.ring.split_degree - 1
         poly_size = self.ring.N // self.ring.split_degree
@@ -549,7 +562,7 @@ class RNSPolynomial(Polynomial):
         modMask = self.ring.split_degree - 1
         poly_size = self.ring.N // self.ring.split_degree
         for k, idx in enumerate(self.ring.prime_indices):
-            row = p.coeffs[idx]
+            row = _row(p, idx)
             for j in range(self.ring.N):
                 row[(j & modMask) * poly_size + j // self.ring.split_degree] = int(
                     matrix[k][j]

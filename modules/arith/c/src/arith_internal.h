@@ -36,6 +36,14 @@ void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low,
 // Likewise for the element-wise kernels: one lane group, `n / 8` iterations.
 #define MOD_MIN_VECTOR_LEN 8
 
+/* None of the vectorized kernels has a tail, so a length is required to be a
+   whole number of lane groups and not merely at least one: at n = 15 an
+   element-wise kernel computes the first 8 and leaves the rest as it found
+   them. Every caller passes a power of two -- a row is `N` words and the
+   split-degree paths pass `N / split_degree`, both powers of two -- so the
+   dispatchers' `< MOD_MIN_VECTOR_LEN` guard is enough in practice. Preserve
+   that if you add a caller. */
+
 /* The transforms' depth-first cutover, in elements. A sub-problem at or below
    this runs all its stages to completion while it is cache resident; above it
    the transform splits and recurses.
@@ -47,6 +55,17 @@ void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low,
    chose 2048. The curve is asymmetric: guessing high is expensive and guessing
    low is nearly free, so an unsure value should err low. */
 #define NTT_LEAF_ELEMENTS 2048
+
+/* The same cutover for the 32-bit-word transform. Its own sweep chose 4096
+   where the 64-bit one chose 2048, which is what halving the footprint should
+   do: the leaf is sized by the block's data plus its slice of the tables, and
+   both halve. Its curve is also far flatter -- at n = 65536 the spread across
+   leaves 128..16384 was about 4%, against 22% for the 64-bit transform -- so
+   the choice matters less here as well as landing higher. */
+#define NTT_LEAF_ELEMENTS_W32 4096
+
+void ntt_w32_precompute(NTT_Plan plan);
+void ntt_w32_free(NTT_Plan plan);
 
 void ntt_scalar_precompute(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t ***out_ws);
 void ntt_scalar_free_precompute(uint64_t **ws);
@@ -118,6 +137,160 @@ static inline uint64_t mod_shoup_shift(uint64_t q)
    where its bound is least likely to be violated. Test-only; the library
    itself always goes through `ntt_new_plan`. */
 NTT_Plan ntt_new_plan_at_shift(uint64_t n, Modulus mod, uint64_t shoup_shift);
+
+/* Coefficients held as `uint32_t`, 16 to an AVX-512 vector instead of 8.
+   Applies only where the lazy range fits a 32-bit lane: values live in
+   [0, 4q), so `q <= 2^30`. That is the same ceiling the radix-2^32 Shoup form
+   already carries, which is why the word width costs no modulus range that was
+   not already spent.
+
+   A prime under `RNS_NARROW_MAX_BITS` bits is stored narrow. This is a
+   property of the prime, not a choice a caller makes, so two elements over the
+   same prime always agree on width and no conversion between widths exists.
+
+   Inputs and outputs are canonical, in [0, q); `n` is a multiple of 16.
+   Element-wise operations at the conversion boundaries (`reduce_signed`,
+   `reduce_array_mp`) have no narrow form: they read 64-bit or 128-bit inputs,
+   so they reduce into a wide scratch row and the caller narrows. */
+#define RNS_NARROW_MAX_BITS 30
+
+static inline bool rns_prime_is_narrow(uint64_t q) { return q < (1ULL << RNS_NARROW_MAX_BITS); }
+
+// Whether prime index `i` of this base is stored narrow. The base is the only
+// authority; never re-derive this from a modulus at a call site, or a row can
+// be allocated at one width and read at the other.
+static inline bool rns_row_is_narrow(RNS_Base base, size_t i)
+{
+    return (base->narrow_mask >> i) & 1ULL;
+}
+
+/* Reaching a row.
+ *
+ * The rule for `rns_polynomial.c` and the `_rns` backend files is: **branch on
+ * the width once per row, then run typed code**. Never per coefficient, and
+ * never by converting a row to the other width -- a narrow row exists in order
+ * to be half the bytes and twice the lanes, and both are lost the moment it is
+ * widened. The macros below are that branch; what they call are the kernels.
+ *
+ * Where a body is identical apart from the word type -- the coefficient
+ * shifts, the block products, the slot moves -- it lives in `rns_row_ops.inc`,
+ * which is included twice, so there is one source and two instantiations
+ * rather than a runtime test inside the loop.
+ */
+#define rns_row64(p, i)                                                                            \
+    (assert(!rns_row_is_narrow((p)->base, (i)) && (p)->rows64[(i)] != NULL), (p)->rows64[(i)])
+#define rns_row32(p, i)                                                                            \
+    (assert(rns_row_is_narrow((p)->base, (i)) && (p)->rows32[(i)] != NULL), (p)->rows32[(i)])
+
+/* One row through the element-wise kernels, at the row's own width: one branch
+   per row, then a vectorized kernel over 16 lanes (narrow) or 8 (wide). `fn`
+   names the 64-bit kernel; the narrow one is `fn##_w32`. */
+#define RNS_ROW_BINOP(fn, out, a, b, i, n, mod)                                                    \
+    do                                                                                             \
+    {                                                                                              \
+        if (rns_row_is_narrow((out)->base, (i)))                                                   \
+            fn##_w32((out)->rows32[(i)], (a)->rows32[(i)], (b)->rows32[(i)], (n), (mod));          \
+        else                                                                                       \
+            fn((out)->rows64[(i)], (a)->rows64[(i)], (b)->rows64[(i)], (n), (mod));                \
+    } while (0)
+
+#define RNS_ROW_UNOP(fn, out, a, i, n, mod)                                                        \
+    do                                                                                             \
+    {                                                                                              \
+        if (rns_row_is_narrow((out)->base, (i)))                                                   \
+            fn##_w32((out)->rows32[(i)], (a)->rows32[(i)], (n), (mod));                            \
+        else                                                                                       \
+            fn((out)->rows64[(i)], (a)->rows64[(i)], (n), (mod));                                  \
+    } while (0)
+
+#define RNS_ROW_SCALAROP(fn, out, a, sc, i, n, mod)                                                \
+    do                                                                                             \
+    {                                                                                              \
+        if (rns_row_is_narrow((out)->base, (i)))                                                   \
+            fn##_w32((out)->rows32[(i)], (a)->rows32[(i)], (sc), (n), (mod));                      \
+        else                                                                                       \
+            fn((out)->rows64[(i)], (a)->rows64[(i)], (sc), (n), (mod));                            \
+    } while (0)
+
+// Whole-row zero and copy, at the row's width.
+#define RNS_ROW_ZERO(p, i, n)                                                                      \
+    do                                                                                             \
+    {                                                                                              \
+        if (rns_row_is_narrow((p)->base, (i)))                                                     \
+            memset((p)->rows32[(i)], 0, (n) * sizeof(uint32_t));                                   \
+        else                                                                                       \
+            memset((p)->rows64[(i)], 0, (n) * sizeof(uint64_t));                                   \
+    } while (0)
+
+#define RNS_ROW_COPY(out, in, i, n)                                                                \
+    do                                                                                             \
+    {                                                                                              \
+        if (rns_row_is_narrow((out)->base, (i)))                                                   \
+            memcpy((out)->rows32[(i)], (in)->rows32[(i)], (n) * sizeof(uint32_t));                 \
+        else                                                                                       \
+            memcpy((out)->rows64[(i)], (in)->rows64[(i)], (n) * sizeof(uint64_t));                 \
+    } while (0)
+
+/* Two rows of one prime have one width -- width is a function of the prime --
+   so equality is a compare at that width, never a cross-width one. */
+#define RNS_ROW_EQ(a, b, i, n)                                                                     \
+    (rns_row_is_narrow((a)->base, (i))                                                             \
+         ? memcmp((a)->rows32[(i)], (b)->rows32[(i)], (n) * sizeof(uint32_t)) == 0                 \
+         : memcmp((a)->rows64[(i)], (b)->rows64[(i)], (n) * sizeof(uint64_t)) == 0)
+
+/* Reducing one row into another crosses a modulus boundary, so it is the one
+   element-wise operation whose source and destination can differ in width. */
+#define RNS_ROW_REDUCE(out, in, oi, ii, n, mod)                                                    \
+    do                                                                                             \
+    {                                                                                              \
+        const bool rr_on_ = rns_row_is_narrow((out)->base, (oi));                                  \
+        const bool rr_in_ = rns_row_is_narrow((in)->base, (ii));                                   \
+        if (rr_on_ && rr_in_)                                                                      \
+            mod_eltwise_reduce_w32((out)->rows32[(oi)], (in)->rows32[(ii)], (n), (mod));           \
+        else if (rr_on_)                                                                           \
+            mod_eltwise_reduce_narrow_from_wide((out)->rows32[(oi)], (in)->rows64[(ii)], (n),      \
+                                                (mod));                                            \
+        else if (rr_in_)                                                                           \
+            mod_eltwise_reduce_wide_from_narrow((out)->rows64[(oi)], (in)->rows32[(ii)], (n),      \
+                                                (mod));                                            \
+        else                                                                                       \
+            mod_eltwise_reduce((out)->rows64[(oi)], (in)->rows64[(ii)], (n), (mod));               \
+    } while (0)
+
+// A signed 64-bit array reduced into one row: the samplers and the permutation.
+#define RNS_ROW_REDUCE_SIGNED(out, src, i, n, mod)                                                 \
+    do                                                                                             \
+    {                                                                                              \
+        if (rns_row_is_narrow((out)->base, (i)))                                                   \
+            mod_eltwise_reduce_signed_w32((out)->rows32[(i)], (src), (n), (mod));                  \
+        else                                                                                       \
+            mod_eltwise_reduce_signed((out)->rows64[(i)], (src), (n), (mod));                      \
+    } while (0)
+
+// 32-bit-word element-wise kernels. See mod_w32.c for the bounds and for why
+// every engine has them.
+void mod_eltwise_mul_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_mul_addto_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n,
+                               Modulus mod);
+void mod_eltwise_mul_subto_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n,
+                               Modulus mod);
+void mod_eltwise_scale_w32(uint32_t *out, uint32_t *in, uint64_t scale, uint64_t n, Modulus mod);
+void mod_eltwise_fma_w32(uint32_t *out, uint32_t *in, uint64_t scale, uint64_t n, Modulus mod);
+void mod_eltwise_add_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_sub_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_negate_w32(uint32_t *out, uint32_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_add_scalar_w32(uint32_t *out, uint32_t *in, uint64_t scalar, uint64_t n,
+                                Modulus mod);
+void mod_eltwise_sub_scalar_w32(uint32_t *out, uint32_t *in, uint64_t scalar, uint64_t n,
+                                Modulus mod);
+void mod_eltwise_reduce_w32(uint32_t *out, uint32_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_signed_w32(uint32_t *out, int64_t *in, uint64_t n, Modulus mod);
+
+// The three width-changing kernels; see the note above their definitions.
+void mod_narrow_w32(uint32_t *out, const uint64_t *in, uint64_t n);
+void mod_widen_w32(uint64_t *out, const uint32_t *in, uint64_t n);
+void mod_eltwise_reduce_narrow_from_wide(uint32_t *out, uint64_t *in, uint64_t n, Modulus mod);
+void mod_eltwise_reduce_wide_from_narrow(uint64_t *out, uint32_t *in, uint64_t n, Modulus mod);
 
 // 32-bit declarations
 void ntt_forward_32(uint64_t *out, uint64_t *in, NTT_Plan plan);

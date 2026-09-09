@@ -72,6 +72,11 @@ NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
     res->root_of_unity = root_of_unity;
     res->inv_root_of_unity = inv_root_of_unity;
     res->shoup_shift = 0;
+    // no vectorized transforms on this engine, so no 32-bit-word tables either
+    res->ws_fwd32 = NULL;
+    res->w_precon_fwd32 = NULL;
+    res->ws_inv32 = NULL;
+    res->w_precon_inv32 = NULL;
     ntt_precompute_fwd(n, mod, root_of_unity, 0, (uint64_t ***)&res->ws_fwd,
                        (uint64_t ***)&res->w_precon_fwd);
     ntt_precompute_inv(n, mod, inv_root_of_unity, 0, (uint64_t ***)&res->ws_inv,

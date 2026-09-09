@@ -215,6 +215,80 @@ void test_ntt_families_agree_where_they_overlap(void)
 }
 #endif
 
+#if VFHE_HAVE_AVX512IFMA
+/* The 32-bit-word transform against the 64-bit one over the same plan.
+   Storing a coefficient in 32 bits does not change its value and an NTT is
+   exact, so the two owe identical words -- which makes the 64-bit transform,
+   already checked against the direct-evaluation oracle above, the oracle here.
+   Sizes span the guard at 32, the depth-first cutover at 4096, and one length
+   below the guard where the entry point falls back to widening. */
+void test_ntt_w32_matches_the_wide_transform(void)
+{
+    const uint64_t bits[] = {20, 29};
+    const uint64_t sizes[] = {16, 32, 64, 256, 1024, 4096, 8192};
+
+    for (unsigned b = 0; b < sizeof(bits) / sizeof(*bits); b++)
+    {
+        for (unsigned s = 0; s < sizeof(sizes) / sizeof(*sizes); s++)
+        {
+            const uint64_t n = sizes[s];
+            const uint64_t q = next_special_prime(1ULL << bits[b], n, true);
+            TEST_ASSERT_TRUE(rns_prime_is_narrow(q));
+            Modulus mod = mod_new(q);
+            NTT_Plan plan = ntt_new_plan(n, mod);
+            TEST_ASSERT_NOT_NULL(plan);
+            // the tables exist exactly when the length allows them
+            TEST_ASSERT_EQUAL_INT(ntt_w32_applies(n, q), plan->ws_fwd32 != NULL);
+
+            uint64_t *in64 = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *fwd64 = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *back64 = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint32_t *in32 = safe_aligned_malloc(n * sizeof(uint32_t));
+            uint32_t *fwd32 = safe_aligned_malloc(n * sizeof(uint32_t));
+            uint32_t *back32 = safe_aligned_malloc(n * sizeof(uint32_t));
+
+            for (uint64_t i = 0; i < n; i++)
+            {
+                in64[i] = (0x9E3779B97F4A7C15ULL * (i + 1)) % q;
+                in32[i] = (uint32_t)in64[i];
+            }
+
+            ntt_forward(fwd64, in64, plan);
+            ntt_forward_w32(fwd32, in32, plan);
+            for (uint64_t i = 0; i < n; i++)
+            {
+                TEST_ASSERT_TRUE(fwd64[i] < q);
+                TEST_ASSERT_EQUAL_UINT64(fwd64[i], (uint64_t)fwd32[i]);
+            }
+
+            ntt_reverse(back64, fwd64, plan);
+            ntt_reverse_w32(back32, fwd32, plan);
+            for (uint64_t i = 0; i < n; i++)
+            {
+                TEST_ASSERT_EQUAL_UINT64(in64[i], back64[i]);
+                TEST_ASSERT_EQUAL_UINT64(in64[i], (uint64_t)back32[i]);
+            }
+
+            // and in place, which is how rns_polynomial.c calls them
+            memcpy(fwd32, in32, n * sizeof(uint32_t));
+            ntt_forward_w32(fwd32, fwd32, plan);
+            ntt_reverse_w32(fwd32, fwd32, plan);
+            for (uint64_t i = 0; i < n; i++)
+                TEST_ASSERT_EQUAL_UINT64(in64[i], (uint64_t)fwd32[i]);
+
+            free(in64);
+            free(fwd64);
+            free(back64);
+            free(in32);
+            free(fwd32);
+            free(back32);
+            ntt_free_plan(plan);
+            mod_free(mod);
+        }
+    }
+}
+#endif
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -225,6 +299,7 @@ int main(void)
     RUN_TEST(test_ntt_plan_stays_inside_its_family_bound);
 #if VFHE_HAVE_AVX512IFMA
     RUN_TEST(test_ntt_families_agree_where_they_overlap);
+    RUN_TEST(test_ntt_w32_matches_the_wide_transform);
 #endif
     return UNITY_END();
 }

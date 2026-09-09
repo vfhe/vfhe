@@ -5,6 +5,122 @@
 #include <crypto.h>
 #include <blake3.h>
 
+// Row width, the row accessors and the per-row operation macros.
+#include "arith_internal.h"
+
+// How the block product writes its destination.
+typedef enum
+{
+    RNS_BLOCK_SET = 0,
+    RNS_BLOCK_ADDTO,
+    RNS_BLOCK_SUBTO
+} RnsBlockAcc;
+
+/* The row bodies, once per storage width. Everything below dispatches on the
+   narrow bit once per row and then calls the matching instantiation, so no
+   coefficient loop tests a width and no row is converted to reuse a body. */
+#define RNS_W uint32_t
+#define RNS_SFX _narrow
+#define RNS_ADD mod_eltwise_add_w32
+#define RNS_SUB mod_eltwise_sub_w32
+#define RNS_MUL mod_eltwise_mul_w32
+#define RNS_MULADDTO mod_eltwise_mul_addto_w32
+#define RNS_NEGATE mod_eltwise_negate_w32
+#include "rns_row_ops.inc"
+
+#define RNS_W uint64_t
+#define RNS_SFX _wide
+#define RNS_ADD mod_eltwise_add
+#define RNS_SUB mod_eltwise_sub
+#define RNS_MUL mod_eltwise_mul
+#define RNS_MULADDTO mod_eltwise_mul_addto
+#define RNS_NEGATE mod_eltwise_negate
+#include "rns_row_ops.inc"
+
+/* Reducing a row into a buffer of a given width. Only a cross-modulus
+   reduction can change width, so these two are the only places in this file
+   that do -- everything else keeps both sides at one width. */
+static void rns_reduce_row_to32(uint32_t *out, RNS_Polynomial p, size_t i, uint64_t n, Modulus mod)
+{
+    if (rns_row_is_narrow(p->base, i))
+        mod_eltwise_reduce_w32(out, p->rows32[i], n, mod);
+    else
+        mod_eltwise_reduce_narrow_from_wide(out, p->rows64[i], n, mod);
+}
+
+static void rns_reduce_row_to64(uint64_t *out, RNS_Polynomial p, size_t i, uint64_t n, Modulus mod)
+{
+    if (rns_row_is_narrow(p->base, i))
+        mod_eltwise_reduce_wide_from_narrow(out, p->rows32[i], n, mod);
+    else
+        mod_eltwise_reduce(out, p->rows64[i], n, mod);
+}
+
+#define RNS_ROW_SCATTER_SPLIT(out, src, i, n, sd, ps)                                              \
+    do                                                                                             \
+    {                                                                                              \
+        if (rns_row_is_narrow((out)->base, (i)))                                                   \
+            rns_row_scatter_split_narrow((out)->rows32[(i)], (src), (n), (sd), (ps));              \
+        else                                                                                       \
+            rns_row_scatter_split_wide((out)->rows64[(i)], (src), (n), (sd), (ps));                \
+    } while (0)
+
+static bool rns_row_zero(RNS_Polynomial p, size_t i, uint64_t n)
+{
+    return rns_row_is_narrow(p->base, i) ? rns_row_is_zero_narrow(p->rows32[i], n)
+                                         : rns_row_is_zero_wide(p->rows64[i], n);
+}
+
+// Computes (Z_q[i](Q/q[i]))**-1, for i in [0,l)
+void compute_RNS_Qhat_array(uint64_t *out, uint64_t *p, uint64_t l)
+{
+    for (size_t i = 0; i < l; i++)
+    {
+        out[i] = 1;
+        for (size_t j = 0; j < l; j++)
+        {
+            if (i != j)
+            {
+                const uint64_t inv = inverse_mod(p[j], p[i]);
+                out[i] = (uint64_t)(((unsigned __int128)out[i] * inv) % p[i]);
+            }
+        }
+    }
+}
+
+static Modulus *new_modulus_list(uint64_t *primes, uint64_t l)
+{
+    Modulus *mods = (Modulus *)safe_malloc(sizeof(Modulus) * l);
+    for (size_t i = 0; i < l; i++)
+    {
+        mods[i] = mod_new(primes[i]);
+    }
+    return mods;
+}
+
+// The plans borrow `mods`, so the caller keeps owning it and must outlive them.
+static NTT_Plan *new_ntt_plan_list(Modulus *mods, uint64_t N, uint64_t l)
+{
+    NTT_Plan *plans = (NTT_Plan *)safe_malloc(sizeof(NTT_Plan) * l);
+    for (size_t i = 0; i < l; i++)
+    {
+        plans[i] = ntt_new_plan(N, mods[i]);
+    }
+    return plans;
+}
+
+/* A narrow copy of prime i's twiddle row, or NULL for a wide prime. The block
+   product multiplies a row by these, so they are held at the row's width and
+   the product never converts. */
+static uint32_t *rns_narrow_twiddles(RNS_Base base, size_t i, uint64_t poly_size)
+{
+    if (!rns_row_is_narrow(base, i))
+        return NULL;
+    uint32_t *w32 = (uint32_t *)safe_aligned_malloc(poly_size * sizeof(uint32_t));
+    mod_narrow_w32(w32, base->w[i], poly_size);
+    return w32;
+}
+
 RNS_Base new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l)
 {
     const uint64_t poly_size = N / split_degree;
@@ -13,11 +129,18 @@ RNS_Base new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint6
     RNS_Base base = (RNS_Base)safe_malloc(sizeof(*base));
     base->N = N;
     base->l = l;
+    base->narrow_mask = 0;
     // The moduli first: the plans borrow them, so they must outlive the plans.
     base->mods = new_modulus_list(primes, l);
+    for (size_t i = 0; i < l; i++)
+    {
+        if (rns_prime_is_narrow(primes[i]))
+            base->narrow_mask |= 1ULL << i;
+    }
     base->plans = new_ntt_plan_list(base->mods, poly_size, l);
     base->split_degree = split_degree;
     base->w = (uint64_t **)safe_malloc(sizeof(uint64_t *) * l);
+    base->w32 = (uint32_t **)safe_malloc(sizeof(uint32_t *) * l);
     for (size_t i = 0; i < l; i++)
     {
         base->w[i] = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
@@ -28,6 +151,7 @@ RNS_Base new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint6
             w_p[j] = mul_modq(w_p[j - 1], w1, base->mods[i]);
         }
         bit_rev(base->w[i], w_p, poly_size, log_poly_size + 1);
+        base->w32[i] = rns_narrow_twiddles(base, i, poly_size);
     }
     free(w_p);
     return base;
@@ -45,10 +169,13 @@ void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t c
     base->mods = (Modulus *)safe_realloc(base->mods, sizeof(Modulus) * new_l);
     base->plans = (NTT_Plan *)safe_realloc(base->plans, sizeof(NTT_Plan) * new_l);
     base->w = (uint64_t **)safe_realloc(base->w, sizeof(uint64_t *) * new_l);
+    base->w32 = (uint32_t **)safe_realloc(base->w32, sizeof(uint32_t *) * new_l);
 
     for (size_t i = base->l; i < new_l; i++)
     {
         uint64_t prime = new_primes[i - base->l];
+        if (rns_prime_is_narrow(prime))
+            base->narrow_mask |= 1ULL << i;
         base->mods[i] = mod_new(prime);
         base->plans[i] = ntt_new_plan(poly_size, base->mods[i]);
         base->w[i] = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
@@ -59,6 +186,7 @@ void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t c
             w_p[j] = mul_modq(w_p[j - 1], w1, base->mods[i]);
         }
         bit_rev(base->w[i], w_p, poly_size, log_poly_size + 1);
+        base->w32[i] = rns_narrow_twiddles(base, i, poly_size);
     }
 
     base->l = new_l;
@@ -74,10 +202,12 @@ void rns_base_free(RNS_Base base)
         ntt_free_plan(base->plans[i]);
         mod_free(base->mods[i]);
         free(base->w[i]);
+        free(base->w32[i]);
     }
     free(base->plans);
     free(base->mods);
     free(base->w);
+    free(base->w32);
     free(base);
 }
 
@@ -87,10 +217,22 @@ RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, RNS_
 {
     RNS_Polynomial res;
     res = (RNS_Polynomial)safe_malloc(sizeof(*res));
-    res->coeffs = (uint64_t **)safe_malloc(sizeof(uint64_t *) * base->l);
+    /* One row per prime, at that prime's width: exactly one of the two arrays
+       holds a buffer for each index, the other a NULL. */
+    res->rows64 = (uint64_t **)safe_malloc(sizeof(uint64_t *) * base->l);
+    res->rows32 = (uint32_t **)safe_malloc(sizeof(uint32_t *) * base->l);
     for (size_t i = 0; i < base->l; i++)
     {
-        res->coeffs[i] = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * base->N);
+        if (rns_row_is_narrow(base, i))
+        {
+            res->rows64[i] = NULL;
+            res->rows32[i] = (uint32_t *)safe_aligned_malloc(sizeof(uint32_t) * base->N);
+        }
+        else
+        {
+            res->rows64[i] = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * base->N);
+            res->rows32[i] = NULL;
+        }
     }
     res->base = base;
     res->rns_mask = rns_mask;
@@ -119,26 +261,18 @@ bool polynomial_eq(RNS_Polynomial a, RNS_Polynomial b)
         bool active_b = (i < b->base->l) && (b->rns_mask & (1ULL << i));
         if (active_a && active_b)
         {
-            if (memcmp(a->coeffs[i], b->coeffs[i], a->base->N * sizeof(uint64_t)) != 0)
-            {
+            if (!RNS_ROW_EQ(a, b, i, a->base->N))
                 return false;
-            }
         }
         else if (active_a)
         {
-            for (size_t j = 0; j < a->base->N; j++)
-            {
-                if (a->coeffs[i][j])
-                    return false;
-            }
+            if (!rns_row_zero(a, i, a->base->N))
+                return false;
         }
         else if (active_b)
         {
-            for (size_t j = 0; j < b->base->N; j++)
-            {
-                if (b->coeffs[i][j])
-                    return false;
-            }
+            if (!rns_row_zero(b, i, b->base->N))
+                return false;
         }
     }
     return true;
@@ -151,7 +285,10 @@ void polynomial_copy_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            memcpy(out->coeffs[i], in->coeffs[i], sizeof(uint64_t) * out->base->N);
+            if (rns_row_is_narrow(out->base, i))
+                memcpy(out->rows32[i], in->rows32[i], sizeof(uint32_t) * out->base->N);
+            else
+                memcpy(out->rows64[i], in->rows64[i], sizeof(uint64_t) * out->base->N);
         }
     }
 }
@@ -167,7 +304,7 @@ void polynomial_RNS_zero(RNS_Polynomial p)
     {
         if (p->rns_mask & (1ULL << i))
         {
-            memset(p->coeffs[i], 0, sizeof(uint64_t) * p->base->N);
+            RNS_ROW_ZERO(p, i, p->base->N);
         }
     }
 }
@@ -175,11 +312,15 @@ void polynomial_RNS_zero(RNS_Polynomial p)
 void free_RNS_polynomial(void *p)
 {
     RNS_Polynomial pp = (RNS_Polynomial)p;
+    // One of the two is NULL for each row, and free(NULL) is a no-op, so this
+    // needs no width test and cannot go wrong if the base grew meanwhile.
     for (size_t i = 0; i < pp->allocated_l; i++)
     {
-        free(pp->coeffs[i]);
+        free(pp->rows64[i]);
+        free(pp->rows32[i]);
     }
-    free(pp->coeffs);
+    free(pp->rows64);
+    free(pp->rows32);
     free(pp);
 }
 
@@ -212,10 +353,7 @@ void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in)
         {
             Modulus mod = out->base->mods[i];
             mod_eltwise_reduce_signed(temp, (int64_t *)in->coeffs, out->base->N, mod);
-            for (size_t j = 0; j < out->base->N; j++)
-            {
-                out->coeffs[i][(j & modMask) * poly_size + j / out->base->split_degree] = temp[j];
-            }
+            RNS_ROW_SCATTER_SPLIT(out, temp, i, out->base->N, out->base->split_degree, poly_size);
         }
     }
     free(temp);
@@ -233,10 +371,7 @@ void int_array_to_RNS(RNS_Polynomial out, uint64_t *in)
         {
             Modulus mod = out->base->mods[i];
             mod_eltwise_reduce_signed(temp, (int64_t *)in, out->base->N, mod);
-            for (size_t j = 0; j < out->base->N; j++)
-            {
-                out->coeffs[i][(j & modMask) * poly_size + j / out->base->split_degree] = temp[j];
-            }
+            RNS_ROW_SCATTER_SPLIT(out, temp, i, out->base->N, out->base->split_degree, poly_size);
         }
     }
     free(temp);
@@ -251,10 +386,7 @@ void array_to_RNS(RNS_Polynomial out, uint64_t **in)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->base->N; j++)
-            {
-                out->coeffs[i][(j & modMask) * poly_size + j / out->base->split_degree] = in[i][j];
-            }
+            RNS_ROW_SCATTER_SPLIT(out, in[i], i, out->base->N, out->base->split_degree, poly_size);
         }
     }
     polynomial_RNSc_to_RNS(out, (RNSc_Polynomial)out);
@@ -262,15 +394,27 @@ void array_to_RNS(RNS_Polynomial out, uint64_t **in)
 
 void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
 {
+    // The sampler and the mod switch both work in 64 bits, so a narrow row is
+    // produced in a wide view and narrowed after.
+    /* The sampler wants 64 bits of entropy per coefficient and the mod switch
+       is defined on that, so a narrow row is produced wide and stored narrow
+       in one vectorized pass -- narrowing the sampler instead would change the
+       distribution. */
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
     for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
             const uint64_t p = out->base->mods[i]->q;
-            generate_random_bytes(sizeof(uint64_t) * out->base->N, (uint8_t *)out->coeffs[i]);
-            array_mod_switch_from_2k(out->coeffs[i], out->coeffs[i], p, p, out->base->N);
+            const bool narrow = rns_row_is_narrow(out->base, i);
+            uint64_t *dst = narrow ? scratch : out->rows64[i];
+            generate_random_bytes(sizeof(uint64_t) * out->base->N, (uint8_t *)dst);
+            array_mod_switch_from_2k(dst, dst, p, p, out->base->N);
+            if (narrow)
+                mod_narrow_w32(out->rows32[i], scratch, out->base->N);
         }
     }
+    free(scratch);
 }
 
 void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma)
@@ -285,174 +429,136 @@ void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma)
         if (out->rns_mask & (1ULL << i))
         {
             Modulus mod = out->base->mods[i];
-            mod_eltwise_reduce_signed(out->coeffs[i], noise_arr, out->base->N, mod);
+            RNS_ROW_REDUCE_SIGNED(out, noise_arr, i, out->base->N, mod);
         }
     }
     free(noise_arr);
 }
 
-void polynomial_multo_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in)
+/* The per-prime product. `split_degree == 1` is not a fast path bolted on: it
+   is the whole incomplete-NTT product when the ring is not split, and there a
+   row is one element-wise multiply at its own width. Above 1 the blocks are
+   convolved and the wrap-around terms scaled by the base's twiddle row, which
+   is held at both widths for exactly this reason -- so a narrow row runs the
+   whole product in 32-bit words and nothing is converted. */
+static void rns_product(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2, RnsBlockAcc acc)
 {
-    const uint64_t poly_size = out->base->N / out->base->split_degree;
-    out->rns_mask = out->rns_mask & in->rns_mask;
-    uint64_t *tmp = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
-    uint64_t *tmp2 = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
-    for (size_t i = 0; i < out->base->l; i++)
+    RNS_Base b = out->base;
+    const uint64_t sd = b->split_degree, N = b->N, ps = N / sd;
+
+    if (sd == 1)
     {
-        if (out->rns_mask & (1ULL << i))
+        for (size_t i = 0; i < b->l; i++)
         {
-            memcpy(tmp2, out->coeffs[i], sizeof(uint64_t) * out->base->N);
-            memset(out->coeffs[i], 0, sizeof(uint64_t) * out->base->N);
-            for (size_t j = 0; j < out->base->split_degree; j++)
+            if (!(out->rns_mask & (1ULL << i)))
+                continue;
+            Modulus mod = b->mods[i];
+            if (rns_row_is_narrow(b, i))
             {
-                for (size_t k = 0; k < out->base->split_degree - j; k++)
-                {
-                    mod_eltwise_mul(tmp, &in->coeffs[i][j * poly_size], &tmp2[k * poly_size],
-                                    poly_size, out->base->mods[i]);
-                    mod_eltwise_add(&out->coeffs[i][(j + k) * poly_size],
-                                    &out->coeffs[i][(j + k) * poly_size], tmp, poly_size,
-                                    out->base->mods[i]);
-                }
-                for (size_t k = out->base->split_degree - j; k < out->base->split_degree; k++)
-                {
-                    mod_eltwise_mul(tmp, &in->coeffs[i][j * poly_size], &tmp2[k * poly_size],
-                                    poly_size, out->base->mods[i]);
-                    mod_eltwise_mul(tmp, tmp, out->base->w[i], poly_size, out->base->mods[i]);
-                    mod_eltwise_add(&out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
-                                    &out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
-                                    tmp, poly_size, out->base->mods[i]);
-                }
+                uint32_t *o = out->rows32[i], *x = in1->rows32[i], *y = in2->rows32[i];
+                if (acc == RNS_BLOCK_ADDTO)
+                    mod_eltwise_mul_addto_w32(o, x, y, N, mod);
+                else if (acc == RNS_BLOCK_SUBTO)
+                    mod_eltwise_mul_subto_w32(o, x, y, N, mod);
+                else
+                    mod_eltwise_mul_w32(o, x, y, N, mod);
+            }
+            else
+            {
+                uint64_t *o = out->rows64[i], *x = in1->rows64[i], *y = in2->rows64[i];
+                if (acc == RNS_BLOCK_ADDTO)
+                    mod_eltwise_mul_addto(o, x, y, N, mod);
+                else if (acc == RNS_BLOCK_SUBTO)
+                    mod_eltwise_mul_subto(o, x, y, N, mod);
+                else
+                    mod_eltwise_mul(o, x, y, N, mod);
             }
         }
+        return;
     }
-    free(tmp);
-    free(tmp2);
+
+    uint32_t *t32 = (uint32_t *)safe_aligned_malloc(ps * sizeof(uint32_t));
+    uint64_t *t64 = (uint64_t *)safe_aligned_malloc(ps * sizeof(uint64_t));
+    for (size_t i = 0; i < b->l; i++)
+    {
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        Modulus mod = b->mods[i];
+        if (rns_row_is_narrow(b, i))
+            rns_row_block_mul_narrow(out->rows32[i], in1->rows32[i], in2->rows32[i], t32, b->w32[i],
+                                     sd, ps, mod, acc);
+        else
+            rns_row_block_mul_wide(out->rows64[i], in1->rows64[i], in2->rows64[i], t64, b->w[i], sd,
+                                   ps, mod, acc);
+    }
+    free(t32);
+    free(t64);
 }
 
 void polynomial_mul_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2)
 {
     assert(out != in1);
     assert(out != in2);
-    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in1->rns_mask & in2->rns_mask;
-    uint64_t *tmp = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
-    for (size_t i = 0; i < out->base->l; i++)
-    {
-        if (out->rns_mask & (1ULL << i))
-        {
-            memset(out->coeffs[i], 0, out->base->N * sizeof(uint64_t));
-            for (size_t j = 0; j < out->base->split_degree; j++)
-            {
-                for (size_t k = 0; k < out->base->split_degree - j; k++)
-                {
-                    if (j == 0)
-                    {
-                        mod_eltwise_mul(
-                            &out->coeffs[i][(j + k) * poly_size], &in1->coeffs[i][j * poly_size],
-                            &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
-                    }
-                    else
-                    {
-                        mod_eltwise_mul(tmp, &in1->coeffs[i][j * poly_size],
-                                        &in2->coeffs[i][k * poly_size], poly_size,
-                                        out->base->mods[i]);
-                        mod_eltwise_add(&out->coeffs[i][(j + k) * poly_size],
-                                        &out->coeffs[i][(j + k) * poly_size], tmp, poly_size,
-                                        out->base->mods[i]);
-                    }
-                }
-                for (size_t k = out->base->split_degree - j; k < out->base->split_degree; k++)
-                {
-                    mod_eltwise_mul(tmp, &in1->coeffs[i][j * poly_size],
-                                    &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
-                    mod_eltwise_mul(tmp, tmp, out->base->w[i], poly_size, out->base->mods[i]);
-                    mod_eltwise_add(&out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
-                                    &out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
-                                    tmp, poly_size, out->base->mods[i]);
-                }
-            }
-        }
-    }
-    free(tmp);
+    rns_product(out, in1, in2, RNS_BLOCK_SET);
 }
 
 void polynomial_mul_addto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2)
 {
     assert(out != in1);
     assert(out != in2);
-    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in1->rns_mask & in2->rns_mask;
-    uint64_t mask = out->rns_mask;
-    // tmp is only needed for the twiddle (cross-block) term; with split_degree==1 it is unused.
-    uint64_t *tmp = (out->base->split_degree > 1)
-                        ? (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t))
-                        : NULL;
-    for (size_t i = 0; i < out->base->l; i++)
-    {
-        if (mask & (1ULL << i))
-        {
-            for (size_t j = 0; j < out->base->split_degree; j++)
-            {
-                for (size_t k = 0; k < out->base->split_degree - j; k++)
-                {
-                    // fused: out += in1*in2 in one pass (no temp, no separate add)
-                    mod_eltwise_mul_addto(
-                        &out->coeffs[i][(j + k) * poly_size], &in1->coeffs[i][j * poly_size],
-                        &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
-                }
-                for (size_t k = out->base->split_degree - j; k < out->base->split_degree; k++)
-                {
-                    mod_eltwise_mul(tmp, &in1->coeffs[i][j * poly_size],
-                                    &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
-                    mod_eltwise_mul(tmp, tmp, out->base->w[i], poly_size, out->base->mods[i]);
-                    mod_eltwise_add(&out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
-                                    &out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
-                                    tmp, poly_size, out->base->mods[i]);
-                }
-            }
-        }
-    }
-    if (tmp)
-        free(tmp);
+    rns_product(out, in1, in2, RNS_BLOCK_ADDTO);
 }
 
 void polynomial_mul_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2)
 {
     assert(out != in1);
     assert(out != in2);
-    const uint64_t poly_size = out->base->N / out->base->split_degree;
     out->rns_mask = in1->rns_mask & in2->rns_mask;
-    uint64_t mask = out->rns_mask;
-    uint64_t *tmp = (out->base->split_degree > 1)
-                        ? (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t))
-                        : NULL;
-    for (size_t i = 0; i < out->base->l; i++)
+    rns_product(out, in1, in2, RNS_BLOCK_SUBTO);
+}
+
+/* out *= in. The element-wise kernels read a lane before writing it, so the
+   unsplit case aliases safely; the block product does not, and there the row
+   is copied first -- at its own width. */
+void polynomial_multo_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in)
+{
+    RNS_Base b = out->base;
+    out->rns_mask = out->rns_mask & in->rns_mask;
+    if (b->split_degree == 1)
     {
-        if (mask & (1ULL << i))
+        rns_product(out, out, in, RNS_BLOCK_SET);
+        return;
+    }
+
+    const uint64_t sd = b->split_degree, N = b->N, ps = N / sd;
+    uint32_t *t32 = (uint32_t *)safe_aligned_malloc(ps * sizeof(uint32_t));
+    uint64_t *t64 = (uint64_t *)safe_aligned_malloc(ps * sizeof(uint64_t));
+    uint32_t *prev32 = (uint32_t *)safe_aligned_malloc(N * sizeof(uint32_t));
+    uint64_t *prev64 = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    for (size_t i = 0; i < b->l; i++)
+    {
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        Modulus mod = b->mods[i];
+        if (rns_row_is_narrow(b, i))
         {
-            for (size_t j = 0; j < out->base->split_degree; j++)
-            {
-                for (size_t k = 0; k < out->base->split_degree - j; k++)
-                {
-                    // fused: out -= in1*in2 in one pass
-                    mod_eltwise_mul_subto(
-                        &out->coeffs[i][(j + k) * poly_size], &in1->coeffs[i][j * poly_size],
-                        &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
-                }
-                for (size_t k = out->base->split_degree - j; k < out->base->split_degree; k++)
-                {
-                    mod_eltwise_mul(tmp, &in1->coeffs[i][j * poly_size],
-                                    &in2->coeffs[i][k * poly_size], poly_size, out->base->mods[i]);
-                    mod_eltwise_mul(tmp, tmp, out->base->w[i], poly_size, out->base->mods[i]);
-                    mod_eltwise_sub(&out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
-                                    &out->coeffs[i][(j + k - out->base->split_degree) * poly_size],
-                                    tmp, poly_size, out->base->mods[i]);
-                }
-            }
+            memcpy(prev32, out->rows32[i], N * sizeof(uint32_t));
+            rns_row_block_mul_narrow(out->rows32[i], in->rows32[i], prev32, t32, b->w32[i], sd, ps,
+                                     mod, RNS_BLOCK_SET);
+        }
+        else
+        {
+            memcpy(prev64, out->rows64[i], N * sizeof(uint64_t));
+            rns_row_block_mul_wide(out->rows64[i], in->rows64[i], prev64, t64, b->w[i], sd, ps, mod,
+                                   RNS_BLOCK_SET);
         }
     }
-    if (tmp)
-        free(tmp);
+    free(t32);
+    free(t64);
+    free(prev32);
+    free(prev64);
 }
 
 void polynomial_sub_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2)
@@ -462,8 +568,7 @@ void polynomial_sub_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_P
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_sub(out->coeffs[i], in1->coeffs[i], in2->coeffs[i], out->base->N,
-                            out->base->mods[i]);
+            RNS_ROW_BINOP(mod_eltwise_sub, out, in1, in2, i, out->base->N, out->base->mods[i]);
         }
     }
 }
@@ -480,8 +585,7 @@ void polynomial_add_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, RN
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_add(out->coeffs[i], in1->coeffs[i], in2->coeffs[i], out->base->N,
-                            out->base->mods[i]);
+            RNS_ROW_BINOP(mod_eltwise_add, out, in1, in2, i, out->base->N, out->base->mods[i]);
         }
     }
 }
@@ -500,10 +604,13 @@ void polynomial_RNSc_add_integer(RNSc_Polynomial out, RNSc_Polynomial in1, uint6
         if (out->rns_mask & (1ULL << i))
         {
             if (out != in1)
-                memcpy(out->coeffs[i], in1->coeffs[i], out->base->N * sizeof(uint64_t));
+                RNS_ROW_COPY(out, in1, i, out->base->N);
             const uint64_t q = out->base->mods[i]->q;
             const uint64_t in_mod_q = in2 & (1ULL << 63) ? q - ((-in2) % q) : in2 % q;
-            out->coeffs[i][0] = (out->coeffs[i][0] + in_mod_q) % q;
+            if (rns_row_is_narrow(out->base, i))
+                rns_row_add_at0_narrow(out->rows32[i], in_mod_q, q);
+            else
+                rns_row_add_at0_wide(out->rows64[i], in_mod_q, q);
         }
     }
 }
@@ -518,7 +625,7 @@ void polynomial_RNS_add_integer(RNS_Polynomial out, RNS_Polynomial in1, uint64_t
         {
             Modulus mod = out->base->mods[i];
             if (out != in1)
-                memcpy(out->coeffs[i], in1->coeffs[i], out->base->N * sizeof(uint64_t));
+                RNS_ROW_COPY(out, in1, i, out->base->N);
             const uint64_t q = mod->q;
             uint64_t in_mod_q;
             if (in2 & (1ULL << 63))
@@ -529,7 +636,7 @@ void polynomial_RNS_add_integer(RNS_Polynomial out, RNS_Polynomial in1, uint64_t
             {
                 in_mod_q = modq(in2, mod);
             }
-            mod_eltwise_add_scalar(out->coeffs[i], out->coeffs[i], in_mod_q, poly_size, mod);
+            RNS_ROW_SCALAROP(mod_eltwise_add_scalar, out, out, in_mod_q, i, poly_size, mod);
         }
     }
 }
@@ -541,8 +648,8 @@ void polynomial_scale_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, 
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_scale(out->coeffs[i], in1->coeffs[i], scale, out->base->N,
-                              out->base->mods[i]);
+            RNS_ROW_SCALAROP(mod_eltwise_scale, out, in1, scale, i, out->base->N,
+                             out->base->mods[i]);
         }
     }
 }
@@ -556,8 +663,7 @@ void polynomial_scale_addto_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial
     {
         if (mask & (1ULL << i))
         {
-            mod_eltwise_fma(out->coeffs[i], in1->coeffs[i], scale, out->base->N,
-                            out->base->mods[i]);
+            RNS_ROW_SCALAROP(mod_eltwise_fma, out, in1, scale, i, out->base->N, out->base->mods[i]);
         }
     }
 }
@@ -579,8 +685,8 @@ void polynomial_scale_RNS_polynomial_RNS(RNS_Polynomial out, RNS_Polynomial in1,
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_scale(out->coeffs[i], in1->coeffs[i], scale[i], out->base->N,
-                              out->base->mods[i]);
+            RNS_ROW_SCALAROP(mod_eltwise_scale, out, in1, scale[i], i, out->base->N,
+                             out->base->mods[i]);
         }
     }
 }
@@ -592,7 +698,7 @@ void polynomial_RNSc_negate(RNSc_Polynomial out, RNSc_Polynomial in)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            mod_eltwise_negate(out->coeffs[i], in->coeffs[i], out->base->N, out->base->mods[i]);
+            RNS_ROW_UNOP(mod_eltwise_negate, out, in, i, out->base->N, out->base->mods[i]);
         }
     }
 }
@@ -606,14 +712,28 @@ void polynomial_RNSc_to_RNS(RNS_Polynomial out, RNSc_Polynomial in)
 {
     out->rns_mask = in->rns_mask;
     const uint64_t poly_size = out->base->N / out->base->split_degree;
+    /* A narrow row transforms in 32-bit words: 16 coefficients per vector and
+       half the memory traffic. The plan carries both table sets, so all that is
+       asked here is the row's width; a length or an engine without the 32-bit
+       kernels is the entry point's business, not this loop's. */
     for (size_t i = 0; i < out->base->l; i++)
     {
-        if (out->rns_mask & (1ULL << i))
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        NTT_Plan plan = out->base->plans[i];
+        if (rns_row_is_narrow(out->base, i))
         {
             for (size_t k = 0; k < out->base->split_degree; k++)
             {
-                ntt_forward(&out->coeffs[i][k * poly_size], &in->coeffs[i][k * poly_size],
-                            out->base->plans[i]);
+                ntt_forward_w32(&out->rows32[i][k * poly_size], &in->rows32[i][k * poly_size],
+                                plan);
+            }
+        }
+        else
+        {
+            for (size_t k = 0; k < out->base->split_degree; k++)
+            {
+                ntt_forward(&out->rows64[i][k * poly_size], &in->rows64[i][k * poly_size], plan);
             }
         }
     }
@@ -623,14 +743,28 @@ void polynomial_RNS_to_RNSc(RNSc_Polynomial out, RNS_Polynomial in)
 {
     out->rns_mask = in->rns_mask;
     const uint64_t poly_size = out->base->N / out->base->split_degree;
+    /* A narrow row transforms in 32-bit words: 16 coefficients per vector and
+       half the memory traffic. The plan carries both table sets, so all that is
+       asked here is the row's width; a length or an engine without the 32-bit
+       kernels is the entry point's business, not this loop's. */
     for (size_t i = 0; i < out->base->l; i++)
     {
-        if (out->rns_mask & (1ULL << i))
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        NTT_Plan plan = out->base->plans[i];
+        if (rns_row_is_narrow(out->base, i))
         {
             for (size_t k = 0; k < out->base->split_degree; k++)
             {
-                ntt_reverse(&out->coeffs[i][k * poly_size], &in->coeffs[i][k * poly_size],
-                            out->base->plans[i]);
+                ntt_reverse_w32(&out->rows32[i][k * poly_size], &in->rows32[i][k * poly_size],
+                                plan);
+            }
+        }
+        else
+        {
+            for (size_t k = 0; k < out->base->split_degree; k++)
+            {
+                ntt_reverse(&out->rows64[i][k * poly_size], &in->rows64[i][k * poly_size], plan);
             }
         }
     }
@@ -643,18 +777,29 @@ void polynomial_RNSc_add_noise(RNSc_Polynomial out, RNSc_Polynomial in, double s
     {
         noise_arr[j] = (int64_t)round(generate_normal_random(sigma));
     }
-    uint64_t *noise_reduced = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    /* The noise is drawn once and reduced per prime, so it lands in a buffer
+       at that row's width and the add stays there too. */
+    uint64_t *nr64 = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    uint32_t *nr32 = (uint32_t *)safe_aligned_malloc(out->base->N * sizeof(uint32_t));
     out->rns_mask = in->rns_mask;
     for (size_t i = 0; i < out->base->l; i++)
     {
-        if (out->rns_mask & (1ULL << i))
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        Modulus mod = out->base->mods[i];
+        if (rns_row_is_narrow(out->base, i))
         {
-            Modulus mod = out->base->mods[i];
-            mod_eltwise_reduce_signed(noise_reduced, noise_arr, out->base->N, mod);
-            mod_eltwise_add(out->coeffs[i], in->coeffs[i], noise_reduced, out->base->N, mod);
+            mod_eltwise_reduce_signed_w32(nr32, noise_arr, out->base->N, mod);
+            mod_eltwise_add_w32(out->rows32[i], in->rows32[i], nr32, out->base->N, mod);
+        }
+        else
+        {
+            mod_eltwise_reduce_signed(nr64, noise_arr, out->base->N, mod);
+            mod_eltwise_add(out->rows64[i], in->rows64[i], nr64, out->base->N, mod);
         }
     }
-    free(noise_reduced);
+    free(nr64);
+    free(nr32);
     free(noise_arr);
 }
 
@@ -774,7 +919,7 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
         {
             if (out != in)
             {
-                memcpy(out->coeffs[i], in->coeffs[i], sizeof(uint64_t) * out->base->N);
+                RNS_ROW_COPY(out, in, i, out->base->N);
             }
         }
     }
@@ -811,30 +956,56 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
     for (size_t i = 0; i < v; i++)
     {
         uint64_t idx_i = P[i];
-        memset(out->coeffs[idx_i], 0, sizeof(uint64_t) * out->base->N);
+        RNS_ROW_ZERO(out, idx_i, out->base->N);
     }
 
     // 3. Perform Fast Base Extension
     uint64_t *v_tmp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
     uint64_t *v_tmp2 = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    uint32_t *v_tmp_32 = (uint32_t *)safe_aligned_malloc(out->base->N * sizeof(uint32_t));
+    uint32_t *v_tmp2_32 = (uint32_t *)safe_aligned_malloc(out->base->N * sizeof(uint32_t));
+    const uint64_t N = out->base->N;
 
     for (size_t j = 0; j < w; j++)
     {
         uint64_t idx_j = D[j];
         Modulus mod_j = in->base->mods[idx_j];
-        mod_eltwise_scale(v_tmp, in->coeffs[idx_j], Dhat[j], out->base->N, mod_j);
+        // the scaled residue is still mod p_j, so it keeps that row's width
+        const bool j_narrow = rns_row_is_narrow(in->base, idx_j);
+        if (j_narrow)
+            mod_eltwise_scale_w32(v_tmp_32, in->rows32[idx_j], Dhat[j], N, mod_j);
+        else
+            mod_eltwise_scale(v_tmp, in->rows64[idx_j], Dhat[j], N, mod_j);
 
         for (size_t i = 0; i < v; i++)
         {
             uint64_t idx_i = P[i];
             Modulus mod_i = out->base->mods[idx_i];
-            mod_eltwise_reduce(v_tmp2, v_tmp, out->base->N, mod_i);
-            mod_eltwise_fma(out->coeffs[idx_i], v_tmp2, D_mod_p[i][j], out->base->N, mod_i);
+            /* Here the modulus changes, and with it possibly the width: this
+               reduction is the only width-crossing step in the conversion. */
+            if (rns_row_is_narrow(out->base, idx_i))
+            {
+                if (j_narrow)
+                    mod_eltwise_reduce_w32(v_tmp2_32, v_tmp_32, N, mod_i);
+                else
+                    mod_eltwise_reduce_narrow_from_wide(v_tmp2_32, v_tmp, N, mod_i);
+                mod_eltwise_fma_w32(out->rows32[idx_i], v_tmp2_32, D_mod_p[i][j], N, mod_i);
+            }
+            else
+            {
+                if (j_narrow)
+                    mod_eltwise_reduce_wide_from_narrow(v_tmp2, v_tmp_32, N, mod_i);
+                else
+                    mod_eltwise_reduce(v_tmp2, v_tmp, N, mod_i);
+                mod_eltwise_fma(out->rows64[idx_i], v_tmp2, D_mod_p[i][j], N, mod_i);
+            }
         }
     }
 
     free(v_tmp);
     free(v_tmp2);
+    free(v_tmp_32);
+    free(v_tmp2_32);
 
     if (params == NULL)
     {
@@ -846,22 +1017,23 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
 
 void polynomial_RNSc_mod_reduce_lifted(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx)
 {
+    /* Row `idx` of the input is reduced into every active row of the output,
+       and the two rows need not be the same width, so the source is read once
+       through a 64-bit view and reduced from there. */
     for (size_t i = 0; i < out->base->l; i++)
     {
-        if (out->rns_mask & (1ULL << i))
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        if (i == idx)
         {
-            if (i == idx)
-            {
-                // in->coeffs[idx] is the residue mod p_idx (already < p_idx); reducing mod
-                // p_i (== p_idx) is the identity, so just copy instead of running Barrett.
-                if (out->coeffs[i] != in->coeffs[idx])
-                    memcpy(out->coeffs[i], in->coeffs[idx], out->base->N * sizeof(uint64_t));
-            }
-            else
-            {
-                mod_eltwise_reduce(out->coeffs[i], in->coeffs[idx], out->base->N,
-                                   out->base->mods[i]);
-            }
+            // the source is already the residue mod p_idx, so reducing mod
+            // p_i (== p_idx) is the identity: copy instead of Barrett
+            if (out->rows64[i] != in->rows64[idx] || out->rows32[i] != in->rows32[idx])
+                RNS_ROW_COPY(out, in, i, out->base->N);
+        }
+        else
+        {
+            RNS_ROW_REDUCE(out, in, i, idx, out->base->N, out->base->mods[i]);
         }
     }
 }
@@ -872,7 +1044,7 @@ void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            memcpy(out->coeffs[i], in->coeffs[i], out->base->N * sizeof(uint64_t));
+            RNS_ROW_COPY(out, in, i, out->base->N);
         }
     }
 }
@@ -885,15 +1057,20 @@ void polynomial_RNSc_decompose_small(RNSc_Polynomial out, RNSc_Polynomial in, ui
     const uint64_t shift = log_base * level;
     int last_active = rns_mask_get_last_active_index(in->rns_mask);
     assert(last_active >= 0);
-    for (size_t i = 0; i < out->base->N; i++)
-    {
-        tmp[i] = (in->coeffs[last_active][i] >> shift) & mask;
-    }
+    if (rns_row_is_narrow(in->base, (size_t)last_active))
+        rns_row_digit_narrow(tmp, in->rows32[last_active], shift, mask, out->base->N);
+    else
+        rns_row_digit_wide(tmp, in->rows64[last_active], shift, mask, out->base->N);
+    /* The digit is below 2^log_base and so below every prime, which is why one
+       array serves every row: no reduction, just a store at the row's width. */
     for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
-            memcpy(out->coeffs[i], tmp, sizeof(uint64_t) * out->base->N);
+            if (rns_row_is_narrow(out->base, i))
+                mod_narrow_w32(out->rows32[i], tmp, out->base->N);
+            else
+                memcpy(out->rows64[i], tmp, sizeof(uint64_t) * out->base->N);
         }
     }
     free(tmp);
@@ -913,7 +1090,21 @@ void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p)
     {
         if (p->rns_mask & (1ULL << i))
         {
-            blake3_hasher_update(&hasher, p->coeffs[i], p->base->N * sizeof(uint64_t));
+            /* Eight bytes per coefficient whatever the row's width, so the
+               digest is a function of the element and not of how it is
+               stored -- the canonical-domain contract. */
+            if (rns_row_is_narrow(p->base, i))
+            {
+                for (size_t j = 0; j < p->base->N; j++)
+                {
+                    const uint64_t v = p->rows32[i][j];
+                    blake3_hasher_update(&hasher, &v, sizeof(uint64_t));
+                }
+            }
+            else
+            {
+                blake3_hasher_update(&hasher, p->rows64[i], p->base->N * sizeof(uint64_t));
+            }
         }
     }
     blake3_hasher_finalize(&hasher, (uint8_t *)out, BLAKE3_OUT_LEN);
@@ -934,6 +1125,10 @@ void polynomial_floor_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide
 
     const uint64_t N = out->base->N;
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    /* The dropped row is reduced into each surviving one; that reduce is the
+       only step that crosses a modulus, so it is the only one that can change
+       width. The subtract and the scale stay at the destination's width. */
+    uint32_t *tmp32 = (uint32_t *)safe_aligned_malloc(N * sizeof(uint32_t));
 
     for (size_t idx = 0; idx < out->base->l; idx++)
     {
@@ -948,16 +1143,27 @@ void polynomial_floor_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide
                         continue;
                     const uint64_t q = out->base->mods[i]->q;
                     const uint64_t inv_p = inverse_mod(p, q);
-                    mod_eltwise_reduce(tmp, out->coeffs[idx], N, out->base->mods[i]);
-                    mod_eltwise_sub(out->coeffs[i], out->coeffs[i], tmp, N, out->base->mods[i]);
-                    mod_eltwise_scale(out->coeffs[i], out->coeffs[i], inv_p, N, out->base->mods[i]);
+                    Modulus mod_i = out->base->mods[i];
+                    if (rns_row_is_narrow(out->base, i))
+                    {
+                        rns_reduce_row_to32(tmp32, (RNS_Polynomial)out, idx, N, mod_i);
+                        mod_eltwise_sub_w32(out->rows32[i], out->rows32[i], tmp32, N, mod_i);
+                        mod_eltwise_scale_w32(out->rows32[i], out->rows32[i], inv_p, N, mod_i);
+                    }
+                    else
+                    {
+                        rns_reduce_row_to64(tmp, (RNS_Polynomial)out, idx, N, mod_i);
+                        mod_eltwise_sub(out->rows64[i], out->rows64[i], tmp, N, mod_i);
+                        mod_eltwise_scale(out->rows64[i], out->rows64[i], inv_p, N, mod_i);
+                    }
                 }
             }
-            memset(out->coeffs[idx], 0, sizeof(uint64_t) * N);
+            RNS_ROW_ZERO(out, idx, N);
             out->rns_mask &= ~(1ULL << idx);
         }
     }
     free(tmp);
+    free(tmp32);
 }
 
 void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide_mask)
@@ -968,14 +1174,16 @@ void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide
 
     const uint64_t N = out->base->N;
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    // as in the floor case, only the cross-modulus reduce can change width
+    uint32_t *tmp32 = (uint32_t *)safe_aligned_malloc(N * sizeof(uint32_t));
 
     for (size_t idx = 0; idx < out->base->l; idx++)
     {
         if (mask & (1ULL << idx))
         {
             const uint64_t p = out->base->mods[idx]->q, half_p = p / 2;
-            mod_eltwise_add_scalar(out->coeffs[idx], out->coeffs[idx], half_p, N,
-                                   out->base->mods[idx]);
+            RNS_ROW_SCALAROP(mod_eltwise_add_scalar, out, out, half_p, idx, N,
+                             out->base->mods[idx]);
             for (size_t i = 0; i < out->base->l; i++)
             {
                 if (out->rns_mask & (1ULL << i))
@@ -985,18 +1193,31 @@ void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide
                     const uint64_t q = out->base->mods[i]->q;
                     const uint64_t inv_p = inverse_mod(p, q);
                     const uint64_t half_p_mod_q = half_p % q;
-                    mod_eltwise_reduce(tmp, out->coeffs[idx], N, out->base->mods[i]);
-                    mod_eltwise_add_scalar(out->coeffs[i], out->coeffs[i], half_p_mod_q, N,
-                                           out->base->mods[i]);
-                    mod_eltwise_sub(out->coeffs[i], out->coeffs[i], tmp, N, out->base->mods[i]);
-                    mod_eltwise_scale(out->coeffs[i], out->coeffs[i], inv_p, N, out->base->mods[i]);
+                    Modulus mod_i = out->base->mods[i];
+                    if (rns_row_is_narrow(out->base, i))
+                    {
+                        rns_reduce_row_to32(tmp32, (RNS_Polynomial)out, idx, N, mod_i);
+                        mod_eltwise_add_scalar_w32(out->rows32[i], out->rows32[i], half_p_mod_q, N,
+                                                   mod_i);
+                        mod_eltwise_sub_w32(out->rows32[i], out->rows32[i], tmp32, N, mod_i);
+                        mod_eltwise_scale_w32(out->rows32[i], out->rows32[i], inv_p, N, mod_i);
+                    }
+                    else
+                    {
+                        rns_reduce_row_to64(tmp, (RNS_Polynomial)out, idx, N, mod_i);
+                        mod_eltwise_add_scalar(out->rows64[i], out->rows64[i], half_p_mod_q, N,
+                                               mod_i);
+                        mod_eltwise_sub(out->rows64[i], out->rows64[i], tmp, N, mod_i);
+                        mod_eltwise_scale(out->rows64[i], out->rows64[i], inv_p, N, mod_i);
+                    }
                 }
             }
-            memset(out->coeffs[idx], 0, sizeof(uint64_t) * N);
+            RNS_ROW_ZERO(out, idx, N);
             out->rns_mask &= ~(1ULL << idx);
         }
     }
     free(tmp);
+    free(tmp32);
 }
 
 void polynomial_floor_division_RNSc(RNSc_Polynomial out)
@@ -1020,8 +1241,7 @@ void polynomial_round_division_RNSc(RNSc_Polynomial out)
 void polynomial_RNSc_permute(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t gen)
 {
     assert(out != in);
-    const uint64_t N = out->base->N, mod_mask = N - 1, split_degree = out->base->split_degree,
-                   split_degree_mod = split_degree - 1;
+    const uint64_t N = out->base->N, split_degree = out->base->split_degree;
     int split_degree_log = 0;
     while ((1ULL << split_degree_log) < split_degree)
         split_degree_log++;
@@ -1037,22 +1257,17 @@ void polynomial_RNSc_permute(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t g
         if (out->rns_mask & (1ULL << j))
         {
             Modulus mod = out->base->mods[j];
-            for (size_t i = 0; i < split_degree; i++)
-            {
-                for (size_t i2 = 0; i2 < poly_size; i2++)
-                {
-                    const uint64_t idx = ((i + (i2 << split_degree_log)) * gen);
-                    const uint64_t dst = (idx & split_degree_mod) * poly_size +
-                                         ((idx & mod_mask) >> split_degree_log);
-                    int64_t val = (int64_t)in->coeffs[j][i * poly_size + i2];
-                    temp_signed[dst] = (idx & N) ? -val : val;
-                }
-            }
-            mod_eltwise_reduce_signed(out->coeffs[j], temp_signed, N, mod);
+            if (rns_row_is_narrow(in->base, j))
+                rns_row_permute_gather_narrow(temp_signed, in->rows32[j], gen, N, split_degree,
+                                              split_degree_log, poly_size);
+            else
+                rns_row_permute_gather_wide(temp_signed, in->rows64[j], gen, N, split_degree,
+                                            split_degree_log, poly_size);
+            RNS_ROW_REDUCE_SIGNED(out, temp_signed, j, N, mod);
         }
         else
         {
-            memset(out->coeffs[j], 0, sizeof(uint64_t) * N);
+            RNS_ROW_ZERO(out, j, N);
         }
     }
     free(temp_signed);
@@ -1083,49 +1298,13 @@ void polynomial_RNSc_mul_by_xai(RNSc_Polynomial out, RNSc_Polynomial in, uint64_
     out->rns_mask = in->rns_mask;
     for (size_t j = 0; j < out->base->l; j++)
     {
-        if (out->rns_mask & (1ULL << j))
-        {
-            Modulus mod = in->base->mods[j];
-            uint64_t q = mod->q;
-            if (a < N)
-            {
-                if (a % 8 == 0)
-                {
-                    mod_eltwise_negate(out->coeffs[j], in->coeffs[j] + N - a, a, mod);
-                    memcpy(out->coeffs[j] + a, in->coeffs[j], (N - a) * sizeof(uint64_t));
-                }
-                else
-                {
-                    for (size_t i = 0; i < a; i++)
-                    {
-                        out->coeffs[j][i] = negate_modq(in->coeffs[j][i - a + N], q);
-                    }
-                    for (size_t i = a; i < N; i++)
-                    {
-                        out->coeffs[j][i] = in->coeffs[j][i - a];
-                    }
-                }
-            }
-            else
-            {
-                if (a % 8 == 0)
-                {
-                    memcpy(out->coeffs[j], in->coeffs[j] + 2 * N - a, (a - N) * sizeof(uint64_t));
-                    mod_eltwise_negate(out->coeffs[j] + a - N, in->coeffs[j], 2 * N - a, mod);
-                }
-                else
-                {
-                    for (size_t i = 0; i < a - N; i++)
-                    {
-                        out->coeffs[j][i] = in->coeffs[j][i - a + 2 * N];
-                    }
-                    for (size_t i = a - N; i < N; i++)
-                    {
-                        out->coeffs[j][i] = negate_modq(in->coeffs[j][i - a + N], q);
-                    }
-                }
-            }
-        }
+        if (!(out->rns_mask & (1ULL << j)))
+            continue;
+        Modulus mod = in->base->mods[j];
+        if (rns_row_is_narrow(out->base, j))
+            rns_row_mul_by_xai_narrow(out->rows32[j], in->rows32[j], a, N, mod);
+        else
+            rns_row_mul_by_xai_wide(out->rows64[j], in->rows64[j], a, N, mod);
     }
 }
 
@@ -1135,69 +1314,25 @@ void polynomial_RNSc_mul_by_xai_minus1(RNSc_Polynomial out, RNSc_Polynomial in, 
     assert(out->base->split_degree == 1);
     const uint64_t N = out->base->N;
     a &= ((N << 1) - 1);
+    out->rns_mask = in->rns_mask;
     if (a == 0)
     {
+        // x^0 - 1 == 0
         for (size_t j = 0; j < out->base->l; j++)
         {
-            memset(out->coeffs[j], 0, sizeof(uint64_t) * N);
+            RNS_ROW_ZERO(out, j, N);
         }
-        out->rns_mask = in->rns_mask;
         return;
     }
-    out->rns_mask = in->rns_mask;
     for (size_t j = 0; j < out->base->l; j++)
     {
-        if (out->rns_mask & (1ULL << j))
-        {
-            Modulus mod = in->base->mods[j];
-            uint64_t q = mod->q;
-            if (a < N)
-            {
-                if (a % 8 == 0)
-                {
-                    mod_eltwise_negate(out->coeffs[j], in->coeffs[j] + N - a, a, mod);
-                    mod_eltwise_sub(out->coeffs[j], out->coeffs[j], in->coeffs[j], a, mod);
-                    mod_eltwise_sub(out->coeffs[j] + a, in->coeffs[j], in->coeffs[j] + a, N - a,
-                                    mod);
-                }
-                else
-                {
-                    for (size_t i = 0; i < a; i++)
-                    {
-                        uint64_t term1 = negate_modq(in->coeffs[j][i - a + N], q);
-                        out->coeffs[j][i] = sub_modq(term1, in->coeffs[j][i], q);
-                    }
-                    for (size_t i = a; i < N; i++)
-                    {
-                        out->coeffs[j][i] = sub_modq(in->coeffs[j][i - a], in->coeffs[j][i], q);
-                    }
-                }
-            }
-            else
-            {
-                if (a % 8 == 0)
-                {
-                    mod_eltwise_sub(out->coeffs[j], in->coeffs[j] + 2 * N - a, in->coeffs[j], a - N,
-                                    mod);
-                    mod_eltwise_negate(out->coeffs[j] + a - N, in->coeffs[j], 2 * N - a, mod);
-                    mod_eltwise_sub(out->coeffs[j] + a - N, out->coeffs[j] + a - N,
-                                    in->coeffs[j] + a - N, 2 * N - a, mod);
-                }
-                else
-                {
-                    for (size_t i = 0; i < a - N; i++)
-                    {
-                        out->coeffs[j][i] =
-                            sub_modq(in->coeffs[j][i - a + 2 * N], in->coeffs[j][i], q);
-                    }
-                    for (size_t i = a - N; i < N; i++)
-                    {
-                        uint64_t term1 = negate_modq(in->coeffs[j][i - a + N], q);
-                        out->coeffs[j][i] = sub_modq(term1, in->coeffs[j][i], q);
-                    }
-                }
-            }
-        }
+        if (!(out->rns_mask & (1ULL << j)))
+            continue;
+        Modulus mod = in->base->mods[j];
+        if (rns_row_is_narrow(out->base, j))
+            rns_row_mul_by_xai_minus1_narrow(out->rows32[j], in->rows32[j], a, N, mod);
+        else
+            rns_row_mul_by_xai_minus1_wide(out->rows64[j], in->rows64[j], a, N, mod);
     }
 }
 
@@ -1257,13 +1392,12 @@ void polynomial_RNS_broadcast_slot(RNS_Polynomial out, RNS_Polynomial in, uint64
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->base->split_degree; j++)
-            {
-                for (size_t k = 0; k < poly_size; k++)
-                {
-                    out->coeffs[i][j * poly_size + k] = in->coeffs[i][j * poly_size + slot_idx];
-                }
-            }
+            if (rns_row_is_narrow(out->base, i))
+                rns_row_broadcast_slot_narrow(out->rows32[i], in->rows32[i], slot_idx,
+                                              out->base->split_degree, poly_size);
+            else
+                rns_row_broadcast_slot_wide(out->rows64[i], in->rows64[i], slot_idx,
+                                            out->base->split_degree, poly_size);
         }
     }
 }
@@ -1275,10 +1409,11 @@ void polynomial_RNS_broadcast_RNS_comp(RNS_Polynomial out, RNS_Polynomial in, ui
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t k = 0; k < out->base->N; k++)
-            {
-                out->coeffs[i][k] = in->coeffs[rns_comp][k];
-            }
+            /* Row `rns_comp` copied verbatim into row i. Both belong to the
+               same base, so if their primes differ in width this is a
+               cross-modulus move and the values must be reduced -- which is
+               what makes it a reduce rather than a copy. */
+            RNS_ROW_REDUCE(out, in, i, rns_comp, out->base->N, out->base->mods[i]);
         }
     }
 }
@@ -1292,18 +1427,12 @@ void polynomial_RNS_rotate_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t 
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->base->split_degree; j++)
-            {
-                for (size_t k = 0; k < poly_size - rot; k++)
-                {
-                    out->coeffs[i][j * poly_size + k] = in->coeffs[i][j * poly_size + k + rot];
-                }
-                for (size_t k = poly_size - rot; k < poly_size; k++)
-                {
-                    out->coeffs[i][j * poly_size + k] =
-                        in->coeffs[i][j * poly_size + k + rot - poly_size];
-                }
-            }
+            if (rns_row_is_narrow(out->base, i))
+                rns_row_rotate_slot_narrow(out->rows32[i], in->rows32[i], rot,
+                                           out->base->split_degree, poly_size);
+            else
+                rns_row_rotate_slot_wide(out->rows64[i], in->rows64[i], rot,
+                                         out->base->split_degree, poly_size);
         }
     }
 }
@@ -1316,10 +1445,12 @@ void polynomial_RNS_copy_slot(RNS_Polynomial out, uint64_t dst, RNS_Polynomial i
     {
         if (out->rns_mask & (1ULL << i))
         {
-            for (size_t j = 0; j < out->base->split_degree; j++)
-            {
-                out->coeffs[i][j * poly_size + dst] = in->coeffs[i][j * poly_size + src];
-            }
+            if (rns_row_is_narrow(out->base, i))
+                rns_row_copy_slot_narrow(out->rows32[i], in->rows32[i], dst, src,
+                                         out->base->split_degree, poly_size);
+            else
+                rns_row_copy_slot_wide(out->rows64[i], in->rows64[i], dst, src,
+                                       out->base->split_degree, poly_size);
         }
     }
 }
@@ -1346,14 +1477,18 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
             Modulus mod = in->base->mods[i];
             const uint64_t *w_i = in->base->w[i];
             uint64_t w0 = w_i[0];
+            /* One width test for the row; the gathers and scatters below are a
+               slot's column across the split blocks, which is one element of
+               the degree-d extension. */
+            const bool narrow = rns_row_is_narrow(in->base, i);
 
             for (size_t s = 0; s < poly_size; s++)
             {
                 uint64_t A_s[d];
-                for (size_t j = 0; j < d; j++)
-                {
-                    A_s[j] = in->coeffs[i][j * poly_size + s];
-                }
+                if (narrow)
+                    rns_row_gather_slot_column_narrow(A_s, in->rows32[i], s, d, poly_size);
+                else
+                    rns_row_gather_slot_column_wide(A_s, in->rows64[i], s, d, poly_size);
                 field_base_conversion(&B[s * d], A_s, s, 0, d, poly_size, w_i, mod);
             }
 
@@ -1379,10 +1514,10 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
 
                 uint64_t A_inv_s[d];
                 field_base_conversion(A_inv_s, O_s, 0, s, d, poly_size, w_i, mod);
-                for (size_t j = 0; j < d; j++)
-                {
-                    out->coeffs[i][j * poly_size + s] = A_inv_s[j];
-                }
+                if (narrow)
+                    rns_row_scatter_slot_column_narrow(out->rows32[i], A_inv_s, s, d, poly_size);
+                else
+                    rns_row_scatter_slot_column_wide(out->rows64[i], A_inv_s, s, d, poly_size);
 
                 field_ext_mul(tmp_field, T, &B[s * d], d, w0, mod);
                 memcpy(T, tmp_field, d * sizeof(uint64_t));
@@ -1390,10 +1525,10 @@ int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
 
             uint64_t A_inv_0[d];
             field_base_conversion(A_inv_0, T, 0, 0, d, poly_size, w_i, mod);
-            for (size_t j = 0; j < d; j++)
-            {
-                out->coeffs[i][j * poly_size + 0] = A_inv_0[j];
-            }
+            if (narrow)
+                rns_row_scatter_slot_column_narrow(out->rows32[i], A_inv_0, 0, d, poly_size);
+            else
+                rns_row_scatter_slot_column_wide(out->rows64[i], A_inv_0, 0, d, poly_size);
         }
     }
 
@@ -1421,33 +1556,16 @@ int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in)
         {
             const uint64_t q = in->base->mods[i]->q;
             Modulus mod = in->base->mods[i];
-            const uint64_t *a = in->coeffs[i];
-
-            if (a[0] == 0)
+            int rc;
+            if (rns_row_is_narrow(out->base, i))
+                rc = rns_row_inverse_narrow(out->rows32[i], in->rows32[i], prefix, N, mod);
+            else
+                rc = rns_row_inverse_wide(out->rows64[i], in->rows64[i], prefix, N, mod);
+            if (rc != 0)
             {
                 free(prefix);
-                return -2;
+                return rc;
             }
-            prefix[0] = a[0];
-            for (size_t k = 1; k < N; k++)
-            {
-                if (a[k] == 0)
-                {
-                    free(prefix);
-                    return -2;
-                }
-                prefix[k] = mul_modq(prefix[k - 1], a[k], mod);
-            }
-
-            uint64_t t = inverse_mod(prefix[N - 1], q);
-
-            uint64_t *o = out->coeffs[i];
-            for (size_t k = N - 1; k > 0; k--)
-            {
-                o[k] = mul_modq(t, prefix[k - 1], mod);
-                t = mul_modq(t, a[k], mod);
-            }
-            o[0] = t;
         }
     }
 
@@ -1538,11 +1656,11 @@ void polynomial_RNSc_scaled_lift(RNSc_Polynomial out, RNSc_Polynomial in, uint64
             Modulus mod_i = out->base->mods[i];
             if (in->rns_mask & (1ULL << i))
             {
-                mod_eltwise_scale(out->coeffs[i], in->coeffs[i], actual_delta[i], N, mod_i);
+                RNS_ROW_SCALAROP(mod_eltwise_scale, out, in, actual_delta[i], i, N, mod_i);
             }
             else
             {
-                memset(out->coeffs[i], 0, N * sizeof(uint64_t));
+                RNS_ROW_ZERO(out, i, N);
             }
         }
     }
