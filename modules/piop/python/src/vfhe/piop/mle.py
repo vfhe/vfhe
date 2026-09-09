@@ -520,13 +520,21 @@ class MLE:
 
 
 class SparseMLE:
-    """A sparse map of hypercube evaluations: a bookkeeping form, not a
-    dense `MLE`.
+    """A sparse map of hypercube evaluations: `evaluations[index] = value`
+    for the nonzero entries, `index` packing the variables LSB-first like a
+    dense table's position. The carrier of wiring predicates and other
+    mostly-zero public tables.
 
     Independent of `MLE` on purpose — it supports the linear operations
-    (add / sub / scale) but none of the folding a dense table exists for, so
-    inheriting `evaluate` would only promise what it cannot do. Convert to
-    an `MLE` to evaluate.
+    (add / sub / scale) and evaluation at a *full* point (`evaluate`, the
+    sum over the nonzeros of value times the eq~ factors, O(nnz * vars)),
+    but none of the per-variable folding a dense table exists for: binding
+    a variable at a time would need the dense form, so a partial point
+    raises. Defined oracles (`virtual.py`) bind symbolically and only ever
+    query a constituent at a full point, which is what makes a sparse
+    constituent sufficient there; `materialize()` gives the dense `MLE` when
+    a fold is really wanted. Values are non-negative ints or elements of the
+    domain (`ring=` / `field=`, or plain Python values without either).
     """
 
     def __init__(
@@ -534,6 +542,9 @@ class SparseMLE:
         variables: list | None = None,
         evaluations: dict | None = None,
         num_vars: int | None = None,
+        ring: Ring | None = None,
+        field: Field | None = None,
+        public: bool = False,
     ):
         if variables is not None:
             self.variables = list(variables)
@@ -541,12 +552,88 @@ class SparseMLE:
             self.variables = _default_variables(num_vars)
         else:
             raise ValueError("Either variables or num_vars must be provided")
+        if ring is not None and field is not None:
+            raise TypeError("pass ring or field, not both")
+        self.ring = ring
+        self.field = field
+        self.public = public
         self.evaluations = dict(evaluations) if evaluations is not None else {}
+        size = 1 << self.num_vars
+        if any(not 0 <= k < size for k in self.evaluations):
+            raise ValueError(f"sparse index out of range for {self.num_vars} variables")
 
     @property
     def num_vars(self) -> int:
         """The number of free variables; derived, so it cannot go stale."""
         return len(self.variables)
+
+    def _like(self, evaluations: dict, variables: list | None = None) -> SparseMLE:
+        return SparseMLE(
+            variables=self.variables if variables is None else variables,
+            evaluations=evaluations,
+            ring=self.ring,
+            field=self.field,
+            public=self.public,
+        )
+
+    def _one(self):
+        if self.ring is not None:
+            return Polynomial(self.ring).from_array([1])
+        if self.field is not None:
+            return self.field.one
+        return 1
+
+    def nonzeros(self):
+        """The (index, value) pairs, in insertion order."""
+        return self.evaluations.items()
+
+    def evaluate(self, point: dict | list, in_place: bool = False) -> SparseMLE:
+        """The value at a full point, as a 0-variable SparseMLE (so that
+        `constant()` reads it, like a folded dense table):
+        sum_{k nonzero} value_k * prod_i (point_i if k_i else 1 - point_i).
+        A partial point raises: this form has no per-variable fold."""
+        if isinstance(point, list):
+            point = dict(zip(self.variables, point, strict=True))
+        if any(v not in point for v in self.variables):
+            raise NotImplementedError(
+                "SparseMLE evaluates at full points only; materialize() to fold"
+            )
+        one = self._one()
+        factors = [(one - point[v], point[v]) for v in self.variables]
+        total = None
+        for index, value in self.evaluations.items():
+            prod = None
+            for i, pair in enumerate(factors):
+                f = pair[(index >> i) & 1]
+                prod = f if prod is None else prod * f
+            if prod is None:  # no variables: the single entry
+                term = value
+            elif isinstance(value, int) and value == 1:
+                term = prod
+            else:
+                term = prod * value
+            total = term if total is None else total + term
+        if total is None:
+            total = one * 0
+        return self._like({0: total}, variables=[])
+
+    def constant(self):
+        """The single value of a fully-evaluated (0-variable) SparseMLE."""
+        assert self.num_vars == 0, "constant() needs a fully-evaluated SparseMLE"
+        return self.evaluations.get(0, self._one() * 0)
+
+    def materialize(self, *_ignored) -> MLE:
+        """The dense table with the same evaluations, in the same domain."""
+        table = [0] * (1 << self.num_vars)
+        for k, v in self.evaluations.items():
+            table[k] = v
+        return MLE(
+            ring=self.ring,
+            field=self.field,
+            variables=self.variables,
+            evaluations=table,
+            public=self.public,
+        )
 
     def _combine(self, other, op) -> SparseMLE:
         if not isinstance(other, SparseMLE):
@@ -559,7 +646,9 @@ class SparseMLE:
             res = op(self.evaluations.get(k, 0), other.evaluations.get(k, 0))
             if res != 0:
                 new_evals[k] = res
-        return SparseMLE(variables=self.variables, evaluations=new_evals)
+        res_mle = self._like(new_evals)
+        res_mle.public = self.public and other.public
+        return res_mle
 
     def __add__(self, other):
         return self._combine(other, operator.add)
@@ -573,7 +662,7 @@ class SparseMLE:
             res = v * factor
             if res != 0:
                 new_evals[k] = res
-        return SparseMLE(variables=self.variables, evaluations=new_evals)
+        return self._like(new_evals)
 
     def __mul__(self, other):
         if isinstance(other, (MLE, SparseMLE)):
@@ -585,15 +674,5 @@ class SparseMLE:
     def __rmul__(self, other):
         return self.__mul__(other)
 
-    def evaluate(self, point: dict | list, in_place: bool = True):
-        raise NotImplementedError(
-            "SparseMLE cannot be evaluated; build a dense MLE to fold variables"
-        )
-
-    def constant(self):
-        """The single value of a fully-evaluated (0-variable) MLE."""
-        assert self.num_vars == 0, "constant() needs a fully-evaluated MLE"
-        return self.evaluations.get(0, 0)
-
     def copy(self) -> SparseMLE:
-        return SparseMLE(variables=self.variables, evaluations=self.evaluations)
+        return self._like(self.evaluations)

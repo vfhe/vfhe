@@ -20,10 +20,17 @@ enum GateType {
   GATE_TYPE_UNSPECIFIED = 0;
   GATE_TYPE_ADD = 1;
   GATE_TYPE_MUL = 2;
+  // Inner product: sum_i in[lefts[i]] * in[rights[i]] over the pairs
+  // (lefts, rights), which must have the same length.
+  GATE_TYPE_XMULT = 3;
 }
 
 message Gate {
   GateType type = 1;
+  // ADD / MUL: the two fan-in wires.
   uint32 left = 2;
   uint32 right = 3;
+  // XMULT: the paired wires of the inner product.
+  repeated uint32 lefts = 4;
+  repeated uint32 rights = 5;
 }

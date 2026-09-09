@@ -176,8 +176,12 @@ class _SumcheckRounds(Protocol):
             iop.transcript.write(f"{label}/g{i}", self._round_message(factors, var))
             r = iop.verifier.challenge(f"{label}/r{i}")
             point[var] = r
+            # Out of place while a factor is still the statement's own
+            # oracle; a prover view (`owned`) brings fresh tables of its own.
             factors = [
-                f.evaluate({var: r}, in_place=f is not orig)
+                f.evaluate(
+                    {var: r}, in_place=f is not orig or getattr(f, "owned", False)
+                )
                 for f, orig in zip(factors, originals, strict=True)
             ]
         return self._prove_tail(iop, statement, label, factors, point)

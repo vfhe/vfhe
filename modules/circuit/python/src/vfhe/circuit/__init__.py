@@ -11,6 +11,6 @@
 
 from _vfhe_proto.vfhe.circuit.gkr.v1 import gkr_pb2 as gkr
 
-from .builder import add_gate, deserialize, mul_gate, serialize
+from .builder import add_gate, deserialize, mul_gate, serialize, xmult_gate
 
-__all__ = ["add_gate", "deserialize", "gkr", "mul_gate", "serialize"]
+__all__ = ["add_gate", "deserialize", "gkr", "mul_gate", "serialize", "xmult_gate"]

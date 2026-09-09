@@ -87,7 +87,8 @@ def element_digest(value) -> bytes:
     bytes, ints, strings and None are primitives; dicts and sequences chain
     their parts; everything else must bring its own digest — a `digest()`
     method, a statement shape (`relation` + `fields`), a dense-MLE shape
-    (`table` + `variables`), `to_bytes()` (MerklePath), `get_hash()`
+    (`table` + `variables`), a sparse-MLE shape (`evaluations` +
+    `variables`, entries in index order), `to_bytes()` (MerklePath), `get_hash()`
     (arith.Polynomial, four 64-bit words) or a callable `hash` attribute
     (arith.FieldElement). Each branch is domain-separated by a tag.
     """
@@ -121,6 +122,11 @@ def element_digest(value) -> bytes:
         parts = [b"mle", element_digest(value.basis.name)]
         parts += [element_digest(v) for v in value.variables]
         parts += [element_digest(entry) for entry in value.table]
+        return _chain(parts)
+    if hasattr(value, "evaluations") and hasattr(value, "variables"):  # a SparseMLE
+        parts = [b"sparse"] + [element_digest(v) for v in value.variables]
+        for k in sorted(value.evaluations):  # canonical order, not insertion order
+            parts += [element_digest(k), element_digest(value.evaluations[k])]
         return _chain(parts)
     if hasattr(value, "to_bytes"):  # e.g. a MerklePath
         return hash_bytes(b"opaque" + value.to_bytes())

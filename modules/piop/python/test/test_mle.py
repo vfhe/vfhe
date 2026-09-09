@@ -245,3 +245,38 @@ def test_mle_full_evaluation():
     assert out.constant().get_polynomial()[0] == 9
     # The original oracle is untouched (in_place=False).
     assert d1.num_vars == 2 and d1.table[0].get_polynomial()[0] == 1
+
+
+def test_sparse_mle_evaluates_at_full_points():
+    from vfhe.piop import OracleKind, element_digest, oracle_kind
+
+    v = [MLE_Variable("x0"), MLE_Variable("x1"), MLE_Variable("x2")]
+    s = SparseMLE(variables=v, evaluations={5: 3, 2: 1}, public=True)
+    dense = s.materialize()
+    assert dense.table == [0, 0, 1, 0, 0, 3, 0, 0] and dense.public
+    assert oracle_kind(s) is OracleKind.public
+    for point in ([0, 0, 0], [1, 0, 1], [7, 11, 13], [2, -3, 5]):
+        pt = dict(zip(v, point, strict=True))
+        assert (
+            s.evaluate(pt).constant() == dense.evaluate(pt, in_place=False).constant()
+        )
+    with pytest.raises(NotImplementedError):
+        s.evaluate({v[0]: 1})
+    # Digest: canonical in the entry order, distinct for distinct tables.
+    same = SparseMLE(variables=v, evaluations={2: 1, 5: 3})
+    assert element_digest(s) == element_digest(same)
+    assert element_digest(s) != element_digest(
+        SparseMLE(variables=v, evaluations={2: 1})
+    )
+
+
+def test_sparse_mle_over_a_ring():
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    v = [MLE_Variable("x0"), MLE_Variable("x1")]
+    s = SparseMLE(ring=ring, variables=v, evaluations={1: 1, 3: 2}, public=True)
+    pt = {v[0]: ring.random_exceptional(), v[1]: ring.random_exceptional()}
+    want = s.materialize().evaluate(pt, in_place=False).constant()
+    assert s.evaluate(pt).constant() == want
+    assert (s + s).evaluations == {1: 2, 3: 4} and (s + s).ring is ring
+    assert s.scale(3).evaluations == {1: 3, 3: 6}
+    assert not (s + SparseMLE(ring=ring, variables=v, evaluations={0: 1})).public
