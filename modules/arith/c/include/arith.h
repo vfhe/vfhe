@@ -88,6 +88,18 @@ extern "C"
         void **w_precon_fwd;
         void **ws_inv;
         void **w_precon_inv;
+        /* The same tables for the 32-bit-word transform, and NULL unless this
+           plan supports it (`ntt_w32_applies`). A plan over a narrow prime
+           carries both sets, because the transform's word width belongs to the
+           buffer and not to the modulus: polycom gathers a codeword into a
+           64-bit array and transforms it over this same plan. */
+        void **ws_fwd32;
+        void **w_precon_fwd32;
+        void **ws_inv32;
+        void **w_precon_inv32;
+        /* 1/n and (1/n) * w, with their Shoup constants, for the inverse's
+           folded final butterfly. */
+        uint32_t inv_n32, inv_n32p, inv_nw32, inv_nw32p;
     } *NTT_Plan;
 
     /* The incomplete NTT of R_q = Z_q[X]/(X^N+1) split into `split_degree`
@@ -102,6 +114,11 @@ extern "C"
         uint64_t split_degree;
         uint64_t **w;
         uint64_t N, l;
+        /* Bit i set iff prime i's coefficients are stored 32 bits wide. */
+        uint64_t narrow_mask;
+        /* `w[i]` at the narrow width, NULL for a wide prime: the block product
+           multiplies a row by these, so they match the row. */
+        uint32_t **w32;
     } *RNS_Base;
 
     void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t count);
@@ -126,18 +143,33 @@ extern "C"
     int rns_mask_get_active_index(uint64_t mask, uint64_t i);
     int rns_mask_get_last_active_index(uint64_t mask);
 
+    /* An element of R_q in the mul (NTT) domain, one row per RNS prime.
+     *
+     * A row is held at the width its prime asks for: `rows64[i]` for a wide
+     * prime and `rows32[i]` for a narrow one, and exactly one of the two is
+     * non-NULL for each prime the mask selects. `base->narrow_mask` says
+     * which, and it is derived from the prime, so the width is fixed for the
+     * life of the prime index rather than chosen per object.
+     *
+     * The two arrays are typed rather than one `void **` on purpose: reading a
+     * 32-bit row as 64-bit is silent, data-dependent corruption, so the choice
+     * is left where the compiler can check it. Reach for a row through
+     * `rns_row64` / `rns_row32` (arith_internal.h), which assert the width.
+     */
     typedef struct _RNS_Polynomial
     {
-        uint64_t **coeffs;
+        uint64_t **rows64;
+        uint32_t **rows32;
         RNS_Base base;
         uint64_t rns_mask;
         uint64_t allocated_l;
     } *RNS_Polynomial;
 
-    /* RNS polynomial in coefficient representation*/
+    /* The same, in the canonical (coefficient) domain. */
     typedef struct _RNSc_Polynomial
     {
-        uint64_t **coeffs;
+        uint64_t **rows64;
+        uint32_t **rows32;
         RNS_Base base;
         uint64_t rns_mask;
         uint64_t allocated_l;
@@ -177,6 +209,14 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
 
     void ntt_forward(uint64_t *out, uint64_t *in, NTT_Plan plan);
     void ntt_reverse(uint64_t *out, uint64_t *in, NTT_Plan plan);
+
+    /* The same transforms on 32-bit words, 16 to a vector. Require
+       `ntt_w32_applies(plan->n, plan->mod->q)`: a narrow prime and a length of
+       at least 32. Output order and values are identical to the 64-bit
+       transform's, coefficient for coefficient. */
+    bool ntt_w32_applies(uint64_t n, uint64_t q);
+    void ntt_forward_w32(uint32_t *out, uint32_t *in, NTT_Plan plan);
+    void ntt_reverse_w32(uint32_t *out, uint32_t *in, NTT_Plan plan);
 
     uint64_t add_modq(uint64_t a, uint64_t b, uint64_t q);
     uint64_t sub_modq(uint64_t a, uint64_t b, uint64_t q);

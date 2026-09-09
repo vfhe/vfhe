@@ -4,6 +4,8 @@
 #include <arith.h>
 #include <misc.h>
 #include "kernels/ifma52.h"
+// RNS row width and accessors, for the RNS <-> MP conversions below.
+#include "arith_internal.h"
 
 int get_mp_vector_size(void)
 {
@@ -620,6 +622,9 @@ void mp_polynomial_to_RNSc(RNSc_Polynomial out, MPPolynomial in)
             continue;
         Modulus mod = out->base->mods[i];
         const uint64_t w1 = mod->mp_w1, q = mod->q;
+        const bool narrow = rns_row_is_narrow(out->base, i);
+        uint32_t *r32 = narrow ? out->rows32[i] : NULL;
+        uint64_t *r64 = narrow ? NULL : out->rows64[i];
         for (uint64_t c = 0; c < N; c++)
         {
             uint64_t res = 0;
@@ -628,7 +633,10 @@ void mp_polynomial_to_RNSc(RNSc_Polynomial out, MPPolynomial in)
                 res = mul_modq(res, w1, mod);
                 res = add_modq(res, modq(in->coeffs[j][c], mod), q);
             }
-            out->coeffs[i][c] = res;
+            if (narrow)
+                r32[c] = (uint32_t)res;
+            else
+                r64[c] = res;
         }
     }
 }
@@ -636,16 +644,34 @@ void mp_polynomial_to_RNSc(RNSc_Polynomial out, MPPolynomial in)
 void mp_polynomial_from_RNS(MPPolynomial out, RNS_Polynomial in, MPScalar *PW, MPScalar q,
                             mp_vector_t *m, uint64_t k)
 {
-    mp_polynomial_int_sp_scale_mp(out, in->coeffs[0], PW[0]);
+    /* Leaving RNS for multiprecision limbs is a change of representation, so a
+       narrow row is widened here by nature rather than by accident: one
+       vectorized pass per row, into the scratch the accumulator reads. */
+    const uint64_t N = in->base->N;
+    uint64_t *sv = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    uint64_t *row0 = in->rows64[0];
+    if (rns_row_is_narrow(in->base, 0))
+    {
+        mod_widen_w32(sv, in->rows32[0], N);
+        row0 = sv;
+    }
+    mp_polynomial_int_sp_scale_mp(out, row0, PW[0]);
     for (size_t i = 1; i < in->base->l; i++)
     {
-        mp_polynomial_int_sp_scale_addto_mp(out, in->coeffs[i], PW[i]);
+        uint64_t *row = in->rows64[i];
+        if (rns_row_is_narrow(in->base, i))
+        {
+            mod_widen_w32(sv, in->rows32[i], N);
+            row = sv;
+        }
+        mp_polynomial_int_sp_scale_addto_mp(out, row, PW[i]);
         if ((i & 0xFF) == 0)
         {
             mp_polynomial_propagate_carry(out);
         }
     }
     mp_polynomial_propagate_carry(out);
+    free(sv);
     mp_polynomial_mod_reduce(out, q, m, k);
 }
 

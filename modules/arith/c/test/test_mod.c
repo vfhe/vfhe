@@ -347,6 +347,243 @@ void test_mod_new_refuses_a_modulus_no_family_can_hold(void)
     mod_free(mod);
 }
 
+/* The 32-bit-word kernels against the 64-bit ones, at a prime both accept.
+   Storing a coefficient in 32 bits does not change its value, so the two must
+   agree word for word -- which makes the 64-bit family, already checked
+   against an __int128 oracle above, the oracle for these. */
+void test_mod_eltwise_w32_matches_the_wide_kernels(void)
+{
+    const uint64_t bits[] = {10, 20, 29};
+    /* Powers of two, short ones included. Two reasons for that shape: a row
+       operation can be handed `N / split_degree`, which is a power of two and
+       may be under a lane group -- below 16 the 32-bit-word bodies would
+       compute nothing at all, so they route to scalar, and unguarded that is
+       ARITH-7 again. And a power of two is all any caller passes, which is
+       what makes it sound that none of these kernels has a tail: their real
+       precondition is a whole number of lane groups, not merely one. */
+    const uint64_t lengths[] = {1, 2, 4, 8, 16, 32, 64, 1024};
+
+    for (unsigned b = 0; b < sizeof(bits) / sizeof(*bits); b++)
+    {
+        const uint64_t q = next_special_prime(1ULL << bits[b], 1024, true);
+        TEST_ASSERT_TRUE(rns_prime_is_narrow(q));
+        Modulus mod = mod_new(q);
+
+        for (unsigned li = 0; li < sizeof(lengths) / sizeof(*lengths); li++)
+        {
+            const uint64_t n = lengths[li];
+            uint64_t *w1 = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *w2 = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint64_t *wo = safe_aligned_malloc(n * sizeof(uint64_t));
+            uint32_t *n1 = safe_aligned_malloc(n * sizeof(uint32_t));
+            uint32_t *n2 = safe_aligned_malloc(n * sizeof(uint32_t));
+            uint32_t *no = safe_aligned_malloc(n * sizeof(uint32_t));
+
+            for (uint64_t i = 0; i < n; i++)
+            {
+                w1[i] = (0x9E3779B97F4A7C15ULL * (i + 1)) % q;
+                w2[i] = (0xC2B2AE3D27D4EB4FULL * (i + 3)) % q;
+                n1[i] = (uint32_t)w1[i];
+                n2[i] = (uint32_t)w2[i];
+            }
+            const uint64_t scalar = w2[1];
+
+/* Run the wide kernel and the narrow one from the same inputs, then require
+   every coefficient to match. `seed_out` says whether the operation reads its
+   output (the accumulating ones do). */
+#define W32_CHECK(seed_out, wide_call, narrow_call)                                                \
+    do                                                                                             \
+    {                                                                                              \
+        for (uint64_t i = 0; i < n; i++)                                                           \
+        {                                                                                          \
+            wo[i] = (seed_out) ? w1[i] : 0;                                                        \
+            no[i] = (uint32_t)wo[i];                                                               \
+        }                                                                                          \
+        wide_call;                                                                                 \
+        narrow_call;                                                                               \
+        for (uint64_t i = 0; i < n; i++)                                                           \
+        {                                                                                          \
+            TEST_ASSERT_TRUE(wo[i] < q);                                                           \
+            TEST_ASSERT_EQUAL_UINT64(wo[i], (uint64_t)no[i]);                                      \
+        }                                                                                          \
+    } while (0)
+
+            W32_CHECK(0, mod_eltwise_mul(wo, w1, w2, n, mod),
+                      mod_eltwise_mul_w32(no, n1, n2, n, mod));
+            W32_CHECK(1, mod_eltwise_mul_addto(wo, w1, w2, n, mod),
+                      mod_eltwise_mul_addto_w32(no, n1, n2, n, mod));
+            W32_CHECK(1, mod_eltwise_mul_subto(wo, w1, w2, n, mod),
+                      mod_eltwise_mul_subto_w32(no, n1, n2, n, mod));
+            W32_CHECK(0, mod_eltwise_scale(wo, w1, scalar, n, mod),
+                      mod_eltwise_scale_w32(no, n1, scalar, n, mod));
+            W32_CHECK(1, mod_eltwise_fma(wo, w1, scalar, n, mod),
+                      mod_eltwise_fma_w32(no, n1, scalar, n, mod));
+            W32_CHECK(0, mod_eltwise_add(wo, w1, w2, n, mod),
+                      mod_eltwise_add_w32(no, n1, n2, n, mod));
+            W32_CHECK(0, mod_eltwise_sub(wo, w1, w2, n, mod),
+                      mod_eltwise_sub_w32(no, n1, n2, n, mod));
+            W32_CHECK(0, mod_eltwise_negate(wo, w1, n, mod),
+                      mod_eltwise_negate_w32(no, n1, n, mod));
+            W32_CHECK(0, mod_eltwise_add_scalar(wo, w1, scalar, n, mod),
+                      mod_eltwise_add_scalar_w32(no, n1, scalar, n, mod));
+            W32_CHECK(0, mod_eltwise_sub_scalar(wo, w1, scalar, n, mod),
+                      mod_eltwise_sub_scalar_w32(no, n1, scalar, n, mod));
+#undef W32_CHECK
+
+            free(w1);
+            free(w2);
+            free(wo);
+            free(n1);
+            free(n2);
+            free(no);
+        }
+        mod_free(mod);
+    }
+}
+
+/* The extremes, which the structured inputs above never produce: 0 and q-1 in
+   every position of a vector, where a conditional subtract is either taken or
+   skipped for the whole lane group. */
+void test_mod_eltwise_w32_at_the_range_edges(void)
+{
+    const uint64_t q = next_special_prime(1ULL << 29, 1024, true);
+    Modulus mod = mod_new(q);
+    const uint64_t n = 64;
+    const uint64_t edges[] = {0, 1, 2, q - 2, q - 1};
+    const unsigned ne = sizeof(edges) / sizeof(*edges);
+
+    uint64_t *w1 = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *w2 = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *wo = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint32_t *n1 = safe_aligned_malloc(n * sizeof(uint32_t));
+    uint32_t *n2 = safe_aligned_malloc(n * sizeof(uint32_t));
+    uint32_t *no = safe_aligned_malloc(n * sizeof(uint32_t));
+
+    for (unsigned e1 = 0; e1 < ne; e1++)
+    {
+        for (unsigned e2 = 0; e2 < ne; e2++)
+        {
+            for (uint64_t i = 0; i < n; i++)
+            {
+                w1[i] = edges[e1];
+                w2[i] = edges[e2];
+                n1[i] = (uint32_t)w1[i];
+                n2[i] = (uint32_t)w2[i];
+                wo[i] = edges[(e1 + e2) % ne];
+                no[i] = (uint32_t)wo[i];
+            }
+            mod_eltwise_mul_addto(wo, w1, w2, n, mod);
+            mod_eltwise_mul_addto_w32(no, n1, n2, n, mod);
+            for (uint64_t i = 0; i < n; i++)
+                TEST_ASSERT_EQUAL_UINT64(wo[i], (uint64_t)no[i]);
+
+            for (uint64_t i = 0; i < n; i++)
+            {
+                wo[i] = 0;
+                no[i] = 0;
+            }
+            mod_eltwise_sub(wo, w1, w2, n, mod);
+            mod_eltwise_sub_w32(no, n1, n2, n, mod);
+            for (uint64_t i = 0; i < n; i++)
+                TEST_ASSERT_EQUAL_UINT64(wo[i], (uint64_t)no[i]);
+
+            mod_eltwise_scale(wo, w1, edges[e2], n, mod);
+            mod_eltwise_scale_w32(no, n1, edges[e2], n, mod);
+            for (uint64_t i = 0; i < n; i++)
+                TEST_ASSERT_EQUAL_UINT64(wo[i], (uint64_t)no[i]);
+
+            mod_eltwise_negate(wo, w1, n, mod);
+            mod_eltwise_negate_w32(no, n1, n, mod);
+            for (uint64_t i = 0; i < n; i++)
+                TEST_ASSERT_EQUAL_UINT64(wo[i], (uint64_t)no[i]);
+        }
+    }
+    free(w1);
+    free(w2);
+    free(wo);
+    free(n1);
+    free(n2);
+    free(no);
+    mod_free(mod);
+}
+
+/* The width-changing kernels against the wide path. These are the only
+   operations allowed to convert a word width, so each is checked against
+   "do it in 64 bits, then move the width" done the long way. */
+void test_mod_w32_width_changes_match_the_wide_path(void)
+{
+    const uint64_t narrow_bits[] = {10, 20, 29};
+    const uint64_t wide_bits[] = {31, 40, 50, 60};
+    const uint64_t lengths[] = {8, 16, 64, 1024};
+
+    for (unsigned li = 0; li < sizeof(lengths) / sizeof(*lengths); li++)
+    {
+        const uint64_t n = lengths[li];
+        uint64_t *w = safe_aligned_malloc(n * sizeof(uint64_t));
+        uint64_t *wref = safe_aligned_malloc(n * sizeof(uint64_t));
+        uint32_t *nar = safe_aligned_malloc(n * sizeof(uint32_t));
+        uint32_t *nref = safe_aligned_malloc(n * sizeof(uint32_t));
+        int64_t *sgn = safe_aligned_malloc(n * sizeof(int64_t));
+
+        for (unsigned b = 0; b < sizeof(narrow_bits) / sizeof(*narrow_bits); b++)
+        {
+            const uint64_t qn = next_special_prime(1ULL << narrow_bits[b], 1024, true);
+            TEST_ASSERT_TRUE(rns_prime_is_narrow(qn));
+            Modulus mn = mod_new(qn);
+
+            for (uint64_t i = 0; i < n; i++)
+            {
+                nar[i] = (uint32_t)((0x9E3779B97F4A7C15ULL * (i + 1)) % qn);
+                w[i] = (0xC2B2AE3D27D4EB4FULL * (i + 3));
+                sgn[i] = (i & 1) ? -(int64_t)((i * 7919) % qn) : (int64_t)((i * 104729) % qn);
+            }
+
+            // widen then narrow is the identity on a canonical narrow row
+            mod_widen_w32(wref, nar, n);
+            for (uint64_t i = 0; i < n; i++)
+                TEST_ASSERT_EQUAL_UINT64((uint64_t)nar[i], wref[i]);
+            mod_narrow_w32(nref, wref, n);
+            TEST_ASSERT_EQUAL_UINT32_ARRAY(nar, nref, n);
+
+            // a signed array reduced straight into a narrow row
+            mod_eltwise_reduce_signed_w32(nref, sgn, n, mn);
+            mod_eltwise_reduce_signed(wref, sgn, n, mn);
+            for (uint64_t i = 0; i < n; i++)
+                TEST_ASSERT_EQUAL_UINT64(wref[i], (uint64_t)nref[i]);
+
+            // an arbitrary 64-bit array reduced into a narrow row
+            mod_eltwise_reduce_narrow_from_wide(nref, w, n, mn);
+            mod_eltwise_reduce(wref, w, n, mn);
+            for (uint64_t i = 0; i < n; i++)
+                TEST_ASSERT_EQUAL_UINT64(wref[i], (uint64_t)nref[i]);
+
+            // a narrow row reduced mod its own prime is the identity
+            mod_eltwise_reduce_w32(nref, nar, n, mn);
+            TEST_ASSERT_EQUAL_UINT32_ARRAY(nar, nref, n);
+
+            for (unsigned c = 0; c < sizeof(wide_bits) / sizeof(*wide_bits); c++)
+            {
+                const uint64_t qw = next_special_prime(1ULL << wide_bits[c], 1024, true);
+                TEST_ASSERT_FALSE(rns_prime_is_narrow(qw));
+                Modulus mw = mod_new(qw);
+
+                // narrow row -> wide row, the cross-modulus direction
+                mod_eltwise_reduce_wide_from_narrow(w, nar, n, mw);
+                mod_widen_w32(wref, nar, n);
+                mod_eltwise_reduce(wref, wref, n, mw);
+                TEST_ASSERT_EQUAL_UINT64_ARRAY(wref, w, n);
+                mod_free(mw);
+            }
+            mod_free(mn);
+        }
+        free(w);
+        free(wref);
+        free(nar);
+        free(nref);
+        free(sgn);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -357,5 +594,8 @@ int main(void)
 #if VFHE_HAVE_AVX512IFMA
     RUN_TEST(test_mod_eltwise_families_agree_where_they_overlap);
 #endif
+    RUN_TEST(test_mod_eltwise_w32_matches_the_wide_kernels);
+    RUN_TEST(test_mod_eltwise_w32_at_the_range_edges);
+    RUN_TEST(test_mod_w32_width_changes_match_the_wide_path);
     return UNITY_END();
 }

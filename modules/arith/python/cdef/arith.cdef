@@ -15,10 +15,14 @@ typedef struct _RNS_Base {
   uint64_t **w;
   uint64_t N;
   uint64_t l;
+  uint64_t narrow_mask;
+  uint32_t **w32;
 } *RNS_Base;
 
+// rows64[i] or rows32[i] holds row i, per base->narrow_mask; the other is NULL.
 typedef struct _RNS_Polynomial {
-  uint64_t **coeffs;
+  uint64_t **rows64;
+  uint32_t **rows32;
   RNS_Base base;
   uint64_t rns_mask;
   uint64_t allocated_l;

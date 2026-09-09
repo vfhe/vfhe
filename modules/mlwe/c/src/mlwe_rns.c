@@ -32,20 +32,34 @@ LWE mlwe_extract_LWE(RNSc_MLWE in, uint64_t idx)
         assert(g_idx >= 0);
         Modulus mod = arith_rns_polynomial(&in->a[0])->base->mods[g_idx];
 
+        // one width test for this prime; the extraction below is typed
+        const bool narrow = rns_row_is_narrow(arith_rns_polynomial(&in->a[0])->base, g_idx);
         for (size_t k = 0; k < r; k++)
         {
+            RNS_Polynomial ak = arith_rns_polynomial(&in->a[k]);
             // Reverse and negate for negacyclic
-            for (size_t i = 0; i <= idx; i++)
+            if (narrow)
             {
-                res->a[j][k * N + i] = arith_rns_polynomial(&in->a[k])->coeffs[g_idx][idx - i];
+                const uint32_t *row = ak->rows32[g_idx];
+                for (size_t i = 0; i <= idx; i++)
+                    res->a[j][k * N + i] = row[idx - i];
+                for (size_t i = idx + 1; i < N; i++)
+                    res->a[j][k * N + i] = negate_modq(row[N + idx - i], mod->q);
             }
-            for (size_t i = idx + 1; i < N; i++)
+            else
             {
-                res->a[j][k * N + i] = negate_modq(
-                    arith_rns_polynomial(&in->a[k])->coeffs[g_idx][N + idx - i], mod->q);
+                const uint64_t *row = ak->rows64[g_idx];
+                for (size_t i = 0; i <= idx; i++)
+                    res->a[j][k * N + i] = row[idx - i];
+                for (size_t i = idx + 1; i < N; i++)
+                    res->a[j][k * N + i] = negate_modq(row[N + idx - i], mod->q);
             }
         }
-        res->b[j] = arith_rns_polynomial(&in->b)->coeffs[g_idx][idx];
+        {
+            RNS_Polynomial bp = arith_rns_polynomial(&in->b);
+            res->b[j] = rns_row_is_narrow(bp->base, g_idx) ? (uint64_t)bp->rows32[g_idx][idx]
+                                                           : bp->rows64[g_idx][idx];
+        }
     }
     return res;
 }
@@ -83,7 +97,7 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
         {
             if (tmp_poly->rns_mask & (1ULL << j))
             {
-                memset(tmp_poly->coeffs[j], 0, N * sizeof(uint64_t));
+                RNS_ROW_ZERO(tmp_poly, j, N);
             }
         }
 
@@ -91,10 +105,12 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
         {
             int g_idx = rns_mask_get_active_index(target_mask, limb);
             assert(g_idx >= 0);
-            for (size_t k = 0; k < size; k++)
-            {
-                tmp_poly->coeffs[g_idx][k] = in[k]->a[limb][i];
-            }
+            if (rns_row_is_narrow(tmp_poly->base, g_idx))
+                for (size_t k = 0; k < size; k++)
+                    tmp_poly->rows32[g_idx][k] = (uint32_t)in[k]->a[limb][i];
+            else
+                for (size_t k = 0; k < size; k++)
+                    tmp_poly->rows64[g_idx][k] = in[k]->a[limb][i];
         }
 
         uint64_t ksk_idx = 0;
@@ -115,17 +131,19 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
     {
         if (tmp_poly->rns_mask & (1ULL << j))
         {
-            memset(tmp_poly->coeffs[j], 0, N * sizeof(uint64_t));
+            RNS_ROW_ZERO(tmp_poly, j, N);
         }
     }
     for (size_t limb = 0; limb < lwe_l; limb++)
     {
         int g_idx = rns_mask_get_active_index(target_mask, limb);
         assert(g_idx >= 0);
-        for (size_t k = 0; k < size; k++)
-        {
-            tmp_poly->coeffs[g_idx][k] = in[k]->b[limb];
-        }
+        if (rns_row_is_narrow(tmp_poly->base, g_idx))
+            for (size_t k = 0; k < size; k++)
+                tmp_poly->rows32[g_idx][k] = (uint32_t)in[k]->b[limb];
+        else
+            for (size_t k = 0; k < size; k++)
+                tmp_poly->rows64[g_idx][k] = in[k]->b[limb];
     }
 
     mlwe_RNS_to_RNSc(out, out);

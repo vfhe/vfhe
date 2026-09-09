@@ -6,6 +6,8 @@
 // the representation; only the signatures are generic, so a field version can
 // sit beside it under the same entry points.
 #include "rscode.h"
+// RNS row width and accessors: this file is the RNS backend of the code.
+#include "arith_internal.h"
 #include <arith_generic.h>
 
 #include <string.h>
@@ -65,18 +67,24 @@ void rs_encode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degr
     {
         if (!(rns_mask & (1ULL << i)))
             continue;
+        // one width test per prime; the gather and scatter below are typed
+        const bool narrow = rns_row_is_narrow(base, i);
         for (uint64_t j = 0; j < N; j++)
         {
             memset(&codeword[degree], 0, sizeof(uint64_t) * (size - degree));
-            for (uint64_t k = 0; k < degree; k++)
-            {
-                codeword[k] = arith_rns_polynomial(&in[k])->coeffs[i][j];
-            }
+            if (narrow)
+                for (uint64_t k = 0; k < degree; k++)
+                    codeword[k] = arith_rns_polynomial(&in[k])->rows32[i][j];
+            else
+                for (uint64_t k = 0; k < degree; k++)
+                    codeword[k] = arith_rns_polynomial(&in[k])->rows64[i][j];
             ntt_forward(codeword, codeword, plans[i]);
-            for (uint64_t k = 0; k < size; k++)
-            {
-                arith_rns_polynomial(&out[k])->coeffs[i][j] = codeword[k];
-            }
+            if (narrow)
+                for (uint64_t k = 0; k < size; k++)
+                    arith_rns_polynomial(&out[k])->rows32[i][j] = (uint32_t)codeword[k];
+            else
+                for (uint64_t k = 0; k < size; k++)
+                    arith_rns_polynomial(&out[k])->rows64[i][j] = codeword[k];
         }
     }
 
@@ -103,19 +111,24 @@ int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degre
     {
         if (!(rns_mask & (1ULL << i)))
             continue;
+        const bool narrow = rns_row_is_narrow(base, i);
         for (uint64_t j = 0; j < N && is_codeword; j++)
         {
-            for (uint64_t k = 0; k < size; k++)
-            {
-                codeword[k] = arith_rns_polynomial(&in[k])->coeffs[i][j];
-            }
+            if (narrow)
+                for (uint64_t k = 0; k < size; k++)
+                    codeword[k] = arith_rns_polynomial(&in[k])->rows32[i][j];
+            else
+                for (uint64_t k = 0; k < size; k++)
+                    codeword[k] = arith_rns_polynomial(&in[k])->rows64[i][j];
             ntt_reverse(codeword, codeword, plans[i]);
             if (out != NULL)
             {
-                for (uint64_t k = 0; k < degree; k++)
-                {
-                    arith_rns_polynomial(&out[k])->coeffs[i][j] = codeword[k];
-                }
+                if (narrow)
+                    for (uint64_t k = 0; k < degree; k++)
+                        arith_rns_polynomial(&out[k])->rows32[i][j] = (uint32_t)codeword[k];
+                else
+                    for (uint64_t k = 0; k < degree; k++)
+                        arith_rns_polynomial(&out[k])->rows64[i][j] = codeword[k];
             }
             // The degree check: a codeword of this code inverts to a message
             // that was zero-padded above `degree`.
