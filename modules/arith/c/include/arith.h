@@ -632,6 +632,16 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
 
     void free_polynomial(void *p);
     void array_to_RNS(RNS_Polynomial out, uint64_t **in);
+    /* BLAKE3 over the active rows, each as it is stored: 32-bit words for a
+       narrow prime, 64-bit for a wide one. That is a function of the element
+       and the ring, which is what a digest has to be -- the width comes from
+       the prime, so there is nothing about the layout left for a caller to
+       vary. What a caller *must* pin is the domain, since the coefficient and
+       mul forms of one element are different words; every caller here hashes
+       the mul form. Not a stable identifier across builds: it digests the
+       in-memory bytes, so it is host-endian and width-dependent by design, and
+       it is only ever compared against a digest computed in the same process.
+       `out` is four 64-bit words. */
     void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p);
     uint64_t *polynomial_RNS_get_hash_p(RNS_Polynomial p);
     RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N,
