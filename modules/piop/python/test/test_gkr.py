@@ -129,3 +129,106 @@ def test_gkr_ring_fiat_shamir(public_output):
     bad = _instance(ring=ring, output=[16, 0], public_output=public_output)
     assert not _iop(ring, fiat_shamir=True).verify(bad, proof)
     assert not _iop(ring, fiat_shamir=True).run(bad)
+
+
+def _dot_circuit():
+    # inputs (a, b, c, d) -> one XMULT gate a*c + b*d, and its ADD/MUL expansion.
+    from vfhe.circuit import xmult_gate
+
+    xm = gkr.Circuit(
+        num_inputs=4, layers=[gkr.Layer(gates=[xmult_gate([0, 1], [2, 3])])]
+    )
+    expanded = gkr.Circuit(
+        num_inputs=4,
+        layers=[
+            gkr.Layer(gates=[mul_gate(0, 2), mul_gate(1, 3)]),
+            gkr.Layer(gates=[add_gate(0, 1)]),
+        ],
+    )
+    return xm, expanded
+
+
+def test_xmult_gate_layer_tables_and_proof():
+    xm, expanded = _dot_circuit()
+    w = [MLE_Variable(f"w{i}") for i in range(2)]
+    w_in = MLE(variables=w, evaluations=[1, 2, 3, 4])
+    assert Relation_Circuit(xm).layer_tables(w_in) == [[1, 2, 3, 4], [11, 0]]
+    assert Relation_Circuit(expanded).layer_tables(w_in)[-1] == [11, 0]
+    out = MLE(variables=[MLE_Variable("o0")], evaluations=[11, 0], public=True)
+    stmt = Statement(Relation_Circuit(xm), oracles=[w_in], output=out)
+    assert stmt.check()
+    iop = _iop(_IntDomain())
+    assert iop.run(stmt)
+    # One layer, one sumcheck over (x, y): 4 rounds, all of degree 2.
+    rounds = [k for k in iop.transcript.order if k.startswith("sumcheck") and "/g" in k]
+    assert len(rounds) == 4
+    assert all(len(iop.transcript.entries[k].result()) == 3 for k in rounds)
+    bad = MLE(variables=[MLE_Variable("o0")], evaluations=[12, 0], public=True)
+    assert not _iop(_IntDomain()).run(
+        Statement(Relation_Circuit(xm), oracles=[w_in], output=bad)
+    )
+
+
+def test_gkr_dense_and_libra_strategies_agree(monkeypatch):
+    from vfhe.piop.virtual import _LibraProver
+
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    stmt = _instance(ring=ring)
+    (w_in,) = stmt.oracles
+    layer = GKR.layers(stmt.relation, w_in, ring)[0]
+    (z,) = layer.variables
+    body = layer.instantiate({z: ring.random_exceptional()})
+    assert isinstance(body.prover_view({}), _LibraProver)
+    from vfhe.piop import VirtualOracle
+
+    digests = {}
+    for strategy in ("dense", "libra"):
+        monkeypatch.setattr(VirtualOracle, "strategy", strategy)
+        digests[strategy] = _iop(ring, fiat_shamir=True).prove(stmt).digest()
+    assert digests["dense"] == digests["libra"]
+
+
+def test_gkr_wide_layers_run_in_linear_time():
+    # 64 inputs, two layers of 64 and 32 random gates: the dense predicates
+    # would have 2^(6 + 12) entries per layer; the two-phase prover touches
+    # the wires and the 2^6 tables only.
+    from vfhe.circuit import xmult_gate
+
+    rng = random.Random(7)
+    n = 64
+
+    def layer(width, fan_in):
+        gates = []
+        for _ in range(width):
+            kind = rng.choice(("add", "mul", "xmult"))
+            if kind == "add":
+                gates.append(add_gate(rng.randrange(fan_in), rng.randrange(fan_in)))
+            elif kind == "mul":
+                gates.append(mul_gate(rng.randrange(fan_in), rng.randrange(fan_in)))
+            else:
+                k = rng.randrange(2, 5)
+                gates.append(
+                    xmult_gate(
+                        [rng.randrange(fan_in) for _ in range(k)],
+                        [rng.randrange(fan_in) for _ in range(k)],
+                    )
+                )
+        return gkr.Layer(gates=gates)
+
+    circuit = gkr.Circuit(num_inputs=n, layers=[layer(64, 64), layer(32, 64)])
+    w = [MLE_Variable(f"w{i}") for i in range(6)]
+    inputs = [rng.randrange(1, 1000) for _ in range(n)]
+    w_in = MLE(variables=w, evaluations=inputs)
+    relation = Relation_Circuit(circuit)
+    last = relation.layer_tables(w_in)[-1]
+    out = MLE(
+        variables=[MLE_Variable(f"o{i}") for i in range(5)],
+        evaluations=last,
+        public=True,
+    )
+    stmt = Statement(relation, oracles=[w_in], output=out)
+    iop = _iop(_IntDomain())
+    assert iop.run(stmt)
+    last[0] += 1
+    bad = MLE(variables=out.variables, evaluations=last, public=True)
+    assert not _iop(_IntDomain()).run(Statement(relation, oracles=[w_in], output=bad))

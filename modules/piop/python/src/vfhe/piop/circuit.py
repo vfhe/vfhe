@@ -5,31 +5,37 @@
 `Relation_Circuit` is circuit satisfiability: the input oracle evaluates,
 under the circuit in the relation's `index`, to the output oracle. `GKR` is
 one protocol for it [GKR15; Tha22, §4.6]: every gate layer becomes an
-implicit oracle (`virtual.ImplicitOracle`) defined by the layer identity
+implicit oracle (`virtual.ImplicitOracle`) defined by the generalized layer
+identity of Libra and zkCNN [XZZPS19; LXZ21, §4]
 
-    W_{l+1}(z) = sum_{x,y} add_l(z,x,y) (W_l(x) + W_l(y)) + mul_l(z,x,y) W_l(x) W_l(y)
+    W_{l+1}(z) = sum_{x,y} lin_l(z,x,y) W_l(x) + xmult_l(z,x,y) W_l(x) W_l(y)
 
-over public wiring predicates and the layer below, and the circuit claim
-reduces to one evaluation claim on the output layer at a random point. The
-rest is the framework's: `ImplicitEval` instantiates a layer's definition
-at the claimed point, the sumcheck reduces it to claims on the layer below
-(two per layer, on one oracle, at different points), the driver's parking
-rule bundles them, and so on down to the input oracle, whose claims are
-decided by its own kind (public, committed, or plain).
+over public *sparse* wiring predicates (`SparseMLE`, one nonzero per wire
+read: `lin` for the linear summands, supported on y = 0; `xmult` for the
+multiplied pairs — a MUL gate is one pair, an XMULT inner-product gate
+several) and the layer below, and the circuit claim reduces to one
+evaluation claim on the output layer at a random point. The rest is the
+framework's: `ImplicitEval` instantiates a layer's definition at the
+claimed point, the sumcheck reduces it to claims on the layer below (two
+per layer, on one oracle, at different points), the driver's parking rule
+bundles them, and so on down to the input oracle, whose claims are decided
+by its own kind (public, committed, or plain). The prover's rounds run on
+the sparse predicates through the Libra two-phase strategy of `virtual.py`
+(linear in the number of wires plus the layer widths), which the dense
+strategy reproduces message for message.
 
 Circuits are the protobuf messages of `vfhe.circuit` (imported lazily; the
-wiring tables come from `vfhe.circuit.export`). A wiring table is indexed
-`z || x || y` with y in the low bits, so its MLE variables are listed
-`[y..., x..., z...]` and no reordering is needed against the framework's
-LSB-first tables. The tables are dense (2^(s_out + 2 s_in) entries) — the
-correctness-first path; sparse predicates are a later concern.
+predicates come from `vfhe.circuit.export.sparse_wiring`). A wiring index
+packs `z || x || y` with y in the low bits, so a predicate's MLE variables
+are listed `[y..., x..., z...]` and no reordering is needed against the
+framework's LSB-first tables.
 """
 
 from __future__ import annotations
 
 from vfhe.arith import Field, Ring
 
-from .mle import MLE, MLE_Variable
+from .mle import MLE, MLE_Variable, SparseMLE
 from .piop import (
     IOP,
     Protocol,
@@ -44,14 +50,28 @@ from .piop import (
 from .virtual import ImplicitOracle, VirtualOracle
 
 
-def _table(domain, variables: list, values: list, public: bool = False) -> MLE:
-    """A dense table over `variables` in `domain` (a Ring, a Field, or None
-    for plain Python values), from a list of ints or domain elements."""
+def _domain_kw(domain) -> dict:
+    """The MLE constructor keyword for `domain` (a Ring, a Field, or None for
+    plain Python values)."""
     if isinstance(domain, Ring):
-        return MLE(ring=domain, variables=variables, evaluations=values, public=public)
+        return {"ring": domain}
     if isinstance(domain, Field):
-        return MLE(field=domain, variables=variables, evaluations=values, public=public)
-    return MLE(variables=variables, evaluations=values, public=public)
+        return {"field": domain}
+    return {}
+
+
+def _table(domain, variables: list, values: list, public: bool = False) -> MLE:
+    """A dense table over `variables` in `domain`, from ints or elements."""
+    return MLE(
+        variables=variables, evaluations=values, public=public, **_domain_kw(domain)
+    )
+
+
+def _sparse(domain, variables: list, entries: dict) -> SparseMLE:
+    """A public sparse predicate over `variables` in `domain`."""
+    return SparseMLE(
+        variables=variables, evaluations=entries, public=True, **_domain_kw(domain)
+    )
 
 
 class Relation_Circuit(Relation):
@@ -75,7 +95,7 @@ class Relation_Circuit(Relation):
         the input, entry l + 1 the gates of layer l (zeros past the last
         gate). Domain-agnostic: it uses the entries' own `+` and `*`."""
         from vfhe.circuit import gkr
-        from vfhe.circuit.export import layer_bit_sizes
+        from vfhe.circuit.export import gate_pairs, layer_bit_sizes
 
         sizes = layer_bit_sizes(self.circuit)
         if w_in.num_vars != sizes[0]:
@@ -87,11 +107,14 @@ class Relation_Circuit(Relation):
             prev = tables[-1]
             out = []
             for gate in layer.gates:
-                a, b = prev[gate.left], prev[gate.right]
                 if gate.type == gkr.GATE_TYPE_ADD:
-                    out.append(a + b)
-                elif gate.type == gkr.GATE_TYPE_MUL:
-                    out.append(a * b)
+                    out.append(prev[gate.left] + prev[gate.right])
+                elif gate.type in (gkr.GATE_TYPE_MUL, gkr.GATE_TYPE_XMULT):
+                    acc = None
+                    for a, b in gate_pairs(gate):
+                        t = prev[a] * prev[b]
+                        acc = t if acc is None else acc + t
+                    out.append(prev[0] * 0 if acc is None else acc)
                 else:
                     raise ValueError("unspecified gate type")
             zero = prev[0] * 0
@@ -142,9 +165,11 @@ class GKR(Protocol):
     @staticmethod
     def layers(relation: Relation_Circuit, w_in, domain) -> list:
         """The implicit oracles W_1..W_d of the gate layers, W_0 = w_in; each
-        defined by the layer identity over public wiring tables in `domain`
-        and the layer below under two renamings (x and y)."""
-        from vfhe.circuit.export import layer_bit_sizes, wiring_tables
+        defined by the generalized layer identity over the layer's sparse
+        public predicates in `domain` and the layer below under two
+        renamings (x and y). The summed variables are listed x first, then
+        y: the round order the two-phase prover needs."""
+        from vfhe.circuit.export import layer_bit_sizes, sparse_wiring
 
         circuit = relation.circuit
         sizes = layer_bit_sizes(circuit)
@@ -155,18 +180,18 @@ class GKR(Protocol):
             z = [MLE_Variable(f"z{layer}_{i}") for i in range(s_out)]
             x = [MLE_Variable(f"x{layer}_{i}") for i in range(s_in)]
             y = [MLE_Variable(f"y{layer}_{i}") for i in range(s_in)]
-            add_t, mul_t = wiring_tables(circuit, layer)
-            add = _table(domain, y + x + z, add_t, public=True)
-            mul = _table(domain, y + x + z, mul_t, public=True)
+            lin_t, xmult_t = sparse_wiring(circuit, layer)
+            lin = _sparse(domain, y + x + z, lin_t)
+            xmult = _sparse(domain, y + x + z, xmult_t)
             wx = dict(zip(below.variables, x, strict=True))
             wy = dict(zip(below.variables, y, strict=True))
             body = VirtualOracle(
                 z + x + y,
-                [add, mul, below, below],
-                terms=[(1, (0, 2)), (1, (0, 3)), (1, (1, 2, 3))],
+                [lin, xmult, below, below],
+                terms=[(1, (0, 2)), (1, (1, 2, 3))],
                 maps=[
-                    {v: v for v in add.variables},
-                    {v: v for v in mul.variables},
+                    {v: v for v in lin.variables},
+                    {v: v for v in xmult.variables},
                     wx,
                     wy,
                 ],

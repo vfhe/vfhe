@@ -142,17 +142,21 @@ starts from four relation kinds. In all of them `f` is (an MLE of) an
   not be left terminal.
 
 - **`Relation_Circuit`** — index: a layered arithmetic circuit
-  (`vfhe.circuit`); instance `(W_in, output)`: the input oracle evaluates
-  under the circuit to the output oracle. Discharged by `GKR`
-  [GKR15; Tha22, §4.6] (`circuit.py`), which turns each gate layer into an
-  *implicit oracle* (below) defined by the layer identity
-  `W_{l+1}(z) = Σ_{x,y} add_l(z,x,y)(W_l(x) + W_l(y)) + mul_l(z,x,y) W_l(x) W_l(y)`
-  over public wiring predicates, and reduces the claim to one evaluation
-  claim on the output layer at a random point (soundness `s_out/|A|`,
-  §6); the rest of the proof is the framework's ordinary reduction of that
-  claim. It is a relation rather than a helper so that circuit
-  satisfiability can be a factor of a larger product of relations or the
-  target of another reduction.
+  (`vfhe.circuit`: fan-in-2 ADD and MUL gates and XMULT inner-product gates
+  `Σ_i in[l_i]·in[r_i]`, the generalized gates of zkCNN [LXZ21, §4]);
+  instance `(W_in, output)`: the input oracle evaluates under the circuit
+  to the output oracle. Discharged by `GKR` [GKR15; Tha22, §4.6]
+  (`circuit.py`), which turns each gate layer into an *implicit oracle*
+  (below) defined by the generalized layer identity
+  `W_{l+1}(z) = Σ_{x,y} lin_l(z,x,y) W_l(x) + xmult_l(z,x,y) W_l(x) W_l(y)`
+  over public *sparse* wiring predicates — `lin` (the linear summands,
+  supported on `y = 0`) and `xmult` (the multiplied pairs), one nonzero per
+  wire read — and reduces the claim to one evaluation claim on the output
+  layer at a random point (soundness `s_out/|A|`, §6); the rest of the
+  proof is the framework's ordinary reduction of that claim. It is a
+  relation rather than a helper so that circuit satisfiability can be a
+  factor of a larger product of relations or the target of another
+  reduction.
 
 Further members of the toolbox (product-check, permutation-check, lookups
 [CBBZ23]) can be added as new `Relation` subclasses without touching
@@ -200,9 +204,28 @@ Sum claim over `Σ_i α_i G(r_i, ·)`, itself a virtual oracle. Zero
 communication; soundness `(k−1)/|A|` for `k` claims. Binding a defined
 oracle is *symbolic* (a bound variable becomes a constant in the variable
 maps; no constituent is touched), so the claims that come out are about
-the original constituents at explicit points; the prover's sumcheck works
-on `prover_view`, the definition with every constituent resolved to a
-table (`Prover.witnesses` for implicit constituents) and folded in place.
+the original constituents at explicit points — and so a *sparse*
+constituent (`SparseMLE`) is only ever queried at a full point, which is
+the one evaluation the sparse form supports (`O(nnz · vars)`, the honest
+verifier cost of a public predicate). The prover's sumcheck works on
+`prover_view`, the definition with every constituent resolved to a table
+(`Prover.witnesses` for implicit constituents) and folded in place, under
+one of two round-message *strategies* that send the same messages: the
+dense one enumerates the remaining hypercube; the two-phase one of Libra
+[XZZPS19, §3.3, Algs. 4–6], as generalized to arbitrary predicates by
+zkCNN and Virgo++ [LXZ21; ZLWZS21], applies whenever the summed variables
+split into two blocks `x` (bound first) and `y`, each dense factor lives
+in one block, and each term carries at most one sparse predicate — the
+shape of every layer identity `Σ_{x,y} pred(z,x,y)·A(x)·B(y)`. Per term it
+builds, in time linear in the predicate's nonzeros, the bookkeeping table
+`h(x) = Σ_y pred(z,x,y)·B(y)` for the `x` rounds (the term becomes
+`A(x)·h(x)`) and `p(y) = pred(z,r_x,y)` for the `y` rounds (the term
+becomes `A(r_x)·p(y)·B(y)`), so every round is a product of dense tables of
+degree at most two — the `k = 2` native kernel's shape — and the prover's
+work per layer is `O(#wires + 2^{s_x} + 2^{s_y})` instead of the dense
+`O(2^{s_z + 2s})`. Round messages carry `deg_i + 1` nodes for the degree
+*in the round variable* (two factors of a term reading `x_i`, not the
+length of the longest product), so both strategies agree node for node.
 
 Each subclass implements `check(statement)`: the *ideal* (non-succinct)
 membership test that simply enumerates the hypercube or queries the oracle.
@@ -651,8 +674,14 @@ common base could only promise an `evaluate` it cannot implement:
   combination of two tables is public only if both are. `rename(mapping)`
   is a relabelled copy — the same polynomial read under other variable
   names, which is how the prover holds `W(x)` and `W(y)` as two tables.
-- `SparseMLE` — a sparse map of hypercube evaluations (bookkeeping form:
-  add / sub / scale only; `evaluate` raises).
+- `SparseMLE` — a sparse map of hypercube evaluations
+  (`evaluations[index] = value`, index packed LSB-first like a dense
+  position), in a domain and with the same `public` mark: the carrier of
+  wiring predicates. It supports add / sub / scale, evaluation at a *full*
+  point (`Σ_k value_k · Π_i eq̃(k_i, point_i)`, `O(nnz · vars)`; a partial
+  point raises, since the form has no per-variable fold — defined oracles
+  never need one, §4), and `materialize()` to the dense table. Digested by
+  the FS walker in canonical index order.
 
 Representation caveat, inherited from `vfhe.arith`: reading a table entry's
 value (`== int`, iteration, `get_polynomial()`) converts *that entry* to
@@ -700,7 +729,10 @@ and records them in `Prover.witnesses`). The prover-side form
 hypercube point, each factor at `t = 0..degree` from its two neighbours
 (`lo + t·(hi − lo)`), summed per term — the degree is the longest product,
 and factors over a subset of the variables are constant in the others.
-`VirtualEval` and `ImplicitEval` live in the same file.
+`VirtualEval` and `ImplicitEval` live in the same file, as do the two
+round-message strategies (`_ProverVirtual`, `_LibraProver`; §4).
+`VirtualOracle.strategy` (`"auto"` / `"dense"` / `"libra"`) pins one; the
+tests assert message-for-message agreement between them.
 
 ### `Relation_Circuit` / `GKR` (`circuit.py`)
 
@@ -713,10 +745,12 @@ protocol draws the output point, computes (public output) or receives
 (otherwise, with a second claim on the output oracle) the value there, and
 emits the claim on the top layer. Everything below that is `ImplicitEval`
 → sumcheck → `VirtualEval` per layer, the two claims per layer meeting in
-one bundle thanks to the parking rule, down to the input oracle. Dense
-wiring tables (`2^(s_out + 2 s_in)`) and the pure-Python product rounds
-(every layer has three factors, beyond the native `k = 2` kernel) make
-this the correctness-first path.
+one bundle thanks to the parking rule, down to the input oracle. The
+predicates come from `vfhe.circuit.export.sparse_wiring` (one nonzero per
+wire read; the dense `wiring_tables` remain as their materialization), the
+summed variables are listed `x` first then `y`, and the prover runs the
+two-phase strategy; the verifier's end-of-layer cost is the sparse
+evaluation of the two predicates.
 
 ### `Merkle` (`merkle.py`)
 
@@ -777,13 +811,14 @@ therefore lives inside the PCS's evaluation protocol
    reduction plus a batched opening (BatchEval [CBBZ23, §3.8]) is the
    `vfhe.polycom` roadmap. Sumcheck-side batching (one run for several
    Sum claims) is a bundle variant of `Sumcheck` still to write.
-3a. **Defined-oracle follow-ups**: a general-`k` product kernel (every
-   circuit layer has three factors, so the native `k = 2` kernel covers
-   none of §4's sumchecks), products-form round messages in C, sparse
-   wiring predicates (`SparseMLE.evaluate`, the Libra two-phase prover
-   [XZZPS19, §3.3]) in place of the dense `2^(s_out + 2 s_in)` tables, and
-   the line-restriction 2-to-1 [Tha22, §4.5.2] should a single-point
-   opening ever pay.
+3a. **Defined-oracle follow-ups**: the two-phase strategy's `O(nnz)`
+   bookkeeping loops and the sparse `evaluate` in C (every round is
+   already the `k = 2` shape the native product kernel covers, so a
+   general-`k` kernel is no longer on GKR's path); products-form round
+   messages in C for the dense strategy; committing to circuit-dependent
+   predicates for sublinear verification (a sparse-evaluation protocol
+   registered for the `committed` kind); the line-restriction 2-to-1
+   [Tha22, §4.5.2] should a single-point opening ever pay.
 4. **Lookup relation**, reducing to a mix of Eval and Sum claims.
 5. **Field coefficient domains** are done (`MLE(field=...)`, the
    whole-vector round messages, `Field`'s samplers); binding a variable
@@ -801,6 +836,10 @@ therefore lives inside the PCS's evaluation protocol
 
 ## Bibliography
 
+- **[LXZ21]** Tianyi Liu, Xiang Xie, Yupeng Zhang. *zkCNN: Zero Knowledge
+  Proofs for Convolutional Neural Network Predictions and Accuracy*. ACM
+  CCS 2021, pp. 2968–2985. <https://doi.org/10.1145/3460120.3485379>
+  (Generalized GKR gates: §4.)
 - **[BCRSW19]** Eli Ben-Sasson, Alessandro Chiesa, Michael Riabzev, Nicholas
   Spooner, Madars Virza, Nicholas P. Ward. *Aurora: Transparent Succinct
   Arguments for R1CS*. EUROCRYPT 2019, LNCS 11476, pp. 103–128, Springer,

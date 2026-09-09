@@ -8,7 +8,16 @@ extensions (MLEs) of three families of functions per layer ``l``:
 * ``W_l(x)``     : the wire values of layer ``l`` (given a concrete input),
 * ``add_l(z,x,y)``: 1 iff gate ``z`` of layer ``l`` is an ADD gate wired to
   outputs ``x`` and ``y`` of the previous layer,
-* ``mul_l(z,x,y)``: likewise for MUL gates.
+* ``mul_l(z,x,y)``: likewise for MUL gates — and, for an XMULT (inner
+  product) gate, 1 at every pair ``(x_i, y_i)`` of gate ``z``: the layer
+  identity ``sum_{x,y} mul_l(z,x,y) W_l(x) W_l(y)`` is the inner product.
+
+:func:`sparse_wiring` gives the same predicates in the generalized form of
+Libra / zkCNN as sparse maps: ``lin_l(z,x)`` (the linear part — an ADD gate
+contributes ``1`` at ``(z, left)`` and ``(z, right)``) and ``xmult_l(z,x,y)``
+(the bilinear part — one entry per MUL gate, one per XMULT pair), so that
+``W_{l+1}(z) = sum_x lin_l(z,x) W_l(x) + sum_{x,y} xmult_l(z,x,y) W_l(x) W_l(y)``
+with as many nonzeros as wires, whatever the layer widths.
 
 This module computes the *evaluation tables* of those functions over the
 boolean hypercube (dense 0/1 or field-value vectors, padded to powers of
@@ -42,8 +51,11 @@ from _vfhe_proto.vfhe.circuit.gkr.v1 import gkr_pb2 as gkr
 
 __all__ = [
     "evaluate",
+    "gate_pairs",
+    "gate_wires",
     "layer_bit_sizes",
     "mle_eval",
+    "sparse_wiring",
     "value_tables",
     "values_polynomial",
     "wiring_polynomials",
@@ -100,18 +112,37 @@ def evaluate(circuit: gkr.Circuit, inputs: list[int]) -> list[list[int]]:
         prev = values[-1]
         out: list[int] = []
         for g, gate in enumerate(layer.gates):
-            if gate.left >= len(prev) or gate.right >= len(prev):
+            if any(w >= len(prev) for w in gate_wires(gate)):
                 raise ValueError(f"layer {layer_idx} gate {g}: wire index out of range")
-            a, b = prev[gate.left], prev[gate.right]
             if gate.type == gkr.GATE_TYPE_ADD:
-                v = a + b
+                v = prev[gate.left] + prev[gate.right]
             elif gate.type == gkr.GATE_TYPE_MUL:
-                v = a * b
+                v = prev[gate.left] * prev[gate.right]
+            elif gate.type == gkr.GATE_TYPE_XMULT:
+                v = sum(prev[a] * prev[b] for a, b in gate_pairs(gate))
             else:
                 raise ValueError(f"layer {layer_idx} gate {g}: unspecified gate type")
             out.append(v % mod if mod is not None else v)
         values.append(out)
     return values
+
+
+def gate_pairs(gate: gkr.Gate) -> list[tuple[int, int]]:
+    """The multiplied wire pairs of a MUL or XMULT gate (empty for ADD)."""
+    if gate.type == gkr.GATE_TYPE_MUL:
+        return [(gate.left, gate.right)]
+    if gate.type == gkr.GATE_TYPE_XMULT:
+        if len(gate.lefts) != len(gate.rights):
+            raise ValueError("XMULT gate with unpaired wires")
+        return list(zip(gate.lefts, gate.rights, strict=True))
+    return []
+
+
+def gate_wires(gate: gkr.Gate) -> list[int]:
+    """Every previous-layer wire a gate reads."""
+    if gate.type == gkr.GATE_TYPE_XMULT:
+        return [*gate.lefts, *gate.rights]
+    return [gate.left, gate.right]
 
 
 def value_tables(circuit: gkr.Circuit, inputs: list[int]) -> list[list[int]]:
@@ -149,14 +180,58 @@ def wiring_tables(circuit: gkr.Circuit, layer: int) -> tuple[list[int], list[int
     add_table = [0] * length
     mul_table = [0] * length
     for z, gate in enumerate(circuit.layers[layer].gates):
-        idx = (((z << s_in) | gate.left) << s_in) | gate.right
         if gate.type == gkr.GATE_TYPE_ADD:
-            add_table[idx] = 1
-        elif gate.type == gkr.GATE_TYPE_MUL:
-            mul_table[idx] = 1
+            add_table[(((z << s_in) | gate.left) << s_in) | gate.right] = 1
+        elif gate.type in (gkr.GATE_TYPE_MUL, gkr.GATE_TYPE_XMULT):
+            for a, b in gate_pairs(gate):
+                mul_table[(((z << s_in) | a) << s_in) | b] += 1
         else:
             raise ValueError(f"layer {layer} gate {z}: unspecified gate type")
     return add_table, mul_table
+
+
+def sparse_wiring(
+    circuit: gkr.Circuit, layer: int
+) -> tuple[dict[int, int], dict[int, int]]:
+    """One layer's wiring in the generalized (Libra / zkCNN) form, as sparse
+    maps from packed index to coefficient:
+
+    * ``lin``: indexed ``z || x || y`` **with y = 0**, one entry per linear
+      summand — an ADD gate ``z = in[a] + in[b]`` gives ``lin[(z, a, 0)] += 1``
+      and ``lin[(z, b, 0)] += 1``;
+    * ``xmult``: indexed ``z || x || y``, one entry per multiplied pair — a
+      MUL gate gives ``xmult[(z, a, b)] += 1``, an XMULT gate one entry per
+      pair.
+
+    Both are indexed like :func:`wiring_tables` (``y`` in the low ``s_in``
+    bits, then ``x``, then ``z``); ``lin`` keeps the ``y`` bits at zero so that
+    summing ``lin(z,x,y) W(x)`` over the full ``(x, y)`` cube counts each
+    summand once. The number of entries is the number of wires read, not
+    ``2^(s_out + 2 s_in)``.
+
+    Raises:
+        ValueError: on a bad layer index or an unspecified gate type.
+    """
+    if not 0 <= layer < len(circuit.layers):
+        raise ValueError(f"layer {layer} out of range (0..{len(circuit.layers) - 1})")
+    sizes = layer_bit_sizes(circuit)
+    s_in = sizes[layer]
+    lin: dict[int, int] = {}
+    xmult: dict[int, int] = {}
+
+    def idx(z: int, x: int, y: int) -> int:
+        return (((z << s_in) | x) << s_in) | y
+
+    for z, gate in enumerate(circuit.layers[layer].gates):
+        if gate.type == gkr.GATE_TYPE_ADD:
+            for a in (gate.left, gate.right):
+                lin[idx(z, a, 0)] = lin.get(idx(z, a, 0), 0) + 1
+        elif gate.type in (gkr.GATE_TYPE_MUL, gkr.GATE_TYPE_XMULT):
+            for a, b in gate_pairs(gate):
+                xmult[idx(z, a, b)] = xmult.get(idx(z, a, b), 0) + 1
+        else:
+            raise ValueError(f"layer {layer} gate {z}: unspecified gate type")
+    return lin, xmult
 
 
 def wiring_polynomials(circuit: gkr.Circuit, layer: int, ring):

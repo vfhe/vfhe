@@ -32,7 +32,14 @@ Binding is *symbolic*: a bound variable becomes a constant in the query
 maps and no constituent is touched, so claims derived later are about the
 original constituents at explicit points. The prover's fast path is
 `prover_view`, which resolves every constituent to a concrete table
-(`Prover.witnesses` for implicit constituents) and folds those.
+(`Prover.witnesses` for implicit constituents) and folds those — with one
+of two *strategies* for the round messages, both producing the same
+messages: the dense one (`_ProverVirtual`) enumerates the hypercube of the
+remaining variables; the two-phase one (`_LibraProver`, [XZZPS19, §3.3,
+Algs. 4-6], generalized to arbitrary predicates as in [LXZ21; ZLWZS21])
+keeps the sparse predicates sparse and builds, per phase, dense
+bookkeeping tables in time linear in their nonzeros, so that every round
+is a product of dense tables of degree at most two.
 
 Naming hazard: Jolt's code calls the implicit kind "virtual polynomials";
 this module's "virtual" is the HyperPlonk sense.
@@ -40,7 +47,10 @@ this module's "virtual" is the HyperPlonk sense.
 
 from __future__ import annotations
 
-from .mle import MLE, MLE_Basis
+import copy
+from dataclasses import dataclass
+
+from .mle import MLE, MLE_Basis, MLE_Variable, SparseMLE, _pair_indices, native_table
 from .piop import (
     IOP,
     OracleKind,
@@ -127,6 +137,12 @@ class VirtualOracle:
         for c, m in zip(self.constituents, self.maps, strict=True):
             if any(v not in m for v in c.variables):
                 raise ValueError("a constituent variable has no source in its map")
+            for src in m.values():
+                if isinstance(src, MLE_Variable) and not _is_var(src, self.variables):
+                    raise ValueError(
+                        f"map source {src!r} is neither a variable of this oracle "
+                        "nor a constant"
+                    )
         for _, idxs in self.terms:
             if not idxs or any(not 0 <= j < len(self.constituents) for j in idxs):
                 raise ValueError("a term must index at least one constituent")
@@ -171,10 +187,19 @@ class VirtualOracle:
         it itself."""
         return all(getattr(c, "public", False) for c in self.constituents)
 
+    def reads(self, j: int, var) -> bool:
+        """Whether constituent j reads the variable `var` through its map."""
+        return any(src is var for src in self.maps[j].values())
+
+    def degree_in(self, var) -> int:
+        """The degree bound in `var`: the most factors reading it in one term."""
+        return max(sum(1 for j in idxs if self.reads(j, var)) for _, idxs in self.terms)
+
     @property
     def degree(self) -> int:
-        """The per-variable degree bound: the longest product."""
-        return max(len(idxs) for _, idxs in self.terms)
+        """The per-variable degree bound over all variables (1 for a
+        multilinear oracle; 0 with no variables)."""
+        return max((self.degree_in(v) for v in self.variables), default=0)
 
     def dependencies(self) -> list:
         return list(self.constituents)
@@ -247,22 +272,51 @@ class VirtualOracle:
                 out.append((c, pt, [j]))
         return out
 
-    def prover_view(self, witnesses: dict | None = None) -> _ProverVirtual:
+    # Which round-message strategy `prover_view` builds: "auto" takes the
+    # two-phase one whenever the oracle has sparse constituents and the shape
+    # it needs (§`_LibraProver`), the dense one otherwise; "dense" / "libra"
+    # force one (the latter raising when the shape does not fit). A class
+    # attribute so tests can pin it; both strategies send identical messages.
+    strategy = "auto"
+
+    def _dense_constituent(self, j: int, table):
+        """Constituent j as the prover reads it: fixed coordinates bound
+        (out of place), variables renamed to this oracle's. Not yet a copy
+        of its own: the strategies expand every factor into a fresh table."""
+        m = self.maps[j]
+        fixed = {cv: src for cv, src in m.items() if not _is_var(src, self.variables)}
+        renames = {cv: src for cv, src in m.items() if _is_var(src, self.variables)}
+        if fixed:
+            table = table.evaluate(fixed, in_place=False)
+            table.variables = [renames.get(v, v) for v in table.variables]
+            return table
+        return table.rename(renames)
+
+    def prover_view(self, witnesses: dict | None = None, strategy: str | None = None):
         """The prover's concrete form: every constituent resolved to a table
-        (`resolve_table`), its fixed coordinates bound, its variables
-        renamed to this oracle's — each an independent copy, so the round
-        loop may fold them in place."""
-        tables = []
+        (`resolve_table`; sparse predicates stay sparse for the two-phase
+        strategy), with the round-message strategy chosen by `strategy`
+        (default: the class attribute)."""
+        strategy = self.strategy if strategy is None else strategy
+        tables: dict[int, MLE] = {}
+        sparse: dict[int, SparseMLE] = {}
         for j, c in enumerate(self.constituents):
-            t = resolve_table(c, witnesses)
-            m = self.maps[j]
-            fixed = {
-                cv: src for cv, src in m.items() if not _is_var(src, self.variables)
-            }
-            renames = {cv: src for cv, src in m.items() if _is_var(src, self.variables)}
-            t = t.evaluate(fixed, in_place=False) if fixed else t.copy()
-            tables.append(t.rename(renames))
-        return _ProverVirtual(self.variables, tables, self.terms)
+            if isinstance(c, SparseMLE) and strategy != "dense":
+                sparse[j] = c
+            else:
+                tables[j] = self._dense_constituent(j, resolve_table(c, witnesses))
+        if sparse:
+            libra = _LibraProver.build(self, tables, sparse)
+            if libra is not None:
+                return libra
+            if strategy == "libra":
+                raise ValueError(
+                    "this oracle's shape is not one the two-phase prover handles"
+                )
+            for j, c in sparse.items():
+                tables[j] = self._dense_constituent(j, c.materialize())
+        ordered = [tables[j] for j in range(len(self.constituents))]
+        return _ProverVirtual(self.variables, ordered, self.terms)
 
     def digest(self) -> bytes:
         parts = [b"virtual"]
@@ -289,23 +343,96 @@ def _same_point(a: dict, b: dict) -> bool:
     return all(bool(a[k] == b[k]) for k in a)
 
 
-class _ProverVirtual:
-    """A virtual oracle with concrete constituent tables, for the prover's
-    sumcheck rounds: `round_evals` gives the round polynomial at the nodes
-    0..degree, `evaluate` folds the tables holding the round variable."""
+def _one_of(tables) -> object:
+    """The multiplicative identity of the tables' domain (1 for plain values)."""
+    for t in tables:
+        if getattr(t, "ring", None) is not None:
+            from vfhe.arith import Polynomial
 
-    def __init__(self, variables: list, tables: list, terms: list):
+            return Polynomial(t.ring).from_array([1])
+        if getattr(t, "field", None) is not None:
+            return t.field.one
+    return 1
+
+
+def _eq_weights(values: list, one) -> list:
+    """The table of eq~(values, b) over b in {0,1}^len(values), LSB-first:
+    the weight of a hypercube point against fixed coordinates ([XZZPS19]'s
+    precomputed G table; a scalar `MLE.eq` that also works on plain values)."""
+    table = [one]
+    for c in values:
+        nc = one - c
+        table = [t * nc for t in table] + [t * c for t in table]
+    return table
+
+
+def _mul(a, b):
+    """a * b, skipping the multiplication by an integer 1."""
+    if isinstance(a, int) and a == 1:
+        return b
+    if isinstance(b, int) and b == 1:
+        return a
+    return a * b
+
+
+def _gather(k: int, bits: list[int]) -> int:
+    """The bits of k at positions `bits`, packed in that order."""
+    out = 0
+    for i, bit in enumerate(bits):
+        out |= ((k >> bit) & 1) << i
+    return out
+
+
+def _scatter(k: int, bits: list[int], positions: list[int]) -> int:
+    """The bits of k at positions `bits`, moved to `positions`."""
+    out = 0
+    for bit, pos in zip(bits, positions, strict=True):
+        out |= ((k >> bit) & 1) << pos
+    return out
+
+
+def _expand(table, variables: list) -> MLE:
+    """`table` as a fresh dense table over `variables` — a superset of its
+    own, in any order — holding the same polynomial (constant in the added
+    variables). Evaluation basis only: the entries are read as values."""
+    if getattr(table, "basis", MLE_Basis.eval) is not MLE_Basis.eval:
+        raise NotImplementedError("defined oracles need evaluation-basis tables")
+    own = [variables.index(v) for v in table.variables]
+    entries = [table.table[_gather(idx, own)] for idx in range(1 << len(variables))]
+    return _table_like([table], variables, entries)
+
+
+class _ProverVirtual:
+    """The dense round-message strategy: a products form over tables that
+    all span the same variables (`_expand`ed on construction), so a round
+    over the variable at position `idx` reads the table pairs
+    `_pair_indices(size, idx)`, and a factor that never read the variable
+    is simply constant across each pair.
+
+    `round_evals(var)` gives the round polynomial at the nodes
+    `0..degree_in(var)`; the degree counts the factors that *read* the
+    variable in the original definition (`reads`), not the tables that now
+    span it. `evaluate` folds every table by the challenge."""
+
+    owned = True  # fresh tables: the round loop may fold them in place
+
+    def __init__(self, variables: list, factors: list, terms: list):
         self.variables = list(variables)
-        self.tables = tables
-        self.terms = terms
+        self.reads = [list(f.variables) for f in factors]
+        self.tables = [_expand(f, self.variables) for f in factors]
+        self.terms = [(coeff, tuple(idxs)) for coeff, idxs in terms]
 
     @property
     def num_vars(self) -> int:
         return len(self.variables)
 
-    @property
-    def degree(self) -> int:
-        return max(len(idxs) for _, idxs in self.terms)
+    def degree_in(self, var) -> int:
+        """The degree bound in `var` (at least 1, so a message always has
+        the two nodes the verifier's `g(0) + g(1)` check reads)."""
+        per_term = (
+            sum(1 for j in idxs if var in self.reads[j]) for _, idxs in self.terms
+        )
+        return max(1, max(per_term))
 
     def evaluate(self, point: dict | list, in_place: bool = True) -> _ProverVirtual:
         if isinstance(point, list):
@@ -315,53 +442,353 @@ class _ProverVirtual:
         if in_place:
             self.tables, self.variables = tables, variables
             return self
-        return _ProverVirtual(variables, tables, self.terms)
+        view = _ProverVirtual.__new__(_ProverVirtual)
+        view.variables, view.reads, view.tables, view.terms = (
+            variables,
+            self.reads,
+            tables,
+            self.terms,
+        )
+        return view
 
     def constant(self):
         assert self.num_vars == 0, "constant() needs a fully-evaluated oracle"
         return _combine(self.terms, [_constant(t) for t in self.tables])
 
+    def at(self, point: dict):
+        """The value at a hypercube point of the remaining variables."""
+        idx = 0
+        for i, v in enumerate(self.variables):
+            idx |= point[v] << i
+        return _combine(self.terms, [t.table[idx] for t in self.tables])
+
     def round_evals(self, var=None) -> tuple:
-        """The round message over `var` (default: the first variable): the
-        evaluations at t = 0..degree of g(t) = sum_b p*(t, b), b over the
-        hypercube of the other variables. Every factor is multilinear, so
-        its value at node t is `lo + t * (hi - lo)` from its two hypercube
-        neighbours; a factor without the round variable is constant in t.
-        """
+        """sum_terms coeff * (sum_b prod_j table_j(t, b)) at t = 0..degree,
+        b over the cube of the other variables — each term summed first,
+        then scaled once per node."""
         var = self.variables[0] if var is None else var
-        rest = [v for v in self.variables if v is not var]
-        nodes = self.degree + 1
-        evals: list = [None] * nodes
-        lookups = [_Lookup(t) for t in self.tables]
-        for b in _hypercube(rest):
-            lo = [lk.at({**b, var: 0}) for lk in lookups]
-            hi = [lk.at({**b, var: 1}) for lk in lookups]
-            for t in range(nodes):
-                vals = [
-                    lo_j if t == 0 else hi_j if t == 1 else lo_j + t * (hi_j - lo_j)
-                    for lo_j, hi_j in zip(lo, hi, strict=True)
-                ]
-                total = _combine(self.terms, vals)
-                evals[t] = total if evals[t] is None else evals[t] + total
-        return tuple(evals)
+        idx = self.variables.index(var)
+        nodes = self.degree_in(var) + 1
+        total = None
+        for coeff, idxs in self.terms:
+            evals = self._term_round_evals(
+                [self.tables[j] for j in idxs], var, idx, nodes
+            )
+            evals = [_scale(coeff, e) for e in evals]
+            total = (
+                evals
+                if total is None
+                else [a + b for a, b in zip(total, evals, strict=True)]
+            )
+        return tuple(total)
+
+    @staticmethod
+    def _term_round_evals(tables: list, var, idx: int, nodes: int) -> list:
+        """One product's node sums; the native kernels for the shapes they
+        cover (one table, or two ring tables at three nodes), Python pairs
+        otherwise. Every factor is multilinear, so its value at node t is
+        `lo + t * (hi - lo)` from the pair."""
+        from .sumcheck import Sumcheck, SumcheckProd
+
+        if len(tables) == 1 and nodes == 2:
+            return list(Sumcheck.round_evals(tables[0], var))
+        if len(tables) == 2 and nodes == 3 and all(native_table(t) for t in tables):
+            return list(
+                SumcheckProd.prod2_round_evals_native(tables[0], tables[1], var)
+            )
+        size = 1 << tables[0].num_vars
+        evals = []
+        for t in range(nodes):
+            total = None
+            for lo, hi in _pair_indices(size, idx):
+                prod = None
+                for table in tables:
+                    a, b = table.table[lo], table.table[hi]
+                    v = a if t == 0 else b if t == 1 else a + t * (b - a)
+                    prod = v if prod is None else prod * v
+                total = prod if total is None else total + prod
+            evals.append(total)
+        return evals
 
 
-class _Lookup:
-    """Hypercube reads of one factor table: an index computation for a dense
-    evaluation-basis MLE, a fold for anything else."""
+class _Unsupported(Exception):
+    """The oracle's shape is not one the two-phase strategy handles."""
 
-    def __init__(self, table):
-        self.table = table
-        self.direct = isinstance(table, MLE) and table.basis is MLE_Basis.eval
-        self.positions = {v: i for i, v in enumerate(table.variables)}
 
-    def at(self, b: dict):
-        if self.direct:
-            idx = 0
-            for v, i in self.positions.items():
-                idx |= b[v] << i
-            return self.table.table[idx]
-        return _constant(self.table.evaluate(b, in_place=False))
+@dataclass
+class _Predicate:
+    """A sparse predicate of a term, with its nonzero indices' bits sorted
+    by where the variable they encode lives: in the X block, in the Y
+    block, or fixed to a constant (a bound z coordinate, or a 0/1 in the
+    map). `fixed_weights[gather(k, fixed_bits)]` is eq~(constants, k)."""
+
+    sparse: SparseMLE
+    x_bits: list[int]
+    x_vars: list
+    y_bits: list[int]
+    y_positions: list[int]  # positions in the Y block of the y variables read
+    fixed_bits: list[int]
+    fixed_weights: list
+
+    def weight(self, k: int):
+        return self.fixed_weights[_gather(k, self.fixed_bits)]
+
+    def x_index(self, k: int) -> int:
+        return _gather(k, self.x_bits)
+
+    def y_index(self, k: int) -> int:
+        return _gather(k, self.y_bits)
+
+    def y_block_index(self, k: int) -> int:
+        return _scatter(k, self.y_bits, self.y_positions)
+
+
+@dataclass
+class _Term:
+    coeff: object
+    x_factors: list[int]  # constituent indices of the dense factors over X
+    y_factors: list[int]  # ... over Y
+    constants: list[int]  # ... with no variables left
+    predicate: _Predicate | None
+
+
+class _LibraProver:
+    """The two-phase round-message strategy [XZZPS19, §3.3, Algs. 4-6; LXZ21,
+    §4] for `sum_{x,y} sum_terms coeff * pred(z,x,y) * A(x) * B(y)`, z fixed:
+
+    - **phase 1**, the rounds over X: the term is `A(x) * h(x)` with the
+      bookkeeping table `h(x) = sum_y pred(z,x,y) B(y)`, filled from the
+      predicate's nonzeros in O(nnz) — one eq~ weight lookup for the fixed
+      coordinates and one B lookup per nonzero;
+    - **phase 2**, the rounds over Y, X bound to r: the term is
+      `A(r) * p(y) * B(y)` with `p(y) = pred(z, r, y)`, filled the same way
+      with the extra weight eq~(r, x).
+
+    Each phase is a dense products form (`_ProverVirtual`) of degree at most
+    two, and its messages are those of the full polynomial — the dense
+    strategy's transcript, at the cost of the wires and the block sizes
+    instead of the hypercube of (x, y).
+
+    Shape: the summed variables form two contiguous blocks X then Y (a
+    variable read by no dense factor joins the block of its position),
+    every dense factor lives inside one block, and a term has at most one
+    sparse predicate. `build` returns None for anything else.
+    """
+
+    owned = True
+
+    def __init__(self, oracle: VirtualOracle, tables: dict, sparse: dict):
+        self.xs, self.ys = self._blocks(oracle.variables, tables)
+        self.one = _one_of([*tables.values(), *sparse.values()])
+        self.tables = tables
+        self.terms = [
+            self._term(coeff, idxs, oracle, tables, sparse)
+            for coeff, idxs in oracle.terms
+        ]
+        # The Y-side factors over the whole Y block, read by the phase-1
+        # bookkeeping and handed to phase 2.
+        self.y_tables = {
+            j: _expand(tables[j], self.ys) for t in self.terms for j in t.y_factors
+        }
+        self.x_point: dict = {}
+        self.in_phase_two = False
+        self.phase = self._phase_one()
+
+    @classmethod
+    def build(cls, oracle: VirtualOracle, tables: dict, sparse: dict):
+        """The strategy for `oracle`, or None when its shape does not fit."""
+        try:
+            return cls(oracle, tables, sparse)
+        except _Unsupported:
+            return None
+
+    # -- shape ---------------------------------------------------------------
+
+    @staticmethod
+    def _blocks(variables: list, tables: dict) -> tuple[list, list]:
+        """Split the round order into the X and Y blocks from the dense
+        factors' variable sets."""
+        sets: list[list] = []
+        for t in tables.values():
+            if t.num_vars and not any(
+                set(map(id, t.variables)) == set(map(id, s)) for s in sets
+            ):
+                sets.append(list(t.variables))
+        if not sets or len(sets) > 2:
+            raise _Unsupported
+        first = next(i for i, v in enumerate(variables) if any(v in s for s in sets))
+        x_set = next(s for s in sets if variables[first] in s)
+        y_set = next((s for s in sets if s is not x_set), [])
+        y_start = next(
+            (i for i, v in enumerate(variables) if v in y_set), len(variables)
+        )
+        xs, ys = variables[:y_start], variables[y_start:]
+        if any(v in y_set for v in xs) or any(v in x_set for v in ys):
+            raise _Unsupported  # the blocks are not contiguous
+        return xs, ys
+
+    def _term(self, coeff, idxs, oracle, tables, sparse) -> _Term:
+        preds = [j for j in idxs if j in sparse]
+        if len(preds) > 1:
+            raise _Unsupported
+        term = _Term(coeff, [], [], [], None)
+        for j in idxs:
+            if j in sparse:
+                term.predicate = self._predicate(sparse[j], oracle.maps[j])
+            elif tables[j].num_vars == 0:
+                term.constants.append(j)
+            elif all(v in self.xs for v in tables[j].variables):
+                term.x_factors.append(j)
+            elif all(v in self.ys for v in tables[j].variables):
+                term.y_factors.append(j)
+            else:
+                raise _Unsupported
+        return term
+
+    def _predicate(self, sparse: SparseMLE, mapping: dict) -> _Predicate:
+        x_bits, x_vars, y_bits, y_positions, fixed_bits, fixed = [], [], [], [], [], []
+        for bit, cv in enumerate(sparse.variables):
+            src = mapping[cv]
+            if _is_var(src, self.xs):
+                x_bits.append(bit)
+                x_vars.append(src)
+            elif _is_var(src, self.ys):
+                y_bits.append(bit)
+                y_positions.append(self.ys.index(src))
+            else:
+                fixed_bits.append(bit)
+                fixed.append(src)
+        return _Predicate(
+            sparse,
+            x_bits,
+            x_vars,
+            y_bits,
+            y_positions,
+            fixed_bits,
+            _eq_weights(fixed, self.one),
+        )
+
+    # -- the two phases -------------------------------------------------------
+
+    def _phase_one(self) -> _ProverVirtual:
+        factors: list = []
+        terms: list = []
+        self.slot: dict[int, int] = {}  # constituent -> its phase-1 table
+        for term in self.terms:
+            start = len(factors)
+            for j in term.x_factors + term.constants:
+                self.slot.setdefault(j, len(factors))
+                factors.append(self.tables[j])
+            factors.append(self._bookkeeping_x(term))
+            terms.append((term.coeff, range(start, len(factors))))
+        return _ProverVirtual(self.xs, factors, terms)
+
+    def _phase_two(self) -> _ProverVirtual:
+        factors: list = []
+        terms: list = []
+        for term in self.terms:
+            scale = term.coeff
+            for j in term.x_factors + term.constants:
+                scale = _mul(scale, _constant(self.phase.tables[self.slot[j]]))
+            start = len(factors)
+            factors += [self.y_tables[j] for j in term.y_factors]
+            if term.predicate is not None:
+                factors.append(self._bookkeeping_y(term.predicate))
+            terms.append((scale, range(start, len(factors))))
+        return _ProverVirtual(self.ys, factors, terms)
+
+    def _bookkeeping_x(self, term: _Term) -> MLE:
+        """h(x) = sum_y pred(z, x, y) * prod B(y), over the predicate's X
+        variables; without a predicate, the constant sum_y prod B(y)."""
+        b_tables = [self.y_tables[j] for j in term.y_factors]
+        pred = term.predicate
+        if pred is None:
+            total = None
+            for idx in range(1 << len(self.ys)):
+                prod = self.one
+                for b in b_tables:
+                    prod = _mul(prod, b.table[idx])
+                total = prod if total is None else total + prod
+            return _table_like(list(self.tables.values()), [], [total])
+        # Y positions the predicate does not read are summed over: every
+        # completion of its y bits contributes (a factor 2 each without B).
+        free = [p for p in range(len(self.ys)) if p not in pred.y_positions]
+        completions = [
+            sum(1 << p for i, p in enumerate(free) if (m >> i) & 1)
+            for m in range(1 << len(free))
+        ]
+        acc: dict[int, object] = {}
+        for k, value in pred.sparse.nonzeros():
+            weight = pred.weight(k)
+            if isinstance(weight, int) and weight == 0:
+                continue
+            base = pred.y_block_index(k)
+            b_sum = None
+            for mask in completions:
+                prod = 1
+                for b in b_tables:
+                    prod = _mul(prod, b.table[base | mask])
+                b_sum = prod if b_sum is None else b_sum + prod
+            entry = _mul(_mul(weight, value), b_sum)
+            i = pred.x_index(k)
+            acc[i] = entry if i not in acc else acc[i] + entry
+        table = [acc.get(i, 0) for i in range(1 << len(pred.x_vars))]
+        return _table_like(list(self.tables.values()), pred.x_vars, table)
+
+    def _bookkeeping_y(self, pred: _Predicate) -> MLE:
+        """p(y) = pred(z, r, y) over the predicate's Y variables, r the
+        bound X point."""
+        x_weights = _eq_weights([self.x_point[v] for v in pred.x_vars], self.one)
+        acc: dict[int, object] = {}
+        for k, value in pred.sparse.nonzeros():
+            weight = _mul(pred.weight(k), x_weights[pred.x_index(k)])
+            entry = _mul(weight, value)
+            i = pred.y_index(k)
+            acc[i] = entry if i not in acc else acc[i] + entry
+        y_vars = [self.ys[p] for p in pred.y_positions]
+        table = [acc.get(i, 0) for i in range(1 << len(y_vars))]
+        return _table_like(list(self.tables.values()), y_vars, table)
+
+    # -- the oracle surface the sumcheck drives -------------------------------
+
+    @property
+    def variables(self) -> list:
+        return list(self.phase.variables) + ([] if self.in_phase_two else list(self.ys))
+
+    @property
+    def num_vars(self) -> int:
+        return len(self.variables)
+
+    def degree_in(self, var) -> int:
+        return self.phase.degree_in(var)
+
+    def round_evals(self, var=None) -> tuple:
+        var = self.variables[0] if var is None else var
+        if var not in self.phase.variables:
+            raise ValueError(
+                "the two-phase prover binds the X block before the Y block"
+            )
+        return self.phase.round_evals(var)
+
+    def evaluate(self, point: dict | list, in_place: bool = True) -> _LibraProver:
+        if isinstance(point, list):
+            point = dict(zip(self.variables, point, strict=True))
+        if any(v not in self.phase.variables for v in point):
+            raise ValueError(
+                "the two-phase prover binds the X block before the Y block"
+            )
+        target = self if in_place else copy.copy(self)
+        target.phase = self.phase.evaluate(point, in_place=in_place)
+        if not target.in_phase_two:
+            target.x_point = {**self.x_point, **point}
+            if target.phase.num_vars == 0 and self.ys:
+                target.phase = target._phase_two()
+                target.in_phase_two = True
+        return target
+
+    def constant(self):
+        assert self.num_vars == 0, "constant() needs a fully-evaluated oracle"
+        return self.phase.constant()
 
 
 class ImplicitOracle:
@@ -425,14 +852,12 @@ class ImplicitOracle:
         """L's hypercube table from concrete constituent tables — the
         generic (slow) prover-side route; a protocol that knows the
         structure (a circuit) computes the table directly instead."""
-        view = self.body.prover_view(witnesses)
-        lookups = [_Lookup(t) for t in view.tables]
+        view = self.body.prover_view(witnesses, strategy="dense")
         evaluations = []
         for z in _hypercube(self.variables):
             total = None
             for b in _hypercube(self.summed):
-                vals = [lk.at({**z, **b}) for lk in lookups]
-                e = _combine(view.terms, vals)
+                e = view.at({**z, **b})
                 total = e if total is None else total + e
             evaluations.append(total)
         return _table_like(view.tables, self.variables, evaluations)

@@ -5,17 +5,19 @@
 Layered GKR arithmetic-circuit representation and its polynomial export.
 
 - `proto/vfhe/circuit/gkr/v1/gkr.proto`: the language-neutral wire format
-  (layers of fan-in-2 ADD/MUL gates over a declared field modulus).
+  (layers of fan-in-2 ADD/MUL gates and XMULT inner-product gates over a
+  declared field modulus).
 - `builder.py`: construct and (de)serialize circuits.
 - `export.py`, the bridge to `vfhe.arith` — evaluates circuits,
-  builds the dense MLE tables GKR reasons about (per-layer wire values `W_l`
-  and wiring predicates `add_l` / `mul_l`), evaluates MLEs at arbitrary
-  points (`mle_eval`, the sumcheck verifier's primitive), and packs tables
-  into `vfhe.arith.Polynomial` coefficients for the polynomial-commitment
+  builds the MLE tables GKR reasons about (per-layer wire values `W_l`; the
+  wiring predicates dense as `add_l` / `mul_l` or sparse as `lin_l` /
+  `xmult_l`, one entry per wire read), evaluates MLEs at arbitrary points
+  (`mle_eval`, the sumcheck verifier's primitive), and packs tables into
+  `vfhe.arith.Polynomial` coefficients for the polynomial-commitment
   layers.
 
 The arith dependency is imported lazily inside the two packing functions, so
 the circuit representation itself stays usable without the native extension.
-The dense-MLE export is exponential in layer bit-widths by nature; sparse
-representations for production-size circuits can be added behind the same API
-(the multilinear-extension machinery lives in `vfhe.piop`).
+The dense-MLE export is exponential in layer bit-widths by nature;
+`sparse_wiring` is the linear-size form the GKR prover in `vfhe.piop` consumes
+(the multilinear-extension machinery lives there).
