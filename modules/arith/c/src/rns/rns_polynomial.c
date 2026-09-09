@@ -1088,24 +1088,13 @@ void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p)
     blake3_hasher_init(&hasher);
     for (size_t i = 0; i < p->base->l; i++)
     {
-        if (p->rns_mask & (1ULL << i))
-        {
-            /* Eight bytes per coefficient whatever the row's width, so the
-               digest is a function of the element and not of how it is
-               stored -- the canonical-domain contract. */
-            if (rns_row_is_narrow(p->base, i))
-            {
-                for (size_t j = 0; j < p->base->N; j++)
-                {
-                    const uint64_t v = p->rows32[i][j];
-                    blake3_hasher_update(&hasher, &v, sizeof(uint64_t));
-                }
-            }
-            else
-            {
-                blake3_hasher_update(&hasher, p->rows64[i], p->base->N * sizeof(uint64_t));
-            }
-        }
+        if (!(p->rns_mask & (1ULL << i)))
+            continue;
+        // one update per row, over the row as it is stored
+        if (rns_row_is_narrow(p->base, i))
+            blake3_hasher_update(&hasher, p->rows32[i], p->base->N * sizeof(uint32_t));
+        else
+            blake3_hasher_update(&hasher, p->rows64[i], p->base->N * sizeof(uint64_t));
     }
     blake3_hasher_finalize(&hasher, (uint8_t *)out, BLAKE3_OUT_LEN);
 }
