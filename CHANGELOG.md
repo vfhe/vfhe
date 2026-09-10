@@ -12,6 +12,8 @@ versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-09-10
+
 ### Added
 
 - Add engine selection at import. An install carries one extension per
@@ -151,6 +153,7 @@ versions may contain breaking changes.
   and an AVX-512 or portable native engine.
 - Distribute as an sdist, which builds against the host CPU at install time.
 
-[Unreleased]: https://github.com/vfhe/vfhe/compare/0.0.2...HEAD
+[Unreleased]: https://github.com/vfhe/vfhe/compare/0.0.3...HEAD
+[0.0.3]: https://github.com/vfhe/vfhe/compare/0.0.2...0.0.3
 [0.0.2]: https://github.com/vfhe/vfhe/compare/0.0.1...0.0.2
 [0.0.1]: https://github.com/vfhe/vfhe/releases/tag/0.0.1
