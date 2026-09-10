@@ -10,18 +10,16 @@ vector. Each case runs over both field implementations that have a transform
 element and vector types the protocol carries as well as in the code."""
 
 import pytest
-from vfhe.arith import Field, FieldVector, PseudoMersenneField
+from vfhe.arith import MLE, Field, FieldVector, MLE_Variable, PseudoMersenneField
+from vfhe.crypto import DIGEST_LEN
 from vfhe.piop import (
     IOP,
-    MLE,
-    MLE_Variable,
     Proof,
     Relation_Eval,
     Relation_Sum,
     Statement,
     Sumcheck,
 )
-from vfhe.piop.merkle import DIGEST_LEN
 from vfhe.polycom import Basefold, BasefoldEval, FieldFoldableRS
 from vfhe.polycom.basefold import Word  # noqa: TC002
 

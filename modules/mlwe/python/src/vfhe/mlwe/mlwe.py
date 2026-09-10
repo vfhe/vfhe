@@ -5,7 +5,6 @@ from __future__ import annotations
 import functools
 import math
 import operator
-import secrets
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from vfhe.arith.base import ArithParent
@@ -139,7 +138,7 @@ class MLWE_Scheme:
         crt_h = 0
         sign = 1
         while crt_h < h:
-            rnd = secrets.randbelow(self.N * self.r)
+            rnd = entropy.below(self.N * self.r)
             if key[rnd // self.N][rnd % self.N]:
                 continue
             key[rnd // self.N][rnd % self.N] = sign

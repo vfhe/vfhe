@@ -8,12 +8,10 @@ produce byte-identical transcripts.
 """
 
 import pytest
-from vfhe.arith import Polynomial, Ring, RNSRing
+from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring, RNSRing
 from vfhe.piop import (
     IOP,
-    MLE,
     FS_Verifier,
-    MLE_Variable,
     Proof,
     Relation_Sum,
     Relation_SumProd,

@@ -35,9 +35,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from vfhe.arith import Field, Ring
+from vfhe.arith import MLE, Field, MLE_Variable, Ring, SparseMLE
 
-from .mle import MLE, MLE_Variable, SparseMLE
 from .piop import (
     IOP,
     Protocol,

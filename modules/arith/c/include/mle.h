@@ -10,7 +10,7 @@ extern "C"
 #endif
 
     // Dense multilinear-extension (const ArithElement *vector) operations. Defined in
-    // piop/c/src/mle.c; declared here so the CFFI preamble sees the prototypes.
+    // arith/c/src/mle.c; declared here so the CFFI preamble sees the prototypes.
     void mle_dense_poly_add(ArithRing ring, ArithElement *out, ArithElement *in1, ArithElement *in2,
                             uint64_t size);
     void mle_dense_poly_sub(ArithRing ring, ArithElement *out, ArithElement *in1, ArithElement *in2,

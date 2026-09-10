@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Binary Merkle trees over BLAKE3 (piop.md §7).
+"""Binary Merkle trees over BLAKE3.
 
 A vector commitment: `Merkle(leaves)` commits to a list of arbitrary Python
 objects, `open(index)` produces the sibling path of one leaf, and the static
@@ -14,9 +14,6 @@ returning the leaf's digest (`vfhe.arith.FieldElement` has one), or a
 `hash=` callable passed to `Merkle` / `Merkle.verify` for types that do not
 (e.g. `hash=lambda p: p.get_hash()`). Nothing else about a leaf is assumed -
 in particular the tree never keeps a copy of one, only a reference.
-
-This module is a general-purpose primitive with no PIOP-specific content; it
-lives here until the library grows a module for basic crypto primitives.
 """
 
 from __future__ import annotations

@@ -16,6 +16,7 @@ from .impl.rns.polynomial import (
     domain_of,
     repr,
 )
+from .mle import MLE, MLE_Basis, MLE_Variable, SparseMLE
 from .number_theory import crt, gen_pseudo_mersenne_prime, is_prime
 from .registry import (
     backends,
@@ -33,6 +34,7 @@ from .state import (
 )
 
 __all__ = [
+    "MLE",
     "ArithParent",
     "Capability",
     "ComplexPolynomial",
@@ -45,6 +47,8 @@ __all__ = [
     "Field",
     "FieldElement",
     "FieldVector",
+    "MLE_Basis",
+    "MLE_Variable",
     "Multiprecision",
     "Polynomial",
     "PseudoMersenneElement",
@@ -55,6 +59,7 @@ __all__ = [
     "RNSRing",
     "Representation",
     "Ring",
+    "SparseMLE",
     "Spec",
     "backends",
     "crt",

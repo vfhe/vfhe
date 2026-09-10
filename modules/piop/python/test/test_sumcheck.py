@@ -8,11 +8,9 @@ consistently for a different polynomial is caught by the terminal oracle
 query.
 """
 
-from vfhe.arith import Ring
+from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import (
     IOP,
-    MLE,
-    MLE_Variable,
     Relation_Sum,
     Relation_SumProd,
     Statement,

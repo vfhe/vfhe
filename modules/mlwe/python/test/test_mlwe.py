@@ -9,13 +9,18 @@ round_division back to the plaintext ring, so equality is exact.
 """
 
 import math
-import secrets
 
 import pytest
 from vfhe.arith import Polynomial, Ring
+from vfhe.crypto import entropy
 from vfhe.mlwe import LWE, LWE_Key, MGSW_Scheme, MLWE_Scheme
 
 N = 256
+
+
+def _ternary(n):
+    """`n` coefficients drawn uniformly from {-1, 0, 1}."""
+    return [entropy.below(3) - 1 for _ in range(n)]
 
 
 @pytest.fixture
@@ -109,8 +114,8 @@ def test_mlwe_multiplication(scheme_fixture, request):
     s_0 = key.poly[0]
     scheme.rlk = scheme.gen_rlk(key, [-(s_0 * s_0)])
 
-    m1 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N)])
-    m2 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N)])
+    m1 = Polynomial(Rp).from_array(_ternary(N))
+    m2 = Polynomial(Rp).from_array(_ternary(N))
     c1 = enc(scheme, Rp, m1, key)
     c2 = enc(scheme, Rp, m2, key)
 
@@ -126,8 +131,8 @@ def test_mlwe_multiplication_deferred_relinearization(scheme_fixture, request):
     s_0 = key.poly[0]
     rlk = scheme.gen_rlk(key, [-(s_0 * s_0)])
 
-    m1 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N)])
-    m2 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N)])
+    m1 = Polynomial(Rp).from_array(_ternary(N))
+    m2 = Polynomial(Rp).from_array(_ternary(N))
     c1 = enc(scheme, Rp, m1, key)
     c2 = enc(scheme, Rp, m2, key)
 
@@ -261,8 +266,8 @@ def test_multiplication_module_rank(r, N_r, special_primes):
     key = _rank_key(scheme, N_r, r)
     scheme.rlk = scheme.gen_rlk(key, key)
 
-    m1 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N_r)])
-    m2 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N_r)])
+    m1 = Polynomial(Rp).from_array(_ternary(N_r))
+    m2 = Polynomial(Rp).from_array(_ternary(N_r))
     c1 = enc(scheme, Rp, m1, key)
     c2 = enc(scheme, Rp, m2, key)
 
@@ -279,8 +284,8 @@ def test_multiplication_deferred_relinearization_module_rank(r, N_r):
     key = _rank_key(scheme, N_r, r)
     rlk = scheme.gen_rlk(key, key)
 
-    m1 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N_r)])
-    m2 = Polynomial(Rp).from_array([secrets.choice([-1, 0, 1]) for _ in range(N_r)])
+    m1 = Polynomial(Rp).from_array(_ternary(N_r))
+    m2 = Polynomial(Rp).from_array(_ternary(N_r))
     c1 = enc(scheme, Rp, m1, key)
     c2 = enc(scheme, Rp, m2, key)
 

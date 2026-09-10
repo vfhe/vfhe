@@ -128,6 +128,7 @@ extraPaths = [
     "test/smoke/cases",
     "modules/arith/python/src",
     "modules/circuit/python/src",
+    "modules/crypto/python/src",
     "modules/fhe/python/src",
     "modules/mlwe/python/src",
     "modules/piop/python/src",
@@ -182,6 +183,8 @@ select = [
 # unused arguments in protocol implementations. Scoped here rather than
 # rewritten, and to be settled by the authors of that code.
 "modules/piop/python/**" = ["S101", "S311", "SLF001", "ARG002"]
+# mle.py arrived from piop with the same findings and moved unchanged.
+"modules/arith/python/src/vfhe/arith/mle.py" = ["ARG002", "S101", "SLF001"]
 "modules/polycom/python/**" = ["SLF001", "ARG002", "TC001"]
 
 [tool.coverage.run]

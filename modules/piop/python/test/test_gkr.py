@@ -7,14 +7,12 @@ Fiat-Shamir, and the shape of the reduction (claims per layer)."""
 import random
 
 import pytest
-from vfhe.arith import Ring
+from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.circuit import add_gate, gkr, mul_gate
 from vfhe.piop import (
     GKR,
     IOP,
-    MLE,
     ImplicitEval,
-    MLE_Variable,
     OracleKind,
     Protocol,
     Relation_Circuit,

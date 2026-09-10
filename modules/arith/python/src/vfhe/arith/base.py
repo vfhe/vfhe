@@ -30,9 +30,10 @@ is the same answer `require` gives from the capability flags, one level later.
 
 from __future__ import annotations
 
-import secrets
 from abc import ABC, ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
+
+from vfhe.crypto import entropy
 
 from .registry import registered, resolve
 from .spec import Capability, Domain, Spec
@@ -45,6 +46,10 @@ if TYPE_CHECKING:
     from typing_extensions import Self
 
     from .impl.rns.polynomial import RNSPolynomial, RNSRing
+
+# Seed length for an unseeded field sampler: 256 bits, matching the width the
+# C expanders absorb.
+_SEED_BYTES = 32
 
 
 class ArithParent(ABC):
@@ -707,12 +712,11 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         """A uniform element of the field.
 
         Deterministic from ``seed`` when one is given -- the same seed gives
-        the same element on every engine -- and drawn from fresh entropy
-        otherwise.
-        TODO: use prgn module to generate all randomness.
+        the same element on every engine -- and expanded from a fresh
+        ``vfhe.crypto`` seed otherwise.
         """
         if seed is None:
-            seed = secrets.token_bytes(32)
+            seed = entropy.bytes(_SEED_BYTES)
         return self._uniform_from_seed(seed)
 
     def random_exceptional(self) -> FieldElement:

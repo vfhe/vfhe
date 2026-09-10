@@ -29,6 +29,12 @@ versions may contain breaking changes.
   environment a bug report needs.
 - Add PEP 561 typing markers to every subpackage, so a type checker resolves
   `vfhe.*` against an install.
+- Add `vfhe.crypto.entropy` and `vfhe.crypto.seeded`, a typed Python surface
+  over the C generators: unpredictable bytes, values below a bound, Gaussian
+  draws, and the seeded `(context, seed)` sampler a transcript recomputes,
+  plus `entropy.deterministic(seed)` for tests. They are the library's only
+  randomness — nothing in the tree draws from `secrets`, `random`, or the OS
+  directly any more.
 - Add the metadata a scanner and a redistributor need to every wheel:
   - CycloneDX SBOM fragments at `.dist-info/sboms/`, the location PEP 770
     standardises — the vendored BLAKE3 sources, plus pedigree entries for code
@@ -42,6 +48,12 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: Move the multilinear-extension layer from `vfhe.piop` to
+  `vfhe.arith` and the Merkle tree from `vfhe.piop` to `vfhe.crypto`, which
+  is now a Python-facing module. Import `MLE`, `SparseMLE`, `MLE_Basis` and
+  `MLE_Variable` from `vfhe.arith`, and `Merkle` / `MerklePath` from
+  `vfhe.crypto`; `vfhe.piop` no longer re-exports them. Neither depended on
+  anything PIOP-specific.
 - **BREAKING**: Split `vfhe.misc` into `vfhe.engine` (the native handle) and
   `vfhe.dynamic_extensions` (runtime C compilation), and move randomness into
   a new internal `crypto` module. Import `from vfhe.engine import ffi, lib`
@@ -72,6 +84,11 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix a crash in the AES-NI/VAES keystream when asked for 256 bytes or more
+  into a buffer that is not 64-byte aligned: it wrote through aligned vector
+  stores while its callers' signatures promised a plain `uint8_t *`. Every
+  in-tree caller happened to pass aligned memory, so it only surfaced once
+  the generators were reachable from Python.
 - Fix `vfhe.dynamic_extensions`:
   - It failed from an installed package, because the C sources it recompiles
     were never installed and a clean Python 3.12 or later lacks the

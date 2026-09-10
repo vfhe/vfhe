@@ -3,14 +3,12 @@
 """A circuit over a committed input: GKR down to the input layer, whose two
 claims the driver parks and hands to BasefoldEval as one bundle."""
 
-from vfhe.arith import Ring, RNSRing
+from vfhe.arith import MLE, MLE_Variable, Ring, RNSRing
 from vfhe.circuit import add_gate, gkr, mul_gate
 from vfhe.piop import (
     GKR,
     IOP,
-    MLE,
     ImplicitEval,
-    MLE_Variable,
     OracleKind,
     Relation_Circuit,
     Relation_Eval,

@@ -5,6 +5,7 @@ module = {
     'sources': files(
         # the interface, and what belongs to no single representation
         'c/src/arith_generic.c',
+        'c/src/mle.c',
         'c/src/number_theory.c',
         # shared modular-arithmetic and transform kernels
         'c/src/kernels/mod.c',
@@ -37,8 +38,9 @@ module = {
     'headers': files(
         'c/include/arith.h',
         'c/include/arith_generic.h',
+        'c/include/mle.h',
     ),
-    'cdefs': files('python/cdef/arith.cdef'),
+    'cdefs': files('python/cdef/arith.cdef', 'python/cdef/mle.cdef'),
     'fuzz': files('c/fuzz/fuzz_ntt.c'),
     'c_tests': files(
         'c/test/test_arith_generic.c',

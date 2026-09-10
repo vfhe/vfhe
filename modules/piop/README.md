@@ -6,28 +6,13 @@
 > the documentation text — this file and [piop.md](piop.md) — has not been
 > reviewed yet and may be inaccurate or out of date.
 
-Multilinear extensions and the interactive-oracle-proof scaffolding. The
-architecture and its derivation from the PIOP literature are documented in
-[piop.md](piop.md).
+The interactive-oracle-proof scaffolding. The architecture and its
+derivation from the PIOP literature are documented in [piop.md](piop.md).
 
-- `mle.py`: two unrelated types — `MLE` (a dense table of 2^n coefficients,
-  what protocols use) and `SparseMLE` (a sparse map of evaluations;
-  add / sub / scale only, `evaluate` raises).
-  An MLE carries two orthogonal properties: its `basis` — `MLE_Basis.eval` (hypercube evaluations, constructor
-  argument `evaluations=`) or `MLE_Basis.coeff` (monomial coefficients,
-  `coefficients=`; `to_coefficients()` converts and returns an `MLE`)
-  — and its coefficient type: with a `ring`, entries are
-  `vfhe.arith.Polynomial` and the `mle_dense_poly_*` C kernels do the work;
-  without one, entries are plain Python values (any type with `+`/`*`, e.g.
-  ints) folded in Python.
-  Supports add / sub / scale and variable-by-variable evaluation at concrete
-  points; variables are plain identifiers (`MLE_Variable` or any hashable)
-  and may be bound in any order — binding dispatches on the variable's
-  position to the best pair layout (adjacent pairs for the LSB, table halves
-  for the MSB, a strided generic fallback in between).
-  `MLE.eq(ring, point)` builds the dense equality-polynomial table
-  eq~(point, .). The layer is asyncio-free — unresolved protocol values are
-  a Transcript / Statement concern (`Statement.resolved()`).
+The polynomials the protocols here run on — `MLE`, `SparseMLE`,
+`MLE_Basis`, `MLE_Variable` — are `vfhe.arith`'s (`arith/mle.py`), not this
+module's.
+
 - `piop.py`: the IOP primitives: `IOP` (event loop, coefficient domain,
   transcript, parties, and the relation → protocol registry), `Transcript`
   (the ordered, labeled record of exchanged messages: `write(label, value)`
@@ -63,17 +48,6 @@ architecture and its derivation from the PIOP literature are documented in
   proof)` checks it with no prover, witnesses, or oracles present, reading
   the proof in a single forward pass and rejecting messages that arrive out
   of turn, run out, or are left over.
-- `merkle.py`: `Merkle`, a binary Merkle tree over BLAKE3 — a vector
-  commitment to a list of arbitrary Python objects (`root`, `open(index)`,
-  static `verify(root, index, path, leaf)`; `MerklePath` is the sibling list
-  of one opening, without the index, which the verifier supplies itself).
-  The only requirement on a leaf type is a `.hash()` method returning its
-  digest (`vfhe.arith.FieldElement` has one); a `hash=` callable supplies it
-  for types that do not (`hash=Polynomial.get_hash`). Leaf hashing is the
-  Python layer's only per-leaf work — the tree itself is built by
-  `c/src/merkle.c`. A general-purpose primitive with nothing PIOP-specific
-  about it: it lives here until the library grows a module for basic crypto
-  primitives.
 - `sumcheck.py`: `Sumcheck` (reduces `Relation_Sum` to `Relation_Eval` in
   `num_vars` rounds) and the Libra-style `SumcheckProd` (reduces
   `Relation_SumProd` to one `Relation_Eval` per factor). Round messages are
@@ -112,9 +86,7 @@ and `resolved()` awaits them. Challenges are sampled from the exceptional
 set of the coefficient domain (`Ring` / `Field`), never from a set carried
 by the statement.
 
-`c/src/mle.c` holds the dense-MLE kernels (`python/cdef/piop.cdef`);
 `c/src/sumcheck.c` holds the sumcheck round-message kernels
-(`python/cdef/sumcheck.cdef`); `c/src/merkle.c` holds the Merkle tree
-(`python/cdef/merkle.cdef`), which depends on neither. The MLE layer is planned to move to
-`vfhe.arith`, so the two stay strictly separated: sumcheck code may depend
-on MLE kernels, never the reverse.
+(`python/cdef/sumcheck.cdef`), the module's only C. The dense-MLE kernels
+they mirror are `vfhe.arith`'s (`arith/c/src/mle.c`), and the vector
+commitment the PCS layer uses is `vfhe.crypto`'s `Merkle`.
