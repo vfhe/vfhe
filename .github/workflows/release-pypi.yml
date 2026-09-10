@@ -176,4 +176,7 @@ jobs:
         run: |
           curl -sS "$API/vfhe/$VERSION/json" | jq -r '.urls[].url' |
             xargs curl -sSL --create-dirs --output-dir published --remote-name-all
-          gh attestation verify published/* --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER"
+          # verify takes one artifact, and the index serves several.
+          for artifact in published/*; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER"
+          done
