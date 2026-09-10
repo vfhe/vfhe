@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <arith.h>
 #include <inttypes.h>
-#include <util.h> /* safe_malloc */
+#include <util.h> /* safe_malloc, safe_aligned_malloc */
 
 #include "arith_internal.h"
 
@@ -70,9 +70,10 @@ typedef struct
     __m512i ia, ib, oa, ob;
 } W32Perm;
 
-// Written and read as whole zmm registers, so the alignment is load-bearing:
-// an aligned 64-byte access to an under-aligned address faults.
-static _Alignas(64) W32Perm w32_perm[W32_TAIL_LEVELS];
+/* Every access here is a whole zmm, so the table must be 64-byte aligned. The
+   allocator guarantees that; a static's alignment does not survive an
+   instrumented build, where the aligned access then faults. */
+static W32Perm *w32_perm;
 static pthread_once_t w32_perm_once = PTHREAD_ONCE_INIT;
 
 /* Derived from the definition of the stage rather than written as constants.
@@ -83,6 +84,7 @@ static pthread_once_t w32_perm_once = PTHREAD_ONCE_INIT;
    are an exact cover of the block before using them. */
 static void w32_build_perms(void)
 {
+    w32_perm = safe_aligned_malloc(sizeof(W32Perm) * W32_TAIL_LEVELS);
     for (int s = 0; s < W32_TAIL_LEVELS; s++)
     {
         const int t = 8 >> s; // 8, 4, 2, 1
