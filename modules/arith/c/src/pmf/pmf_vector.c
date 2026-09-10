@@ -160,10 +160,14 @@ void pmf_vec_sum(uint64_t *out, const PMFVector a)
 
     for (uint64_t k = 0; k < PMF_LANES; k++)
         out[k] = 0;
+    // The limbs at or past L are zero whatever the lane, so set them once;
+    // reading them would address past partial's L * PMF_LANES live entries.
+    for (uint64_t k = L; k < PMF_LANES; k++)
+        element[k] = 0;
     for (uint64_t lane = 0; lane < PMF_VEC_GROUP; lane++)
     {
-        for (uint64_t k = 0; k < PMF_LANES; k++)
-            element[k] = k < L ? partial[k * PMF_LANES + lane] : 0;
+        for (uint64_t k = 0; k < L; k++)
+            element[k] = partial[k * PMF_LANES + lane];
         pmf_add(out, out, element, a->params);
     }
     for (uint64_t i = whole; i < a->n; i++)

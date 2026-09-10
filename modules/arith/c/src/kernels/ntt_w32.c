@@ -70,7 +70,9 @@ typedef struct
     __m512i ia, ib, oa, ob;
 } W32Perm;
 
-static W32Perm w32_perm[W32_TAIL_LEVELS];
+// Written and read as whole zmm registers, so the alignment is load-bearing:
+// an aligned 64-byte access to an under-aligned address faults.
+static _Alignas(64) W32Perm w32_perm[W32_TAIL_LEVELS];
 static pthread_once_t w32_perm_once = PTHREAD_ONCE_INIT;
 
 /* Derived from the definition of the stage rather than written as constants.
