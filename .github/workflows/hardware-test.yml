@@ -7,6 +7,7 @@ on:
   push:
     branches: [main]
     paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
 
 permissions:
   contents: read # checkout
@@ -81,7 +82,7 @@ jobs:
 
   alert:
     name: Alert
-    if: failure()
+    if: failure() && github.event_name != 'workflow_dispatch'
     needs:
       - test-hardware
     uses: ./.github/workflows/alert.yml
