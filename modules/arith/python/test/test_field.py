@@ -3,7 +3,7 @@
 import random
 
 import pytest
-from vfhe.arith import Field, FieldElement
+from vfhe.arith import ExtensionField, ExtensionFieldElement, FieldElement
 
 PRIME = (1 << 61) - 1
 SEED = b"test_seed_123"
@@ -22,15 +22,15 @@ def schoolbook_mul(a, b, prime, w, d):
 @pytest.mark.parametrize("d", [1, 2, 4, 8])
 def test_field_arithmetic(d):
     w = 3
-    field = Field(PRIME, d, w)
-    rng = random.Random(42)
+    field = ExtensionField(PRIME, d, w)
+    rng = random.Random(42)  # noqa: S311 - test data, not a key
 
     # Random lists of coefficients
     a_coeffs = [rng.randint(0, PRIME - 1) for _ in range(d)]
     b_coeffs = [rng.randint(0, PRIME - 1) for _ in range(d)]
 
-    a = FieldElement(field, a_coeffs)
-    b = FieldElement(field, b_coeffs)
+    a = ExtensionFieldElement(field, a_coeffs)
+    b = ExtensionFieldElement(field, b_coeffs)
 
     # Test basic properties of zero and one
     assert a + field.zero == a
@@ -68,8 +68,8 @@ def test_field_arithmetic(d):
 @pytest.mark.parametrize("d", [2, 4, 8])
 def test_field_inversion(d):
     w = 3
-    field = Field(PRIME, d, w)
-    rng = random.Random(1337)
+    field = ExtensionField(PRIME, d, w)
+    rng = random.Random(1337)  # noqa: S311 - test data, not a key
 
     # Generate a random non-zero element
     while True:
@@ -77,7 +77,7 @@ def test_field_inversion(d):
         if any(c != 0 for c in coeffs):
             break
 
-    a = FieldElement(field, coeffs)
+    a = ExtensionFieldElement(field, coeffs)
     a_inv = a.inverse()
 
     prod = a * a_inv
@@ -87,9 +87,9 @@ def test_field_inversion(d):
 def test_field_sampling_and_hashing():
     d = 4
     w = 3
-    field = Field(PRIME, d, w)
+    field = ExtensionField(PRIME, d, w)
 
-    a = FieldElement(field)
+    a = ExtensionFieldElement(field)
     a.sample_random(SEED)
 
     # Verify coefficients are within bounds
@@ -103,7 +103,7 @@ def test_field_sampling_and_hashing():
     assert h1 == h2
 
     # Different seeds or elements should give different hashes
-    b = FieldElement(field)
+    b = ExtensionFieldElement(field)
     b.sample_random(SEED + b"extra")
     assert a != b
     assert a.hash() != b.hash()
@@ -118,15 +118,15 @@ def test_field_sampling_varies_within_one_element():
     value repeated d times.
     """
     d = 8
-    field = Field(PRIME, d, 3)
-    a = FieldElement(field)
+    field = ExtensionField(PRIME, d, 3)
+    a = ExtensionFieldElement(field)
     a.sample_random(SEED)
     coeffs = [a.value[i] for i in range(d)]
     assert len(set(coeffs)) == d
     assert all(0 <= c < PRIME for c in coeffs)
 
     # ...and sampling stays a pure function of the seed
-    again = FieldElement(field)
+    again = ExtensionFieldElement(field)
     again.sample_random(SEED)
     assert [again.value[i] for i in range(d)] == coeffs
 
@@ -138,35 +138,37 @@ class TestFieldSurface:
     prime = (1 << 61) - 1
 
     def test_int_operands_coerce_on_either_side(self):
-        field = Field(self.prime, 2, 3)
-        a = FieldElement(field, [5, 7])
-        assert a + 3 == a + FieldElement(field, 3)
+        field = ExtensionField(self.prime, 2, 3)
+        a = ExtensionFieldElement(field, [5, 7])
+        assert a + 3 == a + ExtensionFieldElement(field, 3)
         assert 3 + a == a + 3
-        assert a - 3 == a - FieldElement(field, 3)
-        assert 3 - a == FieldElement(field, 3) - a
-        assert a * 4 == a * FieldElement(field, 4)
+        assert a - 3 == a - ExtensionFieldElement(field, 3)
+        assert 3 - a == ExtensionFieldElement(field, 3) - a
+        assert a * 4 == a * ExtensionFieldElement(field, 4)
         assert 4 * a == a * 4
         assert a - 1 == a + (self.prime - 1)
         assert a * 0 == field.zero
 
     def test_bool_and_other_types_are_not_operands(self):
-        field = Field(self.prime, 2, 3)
-        a = FieldElement(field, [5, 7])
+        field = ExtensionField(self.prime, 2, 3)
+        a = ExtensionFieldElement(field, [5, 7])
         for bad in (True, 1.5, "x"):
             with pytest.raises(TypeError):
-                a + bad
+                _ = a + bad  # pyright: ignore[reportOperatorIssue]
             with pytest.raises(TypeError):
-                a * bad
+                _ = a * bad  # pyright: ignore[reportOperatorIssue]
 
     def test_two_adicity(self):
-        assert Field(self.prime, 1).two_adicity == 1  # 2^61 - 2 = 2 * odd
-        k = Field(1073643521, 1).two_adicity  # the 30-bit NTT prime, q == 1 mod 2^11
+        assert ExtensionField(self.prime, 1).two_adicity == 1  # 2^61 - 2 = 2 * odd
+        k = ExtensionField(
+            1073643521, 1
+        ).two_adicity  # the 30-bit NTT prime, q == 1 mod 2^11
         assert k >= 11
         assert (1073643521 - 1) % (1 << k) == 0
         assert (1073643521 - 1) % (1 << (k + 1)) != 0
 
     def test_uniform_sampler_api(self):
-        field = Field(self.prime, 2, 3)
+        field = ExtensionField(self.prime, 2, 3)
         seeded = field.random_element(b"seed")
         assert seeded == field.random_element(b"seed")
         assert seeded != field.random_element(b"other")

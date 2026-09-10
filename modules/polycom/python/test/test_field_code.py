@@ -185,7 +185,7 @@ def test_a_field_arith_cannot_transform_raises():
         two_adicity = 32
 
     with pytest.raises(NotImplementedError, match="no Reed-Solomon transform"):
-        FieldFoldableRS(_Unsupported(), k0=4, c=4, d=2)
+        FieldFoldableRS(_Unsupported(), k0=4, c=4, d=2)  # pyright: ignore[reportArgumentType]
 
 
 def test_short_codeword_round_trips(field):

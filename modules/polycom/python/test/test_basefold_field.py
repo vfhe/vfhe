@@ -23,6 +23,7 @@ from vfhe.piop import (
 )
 from vfhe.piop.merkle import DIGEST_LEN
 from vfhe.polycom import Basefold, BasefoldEval, FieldFoldableRS
+from vfhe.polycom.basefold import Word  # noqa: TC002
 
 _PRIME, _W = 562949948178433, 5  # 50 bits, 2-adicity 20; x^2 - 5 irreducible
 
@@ -258,7 +259,8 @@ def test_rejects_a_consistently_committed_wrong_fold(field):
     opening = scheme.openings[fields["commitment"]]
     d = scheme.code.d
     wrong_r = honest.transcript.entries["basefold/r0"].result() + field.one
-    bad_word = scheme.code.fold(opening.word, wrong_r, level=d)
+    # A codeword in whichever form this code produces (see basefold.Word).
+    bad_word: Word = scheme.code.fold(opening.word, wrong_r, level=d)
     bad_tree = scheme.merkle_commit(bad_word)
     queries = BasefoldEval(scheme, rep=4).query_positions(
         honest.transcript.entries["basefold/queries"].result()

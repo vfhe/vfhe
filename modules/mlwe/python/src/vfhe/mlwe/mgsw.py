@@ -15,7 +15,7 @@ class MGSW_Scheme:
         self.ell = ell if ell else MLWE_scheme.rings[0].ell
         self.ring = MLWE_scheme.special_rings[0]
 
-    def encrypt(self, msg: Polynomial, key: MLWE_Key, lvl: int = 0):
+    def encrypt(self, msg: RNSPolynomial, key: MLWE_Key, lvl: int = 0):
         result = []
         special_q = self.ring.modulus_ratio(self.mlwe_scheme.rings[lvl])
         # Base extend msg to self.ring if needed

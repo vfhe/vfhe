@@ -30,7 +30,7 @@ from vfhe.polycom import (
     BasefoldEval,
     FoldableRS,
 )
-from vfhe.polycom.basefold import pair_digest
+from vfhe.polycom.basefold import Word, pair_digest
 
 
 def _setup(num_vars: int, k0: int, c: int, d: int, prime_size=None):
@@ -422,7 +422,8 @@ def test_basefold_rejects_a_consistently_committed_wrong_fold():
     d = scheme.code.d
     r0 = honest.transcript.entries["basefold/r0"].result()
     wrong_r = r0 + Polynomial(ring).from_array([1])
-    bad_word = scheme.code.fold(opening.word, wrong_r, level=d)
+    # A codeword in whichever form this code produces (see basefold.Word).
+    bad_word: Word = scheme.code.fold(opening.word, wrong_r, level=d)
     bad_tree = scheme.merkle_commit(bad_word)
     queries = BasefoldEval(scheme, rep=4).query_positions(
         honest.transcript.entries["basefold/queries"].result()

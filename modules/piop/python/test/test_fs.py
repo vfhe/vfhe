@@ -8,7 +8,7 @@ produce byte-identical transcripts.
 """
 
 import pytest
-from vfhe.arith import Polynomial, Ring
+from vfhe.arith import Polynomial, Ring, RNSRing
 from vfhe.piop import (
     IOP,
     MLE,
@@ -25,18 +25,18 @@ from vfhe.piop import (
 from vfhe.piop.fs import expand_bytes, ring_exceptional_from_seed
 
 
-def _ring() -> Ring:
+def _ring() -> RNSRing:
     return Ring(1024, prime_size=[49], split_degree=4)
 
 
-def _dense_sum_statement(ring: Ring, evaluations: list) -> Statement:
+def _dense_sum_statement(ring: RNSRing, evaluations: list) -> Statement:
     v = [MLE_Variable("x0"), MLE_Variable("x1")]
     f = MLE(ring=ring, variables=v, evaluations=evaluations)
     total = sum(evaluations)
     return Statement(Relation_Sum(), oracles=[f], value=total)
 
 
-def _fs_sum_iop(ring: Ring) -> IOP:
+def _fs_sum_iop(ring: RNSRing) -> IOP:
     iop = IOP(domain=ring, fiat_shamir=True)
     iop.register(Relation_Sum, Sumcheck())
     return iop

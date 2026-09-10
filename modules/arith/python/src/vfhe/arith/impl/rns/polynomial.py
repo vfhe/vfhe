@@ -6,7 +6,12 @@ import contextlib
 import itertools
 import math
 from enum import Enum
+from typing import TYPE_CHECKING, Any
 
+from vfhe.arith.base import Polynomial, Ring, check_spec_keywords
+from vfhe.arith.number_theory import crt, is_prime
+from vfhe.arith.registry import register
+from vfhe.arith.spec import Capability, Constraints, Spec
 from vfhe.engine import ffi, lib
 
 from ...base import Polynomial, Ring
@@ -14,6 +19,10 @@ from ...number_theory import crt, is_prime
 from ...registry import register
 from ...spec import Capability, Constraints, Spec
 from .rns_base import registry
+
+if TYPE_CHECKING:
+    # Type-checking only: `Self` is what an in-place operator returns.
+    from typing_extensions import Self
 
 
 def next_power_of_2(x):
@@ -34,16 +43,63 @@ def _row(p, idx: int):
 
 
 class RNSRing(Ring):
+    """Z_q[X]/(X^N + 1) with q an RNS product, over the incomplete NTT.
+
+    The modulus is a set of word-sized primes and an element is one row of
+    residues per prime, so arithmetic is elementwise per row and a level of a
+    modulus tower is a subset of the primes -- which is what `mask` names and
+    what makes `quotient_ring` and `round_division` cheap.
+
+    Primes are drawn from a process-wide base shared by every ring of the same
+    ``(N, split_degree)``, and prime *indices* are global to it: two rings
+    agree on the index of a prime they share, which is what lets a per-prime
+    native array built for one ring be indexed by another. The base grows when
+    a ring introduces a prime the process has not seen, so size such an array
+    with `rns_rows`, never with the base's current length.
+
+    `Ring` documents the parameters, and ``Ring(...)`` builds this class.
+    """
+
+    #: Number of primes in this ring's modulus. Not a level index -- see the
+    #: `lvl` versus `ell` split in the scheme classes.
+    ell: int
+    #: The primes, in the shared base's order.
+    primes: list[int]
+    #: Each prime's index in the shared base, in the same order as `primes`.
+    prime_indices: list[int]
+    #: Bitmask over the shared base selecting this ring's primes: the ring's
+    #: identity, and how one ring is matched to another across a scheme.
+    mask: int
+    #: Per-prime widths in bits, in the order of `primes`.
+    prime_size: list[int]
+    #: The smallest of `prime_size`: what bounds an integer scalar operand.
+    smallest_prime: int
+    #: Split degree of the incomplete transform: coefficients per residue slot.
+    split_degree: int
+    #: The product of `primes`, as a Python int.
+    q_l: int
+
     def __init__(
         self,
-        N,
-        mod_size=None,
-        split_degree=None,
-        primes=None,
-        mask=None,
+        N: int,
+        mod_size: int | None = None,
+        split_degree: int | None = None,
+        primes: list[int] | None = None,
+        mask: int | None = None,
         prime_size: int | list[int] = 49,
-        exceptional_set_size=128,
+        exceptional_set_size: int = 128,
+        *,
+        implementation: str | None = None,
+        backend: str | None = None,
     ) -> None:
+        """Build the ring; see `Ring` for what each parameter means.
+
+        ``implementation`` and ``backend`` are the keywords `Ring` uses to
+        pick a class. Reaching here through `Ring` they are already consumed;
+        given directly they are checked, so that naming a spec this class does
+        not serve is an error rather than an ignored argument.
+        """
+        check_spec_keywords(RNSRing, implementation, backend)
         if not (
             (mod_size is not None)
             or (type(prime_size) is list)
@@ -167,10 +223,10 @@ class RNSRing(Ring):
             )
         return res
 
-    def is_quotient_ring(self, parent: Ring):
+    def is_quotient_ring(self, parent: RNSRing) -> bool:
         return parent.mask & self.mask == self.mask
 
-    def modulus_ratio(self, other_ring: Ring, return_pointer: bool = False):
+    def modulus_ratio(self, other_ring: RNSRing, return_pointer: bool = False):
         if not (other_ring.is_quotient_ring(self)):
             raise ValueError("other_ring must be a quotient ring of this ring")
 
@@ -189,7 +245,7 @@ class RNSRing(Ring):
             return ffi.new("uint64_t[]", delta_arr)
         return delta_big_int
 
-    def intersec(self, other: Ring):
+    def intersec(self, other: RNSRing) -> RNSRing:
         if self == other:
             return self
         if self.ell > other.ell:
@@ -200,7 +256,7 @@ class RNSRing(Ring):
             raise ValueError("failed: not (self.is_quotient_ring(other))")
         return self
 
-    def union(self, other: Ring) -> Ring:
+    def union(self, other: RNSRing) -> RNSRing:
         """The ring over both rings' primes together.
 
         Neither ring need contain the other, so this is not `intersec`
@@ -271,7 +327,33 @@ class RNSRing(Ring):
         return Polynomial(self).sample_exceptional(ntt)
 
 
-repr = Enum("Polynomial Representation", ["empty", "ntt", "coeff"])
+class Representation(Enum):
+    """Which representation an `RNSPolynomial` currently holds.
+
+    ``empty``
+        Allocated, never written. Not a data representation: converting to it
+        is an error.
+    ``coeff``
+        Residues of the polynomial's coefficients, one row per prime. The
+        canonical form: equality, digests and integer readback are defined
+        here.
+    ``ntt``
+        The same value under the number-theoretic transform, where
+        multiplication is elementwise. The mul domain.
+
+    `Domain` is the same distinction in the vocabulary every implementation
+    shares; `domain_of` maps one to the other.
+    """
+
+    empty = 1
+    ntt = 2
+    coeff = 3
+
+
+#: The name this enum has always had here, kept because it is what the
+#: keyword arguments taking one are called. `Representation` is the same
+#: object under a name that does not shadow the builtin.
+repr = Representation
 
 #: This implementation's representation flag as a generic arithmetic domain:
 #: the two say the same thing about an element, in the two vocabularies.
@@ -279,15 +361,32 @@ _DOMAIN = {repr.empty: 0, repr.coeff: 1, repr.ntt: 2}
 
 
 def domain_of(representation) -> int:
-    """The `ArithDomain` value matching a `repr`."""
+    """The `ArithDomain` value matching a `Representation`."""
     return _DOMAIN[representation]
 
 
 class RNSPolynomial(Polynomial):
-    def __init__(self, ring: Ring, repr=repr.empty) -> None:
+    """An element of an `RNSRing`: one row of residues per prime.
+
+    The value is held natively and reached through `obj`; `repr` records which
+    of the two representations (`Representation`) those rows are currently in,
+    and the transforms are what move between them. Readers convert a copy, so
+    reading never changes the representation of the object read.
+    """
+
+    #: The parent, whose primes index this element's rows.
+    ring: RNSRing
+    #: The native ``RNS_Polynomial`` handle, freed with this object.
+    obj: Any
+
+    def __init__(
+        self, ring: RNSRing, repr: Representation = Representation.empty
+    ) -> None:
+        """Allocate an element of ``ring``, holding no value yet."""
         self.ring = ring
         self.obj = ring.alloc_polynomial()
-        self.repr = repr
+        #: Which representation `obj`'s rows hold right now.
+        self.repr: Representation = repr
 
     @property
     def rns_mask(self):
@@ -394,7 +493,7 @@ class RNSPolynomial(Polynomial):
         else:
             raise ValueError(f"cannot convert to {target}: not a data representation")
 
-    def _viewed_as(self, target) -> Polynomial:
+    def _viewed_as(self, target) -> RNSPolynomial:
         """``self`` in `target` representation, converting a *copy* if needed.
 
         Every reader goes through this, so that reading a polynomial's value
@@ -426,23 +525,28 @@ class RNSPolynomial(Polynomial):
             self.to_coeff()
         return self
 
-    def base_extend(self, ring: Ring | None = None, out: Polynomial | None = None):
+    def base_extend(
+        self, ring: RNSRing | None = None, out: RNSPolynomial | None = None
+    ) -> RNSPolynomial:
         if out is None and ring is not None:
             out_ = Polynomial(ring)
         elif isinstance(out, Polynomial):
-            out_: Polynomial = out
+            out_: RNSPolynomial = out
         if not (self.ring.is_quotient_ring(out_.ring)):
             raise ValueError("Not a quotient ring")
         return self.lift_to(out=out_)
 
     def lift_to(
-        self, ring: Ring | None = None, out: Polynomial | None = None, params=None
-    ):
+        self,
+        ring: RNSRing | None = None,
+        out: RNSPolynomial | None = None,
+        params=None,
+    ) -> RNSPolynomial:
         self.to_coeff()
         if out is None and ring is not None:
             out_ = Polynomial(ring)
         elif isinstance(out, Polynomial):
-            out_: Polynomial = out
+            out_: RNSPolynomial = out
         if params is None:
             params = registry().get_conversion_params(
                 self.ring.N, self.ring.split_degree, self.rns_mask, out_.rns_mask
@@ -452,15 +556,15 @@ class RNSPolynomial(Polynomial):
         return out_
 
     def mod_reduce(
-        self, ring: Ring | None = None, out: Polynomial | None = None
-    ) -> Polynomial:
+        self, ring: RNSRing | None = None, out: RNSPolynomial | None = None
+    ) -> RNSPolynomial:
         self.to_coeff()
         if not (out is not None or ring is not None):
             raise ValueError("Must provide ring or out")
         if out is None:
             out_ = Polynomial(ring)  # type: ignore
         else:
-            out_: Polynomial = out
+            out_: RNSPolynomial = out
         if not (out_.ring.is_quotient_ring(self.ring)):
             raise ValueError("Not a quotient ring")
         self.ring.lib.polynomial_RNSc_mod_reduce(out_.obj, self.obj)
@@ -468,7 +572,7 @@ class RNSPolynomial(Polynomial):
         return out_
 
     # floor division, in-place
-    def floor_division(self, ring: Ring):
+    def floor_division(self, ring: RNSRing) -> RNSPolynomial:
         if ring.ell >= self.ring.ell:
             raise ValueError("new ring is not smaller than the current one")
         if not (ring.is_quotient_ring(self.ring)):
@@ -480,7 +584,7 @@ class RNSPolynomial(Polynomial):
         return self
 
     # round division, in-place
-    def round_division(self, ring: Ring):
+    def round_division(self, ring: RNSRing) -> RNSPolynomial:
         if ring.ell >= self.ring.ell:
             raise ValueError("new ring is not smaller than the current one")
         if not (ring.is_quotient_ring(self.ring)):
@@ -491,7 +595,7 @@ class RNSPolynomial(Polynomial):
         self.ring = ring
         return self
 
-    def scaled_lift(self, ring: Ring, delta=None) -> Polynomial:
+    def scaled_lift(self, ring: RNSRing, delta=None) -> RNSPolynomial:
         """Lifts the polynomial to a larger ring and scales it by the delta factor."""
         self.to_coeff()
         out = Polynomial(ring)
@@ -571,7 +675,7 @@ class RNSPolynomial(Polynomial):
         return self
 
     # returns the list of coefficients of a Polynomial element
-    def get_polynomial(self, signed: bool = False) -> list:
+    def get_polynomial(self, signed: bool = False) -> list[int]:
         rns = list(self)
         if self.ring.ell == 1:
             unsigned_res = list(itertools.chain.from_iterable(rns))
@@ -597,7 +701,7 @@ class RNSPolynomial(Polynomial):
             "ArithElement *", {"handle": self.obj, "domain": _DOMAIN[self.repr]}
         )
 
-    def copy(self) -> Polynomial:
+    def copy(self) -> RNSPolynomial:
         res = Polynomial(self.ring)
         self.ring.lib.polynomial_copy_RNS_polynomial(res.obj, self.obj)
         res.repr = self.repr
@@ -621,17 +725,17 @@ class RNSPolynomial(Polynomial):
         self.ring.lib.polynomial_RNSc_mod_reduce_lifted(res.obj, self.obj, value_idx)
         return res
 
-    def __copy__(self) -> Polynomial:
+    def __copy__(self) -> RNSPolynomial:
         return self.copy()
 
-    def __itruediv__(self, value) -> Polynomial:  # noqa: PYI034 - Self needs 3.11
+    def __itruediv__(self, value) -> Self:
         self.to_coeff()
         value_idx = self.ring.primes.index(value)
         self.ring.lib.polynomial_round_division_RNSc_wo_free(self.obj, 1 << value_idx)
         return self
 
-    def __mul__(self, other) -> Polynomial:
-        if isinstance(other, Polynomial):
+    def __mul__(self, other) -> RNSPolynomial:
+        if isinstance(other, RNSPolynomial):
             self.to_NTT()
             other.to_NTT()
             res = Polynomial(self.ring.intersec(other.ring))
@@ -664,7 +768,7 @@ class RNSPolynomial(Polynomial):
         return (-self) + other
 
     def __imul__(self, other):
-        if isinstance(other, Polynomial):
+        if isinstance(other, RNSPolynomial):
             self.to_NTT()
             other.to_NTT()
             self.ring.lib.polynomial_multo_RNS_polynomial(self.obj, other.obj)
@@ -680,7 +784,7 @@ class RNSPolynomial(Polynomial):
             raise NotImplementedError(f"cannot scale by {type(other).__name__}")
         return self
 
-    def _add_integer(self, out: Polynomial, other: int) -> Polynomial:
+    def _add_integer(self, out: RNSPolynomial, other: int) -> RNSPolynomial:
         """``out = self + other``, in whichever representation ``self`` is in.
 
         ``out`` may be ``self``; the C kernels accept out == in. They read the
@@ -717,7 +821,7 @@ class RNSPolynomial(Polynomial):
         if self.repr != other.repr:
             self.to_NTT()
             other.to_NTT()
-        if isinstance(other, Polynomial):
+        if isinstance(other, RNSPolynomial):
             self.add(self, other)
             return self
         else:  # assume it's rlwe

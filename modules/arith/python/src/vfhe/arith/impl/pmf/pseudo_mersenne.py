@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vfhe.arith._alloc import aligned64
-from vfhe.arith.base import Field
+from vfhe.arith.base import Field, FieldElement
 from vfhe.arith.number_theory import gen_pseudo_mersenne_prime, is_prime
 from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
@@ -91,6 +91,11 @@ def _unpack(buf, limbs: int) -> int:
 class PseudoMersenneField(Field):
     """F_p for a pseudo-Mersenne prime, with the kernels in C."""
 
+    #: 0, 1 and 2 as elements, built once with the field.
+    zero: PseudoMersenneElement
+    one: PseudoMersenneElement
+    two: PseudoMersenneElement
+
     def __init__(self, modulus: int, degree: int = 1) -> None:
         """
         Build the field for an explicit prime.
@@ -140,6 +145,7 @@ class PseudoMersenneField(Field):
 
         self.zero = self(0)
         self.one = self(1)
+        self.two = self(2)
 
         # Memoized on demand: the least quadratic non-residue, the roots of
         # unity by order, and the transform plans by length.
@@ -196,6 +202,17 @@ class PseudoMersenneField(Field):
         return PseudoMersenneElement(self, value)
 
     @property
+    def d(self) -> int:
+        """The extension degree, 1: this implementation serves prime fields
+        only. `degree` is the same value under the long name."""
+        return 1
+
+    @property
+    def degree(self) -> int:
+        """The extension degree, 1. See `d`."""
+        return 1
+
+    @property
     def byte_length(self) -> int:
         """Bytes in the canonical encoding of an element."""
         return (self.bits + 7) // 8
@@ -204,6 +221,16 @@ class PseudoMersenneField(Field):
         buf = self._new_buffer()
         lib.pmf_sample_random(buf, seed, len(seed), self._params)
         return self._wrap(buf)
+
+    if TYPE_CHECKING:
+        # `Field` spells the samplers once against `_uniform_from_seed`;
+        # these say what they yield here. Declarations only -- the inherited
+        # implementations are what run.
+        def random_element(
+            self, seed: bytes | None = None
+        ) -> PseudoMersenneElement: ...
+        def random_exceptional(self) -> PseudoMersenneElement: ...
+        def exceptional_from_seed(self, seed: bytes) -> PseudoMersenneElement: ...
 
     def random(self, seed: bytes) -> PseudoMersenneElement:
         """Sample a uniform element deterministically from ``seed``.
@@ -316,7 +343,7 @@ class PseudoMersenneField(Field):
         return f"PseudoMersenneField(2^{self.bits} - {self.c}, {self.limbs} limbs)"
 
 
-class PseudoMersenneElement:
+class PseudoMersenneElement(FieldElement):
     """
     An element of a ``PseudoMersenneField``.
 
@@ -325,6 +352,9 @@ class PseudoMersenneElement:
     """
 
     __slots__ = ("_buf", "field")
+
+    #: The parent, whose limb layout and native parameters the kernels read.
+    field: PseudoMersenneField
 
     def __init__(self, field: PseudoMersenneField, value: int = 0) -> None:
         """Reduce ``value`` into ``field`` and pack it into a fresh buffer."""
@@ -506,7 +536,7 @@ class PseudoMersenneElement:
         """All ``_LANES`` words, padding included, for tests that pin the layout."""
         return [int(self._buf[i]) for i in range(_LANES)]
 
-    def digest(self) -> bytes:
+    def hash(self) -> bytes:
         """
         BLAKE3 over the canonical encoding, 32 bytes.
 
@@ -517,6 +547,9 @@ class PseudoMersenneElement:
         out = ffi.new("uint8_t[32]")
         lib.pmf_hash(out, self._buf, self.field._params)
         return bytes(out)
+
+    #: The same digest under the name this implementation grew up with.
+    digest = hash
 
     def __repr__(self) -> str:
         """Unambiguous form: the hex value plus the modulus it lives in."""

@@ -285,7 +285,7 @@ class GP25:
         return res
 
     def setup_tv_xb(
-        self, b: Polynomial, tv: MLWE, b_prec: int, q: int | None = None
+        self, b: RNSPolynomial, tv: MLWE, b_prec: int, q: int | None = None
     ) -> list[MLWE]:
         acc = []
         log_N2 = int(math.log2(2 * self.ring.N))

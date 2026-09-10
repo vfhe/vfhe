@@ -33,8 +33,8 @@ LENGTHS = [1, 5, 8, 13, 32]
 DEGREES = [1, 2, 4, 8]
 
 
-def make_field(d=4):
-    return Field(PRIME, d, W)
+def make_field(d: int = 4) -> ExtensionField:
+    return ExtensionField(PRIME, d, W)
 
 
 def random_elements(field, n, seed=42):
@@ -56,7 +56,11 @@ class TestDispatch:
     def test_a_field_without_vectors_says_so(self):
         """Both implementations have one today, so the refusal needs a stub."""
 
-        class _NoVectors:
+        class _NoVectors(Field):
+            def __init__(self) -> None:
+                """A parent with a spec and nothing else: what a vector needs
+                to look at before it refuses."""
+
             spec = Spec(
                 implementation="field",
                 backend="_test_no_vectors",
@@ -139,7 +143,7 @@ class TestIndexing:
     def test_a_read_element_is_detached(self):
         """Writing to what `__getitem__` returned must not reach the vector."""
         field = make_field()
-        vector = FieldVector(field, [5, 6, 7])
+        vector = ExtensionFieldVector(field, [5, 6, 7])
         element = vector[1]
         element.value[0] = 999
         assert vector[1] == FieldElement(field, 6)
@@ -221,9 +225,9 @@ class TestArithmetic:
     def test_length_and_field_mismatches_are_rejected(self):
         field = make_field()
         with pytest.raises(ValueError, match="length mismatch"):
-            FieldVector(field, 4) + FieldVector(field, 5)
+            _ = FieldVector(field, 4) + FieldVector(field, 5)
         with pytest.raises(ValueError, match="different fields"):
-            FieldVector(field, 4) + FieldVector(make_field(), 4)
+            _ = FieldVector(field, 4) + FieldVector(make_field(), 4)
 
 
 class TestFallbackTier:
@@ -238,7 +242,7 @@ class TestFallbackTier:
 
     def test_pow_rejects_a_negative_exponent(self):
         with pytest.raises(ValueError, match="negative exponent"):
-            FieldVector(make_field(), 4) ** -1
+            _ = FieldVector(make_field(), 4) ** -1
 
     def test_concat(self):
         field = make_field()
@@ -340,7 +344,7 @@ class TestSamplingAndHashing:
     def test_sampling_is_uniform_across_the_whole_vector(self):
         """One draw stream, so no coefficient repeats by construction."""
         field = make_field()
-        vector = FieldVector(field, 16)
+        vector = ExtensionFieldVector(field, 16)
         vector.sample_random(SEED)
         coefficients = [element.value[j] for element in vector for j in range(field.d)]
         assert len(set(coefficients)) == len(coefficients)

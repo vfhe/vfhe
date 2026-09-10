@@ -175,6 +175,7 @@ def test_gkr_dense_and_libra_strategies_agree(monkeypatch):
     ring = Ring(1024, prime_size=[49], split_degree=4)
     stmt = _instance(ring=ring)
     (w_in,) = stmt.oracles
+    assert isinstance(stmt.relation, Relation_Circuit)
     layer = GKR.layers(stmt.relation, w_in, ring)[0]
     (z,) = layer.variables
     body = layer.instantiate({z: ring.random_exceptional()})

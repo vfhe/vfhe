@@ -11,26 +11,38 @@ declaration in ``arith.h``; this module is what allocates buffers meeting it.
 
 from __future__ import annotations
 
-from vfhe.misc.libvfhe import ffi, lib
+from typing import TYPE_CHECKING
 
-from ..._alloc import aligned64
-from ...base import FieldVector
-from .field import FieldElement
+from vfhe.arith._alloc import aligned64
+from vfhe.arith.base import FieldVector
+from vfhe.engine import ffi, lib
+
+from .field import ExtensionFieldElement
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from .field import ExtensionField
 
 
 class ExtensionFieldVector(FieldVector):
     """n elements of one `ExtensionField`, held in d coefficient planes."""
 
-    def __init__(self, field, values) -> None:
+    #: The parent every element belongs to.
+    field: ExtensionField
+
+    def __init__(self, field: ExtensionField, values: int | Iterable) -> None:
         """
         Build from a length, or from a sequence of values.
 
         An int allocates that many zeros. A sequence builds one element per
-        entry, each accepted in the forms `FieldElement` takes: an element of
+        entry, each accepted in the forms `ExtensionFieldElement` takes: an element of
         the same field, an int, or a list of up to d coefficients.
         """
         self.field = field
-        if isinstance(values, int) and not isinstance(values, bool):
+        if isinstance(values, bool):
+            raise TypeError("values is a length or a sequence, not a bool")
+        if isinstance(values, int):
             if values < 0:
                 raise ValueError(f"length must not be negative, got {values}")
             self._allocate(values)
@@ -62,14 +74,14 @@ class ExtensionFieldVector(FieldVector):
         """A fresh vector over the same field, this length unless told another."""
         return ExtensionFieldVector(self.field, self._n if n is None else n)
 
-    def _coerce_element(self, value) -> FieldElement:
+    def _coerce_element(self, value) -> ExtensionFieldElement:
         """Promote `value` to an element of this field, or raise."""
-        if isinstance(value, FieldElement):
+        if isinstance(value, ExtensionFieldElement):
             if value.field is not self.field:
                 raise ValueError("element belongs to a different field")
             return value
         if isinstance(value, (int, list, tuple)) and not isinstance(value, bool):
-            return FieldElement(
+            return ExtensionFieldElement(
                 self.field, list(value) if not isinstance(value, int) else value
             )
         raise TypeError(f"cannot use {type(value).__name__} as a field element")
@@ -92,7 +104,7 @@ class ExtensionFieldVector(FieldVector):
         for i in range(self._n):
             yield self[i]
 
-    def __getitem__(self, index: int) -> FieldElement:
+    def __getitem__(self, index: int) -> ExtensionFieldElement:
         """
         The element at `index`, as a detached copy.
 
@@ -102,7 +114,7 @@ class ExtensionFieldVector(FieldVector):
         index = self._checked_index(index)
         out = ffi.new("uint64_t[]", self.field.d)
         lib.field_vec_get_element(out, self._struct, index)
-        return FieldElement(self.field, out)
+        return ExtensionFieldElement(self.field, out)
 
     def __setitem__(self, index: int, value) -> None:
         """Replace the element at `index`."""
@@ -120,7 +132,7 @@ class ExtensionFieldVector(FieldVector):
             raise IndexError(f"index out of range for a vector of {self._n}")
         return index
 
-    def to_list(self) -> list[FieldElement]:
+    def to_list(self) -> list[ExtensionFieldElement]:
         """Every element, in index order."""
         d = self.field.d
         if self._n == 0:
@@ -132,7 +144,7 @@ class ExtensionFieldVector(FieldVector):
             out = ffi.new("uint64_t[]", d)
             for j in range(d):
                 out[j] = flat[i * d + j]
-            elements.append(FieldElement(self.field, out))
+            elements.append(ExtensionFieldElement(self.field, out))
         return elements
 
     def copy(self) -> ExtensionFieldVector:
@@ -206,11 +218,11 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_scale(result._struct, self._struct, element.value)
         return result
 
-    def sum(self) -> FieldElement:
+    def sum(self) -> ExtensionFieldElement:
         """The sum of every element; zero for an empty vector."""
         out = ffi.new("uint64_t[]", self.field.d)
         lib.field_vec_sum(out, self._struct)
-        return FieldElement(self.field, out)
+        return ExtensionFieldElement(self.field, out)
 
     def inverse(self) -> ExtensionFieldVector:
         """

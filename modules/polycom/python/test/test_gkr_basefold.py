@@ -3,7 +3,7 @@
 """A circuit over a committed input: GKR down to the input layer, whose two
 claims the driver parks and hands to BasefoldEval as one bundle."""
 
-from vfhe.arith import Ring
+from vfhe.arith import Ring, RNSRing
 from vfhe.circuit import add_gate, gkr, mul_gate
 from vfhe.piop import (
     GKR,
@@ -32,7 +32,7 @@ def _circuit():
     )
 
 
-def _instance(ring: Ring, scheme: Basefold):
+def _instance(ring: RNSRing, scheme: Basefold):
     """A random input, committed under `scheme`, and the circuit claim on
     it with a public output."""
     w = [MLE_Variable(f"w{i}") for i in range(2)]
@@ -49,7 +49,7 @@ def _instance(ring: Ring, scheme: Basefold):
     return Statement(Relation_Circuit(_circuit()), oracles=[w_in], output=out)
 
 
-def _iop(ring: Ring, scheme: Basefold, bundles: list, fiat_shamir=False) -> IOP:
+def _iop(ring: RNSRing, scheme: Basefold, bundles: list, fiat_shamir=False) -> IOP:
     class _Counting(BasefoldEval):
         async def prove(self, prover, statements):
             bundles.append(len(statements))

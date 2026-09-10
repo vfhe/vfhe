@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import contextlib
+from typing import TYPE_CHECKING, Any
 
-from vfhe.misc.libvfhe import ffi, lib
-
-from ...base import Field
-from ...registry import register
-from ...spec import Capability, Constraints, Spec
+from vfhe.arith.base import Field, FieldElement
+from vfhe.arith.registry import register
+from vfhe.arith.spec import Capability, Constraints, Spec
+from vfhe.engine import ffi, lib
 
 
 class ExtensionField(Field):
     """F_(p^d) as F_p[x]/(x^d - w), with scalar 64-bit coefficient kernels."""
+
+    #: 0, 1 and 2 as elements, built once with the field; `inv_two` is the
+    #: inverse of `two`, which halving needs on every call.
+    zero: ExtensionFieldElement
+    one: ExtensionFieldElement
+    two: ExtensionFieldElement
+    inv_two: ExtensionFieldElement
 
     def __init__(self, modulus: int, degree: int = 1, w: int | None = None) -> None:
         """
@@ -37,10 +44,20 @@ class ExtensionField(Field):
             )
 
         # Precompute constants
-        self.zero = FieldElement(self, [0] * degree)
-        self.one = FieldElement(self, [1] + [0] * (degree - 1))
-        self.two = FieldElement(self, [2] + [0] * (degree - 1))
+        self.zero = ExtensionFieldElement(self, [0] * degree)
+        self.one = ExtensionFieldElement(self, [1] + [0] * (degree - 1))
+        self.two = ExtensionFieldElement(self, [2] + [0] * (degree - 1))
         self.inv_two = self.two.inverse()
+
+    def __call__(self, value: int) -> ExtensionFieldElement:
+        """``value`` reduced into the field, as its constant coefficient."""
+        return ExtensionFieldElement(self, value)
+
+    @property
+    def degree(self) -> int:
+        """The extension degree. `d` is the same value under the short name
+        the coefficient kernels are written in terms of."""
+        return self.d
 
     @property
     def order(self) -> int:
@@ -59,10 +76,20 @@ class ExtensionField(Field):
         below = self.prime - 1
         return (below & -below).bit_length() - 1
 
-    def _uniform_from_seed(self, seed: bytes) -> FieldElement:
-        element = FieldElement(self)
+    def _uniform_from_seed(self, seed: bytes) -> ExtensionFieldElement:
+        element = ExtensionFieldElement(self)
         element.sample_random(seed)
         return element
+
+    if TYPE_CHECKING:
+        # `Field` spells the samplers once against `_uniform_from_seed`;
+        # these say what they yield here. Declarations only -- the inherited
+        # implementations are what run.
+        def random_element(
+            self, seed: bytes | None = None
+        ) -> ExtensionFieldElement: ...
+        def random_exceptional(self) -> ExtensionFieldElement: ...
+        def exceptional_from_seed(self, seed: bytes) -> ExtensionFieldElement: ...
 
     def __del__(self) -> None:
         if getattr(self, "mod", None):
@@ -70,8 +97,22 @@ class ExtensionField(Field):
                 lib.mod_free(self.mod)
 
 
-class FieldElement:
-    def __init__(self, field: Field, value=None):
+class ExtensionFieldElement(FieldElement):
+    """One element of an `ExtensionField`: d coefficients over F_p."""
+
+    #: The parent, whose `d`, `w` and native modulus the kernels below read.
+    field: ExtensionField
+    #: The d coefficients, low degree first, as a native ``uint64_t[d]``.
+    value: Any
+
+    def __init__(self, field: ExtensionField, value=None) -> None:
+        """
+        Build an element of ``field``.
+
+        ``value`` is a list of up to d coefficients, low degree first; an
+        int, taken as the constant coefficient; a native ``uint64_t[d]``
+        to adopt; or None for zero.
+        """
         self.field = field
         if value is None:
             self.value = ffi.new("uint64_t[]", field.d)
@@ -88,7 +129,7 @@ class FieldElement:
             # Assume it's a ffi cdata uint64_t[]
             self.value = value
 
-    def _coerce(self, other: object) -> FieldElement | None:
+    def _coerce(self, other: object) -> ExtensionFieldElement | None:
         """
         ``other`` as an element, or None if it cannot be one.
 
@@ -97,13 +138,13 @@ class FieldElement:
         what lets the reflected operand take its turn, so `element + vector`
         reaches the vector's __radd__.
         """
-        if isinstance(other, FieldElement):
+        if isinstance(other, ExtensionFieldElement):
             return other
         if isinstance(other, int) and not isinstance(other, bool):
-            return FieldElement(self.field, other)
+            return ExtensionFieldElement(self.field, other)
         return None
 
-    def __add__(self, other: FieldElement | int) -> FieldElement:
+    def __add__(self, other: ExtensionFieldElement | int) -> ExtensionFieldElement:
         rhs = self._coerce(other)
         if rhs is None:
             return NotImplemented
@@ -111,13 +152,13 @@ class FieldElement:
         lib.field_ext_add(
             res_val, self.value, rhs.value, self.field.d, self.field.prime
         )
-        return FieldElement(self.field, res_val)
+        return ExtensionFieldElement(self.field, res_val)
 
-    def __radd__(self, other: FieldElement | int) -> FieldElement:
+    def __radd__(self, other: ExtensionFieldElement | int) -> ExtensionFieldElement:
         """``other + self``; addition commutes, so this is `__add__`."""
         return self.__add__(other)
 
-    def __sub__(self, other: FieldElement | int) -> FieldElement:
+    def __sub__(self, other: ExtensionFieldElement | int) -> ExtensionFieldElement:
         rhs = self._coerce(other)
         if rhs is None:
             return NotImplemented
@@ -125,9 +166,9 @@ class FieldElement:
         lib.field_ext_sub(
             res_val, self.value, rhs.value, self.field.d, self.field.prime
         )
-        return FieldElement(self.field, res_val)
+        return ExtensionFieldElement(self.field, res_val)
 
-    def __rsub__(self, other: FieldElement | int) -> FieldElement:
+    def __rsub__(self, other: ExtensionFieldElement | int) -> ExtensionFieldElement:
         """``other - self``: the operands reversed, not a delegation to `__sub__`."""
         lhs = self._coerce(other)
         if lhs is None:
@@ -136,14 +177,14 @@ class FieldElement:
         lib.field_ext_sub(
             res_val, lhs.value, self.value, self.field.d, self.field.prime
         )
-        return FieldElement(self.field, res_val)
+        return ExtensionFieldElement(self.field, res_val)
 
-    def __neg__(self) -> FieldElement:
+    def __neg__(self) -> ExtensionFieldElement:
         res_val = ffi.new("uint64_t[]", self.field.d)
         lib.field_ext_neg(res_val, self.value, self.field.d, self.field.prime)
-        return FieldElement(self.field, res_val)
+        return ExtensionFieldElement(self.field, res_val)
 
-    def __mul__(self, other: FieldElement | int) -> FieldElement:
+    def __mul__(self, other: ExtensionFieldElement | int) -> ExtensionFieldElement:
         rhs = self._coerce(other)
         if rhs is None:
             return NotImplemented
@@ -156,13 +197,13 @@ class FieldElement:
             self.field.w,
             self.field.mod,
         )
-        return FieldElement(self.field, res_val)
+        return ExtensionFieldElement(self.field, res_val)
 
-    def __rmul__(self, other: FieldElement | int) -> FieldElement:
+    def __rmul__(self, other: ExtensionFieldElement | int) -> ExtensionFieldElement:
         """``other * self``; multiplication commutes, so this is `__mul__`."""
         return self.__mul__(other)
 
-    def __pow__(self, exponent: int) -> FieldElement:
+    def __pow__(self, exponent: int) -> ExtensionFieldElement:
         res_val = ffi.new("uint64_t[]", self.field.d)
         lo = exponent & 0xFFFFFFFFFFFFFFFF
         hi = (exponent >> 64) & 0xFFFFFFFFFFFFFFFF
@@ -175,21 +216,34 @@ class FieldElement:
             self.field.w,
             self.field.mod,
         )
-        return FieldElement(self.field, res_val)
+        return ExtensionFieldElement(self.field, res_val)
 
-    def inverse(self) -> FieldElement:
+    def inverse(self) -> ExtensionFieldElement:
         res_val = ffi.new("uint64_t[]", self.field.d)
         ret = lib.field_ext_inv(
             res_val, self.value, self.field.d, self.field.w, self.field.mod
         )
         if ret == 0:
             raise ValueError("Element not invertible")
-        return FieldElement(self.field, res_val)
+        return ExtensionFieldElement(self.field, res_val)
 
     def sample_random(self, seed: bytes):
         lib.field_sample_random_element(
             self.value, seed, len(seed), self.field.d, self.field.prime
         )
+
+    def __int__(self) -> int:
+        """The constant coefficient, when it is the whole element.
+
+        Raises ValueError for an element of degree above 0, which has no
+        integer value: dropping the other coefficients silently would make
+        ``int(a) == int(b)`` for elements that differ.
+        """
+        if any(self.value[i] for i in range(1, self.field.d)):
+            raise ValueError(
+                f"element of F_(p^{self.field.d}) is not a scalar; no integer value"
+            )
+        return int(self.value[0])
 
     def hash(self) -> bytes:
         out = ffi.new("uint8_t[32]")
@@ -198,10 +252,10 @@ class FieldElement:
 
     def __repr__(self):
         coeffs = [self.value[i] for i in range(self.field.d)]
-        return f"FieldElement({coeffs})"
+        return f"ExtensionFieldElement({coeffs})"
 
     def __eq__(self, other):
-        if not isinstance(other, FieldElement):
+        if not isinstance(other, ExtensionFieldElement):
             return False
         return bool(lib.field_ext_is_equal(self.value, other.value, self.field.d))
 
@@ -209,7 +263,7 @@ class FieldElement:
         return not self.__eq__(other)
 
 
-# Imported here, at the bottom: the vector module imports FieldElement above.
+# Imported here, at the bottom: the vector module imports ExtensionFieldElement above.
 from .vector import ExtensionFieldVector  # noqa: E402
 
 #: A degree-d extension of F_p by scalar modular arithmetic. Its elements are
@@ -220,7 +274,7 @@ FIELD_SCALAR = register(
         implementation="field",
         backend="scalar",
         parent_cls=ExtensionField,
-        element_cls=FieldElement,
+        element_cls=ExtensionFieldElement,
         vector_cls=ExtensionFieldVector,
         capabilities=(
             Capability.CORE

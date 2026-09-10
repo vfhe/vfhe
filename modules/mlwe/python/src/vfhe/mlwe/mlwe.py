@@ -39,18 +39,18 @@ class MLWE_Scheme:
 
     def __init__(
         self,
-        rings: list[Ring] | Ring,
+        rings: list[RNSRing] | RNSRing,
         special_primes: int = 0,
-        special_rings: list[Ring] | None = None,
+        special_rings: list[RNSRing] | None = None,
         max_lvl: int | None = None,
         module_rank: int = 1,
     ) -> None:
         """Create a leveled scheme in one of two initialization modes.
 
-        - Single ``Ring``: the level chain is derived automatically by dropping the top prime one at a time. ``special_primes`` reserves that many top
+        - Single ``RNSRing``: the level chain is derived automatically by dropping the top prime one at a time. ``special_primes`` reserves that many top
           primes as the special (key-switching) primes, and ``max_lvl`` caps the
           number of levels.
-        - List of ``Ring``: the levels are given explicitly. ``rings[i]`` is
+        - List of ``RNSRing``: the levels are given explicitly. ``rings[i]`` is
           level ``i`` and ``special_rings[i]`` its special-prime-extended ring
           (required when ``special_primes > 0``; defaults to ``rings``
           otherwise). This allows non-nested level rings, e.g. for rational
@@ -59,7 +59,7 @@ class MLWE_Scheme:
         first = rings if isinstance(rings, ArithParent) else rings[0]
         first.require(Capability.QUOTIENT_POLY_RING | Capability.TOWER)
 
-        if isinstance(rings, Ring):
+        if isinstance(rings, RNSRing):
             max_lvl = max_lvl if max_lvl is not None else len(rings.primes) - 1
             if special_primes == 0:
                 self.rings = [
@@ -94,7 +94,7 @@ class MLWE_Scheme:
         self.rlk: MLWE_Set | list | None = None
 
     @property
-    def ring(self) -> Ring:
+    def ring(self) -> RNSRing:
         return self.rings[0]
 
     @property
@@ -113,7 +113,7 @@ class MLWE_Scheme:
             return self.special_rings[0].ell - self.rings[0].ell
         return 0
 
-    def level_of_ring(self, ring: Ring, strict: bool = True) -> int:
+    def level_of_ring(self, ring: RNSRing, strict: bool = True) -> int:
         """Return the level index of ``ring`` in ``self.rings``.
 
         Rings are identified by their RNS ``mask`` (their prime set), so an
@@ -149,7 +149,7 @@ class MLWE_Scheme:
         return MLWE_Key(key, sigma_err, self)
 
     def _gen_ksk_components(
-        self, key_out: MLWE_Key, key_poly: list[Polynomial], lvl: int
+        self, key_out: MLWE_Key, key_poly: list[RNSPolynomial], lvl: int
     ) -> list[list[MLWE]]:
         """Sample the gadget ciphertexts for one key-switch key per key poly.
 
@@ -185,13 +185,13 @@ class MLWE_Scheme:
         return result
 
     def gen_ksk_for_level(
-        self, key_out: MLWE_Key, key_in: MLWE_Key | list[Polynomial], lvl: int
+        self, key_out: MLWE_Key, key_in: MLWE_Key | list[RNSPolynomial], lvl: int
     ):
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
         return MLWE_Set(self._gen_ksk_components(key_out, key_poly, lvl))
 
     def gen_rlk_for_level(
-        self, key_out: MLWE_Key, quad_polys: list[Polynomial], lvl: int
+        self, key_out: MLWE_Key, quad_polys: list[RNSPolynomial], lvl: int
     ):
         # One real key-switch key per quadratic component (r*(r+1)/2 of them),
         # followed by r NULL slots for the linear components, which keep the
@@ -199,7 +199,7 @@ class MLWE_Scheme:
         components = self._gen_ksk_components(key_out, quad_polys, lvl)
         return MLWE_Set(components + [None] * self.r)
 
-    def quadratic_key_polys(self, key: MLWE_Key) -> list[Polynomial]:
+    def quadratic_key_polys(self, key: MLWE_Key) -> list[RNSPolynomial]:
         """The quadratic key terms of the tensored product, in slot order.
 
         These are ``-(s_i * s_j)`` for every pair ``i <= j`` in lexicographic
@@ -216,7 +216,7 @@ class MLWE_Scheme:
     def gen_rlk(
         self,
         key_out: MLWE_Key,
-        quad_polys: MLWE_Key | list[Polynomial],
+        quad_polys: MLWE_Key | list[RNSPolynomial],
         lvl: int | None = None,
     ):
         """Relinearization key for the rank-r product.
@@ -245,7 +245,7 @@ class MLWE_Scheme:
     def gen_ksk(
         self,
         key_out: MLWE_Key,
-        key_in: MLWE_Key | list[Polynomial],
+        key_in: MLWE_Key | list[RNSPolynomial],
         lvl: int | None = None,
     ):
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
@@ -345,7 +345,7 @@ class MLWE_Scheme:
 
     def sample(
         self,
-        msg: Polynomial,
+        msg: RNSPolynomial,
         key: MLWE_Key,
         out: MLWE | None = None,
         lvl: int | None = None,
@@ -367,7 +367,7 @@ class MLWE_Scheme:
         out.repr = repr.coeff
         return out
 
-    def phase(self, rlwe: MLWE, key: MLWE_Key, out: Polynomial | None = None):
+    def phase(self, rlwe: MLWE, key: MLWE_Key, out: RNSPolynomial | None = None):
         if not out:
             out = Polynomial(rlwe.ring)
         if key.ring != rlwe.ring:
@@ -379,7 +379,7 @@ class MLWE_Scheme:
         out.repr = repr.ntt
         return out
 
-    def tensor_product(self, in1: MLWE, in2: MLWE) -> list[Polynomial]:
+    def tensor_product(self, in1: MLWE, in2: MLWE) -> list[RNSPolynomial]:
         """Symmetric tensor product of the r+1 components of ``in1`` and ``in2``.
 
         Since ``phase(c) = b - sum_i a_i * s_i``, the product of the two phases
@@ -405,7 +405,7 @@ class MLWE_Scheme:
             in2: The second MLWE ciphertext.
 
         Returns:
-            A list of ``extended_rank + 1`` Polynomial objects.
+            A list of ``extended_rank + 1`` RNSPolynomial objects.
         """
         if in1.ring != in2.ring:
             raise ValueError("Ciphertexts must be in the same ring")
@@ -490,7 +490,7 @@ class MLWE_Key:
         key: list[list[int]],
         sigma_err: float,
         scheme: MLWE_Scheme,
-        ring: Ring | None = None,
+        ring: RNSRing | None = None,
     ):
         if len(key) != scheme.r:
             raise ValueError("failed: len(key) != scheme.r")
@@ -578,7 +578,7 @@ class MLWE:
         self,
         scheme: MLWE_Scheme,
         lvl: int | None = None,
-        ring: Ring | None = None,
+        ring: RNSRing | None = None,
         rank: int | None = None,
     ) -> None:
         if lvl is None:
@@ -624,7 +624,7 @@ class MLWE:
     def new_like(  # noqa: PYI019 - Self needs 3.11
         self: CtT,
         lvl: int | None = None,
-        ring: Ring | None = None,
+        ring: RNSRing | None = None,
         rank: int | None = None,
     ) -> CtT:
         """Allocate an empty ciphertext of the same concrete type as ``self``.
@@ -690,7 +690,7 @@ class MLWE:
         lib_rlwe.lib.mlwe_sub_RNSc_sample(self.obj, in1.obj, in2.obj)
         self.repr = in1.repr
 
-    def add_poly(self, in1: MLWE, in2: Polynomial):
+    def add_poly(self, in1: MLWE, in2: RNSPolynomial):
         if in1.ring != in2.ring:
             raise ValueError("trying to add things in different rings")
         if in1.repr != in2.repr:
@@ -710,19 +710,19 @@ class MLWE:
             lib_rlwe.lib.mlwe_sub_RNSc_polynomial(self.obj, in1.obj, in2.as_element())
         self.repr = in1.repr
 
-    def get_a_poly(self, j: int) -> Polynomial:
+    def get_a_poly(self, j: int) -> RNSPolynomial:
         res = Polynomial(self.ring)
         self.ring.lib.polynomial_copy_RNS_polynomial(res.obj, self.obj_a_i(j))
         res.repr = self.repr
         return res
 
-    def get_b_poly(self) -> Polynomial:
+    def get_b_poly(self) -> RNSPolynomial:
         res = Polynomial(self.ring)
         self.ring.lib.polynomial_copy_RNS_polynomial(res.obj, self.obj_b())
         res.repr = self.repr
         return res
 
-    def get_a_digit(self, j: int, i: int) -> Polynomial:
+    def get_a_digit(self, j: int, i: int) -> RNSPolynomial:
         if i != 0:
             raise NotImplementedError(f"digit {i}; only the base limb is reduced")
         res = Polynomial(self.ring)
@@ -731,7 +731,7 @@ class MLWE:
         res.repr = repr.coeff
         return res
 
-    def get_b_digit(self, i: int) -> Polynomial:
+    def get_b_digit(self, i: int) -> RNSPolynomial:
         if i != 0:
             raise NotImplementedError(f"digit {i}; only the base limb is reduced")
         res = Polynomial(self.ring)
@@ -758,7 +758,7 @@ class MLWE:
         self.repr = other.repr
 
     def round_division(  # noqa: PYI019 - Self needs 3.11
-        self: CtT, ring: Ring | None = None, lvl: int | None = None
+        self: CtT, ring: RNSRing | None = None, lvl: int | None = None
     ) -> CtT:
         """Round-divide the ciphertext down into a smaller (quotient) ring.
 
@@ -787,7 +787,7 @@ class MLWE:
     def __copy__(self):
         return self.copy()
 
-    def _base_extend_cond(self, other: Polynomial):
+    def _base_extend_cond(self, other: RNSPolynomial):
         if other.ring != self.ring:
             res = other.base_extend(self.ring)
             res.to_NTT()
@@ -806,7 +806,7 @@ class MLWE:
         res = self.new_like()
         if isinstance(other, MLWE):
             res.add_MLWE(self, other)
-        if isinstance(other, Polynomial):
+        if isinstance(other, RNSPolynomial):
             res.add_poly(self, other)
         return res
 
@@ -821,7 +821,7 @@ class MLWE:
             other.to_NTT()
         if isinstance(other, MLWE):
             self.add_MLWE(self, other)
-        if isinstance(other, Polynomial):
+        if isinstance(other, RNSPolynomial):
             self.add_poly(self, other)
         return self
 
@@ -837,7 +837,7 @@ class MLWE:
         res = self.new_like()
         if isinstance(other, MLWE):
             res.sub_MLWE(self, other)
-        if isinstance(other, Polynomial):
+        if isinstance(other, RNSPolynomial):
             res.sub_poly(self, other)
         return res
 
@@ -852,12 +852,12 @@ class MLWE:
             other.to_NTT()
         if isinstance(other, MLWE):
             self.sub_MLWE(self, other)
-        if isinstance(other, Polynomial):
+        if isinstance(other, RNSPolynomial):
             self.sub_poly(self, other)
         return self
 
     def __mul__(self, other) -> MLWE:
-        if isinstance(other, Polynomial):
+        if isinstance(other, RNSPolynomial):
             res = self.new_like()
             if other.ring != self.ring:
                 if not (other.ring.is_quotient_ring(self.ring)):

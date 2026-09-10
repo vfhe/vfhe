@@ -172,7 +172,7 @@ def test_mlwe_refuses_a_domain_without_the_ring_capabilities():
     from vfhe.mlwe import MLWE_Scheme
 
     with pytest.raises(TypeError, match="QUOTIENT_POLY_RING"):
-        MLWE_Scheme(Field(PRIME, 4, 7))
+        MLWE_Scheme(Field(PRIME, 4, 7))  # pyright: ignore[reportArgumentType]
 
 
 class TestHierarchy:

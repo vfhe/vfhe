@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from math import ceil, log2, prod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from vfhe.engine import ffi, lib
 
-from ...registry import register
-from ...spec import Capability, Constraints, Spec
-from ..rns.polynomial import Polynomial
+if TYPE_CHECKING:
+    from vfhe.arith.impl.rns.polynomial import RNSPolynomial
 
 
 class Multiprecision:
+    #: The (implementation, backend) this parent was built for.
+    spec: ClassVar[Spec]
+
     def __init__(self) -> None:
         self.lib = lib
         try:
@@ -66,7 +68,7 @@ class Multiprecision:
 
         return {"pw": pw, "q": q, "m": m, "k": k}
 
-    def from_polynomial(self, poly: Polynomial, crt_consts):
+    def from_polynomial(self, poly: RNSPolynomial, crt_consts):
         poly.to_coeff()
         res = self.lib.new_mp_polynomial(poly.ring.N, poly.ring.ell + 1)
         self.lib.mp_polynomial_from_RNS(

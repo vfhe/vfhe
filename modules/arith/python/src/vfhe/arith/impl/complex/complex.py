@@ -3,20 +3,30 @@
 from __future__ import annotations
 
 from math import log2
+from typing import ClassVar
 
 from vfhe.engine import ffi, lib
 
 # The AVX-512 complex FFT casts these buffers to __m512d and uses aligned loads,
 # so they must be 64-byte aligned; more than cffi's default. Shared with the other
 # over-aligned wrappers rather than kept private here.
-from ..._alloc import aligned64 as _aligned64
-from ...registry import register
-from ...spec import Capability, Constraints, Spec
-from ..rns.polynomial import Polynomial, Ring, repr
+from vfhe.arith._alloc import aligned64 as _aligned64
+from vfhe.arith.impl.rns.polynomial import (
+    Polynomial,
+    RNSPolynomial,
+    RNSRing,
+    repr,
+)
+from vfhe.arith.registry import register
+from vfhe.arith.spec import Capability, Constraints, Spec
+from vfhe.engine import ffi, lib
 
 
 class ComplexRing:
-    def __init__(self, N, special_rous=True):
+    #: The (implementation, backend) this parent was built for.
+    spec: ClassVar[Spec]
+
+    def __init__(self, N: int, special_rous: bool = True) -> None:
         self.lib = lib
         self.N = N
         self.logN = int(log2(N))
@@ -45,9 +55,9 @@ class ComplexRing:
     def exp_complex_polys_ifft_scale_round_to_RNS_batch(
         self,
         e_polys: list[ComplexPolynomial],
-        ring: Ring,
+        ring: RNSRing,
         temp_delta: float,
-    ) -> list[Polynomial]:
+    ) -> list[RNSPolynomial]:
         """Batch: for each exp-domain ComplexPolynomial, IFFT, scale by temp_delta, round to RNS/NTT."""
         n = len(e_polys)
         if n == 0:
@@ -147,12 +157,12 @@ class ComplexPolynomial:
             self[i] = v[i]
         return self
 
-    def round_to_RNS(self, ring: Ring) -> Polynomial:
+    def round_to_RNS(self, ring: RNSRing) -> RNSPolynomial:
         array = [round(self.obj[i]) for i in range(self.ring.N2)]
         return Polynomial(ring).from_array(array)
 
     # Duplicate of round_to_RNS with no Python per-coefficient overhead (C rounding + int_array_to_RNS).
-    def round_to_RNS_cpp(self, ring: Ring) -> Polynomial:
+    def round_to_RNS_cpp(self, ring: RNSRing) -> RNSPolynomial:
         res = Polynomial(ring)
         self.ring.lib.complex_poly_round_to_RNS(res.obj, self.obj, ring.N)
         res.repr = repr.ntt

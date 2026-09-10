@@ -327,8 +327,8 @@ def test_integer_operands_are_symmetric(ring):
         # and the other coefficients with it
         assert fresh().__sub__(7).get_polynomial()[1:] == coeffs[1:]
 
-    with pytest.raises(AssertionError, match="int64"):
-        Polynomial(ring).from_array(coeffs) + 2**63
+    with pytest.raises(ValueError, match="int64"):
+        _ = Polynomial(ring).from_array(coeffs) + 2**63
 
 
 # --------------------------------------------------------------------------

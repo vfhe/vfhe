@@ -54,6 +54,8 @@ changing any message here.
 
 from __future__ import annotations
 
+from typing import Any
+
 from vfhe.arith import Field, Polynomial, Ring
 from vfhe.piop import (
     MLE,
@@ -73,8 +75,22 @@ from vfhe.piop.merkle import DIGEST_LEN, hash_bytes
 from vfhe.piop.mle import native_table, vector_table
 from vfhe.piop.sumcheck import _exceptional_set_size, interpolate_evals
 
-from .code import FoldableRS, pair_digest  # noqa: F401  (pair_digest: public here)
+# `pair_digest` is re-exported here: the aliased form is what marks it
+# as a public name of this module rather than an unused import.
+from .code import FoldableRS
+from .code import pair_digest as pair_digest
 from .field_code import FieldFoldableRS
+
+#: A coefficient table or a codeword, in whichever form the domain's code
+#: takes: a list of ring elements, or one `FieldVector`. A `Basefold` is built
+#: with the code matching its tables, so which of the two travels through the
+#: protocol is fixed by that pairing rather than by any one signature here.
+Word = Any
+
+
+def _coefficients(f: MLE) -> Word:
+    """`f`'s coefficient table, in the form its own domain's code encodes."""
+    return f.to_coefficients().table
 
 
 def _committed_table(f) -> bool:
@@ -146,7 +162,7 @@ class BasefoldOpening:
 
     __slots__ = ("polynomial", "tree", "word")
 
-    def __init__(self, polynomial: MLE, word: list, tree: Merkle):
+    def __init__(self, polynomial: MLE, word: Word, tree: Merkle) -> None:
         self.polynomial = polynomial
         self.word = word
         self.tree = tree
@@ -186,7 +202,7 @@ class Basefold:
                 f"encodes {self.code.k_d}"
             )
 
-    def merkle_commit(self, word: list) -> Merkle:
+    def merkle_commit(self, word: Word) -> Merkle:
         """The Merkle tree commitment to a codeword — the vector-commitment
         step of the scheme, one leaf per `±x` pair (digested by the code,
         `leaf_digests`); its `root` is what travels (as the polynomial
@@ -202,7 +218,7 @@ class Basefold:
         (`prover.witnesses[commitment] = opening`).
         """
         self._check_polynomial(f)
-        word = self.code.encode(f.to_coefficients().table)
+        word = self.code.encode(_coefficients(f))
         tree = self.merkle_commit(word)
         commitment = BasefoldCommitment(f.variables, tree.root)
         self.commitments[f] = commitment
@@ -219,7 +235,7 @@ class Basefold:
             self._check_polynomial(f)
         except (TypeError, ValueError):
             return False
-        return self.merkle_commit(self.code.encode(f.to_coefficients().table)).root == (
+        return self.merkle_commit(self.code.encode(_coefficients(f))).root == (
             commitment.root
         )
 
@@ -404,7 +420,7 @@ class BasefoldEval(Protocol):
 
         # Codewords and their trees by level: level d was built at commit
         # time and only folded here; each fold's result is committed by root.
-        words = {d: opening.word}
+        words: dict[int, Word] = {d: opening.word}
         trees = {d: opening.tree}
         cur_f = f
         cur_eq = MLE.eq(_domain_of(f), zs, variables=f.variables)
@@ -499,7 +515,7 @@ class BasefoldEval(Protocol):
 
         # The level-0 codeword is computed, not received, so it is a codeword
         # by construction and needs no tree — it terminates every query walk.
-        word0 = self.code.encode(h0.to_coefficients().table)
+        word0 = self.code.encode(_coefficients(h0))
         queries = self.query_positions(verifier.challenge_bits(f"{label}/queries"))
         answers = await iop.transcript.read(f"{label}/answers")
         if len(answers) != len(queries):
