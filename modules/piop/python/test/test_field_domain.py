@@ -72,7 +72,7 @@ def test_field_table_is_a_vector(field):
     h = MLE(field=field, variables=v[:2], evaluations=[1, 2, 3, 4])
     assert h.table == vec
     with pytest.raises(TypeError, match="not both"):
-        MLE(ring=object(), field=field, variables=v[:2])
+        MLE(ring=object(), field=field, variables=v[:2])  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.parametrize("order", [(0, 1, 2, 3), (3, 2, 1, 0), (1, 3, 0, 2), (2, 0)])
@@ -115,7 +115,7 @@ def test_arithmetic(field):
     assert (3 * f).table == f.scale(three).table
     assert f.copy().table == f.table and f.copy().table is not f.table
     with pytest.raises(TypeError, match="not defined"):
-        f * g
+        _ = f * g
 
 
 def test_eq_table(field):

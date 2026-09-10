@@ -1,15 +1,21 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.arith public API re-exports.
-from .base import ArithParent, Field, FieldVector, Polynomial, Ring
+from .base import ArithParent, Field, FieldElement, FieldVector, Polynomial, Ring
 from .impl.complex.complex import ComplexPolynomial, ComplexRing
-from .impl.field.field import ExtensionField, FieldElement
+from .impl.field.field import ExtensionField, ExtensionFieldElement
 from .impl.field.vector import ExtensionFieldVector
 from .impl.mp.multiprecision import Multiprecision
 from .impl.pmf.ntt import PseudoMersenneNTT
 from .impl.pmf.pseudo_mersenne import PseudoMersenneElement, PseudoMersenneField
 from .impl.pmf.vector import PseudoMersenneVector
-from .impl.rns.polynomial import RNSPolynomial, RNSRing, domain_of, repr
+from .impl.rns.polynomial import (
+    Representation,
+    RNSPolynomial,
+    RNSRing,
+    domain_of,
+    repr,
+)
 from .number_theory import crt, gen_pseudo_mersenne_prime, is_prime
 from .registry import (
     backends,
@@ -34,6 +40,7 @@ __all__ = [
     "Constraints",
     "Domain",
     "ExtensionField",
+    "ExtensionFieldElement",
     "ExtensionFieldVector",
     "Field",
     "FieldElement",
@@ -46,6 +53,7 @@ __all__ = [
     "PseudoMersenneVector",
     "RNSPolynomial",
     "RNSRing",
+    "Representation",
     "Ring",
     "Spec",
     "backends",

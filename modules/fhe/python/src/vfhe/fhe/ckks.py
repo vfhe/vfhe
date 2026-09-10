@@ -6,21 +6,21 @@ import math
 
 from vfhe.arith.complex import ComplexPolynomial, ComplexRing
 from vfhe.engine import ffi
-from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, Polynomial, Ring, repr
+from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
 
 
 class CKKS_Scheme(MLWE_Scheme):
     def __init__(
         self,
-        rings: list[Ring] | Ring,
+        rings: list[RNSRing] | RNSRing,
         scaling_factor: float = 2**30,
         module_rank: int = 1,
         special_primes: int = 0,
-        special_rings: list[Ring] | None = None,
+        special_rings: list[RNSRing] | None = None,
     ):
         """Create a CKKS scheme.
 
-        ``rings`` is either a single :class:`Ring` (the level chain is derived
+        ``rings`` is either a single :class:`RNSRing` (the level chain is derived
         automatically) or an explicit list of per-level rings paired with
         ``special_rings`` when ``special_primes > 0`` -- e.g. non-nested levels
         for rational rescaling. See :class:`MLWE_Scheme` for both modes.
@@ -34,8 +34,8 @@ class CKKS_Scheme(MLWE_Scheme):
         self.scaling_factor = scaling_factor
         self.complex_ring = ComplexRing(self.ring.N // 2, True)
 
-    def encode(self, values: list[complex | float]) -> Polynomial:
-        """Encodes a list of complex/float values into a Polynomial in the ciphertext ring."""
+    def encode(self, values: list[complex | float]) -> RNSPolynomial:
+        """Encodes a list of complex/float values into a polynomial in the ciphertext ring."""
         if not (len(values) == self.ring.N // 2):
             raise ValueError(f"Expected {self.ring.N // 2} values, got {len(values)}")
         # Create a ComplexPolynomial and populate it with values
@@ -55,9 +55,9 @@ class CKKS_Scheme(MLWE_Scheme):
         return poly
 
     def decode(
-        self, poly: Polynomial, scaling_factor: float | None = None
+        self, poly: RNSPolynomial, scaling_factor: float | None = None
     ) -> list[complex]:
-        """Decodes a Polynomial back into a list of complex values."""
+        """Decodes a polynomial back into a list of complex values."""
         if scaling_factor is None:
             scaling_factor = self.scaling_factor
 
@@ -96,14 +96,14 @@ class CKKS_Scheme(MLWE_Scheme):
         # Divide by the scaling factor to return values in C
         return [val / scaling_factor for val in c_poly]
 
-    def encrypt(self, message: Polynomial, key: MLWE_Key) -> CKKS_Ciphertext:
-        """Encrypts a plaintext Polynomial message under the given MLWE key."""
+    def encrypt(self, message: RNSPolynomial, key: MLWE_Key) -> CKKS_Ciphertext:
+        """Encrypts a plaintext polynomial message under the given MLWE key."""
         out = CKKS_Ciphertext(self)
         self.sample(message, key, out=out)
         return out
 
-    def decrypt(self, ciphertext: MLWE, key: MLWE_Key) -> Polynomial:
-        """Decrypts a ciphertext into a Polynomial (by calculating its phase)."""
+    def decrypt(self, ciphertext: MLWE, key: MLWE_Key) -> RNSPolynomial:
+        """Decrypts a ciphertext into a polynomial (by calculating its phase)."""
         return self.phase(ciphertext, key)
 
     def rotate(
@@ -197,7 +197,7 @@ class CKKS_Ciphertext(MLWE):
         self,
         scheme: CKKS_Scheme,
         lvl: int | None = None,
-        ring: Ring | None = None,
+        ring: RNSRing | None = None,
         rank: int | None = None,
     ):
         super().__init__(scheme, lvl=lvl, ring=ring, rank=rank)
@@ -225,7 +225,7 @@ class CKKS_Ciphertext(MLWE):
             prod.delta = self.delta * other.delta
 
             return self.scheme.rescale(prod)
-        elif isinstance(other, Polynomial):
+        elif isinstance(other, RNSPolynomial):
             base_prod = super().__mul__(other)
             prod = CKKS_Ciphertext(self.scheme, lvl=base_prod.lvl)
             prod.copy_from(base_prod)

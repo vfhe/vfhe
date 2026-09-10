@@ -22,7 +22,7 @@ lib_lwe = LibLWE()
 class LWE_Key:
     def __init__(
         self,
-        ring: Ring,
+        ring: RNSRing,
         sec_sigma: float | None = None,
         err_sigma: float | None = None,
         sparse_h: int | None = None,
@@ -78,7 +78,7 @@ class LWE_Key:
 class LWE:
     def __init__(
         self,
-        ring: Ring,
+        ring: RNSRing,
         m: list[int] | None = None,
         key: LWE_Key | None = None,
         is_trivial: bool = False,

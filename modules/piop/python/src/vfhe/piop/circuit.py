@@ -33,6 +33,8 @@ framework's LSB-first tables.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from vfhe.arith import Field, Ring
 
 from .mle import MLE, MLE_Variable, SparseMLE
@@ -48,6 +50,9 @@ from .piop import (
     _hypercube,
 )
 from .virtual import ImplicitOracle, VirtualOracle
+
+if TYPE_CHECKING:
+    from vfhe.circuit import gkr
 
 
 def _domain_kw(domain) -> dict:
@@ -83,12 +88,13 @@ class Relation_Circuit(Relation):
     name = "circuit"
     fields = ("oracles", "output")
 
-    def __init__(self, circuit):
+    def __init__(self, circuit: gkr.Circuit) -> None:
         super().__init__(index=circuit)
 
     @property
-    def circuit(self):
-        return self.index
+    def circuit(self) -> gkr.Circuit:
+        """The circuit this relation is indexed by."""
+        return cast("gkr.Circuit", self.index)
 
     def layer_tables(self, w_in) -> list:
         """Every layer's padded wire values from the input table: entry 0 is

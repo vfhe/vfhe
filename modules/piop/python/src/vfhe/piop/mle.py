@@ -159,10 +159,10 @@ class MLE:
 
     def __init__(
         self,
-        ring: Ring | None = None,
+        ring: RNSRing | None = None,
         variables: list | None = None,
-        evaluations: list | None = None,
-        coefficients: list | None = None,
+        evaluations: FieldVector | list | None = None,
+        coefficients: FieldVector | list | None = None,
         num_vars: int | None = None,
         field: Field | None = None,
         public: bool = False,
@@ -205,34 +205,70 @@ class MLE:
         return len(self.variables)
 
     @property
-    def _ring(self) -> Ring:
+    def _ring(self) -> RNSRing:
         """The ring of a ring-backed table; the kernel paths require one."""
         if self.ring is None:
             raise ValueError("this MLE has no ring backing")
         return self.ring
 
-    def _entry(self, item) -> Polynomial:
+    @property
+    def _polys(self) -> list[RNSPolynomial]:
+        """The entries of a ring-backed table, as the list they are.
+
+        The companion of `_ring` for the table itself: `table` holds one of
+        three unrelated things and only `ring` / `field` says which, so a path
+        that has established it is the ring one says so here.
+        """
+        if self.ring is None or isinstance(self.table, FieldVector):
+            raise ValueError("this MLE has no ring backing")
+        return self.table
+
+    @property
+    def _entries(self) -> list:
+        """The table as the list it is: over a ring, or over plain values.
+
+        Everything but a field-backed table, whose entries are one vector
+        rather than a list.
+        """
+        if isinstance(self.table, FieldVector):
+            raise ValueError("a field-backed table is one vector, not a list")
+        return self.table
+
+    @property
+    def _vector(self) -> FieldVector:
+        """The table of a field-backed table, as the one vector it is."""
+        if not isinstance(self.table, FieldVector):
+            raise ValueError("this MLE is not field-backed")
+        return self.table
+
+    def _entry(self, item) -> RNSPolynomial:
         """A ring-backed table entry: Polynomials are adopted as they are (so
         kernels can fill a freshly allocated table), integers are lifted to
         constants."""
-        if isinstance(item, Polynomial):
+        if isinstance(item, RNSPolynomial):
             return item
         if isinstance(item, int):
             return Polynomial(self._ring).from_array([item])
         raise TypeError("Entries of a ring-backed table must be Polynomial or integer")
 
-    def _set_table(self, entries) -> None:
+    def _set_table(self, entries: FieldVector | list) -> None:
         """Install a table and the handle array the kernels take with it.
 
         Over a field the table is a `FieldVector`; a list of entries (elements
         or ints) is packed into one."""
         if self.field is not None and not isinstance(entries, FieldVector):
             entries = FieldVector(self.field, list(entries))
-        self.table = entries
-        self.table_ptr = element_array(entries) if self.ring is not None else None
+        # Untyped on purpose: the table is a list of ring elements, one
+        # `FieldVector`, or a list of plain Python values, and only `ring` /
+        # `field` says which -- a discriminator no annotation here can carry.
+        # Inside this class the checked accessors (`_polys`, `_vector`,
+        # `_entries`) are how a path that has established one of the three
+        # says so.
+        self.table: Any = entries
+        self.table_ptr = element_array(self._polys) if self.ring is not None else None
 
     @classmethod
-    def _like(cls, src: MLE, entries: list, basis=None) -> MLE:
+    def _like(cls, src: MLE, entries: FieldVector | list, basis=None) -> MLE:
         """A table with `src`'s variables and ring, holding `entries` (in
         `src`'s basis unless another is given)."""
         basis = src.basis if basis is None else basis
@@ -286,19 +322,19 @@ class MLE:
         """
         if self.ring is None:
             return
-        for p in self.table:
+        for p in self._polys:
             p.to_NTT()
         # the array the kernels read carries the domain too, and they refuse
         # to combine elements that disagree
-        stamp_domains(self.table_ptr, self.table)
+        stamp_domains(self.table_ptr, self._polys)
 
-    def _entries_copy(self) -> list:
+    def _entries_copy(self) -> FieldVector | list:
         """A table whose entries can be reassigned without touching self's."""
         if self.ring is not None:
-            return [p.copy() for p in self.table]
+            return [p.copy() for p in self._polys]
         if self.field is not None:
-            return self.table.copy()
-        return list(self.table)
+            return self._vector.copy()
+        return list(self._entries)
 
     def to_coefficients(self) -> MLE:
         """This MLE in the monomial basis, index-aligned with the evaluation
@@ -312,7 +348,7 @@ class MLE:
             # (even, odd - even), then the two halves concatenated -- which
             # moves that variable to the MSB, so the next round's LSB is the
             # next variable, and after num_vars rounds the order is restored.
-            table = self.table
+            table = self._vector
             for _ in range(self.num_vars):
                 even, odd = table.split_even_odd()
                 table = type(table).concat([even, odd - even])
@@ -339,7 +375,7 @@ class MLE:
         size = 1 << self.num_vars
         new_table = [Polynomial(self._ring) for _ in range(size)]
         res = MLE._like(self, new_table)
-        kernel(self.ring.arith_ring, res.table_ptr, self.table_ptr, *args, size)
+        kernel(self._ring.arith_ring, res.table_ptr, self.table_ptr, *args, size)
         mark_ntt(new_table)
         return res
 
@@ -365,10 +401,10 @@ class MLE:
 
     def scale(self, factor):
         if self.field is not None:
-            return MLE._like(self, self.table * factor)
+            return MLE._like(self, self._vector * factor)
         if self.ring is None:
-            return MLE._like(self, [c * factor for c in self.table])
-        if isinstance(factor, Polynomial):
+            return MLE._like(self, [c * factor for c in self._entries])
+        if isinstance(factor, RNSPolynomial):
             factor.to_NTT()
             return self._elementwise(lib.mle_dense_poly_scale, factor.as_element())
         return self._elementwise(lib.mle_dense_poly_scale_scalar, int(factor))
@@ -424,8 +460,8 @@ class MLE:
         (halves, strided pairs) still folds correctly, one element at a
         time."""
         if self.field is not None:
-            return self.table.to_list()
-        return self.table
+            return self._vector.to_list()
+        return self._entries
 
     def _run_bind(self, poly_kernel, scalar_kernel, val, *tail) -> None:
         """Fold into a freshly allocated half-size table and install it. The
@@ -437,11 +473,11 @@ class MLE:
         if isinstance(val, Polynomial):
             val.to_NTT()
             poly_kernel(
-                self.ring.arith_ring, new_ptr, self.table_ptr, val.as_element(), *tail
+                self._ring.arith_ring, new_ptr, self.table_ptr, val.as_element(), *tail
             )
         else:
             scalar_kernel(
-                self.ring.arith_ring, new_ptr, self.table_ptr, int(val), *tail
+                self._ring.arith_ring, new_ptr, self.table_ptr, int(val), *tail
             )
         mark_ntt(new_table)
         self.table, self.table_ptr = new_table, new_ptr
@@ -458,12 +494,12 @@ class MLE:
         if self.field is not None:
             if self.basis is MLE_Basis.eval:
                 # One fused kernel pass: lo + val * (hi - lo) over the pairs.
-                self._set_table(self.table.fold(val))
+                self._set_table(self._vector.fold(val))
             else:
-                even, odd = self.table.split_even_odd()
+                even, odd = self._vector.split_even_odd()
                 self._set_table(even + odd * val)
             return
-        t = self.table
+        t = self._python_entries()
         self._set_table(
             [self._fold(lo, hi, val) for lo, hi in zip(t[0::2], t[1::2], strict=True)]
         )
@@ -542,7 +578,7 @@ class SparseMLE:
         variables: list | None = None,
         evaluations: dict | None = None,
         num_vars: int | None = None,
-        ring: Ring | None = None,
+        ring: RNSRing | None = None,
         field: Field | None = None,
         public: bool = False,
     ):

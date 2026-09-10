@@ -22,6 +22,7 @@ the C kernels of sumcheck.c, anything else runs the naive pure-Python path
 from __future__ import annotations
 
 from fractions import Fraction
+from typing import Any, cast
 
 from vfhe.arith import Polynomial, Ring
 from vfhe.engine import lib
@@ -45,7 +46,7 @@ from .piop import (
 )
 
 
-def _prover_view(prover: Prover, f):
+def _prover_view(prover: Prover, f) -> Any:
     """The prover's working form of an oracle: a defined oracle resolves its
     constituents to tables (`VirtualOracle.prover_view`), a table is itself."""
     view = getattr(f, "prover_view", None)
@@ -92,7 +93,7 @@ def interpolate_evals(evals: tuple, r):
             term = evals[t] * num * (r.field.one * denom).inverse()
             total = term if total is None else total + term
         return total
-    if isinstance(evals[0], Polynomial):
+    if isinstance(evals[0], RNSPolynomial):
         ring = evals[0].ring
         total = None
         for t in range(k + 1):
@@ -239,16 +240,16 @@ class Sumcheck(_SumcheckRounds):
             return Sumcheck.round_evals_native(f, var)
         if vector_table(f) and (var is None or f.variables.index(var) == 0):
             return Sumcheck.round_evals_vector(f)
-        own = getattr(f, "round_evals", None)
+        own: Any = getattr(f, "round_evals", None)
         if callable(own):  # a defined oracle in products form (virtual.py)
-            return own(var)
+            return cast("tuple", own(var))
         return Sumcheck._round_evals_python(f, var)
 
     @staticmethod
     def round_evals_vector(f: MLE) -> tuple:
         """The whole-vector path of round_evals over the first variable:
         g(0) and g(1) are the sums of the even and odd entries."""
-        even, odd = f.table.split_even_odd()
+        even, odd = f._vector.split_even_odd()
         return (even.sum(), odd.sum())
 
     @staticmethod
@@ -273,15 +274,15 @@ class Sumcheck(_SumcheckRounds):
         size = 1 << f.num_vars
         if idx == 0:
             lib.sumcheck_round_pairs(
-                f.ring.arith_ring, g0.as_element(), g1.as_element(), f.table_ptr, size
+                ring.arith_ring, g0.as_element(), g1.as_element(), f.table_ptr, size
             )
         elif idx == f.num_vars - 1:
             lib.sumcheck_round_halves(
-                f.ring.arith_ring, g0.as_element(), g1.as_element(), f.table_ptr, size
+                ring.arith_ring, g0.as_element(), g1.as_element(), f.table_ptr, size
             )
         else:
             lib.sumcheck_round(
-                f.ring.arith_ring,
+                ring.arith_ring,
                 g0.as_element(),
                 g1.as_element(),
                 f.table_ptr,
@@ -301,7 +302,7 @@ class Sumcheck(_SumcheckRounds):
         if size is None:
             return None
         if degree is None:
-            degree = getattr(statement.oracles[0], "degree", 1)
+            degree = int(getattr(statement.oracles[0], "degree", 1))
         return degree * statement.num_vars / size
 
     def _round_message(self, factors: list, var) -> tuple:
@@ -377,8 +378,8 @@ class SumcheckProd(_SumcheckRounds):
         of two field-backed tables: with (lo, hi) the even and odd halves,
         g(0) = sum lo_f lo_g, g(1) = sum hi_f hi_g and g(2) =
         sum (2 hi_f - lo_f)(2 hi_g - lo_g), the t = 2 extrapolation."""
-        f_lo, f_hi = f.table.split_even_odd()
-        g_lo, g_hi = g.table.split_even_odd()
+        f_lo, f_hi = f._vector.split_even_odd()
+        g_lo, g_hi = g._vector.split_even_odd()
         return (
             (f_lo * g_lo).sum(),
             (f_hi * g_hi).sum(),
@@ -431,15 +432,15 @@ class SumcheckProd(_SumcheckRounds):
         size = 1 << f.num_vars
         if idx == 0:
             lib.sumcheck_prod2_round_pairs(
-                f.ring.arith_ring, handles, f.table_ptr, g.table_ptr, size
+                ring.arith_ring, handles, f.table_ptr, g.table_ptr, size
             )
         elif idx == f.num_vars - 1:
             lib.sumcheck_prod2_round_halves(
-                f.ring.arith_ring, handles, f.table_ptr, g.table_ptr, size
+                ring.arith_ring, handles, f.table_ptr, g.table_ptr, size
             )
         else:
             lib.sumcheck_prod2_round(
-                f.ring.arith_ring, handles, f.table_ptr, g.table_ptr, size, idx
+                ring.arith_ring, handles, f.table_ptr, g.table_ptr, size, idx
             )
         mark_ntt(evals)
         return tuple(evals)

@@ -91,7 +91,6 @@ def registry() -> RNS_Base_Registry:
     return rns_base_registry
 
 
-@state.register_reset
 def _reset() -> None:
     """Drop the prime pool, the bases and the cached conversion parameters.
 
@@ -106,9 +105,12 @@ def _reset() -> None:
         cache.clear()
 
 
-@state.register_rebind
 def _rebind() -> None:
     """Replace the registry, which pins `lib` as an instance attribute."""
     global rns_base_registry
     rns_base_registry.cleanup()
     rns_base_registry = RNS_Base_Registry()
+
+
+state.register_reset(_reset)
+state.register_rebind(_rebind)

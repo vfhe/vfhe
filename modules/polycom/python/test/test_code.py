@@ -8,17 +8,17 @@ decoder (round-trip plus degree check), and the fold identity — folding a
 codeword equals encoding the folded message."""
 
 import pytest
-from vfhe.arith import Ring
+from vfhe.arith import Ring, RNSRing
 from vfhe.polycom import FoldableRS
 from vfhe.polycom import code as code_module
 from vfhe.polycom.code import _bit_reverse
 
 
-def _ring() -> Ring:
+def _ring() -> RNSRing:
     return Ring(1024, prime_size=[49], split_degree=4)
 
 
-def _code(ring: Ring, k0: int = 4, c: int = 4, d: int = 2) -> FoldableRS:
+def _code(ring: RNSRing, k0: int = 4, c: int = 4, d: int = 2) -> FoldableRS:
     return FoldableRS(ring, k0=k0, c=c, d=d)  # n0 = 16, n_d = 64, k_d = 16
 
 

@@ -23,11 +23,31 @@ held once more as vectors, for folding a whole codeword).
 from __future__ import annotations
 
 import contextlib
+from typing import TYPE_CHECKING, cast
 
-from vfhe.arith import ExtensionField, Field, FieldVector, PseudoMersenneField
+from vfhe.arith import (
+    ExtensionField,
+    Field,
+    FieldVector,
+    PseudoMersenneField,
+    PseudoMersenneVector,
+)
 from vfhe.engine import ffi, lib
 
 from .code import _bit_reverse
+
+if TYPE_CHECKING:
+    from vfhe.arith import FieldElement
+
+
+def _pmf_vector(vector: FieldVector) -> PseudoMersenneVector:
+    """`vector` as the pseudo-Mersenne vector it is over such a field.
+
+    The transforms below take the field's own plans, which only accept its
+    own vectors; a code is built over one field, so every codeword reaching
+    them is one. Stated here rather than at each call.
+    """
+    return cast("PseudoMersenneVector", vector)
 
 
 class _ExtensionTransforms:
@@ -98,14 +118,14 @@ class _PseudoMersenneTransforms:
         transform runs in place on the padded copy."""
         padding = FieldVector(self.field, self.lengths[level] - len(message))
         padded = type(message).concat([message, padding])
-        return self._plans[level].forward(padded, in_place=True)
+        return self._plans[level].forward(_pmf_vector(padded), in_place=True)
 
     def decode(
         self, word: FieldVector, level: int, degree: int
     ) -> tuple[bool, FieldVector]:
         """The inverse transform of `word`, truncated to `degree`, and whether
         what was cut off was zero (the degree check)."""
-        coefficients = self._plans[level].inverse(word)
+        coefficients = self._plans[level].inverse(_pmf_vector(word))
         size = len(coefficients)
         message = coefficients.query(range(degree))
         tail = coefficients.query(range(degree, size))
@@ -238,7 +258,7 @@ class FieldFoldableRS:
         coeff = (lo - hi) * self._twist2_inv_elements[level - 1][i]
         return hi + coeff * self._twist_elements[level - 1][i] + coeff * r
 
-    def pair_at(self, word: FieldVector, i: int) -> tuple:
+    def pair_at(self, word: FieldVector, i: int) -> tuple[FieldElement, FieldElement]:
         """Position i's `±x` pair, `(word[2i], word[2i + 1])` — the unit the
         fold reads, and the Merkle leaf (see `leaf_digest`)."""
         return word[2 * i], word[2 * i + 1]

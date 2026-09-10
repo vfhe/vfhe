@@ -14,17 +14,29 @@ The C side states the layout contract at the `PMFVector` declaration in
 
 from __future__ import annotations
 
-from vfhe.misc.libvfhe import ffi, lib
+from typing import TYPE_CHECKING
+
+from vfhe.arith._alloc import aligned64
+from vfhe.arith.base import FieldVector
+from vfhe.engine import ffi, lib
 
 from ..._alloc import aligned64
 from ...base import FieldVector
 from .pseudo_mersenne import _LANES, PseudoMersenneElement
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from .pseudo_mersenne import PseudoMersenneField
+
 
 class PseudoMersenneVector(FieldVector):
     """n elements of one `PseudoMersenneField`, held in L limb planes."""
 
-    def __init__(self, field, values) -> None:
+    #: The parent every element belongs to.
+    field: PseudoMersenneField
+
+    def __init__(self, field: PseudoMersenneField, values: int | Iterable) -> None:
         """
         Build from a length, or from a sequence of values.
 
@@ -33,7 +45,9 @@ class PseudoMersenneVector(FieldVector):
         reduced into it.
         """
         self.field = field
-        if isinstance(values, int) and not isinstance(values, bool):
+        if isinstance(values, bool):
+            raise TypeError("values is a length or a sequence, not a bool")
+        if isinstance(values, int):
             if values < 0:
                 raise ValueError(f"length must not be negative, got {values}")
             self._allocate(values)

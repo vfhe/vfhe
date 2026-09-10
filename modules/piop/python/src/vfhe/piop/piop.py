@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from enum import Enum
+from typing import Any, cast
 
 from .merkle import hash_bytes
 
@@ -202,9 +203,9 @@ def oracle_closure(oracles) -> list:
         if id(o) in seen:
             continue
         seen[id(o)] = o
-        deps = getattr(o, "dependencies", None)
+        deps: Any = getattr(o, "dependencies", None)
         if callable(deps):
-            stack.extend(deps())
+            stack.extend(cast("list", deps()))
     return list(seen.values())
 
 

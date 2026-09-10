@@ -527,7 +527,7 @@ class TestExponentiationAndInverse:
 
     def test_pow_rejects_a_bool(self, field):
         with pytest.raises(TypeError):
-            field(3) ** True
+            _ = field(3) ** True
 
 
 class TestEncoding:

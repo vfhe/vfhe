@@ -12,7 +12,8 @@ protocols — the IOP machinery stays FS-unaware, and a run is fully
 deterministic (same statement, same protocols => byte-identical transcript).
 
 Domain challenges need a deterministic bytes -> exceptional-element map.
-Over a `Ring` this module derives one itself (`ring_exceptional_from_seed`);
+Over an RNS ring this module derives one itself
+(`ring_exceptional_from_seed`);
 a domain may instead provide its own `exceptional_from_seed(seed)` method,
 which takes precedence -- every `vfhe.arith.Field` does (a uniform element
 of the field), and so does the test-stub domain.
@@ -20,7 +21,7 @@ of the field), and so does the test-stub domain.
 
 from __future__ import annotations
 
-from vfhe.arith import Polynomial, Ring
+from vfhe.arith import Polynomial, RNSPolynomial, RNSRing
 
 from .merkle import hash_bytes
 from .piop import Verifier
@@ -36,7 +37,7 @@ def expand_bytes(seed: bytes, nbytes: int) -> bytes:
     return out[:nbytes]
 
 
-def ring_exceptional_from_seed(ring: Ring, seed: bytes) -> Polynomial:
+def ring_exceptional_from_seed(ring: RNSRing, seed: bytes) -> RNSPolynomial:
     """A deterministic exceptional element of `ring` derived from `seed`.
 
     The element is a constant chunk: `split_degree` integer coefficients,
@@ -83,7 +84,7 @@ class FS_Verifier(Verifier):
         derive = getattr(domain, "exceptional_from_seed", None)
         if callable(derive):
             return derive(seed)
-        if isinstance(domain, Ring):
+        if isinstance(domain, RNSRing):
             return ring_exceptional_from_seed(domain, seed)
         raise TypeError(
             f"no deterministic exceptional sampler for domain "

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import contextlib
 
-from vfhe.arith import Polynomial, Ring
+from vfhe.arith import Polynomial, RNSPolynomial, RNSRing
 from vfhe.engine import lib
 from vfhe.piop.mle import handle_array, mark_ntt
 
@@ -47,12 +47,12 @@ def _bit_reverse(i: int, bits: int) -> int:
     return out
 
 
-def _element_hash(element: Polynomial):
+def _element_hash(element: RNSPolynomial):
     """The element's own digest, dispatched through its class."""
     return element.get_hash()
 
 
-def pair_digest(pair: tuple[Polynomial, Polynomial]) -> bytes:
+def pair_digest(pair: tuple[RNSPolynomial, RNSPolynomial]) -> bytes:
     """The Merkle leaf digest of one `±x` pair.
 
     Both ring elements are hashed with their own `get_hash` and the two
@@ -78,7 +78,7 @@ class FoldableRS:
     needs 2*n_d | p - 1, so n_d must divide N/split_degree.
     """
 
-    def __init__(self, ring: Ring, k0: int, c: int, d: int):
+    def __init__(self, ring: RNSRing, k0: int, c: int, d: int):
         for name, value in (("k0", k0), ("c", c)):
             if value < 1 or value & (value - 1):
                 raise ValueError(f"{name} must be a power of two, got {value}")
@@ -116,7 +116,7 @@ class FoldableRS:
         ]
         # twists[l][i] = x_i = psi_{l+1}^(2*brv(i)+1), the evaluation point of
         # the pair (2i, 2i+1) folding level l+1 -> l, and twists2_inv their
-        # (2 x_i)^-1 — per prime, so `Polynomial * list` applies them.
+        # (2 x_i)^-1 — per prime, so `RNSPolynomial * list` applies them.
         self.twists: list[list[list[int]]] = []
         self.twists2_inv: list[list[list[int]]] = []
         for level in range(d):
@@ -203,8 +203,8 @@ class FoldableRS:
         return bool(ok), message
 
     def fold_pair(
-        self, lo: Polynomial, hi: Polynomial, r: Polynomial, level: int, i: int
-    ) -> Polynomial:
+        self, lo: RNSPolynomial, hi: RNSPolynomial, r: RNSPolynomial, level: int, i: int
+    ) -> RNSPolynomial:
         """The folded value at position i of a level-`level` codeword, from
         that position's pair alone: `(lo, hi) = (P(x_i), P(-x_i))`.
 
@@ -214,18 +214,18 @@ class FoldableRS:
         coeff = (lo - hi) * self.twists2_inv[level - 1][i]
         return hi + coeff * self.twists[level - 1][i] + r * coeff
 
-    def pair_at(self, word: list, i: int) -> tuple[Polynomial, Polynomial]:
+    def pair_at(self, word: list, i: int) -> tuple[RNSPolynomial, RNSPolynomial]:
         """Position i's `±x` pair, `(word[2i], word[2i + 1])` — the unit the
         fold reads, and the Merkle leaf (see `pair_leaves`)."""
         return word[2 * i], word[2 * i + 1]
 
-    def pair_leaves(self, word: list) -> list[tuple[Polynomial, Polynomial]]:
+    def pair_leaves(self, word: list) -> list[tuple[RNSPolynomial, RNSPolynomial]]:
         """`word` as the leaf vector its Merkle tree commits to: one leaf per
         `±x` pair, so a single path authenticates both operands of a fold
         check ([ZCF24, Remark 9]'s packed leaves)."""
         return [self.pair_at(word, i) for i in range(len(word) // 2)]
 
-    def leaf_digest(self, pair: tuple[Polynomial, Polynomial]) -> bytes:
+    def leaf_digest(self, pair: tuple[RNSPolynomial, RNSPolynomial]) -> bytes:
         """The Merkle leaf digest of one `±x` pair (`pair_digest`)."""
         return pair_digest(pair)
 
@@ -233,13 +233,15 @@ class FoldableRS:
         """The leaf digests of every `±x` pair of `word`."""
         return [pair_digest(pair) for pair in self.pair_leaves(word)]
 
-    def fold_at(self, word: list, r: Polynomial, level: int, i: int) -> Polynomial:
+    def fold_at(
+        self, word: list, r: RNSPolynomial, level: int, i: int
+    ) -> RNSPolynomial:
         """Position i of the fold of the level-`level` codeword `word` with
         challenge r — the value the folded codeword must hold there. The pair
         is adjacent: word[2i] = P(x), word[2i + 1] = P(-x)."""
         return self.fold_pair(*self.pair_at(word, i), r, level, i)
 
-    def fold(self, word: list, r: Polynomial, level: int) -> list:
+    def fold(self, word: list, r: RNSPolynomial, level: int) -> list:
         """The full fold of a level-`level` codeword with challenge r (the
         level-(level-1) codeword of the r-folded message)."""
         return [self.fold_at(word, r, level, i) for i in range(len(word) // 2)]

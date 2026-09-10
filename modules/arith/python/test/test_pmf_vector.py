@@ -246,9 +246,9 @@ class TestArithmetic:
     def test_length_and_field_mismatches_are_rejected(self, field):
         other = PseudoMersenneField.generate(312 if field.bits != 312 else 260)
         with pytest.raises(ValueError, match="length mismatch"):
-            FieldVector(field, 4) + FieldVector(field, 5)
+            _ = FieldVector(field, 4) + FieldVector(field, 5)
         with pytest.raises(ValueError, match="different fields"):
-            FieldVector(field, 4) + FieldVector(other, 4)
+            _ = FieldVector(field, 4) + FieldVector(other, 4)
 
 
 class TestFallbackTier:
@@ -262,7 +262,7 @@ class TestFallbackTier:
 
     def test_pow_rejects_a_negative_exponent(self, field):
         with pytest.raises(ValueError, match="negative exponent"):
-            FieldVector(field, 4) ** -1
+            _ = FieldVector(field, 4) ** -1
 
     def test_batch_inverse(self, field):
         p = field.prime

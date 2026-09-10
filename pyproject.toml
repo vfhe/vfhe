@@ -140,6 +140,10 @@ exclude = [
     "build/*.p",
     "dist",
     "external",
+    # Not part of the repo: a scratch directory for reference implementations
+    # and papers, kept out of the tree through .git/info/exclude. Named here
+    # so a working copy that has one still gets a clean type-check run.
+    "reference",
 ]
 
 [tool.ruff]

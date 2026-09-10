@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from typing import Any
 
 from .mle import MLE, MLE_Basis, MLE_Variable, SparseMLE, _pair_indices, native_table
 from .piop import (
@@ -98,7 +99,7 @@ def _combine(terms: list, values: list):
     return total
 
 
-def resolve_table(oracle, witnesses: dict | None = None):
+def resolve_table(oracle, witnesses: dict | None = None) -> Any:
     """The concrete table behind an oracle on the prover's side: the
     witness recorded for it (`Prover.witnesses[oracle]`), the oracle itself
     when it is a table, else its materialization (defined oracles)."""
@@ -292,7 +293,9 @@ class VirtualOracle:
             return table
         return table.rename(renames)
 
-    def prover_view(self, witnesses: dict | None = None, strategy: str | None = None):
+    def prover_view(
+        self, witnesses: dict | None = None, strategy: str | None = None
+    ) -> Any:
         """The prover's concrete form: every constituent resolved to a table
         (`resolve_table`; sparse predicates stay sparse for the two-phase
         strategy), with the round-message strategy chosen by `strategy`
@@ -343,7 +346,7 @@ def _same_point(a: dict, b: dict) -> bool:
     return all(bool(a[k] == b[k]) for k in a)
 
 
-def _one_of(tables) -> object:
+def _one_of(tables) -> Any:
     """The multiplicative identity of the tables' domain (1 for plain values)."""
     for t in tables:
         if getattr(t, "ring", None) is not None:
@@ -366,7 +369,7 @@ def _eq_weights(values: list, one) -> list:
     return table
 
 
-def _mul(a, b):
+def _mul(a, b) -> Any:
     """a * b, skipping the multiplication by an integer 1."""
     if isinstance(a, int) and a == 1:
         return b
@@ -479,6 +482,10 @@ class _ProverVirtual:
                 evals
                 if total is None
                 else [a + b for a, b in zip(total, evals, strict=True)]
+            )
+        if total is None:
+            raise ValueError(
+                "a products-form oracle with no terms has no round message"
             )
         return tuple(total)
 
@@ -717,7 +724,7 @@ class _LibraProver:
             sum(1 << p for i, p in enumerate(free) if (m >> i) & 1)
             for m in range(1 << len(free))
         ]
-        acc: dict[int, object] = {}
+        acc: dict[int, Any] = {}
         for k, value in pred.sparse.nonzeros():
             weight = pred.weight(k)
             if isinstance(weight, int) and weight == 0:
@@ -739,7 +746,7 @@ class _LibraProver:
         """p(y) = pred(z, r, y) over the predicate's Y variables, r the
         bound X point."""
         x_weights = _eq_weights([self.x_point[v] for v in pred.x_vars], self.one)
-        acc: dict[int, object] = {}
+        acc: dict[int, Any] = {}
         for k, value in pred.sparse.nonzeros():
             weight = _mul(pred.weight(k), x_weights[pred.x_index(k)])
             entry = _mul(weight, value)
