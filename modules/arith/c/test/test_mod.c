@@ -386,7 +386,7 @@ void test_mod_eltwise_w32_matches_the_wide_kernels(void)
                 n1[i] = (uint32_t)w1[i];
                 n2[i] = (uint32_t)w2[i];
             }
-            const uint64_t scalar = w2[1];
+            const uint64_t scalar = w2[n - 1];
 
 /* Run the wide kernel and the narrow one from the same inputs, then require
    every coefficient to match. `seed_out` says whether the operation reads its
