@@ -23,9 +23,9 @@ import random
 
 import pytest
 from vfhe.arith import FieldVector, PseudoMersenneField, PseudoMersenneVector
-from vfhe.misc.libvfhe import lib
+from vfhe.engine import lib
 
-rng = random.Random(0xB0A710)
+rng = random.Random(0xB0A710)  # noqa: S311 - test data, not a key
 
 LIMB_BITS = 52
 LIMB_MASK = (1 << LIMB_BITS) - 1
@@ -60,7 +60,7 @@ def edge_values(f):
 
 
 def random_values(f, n, seed=1):
-    local = random.Random(seed)
+    local = random.Random(seed)  # noqa: S311 - test data, not a key
     return [local.randrange(f.prime) for _ in range(n)]
 
 

@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <engine.h>
 #include <vfhe_cpu.h>
 
 #ifdef __cplusplus

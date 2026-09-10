@@ -7,8 +7,16 @@ import math
 import operator
 from typing import TYPE_CHECKING, TypeVar, cast
 
-from vfhe.arith.base import ArithParent
-from vfhe.arith.polynomial import Polynomial, Ring, repr
+from vfhe.arith import (
+    ArithParent,
+    Capability,
+    Polynomial,
+    RNSPolynomial,
+    RNSRing,
+    domain_of,
+    repr,
+)
+from vfhe.crypto import entropy
 from vfhe.engine import ffi, lib
 
 if TYPE_CHECKING:
@@ -668,7 +676,7 @@ class MLWE:
             raise ValueError("trying to mul things in different rings")
         if not (in_rlwe.repr == in_poly.repr == repr.ntt):
             raise ValueError("failed: not (in_rlwe.repr == in_poly.repr == repr.ntt)")
-        lib_rlwe.lib.mlwe_RNS_mul_by_poly(self.obj, in_rlwe.obj, in_poly.obj)
+        lib_rlwe.lib.mlwe_RNS_mul_by_poly(self.obj, in_rlwe.obj, in_poly.as_element())
         self.repr = repr.ntt
 
     def multiply_scalar(self, in_rlwe, pointer_to_int_list):

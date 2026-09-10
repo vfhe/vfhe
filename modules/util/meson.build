@@ -9,7 +9,7 @@ module = {
         'c/src/util.c',
     ),
     'includes': [include_directories('c/include')],
-    'headers': files('c/include/util.h'),
+    'headers': files('c/include/engine.h', 'c/include/util.h'),
     'cdefs': files('python/cdef/engine.cdef'),
     'c_tests': files('c/test/test_cpu_probe.c'),
     'packages': ['dynamic_extensions', 'engine', 'info'],

@@ -31,7 +31,13 @@ else
 endif
 
 # Coverage swaps LTO for gcov instrumentation.
-lto_args = get_option('b_coverage') ? [] : ['-flto']
+#
+# -fno-semantic-interposition is what lets LTO actually inline the reduction
+# primitives. Without it GCC has to assume any default-visibility global in a
+# shared object may be interposed at load time, so a call to one becomes a PLT
+# call it cannot inline through -- which put a dynamic call per element inside
+# every scalar kernel.
+lto_args = get_option('b_coverage') ? [] : ['-flto', '-fno-semantic-interposition']
 
 # A fuzzing build installs nothing; the placeholder keeps install_dir defined.
 python_dir = fuzz ? 'nothing-is-installed' : py_install.get_install_dir()
@@ -128,7 +134,12 @@ engines = [
             '-mavx512vl',
             '-mavx2',
             '-maes',
+            '-mvaes',
             '-mrdrnd',
+            # BMI2/ADX predate AVX512IFMA, so the engine's runtime gate already
+            # implies them; they let GCC use MULX in the scalar reduction path.
+            '-mbmi2',
+            '-madx',
             '-funroll-all-loops',
         ],
         'sde': ['-icl'],
@@ -208,7 +219,9 @@ foreach fact : engine_facts
     engine = fact['name']
     # Its own name, so vfhe_engine_active() answers per engine and
     # dynamic_extensions finds the matching archive.
-    cflags = fact['cargs'] + ['-DVFHE_ENGINE_NAME="' + engine + '"']
+    # -Wundef: the VFHE_HAVE_* configuration macros are tested with #if, so a
+    # misspelt or missing one must be a warning rather than a silent 0.
+    cflags = fact['cargs'] + ['-DVFHE_ENGINE_NAME="' + engine + '"', '-Wundef']
     engine_sources = collected['sources'] + fact['extra_sources']
 
     installed_lib = static_library(

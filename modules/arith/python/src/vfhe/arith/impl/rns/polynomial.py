@@ -14,10 +14,6 @@ from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
 from vfhe.engine import ffi, lib
 
-from ...base import Polynomial, Ring
-from ...number_theory import crt, is_prime
-from ...registry import register
-from ...spec import Capability, Constraints, Spec
 from .rns_base import registry
 
 if TYPE_CHECKING:
@@ -265,9 +261,8 @@ class RNSRing(Ring):
         array is indexed by, so a caller never has to know how primes are
         numbered.
         """
-        assert self.N == other.N and self.split_degree == other.split_degree, (
-            "rings must share N and split_degree to be combined"
-        )
+        if self.N != other.N or self.split_degree != other.split_degree:
+            raise ValueError("rings must share N and split_degree to be combined")
         order = registry().prime_to_index[(self.N, self.split_degree)]
         primes = sorted(set(self.primes) | set(other.primes), key=lambda p: order[p])
         return type(self)(
@@ -792,7 +787,8 @@ class RNSPolynomial(Polynomial):
         and wrapped into the unsigned value cffi's ``uint64_t`` parameter takes,
         and why subtraction is just addition of the negation.
         """
-        assert -(2**63) <= other < 2**63, f"integer operand {other} exceeds int64"
+        if not (-(2**63) <= other < 2**63):
+            raise ValueError(f"integer operand {other} exceeds int64")
         wrapped = other & 0xFFFFFFFFFFFFFFFF
         if self.repr == repr.coeff:
             self.ring.lib.polynomial_RNSc_add_integer(out.obj, self.obj, wrapped)

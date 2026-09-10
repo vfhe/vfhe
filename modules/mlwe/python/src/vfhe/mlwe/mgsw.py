@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from vfhe.arith.polynomial import Polynomial, repr
+from vfhe.arith import RNSPolynomial, repr
 from vfhe.engine import ffi, lib
 
 from .mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set

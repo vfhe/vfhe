@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
-#include "misc.h"
+#include "util.h"
 
 // Gadget decomposition against the RNS base.
 //

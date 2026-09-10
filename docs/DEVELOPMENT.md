@@ -183,7 +183,9 @@ The matrix has two orthogonal axes.
 **Test sources are engine-invariant.** One C API and one set of test files
 cover every implementation behind the ISA macros, so the engine is a build
 parameter rather than a test parameter. A test that applies to one engine
-asks which one is loaded.
+asks which one is loaded. An arithmetic *implementation* or *backend* is the
+opposite: chosen per object at runtime, so it is a legitimate `parametrize`
+argument (see `modules/arith/python/test/test_spec.py`).
 
 ```bash
 make test                          # C + complete suites, on every built engine
@@ -266,8 +268,12 @@ A module carries only the parts it needs. `circuit` is Python and a protobuf
 schema with no C, `polycom` has no C tests, and `arith` has everything.
 
 1. **Python package.** `modules/<mod>/python/src/vfhe/<mod>/__init__.py` plus
-   its implementation modules, and the pytest suite in `python/test/`.
-2. **C sources.** `c/src/*.c` and `c/include/*.h`. A module exposing C to
+   its implementation modules, and the pytest suite in `python/test/`. A
+   module holding several implementations of one interface gives each its own
+   subpackage, `impl/<name>/` (`arith`).
+2. **C sources.** `c/src/*.c` and `c/include/*.h`, grouped in subdirectories
+   where a module has many (`arith`); `<file>_rns.c` holds the part of
+   `<file>.c` that needs one representation. A module exposing C to
    Python also needs a hand-written `python/cdef/<mod>.cdef` declaring that
    ABI. Kernels worth testing below the Python surface add
    `c/test/test_<mod>.c`, either a plain `assert`/`main()` program whose

@@ -471,8 +471,8 @@ class MLE:
         small integer); `tail` completes the chosen kernel's signature."""
         self.to_NTT()
         new_table = [Polynomial(self._ring) for _ in range(1 << (self.num_vars - 1))]
-        new_ptr = handle_array(new_table)
-        if isinstance(val, Polynomial):
+        new_ptr = element_array(new_table)
+        if isinstance(val, RNSPolynomial):
             val.to_NTT()
             poly_kernel(
                 self._ring.arith_ring, new_ptr, self.table_ptr, val.as_element(), *tail

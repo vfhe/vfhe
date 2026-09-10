@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include <rns-rlwe.h>
-#include <arith_config.h>
+#include <engine.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>

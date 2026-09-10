@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
-#include "misc.h"
+// RNS row width and accessors: this file is the RNS backend, so it reaches
+// into the representation on purpose.
+#include "arith_internal.h"
+#include "util.h"
+#include <crypto.h>
 
 // The MLWE operations that need the RNS representation itself.
 //

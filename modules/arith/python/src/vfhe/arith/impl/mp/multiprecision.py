@@ -5,6 +5,8 @@ from __future__ import annotations
 from math import ceil, log2, prod
 from typing import TYPE_CHECKING, ClassVar
 
+from vfhe.arith.registry import register
+from vfhe.arith.spec import Capability, Constraints, Spec
 from vfhe.engine import ffi, lib
 
 if TYPE_CHECKING:

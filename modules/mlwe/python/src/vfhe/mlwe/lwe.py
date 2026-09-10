@@ -8,7 +8,7 @@ from vfhe.arith.number_theory import crt
 from vfhe.engine import ffi, lib
 
 if TYPE_CHECKING:
-    from vfhe.arith.polynomial import Ring
+    from vfhe.arith import RNSRing
 
 
 class LibLWE:

@@ -176,7 +176,10 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"modules/*/python/test/*" = ["S101"]
+"modules/*/python/test/*" = ["S101", "SLF001"]
+# An implementation's element, field and vector classes share private state
+# by design (a vector borrows its field's native parameters).
+"modules/arith/python/src/vfhe/arith/impl/**" = ["SLF001"]
 # The piop and polycom frameworks arrived with findings this rule set
 # reports: assert as an internal invariant (their tests expect
 # AssertionError), cooperating classes reaching into one another, and
