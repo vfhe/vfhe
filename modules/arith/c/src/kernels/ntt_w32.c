@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <arith.h>
 #include <inttypes.h>
-#include <util.h> /* safe_malloc */
+#include <util.h> /* safe_malloc, safe_aligned_malloc */
 
 #include "arith_internal.h"
 
