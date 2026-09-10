@@ -6,13 +6,11 @@ rule of the driver, and Fiat-Shamir over statements carrying them."""
 
 import random
 
-from vfhe.arith import Ring
+from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
 from vfhe.piop import (
     IOP,
-    MLE,
     ImplicitEval,
     ImplicitOracle,
-    MLE_Variable,
     OracleKind,
     Protocol,
     Relation_Eval,
@@ -22,6 +20,7 @@ from vfhe.piop import (
     Sumcheck,
     VirtualEval,
     VirtualOracle,
+    element_digest,
     oracle_kind,
 )
 
@@ -62,6 +61,22 @@ def test_oracle_kinds():
     assert oracle_kind(g) is OracleKind.virtual
     body = VirtualOracle.product([f])
     assert oracle_kind(ImplicitOracle([], body, x)) is OracleKind.implicit
+    v = _vars("y0", "y1", "y2")
+    assert oracle_kind(SparseMLE(variables=v, evaluations={5: 3}, public=True)) is (
+        OracleKind.public
+    )
+
+
+def test_sparse_mle_digest_is_canonical():
+    """A sparse table's digest depends on its entries, not on their insertion
+    order — the framework keys parked claims on it."""
+    v = _vars("x0", "x1", "x2")
+    s = SparseMLE(variables=v, evaluations={5: 3, 2: 1})
+    same = SparseMLE(variables=v, evaluations={2: 1, 5: 3})
+    assert element_digest(s) == element_digest(same)
+    assert element_digest(s) != element_digest(
+        SparseMLE(variables=v, evaluations={2: 1})
+    )
 
 
 def test_virtual_products_form_sumcheck():

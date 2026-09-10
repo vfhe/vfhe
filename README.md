@@ -97,9 +97,9 @@ modules, no Python symbols). A Python-facing module's public API is its
 
 | Module | Kind | What it provides |
 |---|---|---|
-| `arith` | Python-facing | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: incomplete NTTs, complex FFTs, general multiprecision, and basic number theory procedures |
+| `arith` | Python-facing | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: incomplete NTTs, complex FFTs, general multiprecision, basic number theory procedures, and multilinear extensions |
 | `util` | Python-facing | The native handle (`ffi`/`lib`), the engine picker and CPU probe, `vfhe.info`, runtime C compilation (`vfhe.dynamic_extensions`), and the C substrate (aligned allocation, mod switching) |
-| `crypto` | internal C-only | Randomness: BLAKE3-seeded PRNG, AES-CTR RNG, Box-Muller sampling |
+| `crypto` | Python-facing | Basic primitives: the library's randomness (BLAKE3-seeded PRNG, AES-CTR RNG, Box-Muller sampling, a seeded transcript sampler) and BLAKE3 Merkle trees |
 | `mlwe` | Python-facing | LWE / Module-LWE and MGSW: key generation, encryption, key-switching, arithmetic, and ring morphisms |
 | `fhe` | Python-facing | Schemes on top of `mlwe`: CKKS (encode/encrypt/rescale/rotate/multiply), CGGI16 functional bootstrap, GP25 sparse-amortized bootstrap |
 | `piop` | Python-facing | Sketch of IOP prover/verifier framework (currently under development) |

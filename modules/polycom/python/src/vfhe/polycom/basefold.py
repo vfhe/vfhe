@@ -18,7 +18,7 @@ on the transcript. The prover's opening data is stored under the commitment
 in `prover.witnesses`.
 
 The commitment is a **Merkle root** over the level-d codeword
-(`vfhe.piop.Merkle`, BLAKE3): the RO-model instantiation of [ZCF24] §4's
+(`vfhe.crypto.Merkle`, BLAKE3): the RO-model instantiation of [ZCF24] §4's
 ideal oracle, via the BCS compiler [BCS16]. It commits to the codeword's
 `±x` *pairs*, one leaf each — our fold reads adjacent entries, so a single
 path authenticates both operands of a fold check ([ZCF24, Remark 9]'s
@@ -56,10 +56,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from vfhe.arith import Field, Polynomial, Ring
+from vfhe.arith import MLE, Field, Polynomial, Ring
+from vfhe.arith.mle import native_table, vector_table
+from vfhe.crypto import DIGEST_LEN, Merkle, hash_bytes
 from vfhe.piop import (
-    MLE,
-    Merkle,
     Protocol,
     Prover,
     Rejection,
@@ -71,8 +71,6 @@ from vfhe.piop import (
     Verifier,
     element_digest,
 )
-from vfhe.piop.merkle import DIGEST_LEN, hash_bytes
-from vfhe.piop.mle import native_table, vector_table
 from vfhe.piop.sumcheck import _exceptional_set_size, interpolate_evals
 
 # `pair_digest` is re-exported here: the aliased form is what marks it

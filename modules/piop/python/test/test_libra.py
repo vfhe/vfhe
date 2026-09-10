@@ -7,8 +7,10 @@ fallback on the ones it does not."""
 import random
 
 import pytest
-from vfhe.arith import Ring
-from vfhe.piop import MLE, MLE_Variable, SparseMLE, VirtualOracle
+from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
+from vfhe.piop import (
+    VirtualOracle,
+)
 from vfhe.piop.virtual import _LibraProver, _ProverVirtual
 
 

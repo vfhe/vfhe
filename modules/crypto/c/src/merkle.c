@@ -3,6 +3,8 @@
 #include "merkle.h"
 
 #include <blake3.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "util.h"
 

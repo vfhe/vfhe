@@ -22,8 +22,8 @@ of the field), and so does the test-stub domain.
 from __future__ import annotations
 
 from vfhe.arith import Polynomial, RNSPolynomial, RNSRing
+from vfhe.crypto import hash_bytes
 
-from .merkle import hash_bytes
 from .piop import Verifier
 
 

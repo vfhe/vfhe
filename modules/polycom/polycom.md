@@ -42,7 +42,7 @@ offline phase and reused across proofs), and of the `commit -> (Commitment,
 ProverData)` shape of PCS implementations (arkworks' poly-commit, plonky3's
 `Pcs`).
 
-Codewords are committed by **Merkle root** (`vfhe.piop.Merkle`, BLAKE3):
+Codewords are committed by **Merkle root** (`vfhe.crypto.Merkle`, BLAKE3):
 the RO-model instantiation of [ZCF24] §4's ideal oracle via the BCS
 compiler [BCS16]. So `commit` returns `(BasefoldCommitment, BasefoldOpening)`
 — a root, and the prover data (the codeword and its tree) that every later

@@ -11,19 +11,16 @@ answer. Dishonest-prover cases replay an honest transcript against a
 verifier-only run, since an in-process prover is honest by construction."""
 
 import pytest
-from vfhe.arith import Polynomial, Ring
+from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring
+from vfhe.crypto import DIGEST_LEN, Merkle
 from vfhe.piop import (
     IOP,
-    MLE,
-    Merkle,
-    MLE_Variable,
     Proof,
     Relation_Eval,
     Relation_Sum,
     Statement,
     Sumcheck,
 )
-from vfhe.piop.merkle import DIGEST_LEN
 from vfhe.polycom import (
     Basefold,
     BasefoldCommitment,

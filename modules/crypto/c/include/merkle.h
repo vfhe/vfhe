@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include <arith.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-    // Binary Merkle tree over BLAKE3 digests. Defined in piop/c/src/merkle.c.
+    // Binary Merkle tree over BLAKE3 digests. Defined in crypto/c/src/merkle.c.
     //
     // Every node is a MERKLE_DIGEST_LEN-byte digest: a leaf's digest is
     // supplied by the caller (the Python layer hashes leaf objects, which may

@@ -27,7 +27,6 @@ from typing import Any, cast
 from vfhe.arith import Polynomial, Ring
 from vfhe.engine import lib
 
-from .mle import MLE, element_array, mark_ntt, native_table, vector_table
 from .piop import (
     IOP,
     Protocol,

@@ -51,7 +51,15 @@ import copy
 from dataclasses import dataclass
 from typing import Any
 
-from .mle import MLE, MLE_Basis, MLE_Variable, SparseMLE, _pair_indices, native_table
+from vfhe.arith.mle import (
+    MLE,
+    MLE_Basis,
+    MLE_Variable,
+    SparseMLE,
+    native_table,
+    pair_indices,
+)
+
 from .piop import (
     IOP,
     OracleKind,
@@ -409,7 +417,7 @@ class _ProverVirtual:
     """The dense round-message strategy: a products form over tables that
     all span the same variables (`_expand`ed on construction), so a round
     over the variable at position `idx` reads the table pairs
-    `_pair_indices(size, idx)`, and a factor that never read the variable
+    `pair_indices(size, idx)`, and a factor that never read the variable
     is simply constant across each pair.
 
     `round_evals(var)` gives the round polynomial at the nodes
@@ -507,7 +515,7 @@ class _ProverVirtual:
         evals = []
         for t in range(nodes):
             total = None
-            for lo, hi in _pair_indices(size, idx):
+            for lo, hi in pair_indices(size, idx):
                 prod = None
                 for table in tables:
                     a, b = table.table[lo], table.table[hi]

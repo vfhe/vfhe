@@ -9,11 +9,9 @@ chaining, and future resolution.
 import asyncio
 
 import pytest
-from vfhe.arith import Ring
+from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import (
     IOP,
-    MLE,
-    MLE_Variable,
     Protocol,
     Relation_Eval,
     Relation_Sum,

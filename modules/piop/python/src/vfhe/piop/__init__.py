@@ -3,8 +3,6 @@
 # vfhe.piop public API re-exports.
 from .circuit import GKR, Relation_Circuit
 from .fs import FS_Verifier
-from .merkle import Merkle, MerklePath
-from .mle import MLE, MLE_Basis, MLE_Variable, SparseMLE
 from .piop import (
     IOP,
     OracleKind,
@@ -32,14 +30,9 @@ from .virtual import ImplicitEval, ImplicitOracle, VirtualEval, VirtualOracle
 __all__ = [
     "GKR",
     "IOP",
-    "MLE",
     "FS_Verifier",
     "ImplicitEval",
     "ImplicitOracle",
-    "MLE_Basis",
-    "MLE_Variable",
-    "Merkle",
-    "MerklePath",
     "OracleKind",
     "Party",
     "Proof",
@@ -52,7 +45,6 @@ __all__ = [
     "Relation_Sum",
     "Relation_SumProd",
     "Relation_Zero",
-    "SparseMLE",
     "Statement",
     "Sumcheck",
     "SumcheckProd",

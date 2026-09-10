@@ -10,11 +10,10 @@ full derivation and bibliography.
 from __future__ import annotations
 
 import asyncio
-import secrets
 from enum import Enum
 from typing import Any, cast
 
-from .merkle import hash_bytes
+from vfhe.crypto import entropy, hash_bytes
 
 
 def _loop_of(iop: IOP | None):
@@ -867,7 +866,7 @@ class Verifier(Party):
 
     def _draw_bits(self, label: str, nbytes: int) -> bytes:
         """Where a bit-string challenge's value comes from (see above)."""
-        return secrets.token_bytes(nbytes)
+        return entropy.bytes(nbytes)
 
     async def verify(self, statement: Statement) -> bool:
         """Follow the registered reductions, then decide every terminal

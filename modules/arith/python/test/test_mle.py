@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Characterization tests for vfhe.piop: MLE in both bases and over
+"""Characterization tests for vfhe.arith.mle: MLE in both bases and over
 both coefficient types - pure-Python tables (no ring) and the C-backed
 ring tables (mle_dense_poly_* kernels over the cffi boundary) - plus
 SparseMLE arithmetic. Evaluation points are always concrete values —
@@ -8,9 +8,8 @@ protocol futures live at the Transcript / Statement level (test_piop.py).
 """
 
 import pytest
-from vfhe.arith import Polynomial, Ring
-from vfhe.piop import MLE, MLE_Basis, MLE_Variable, SparseMLE
-from vfhe.piop.mle import native_table
+from vfhe.arith import MLE, MLE_Basis, MLE_Variable, Polynomial, Ring, SparseMLE
+from vfhe.arith.mle import native_table
 
 
 def test_coeff_basis_arithmetic_and_eval():
@@ -248,13 +247,10 @@ def test_mle_full_evaluation():
 
 
 def test_sparse_mle_evaluates_at_full_points():
-    from vfhe.piop import OracleKind, element_digest, oracle_kind
-
     v = [MLE_Variable("x0"), MLE_Variable("x1"), MLE_Variable("x2")]
     s = SparseMLE(variables=v, evaluations={5: 3, 2: 1}, public=True)
     dense = s.materialize()
     assert dense.table == [0, 0, 1, 0, 0, 3, 0, 0] and dense.public
-    assert oracle_kind(s) is OracleKind.public
     for point in ([0, 0, 0], [1, 0, 1], [7, 11, 13], [2, -3, 5]):
         pt = dict(zip(v, point, strict=True))
         assert (
@@ -262,12 +258,6 @@ def test_sparse_mle_evaluates_at_full_points():
         )
     with pytest.raises(NotImplementedError):
         s.evaluate({v[0]: 1})
-    # Digest: canonical in the entry order, distinct for distinct tables.
-    same = SparseMLE(variables=v, evaluations={2: 1, 5: 3})
-    assert element_digest(s) == element_digest(same)
-    assert element_digest(s) != element_digest(
-        SparseMLE(variables=v, evaluations={2: 1})
-    )
 
 
 def test_sparse_mle_over_a_ring():

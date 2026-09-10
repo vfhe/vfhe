@@ -262,9 +262,8 @@ own code; nothing else needs rewiring.
 
 ### Adding a module
 
-A module carries only the parts it needs. `crypto` is C kernels alone,
-`circuit` is Python and a protobuf schema with no C, and `arith` has
-everything.
+A module carries only the parts it needs. `circuit` is Python and a protobuf
+schema with no C, `polycom` has no C tests, and `arith` has everything.
 
 1. **Python package.** `modules/<mod>/python/src/vfhe/<mod>/__init__.py` plus
    its implementation modules, and the pytest suite in `python/test/`.

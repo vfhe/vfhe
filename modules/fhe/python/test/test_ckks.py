@@ -6,15 +6,13 @@ Encode/decode, encrypt/decrypt, slot rotation, and ciphertext multiplication
 (ciphertext*ciphertext with relinearization+rescale, and ciphertext*plaintext).
 """
 
-import secrets
-
 import pytest
 from vfhe.arith import Ring
 from vfhe.arith.residue_selection import search_log_residues_minq0
+from vfhe.crypto import entropy
 from vfhe.fhe import CKKS_Ciphertext, CKKS_Scheme
 
 N = 256
-rng = secrets.SystemRandom()
 
 # Module ranks above 1, paired with a ring dimension that keeps the lattice
 # dimension N*r (and the runtime) in line with the rank-1 tests above.
@@ -30,10 +28,8 @@ def _subring(Rq, *indices):
 
 
 def rand_values(n):
-    return [
-        complex(rng.choice([-2, -1, 0, 1, 2]), rng.choice([-2, -1, 0, 1, 2]))
-        for _ in range(n)
-    ]
+    draw = [-2, -1, 0, 1, 2]
+    return [complex(draw[entropy.below(5)], draw[entropy.below(5)]) for _ in range(n)]
 
 
 def test_encode_decode():

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
-// Python-facing ABI of the piop engine: dense multilinear-extension kernels
-// (piop/c/src/mle.c, prototyped in piop/c/include/mle.h). Polynomial handles
+// Python-facing ABI of arith's dense multilinear-extension kernels
+// (arith/c/src/mle.c, prototyped in arith/c/include/mle.h). Polynomial handles
 // and handle-arrays are passed as `void *` (cffi converts any pointer/array).
 
 void mle_dense_poly_add(ArithRing ring, ArithElement *out, ArithElement *in1, ArithElement *in2, uint64_t size);

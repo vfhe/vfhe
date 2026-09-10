@@ -1,15 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for vfhe.piop.merkle: the C-backed BLAKE3 Merkle tree, its openings,
+"""Tests for vfhe.crypto.merkle: the C-backed BLAKE3 Merkle tree, its openings,
 and the leaf-hashing contract (`.hash()` or an explicit `hash=` callable).
 """
 
-import random
-
 import pytest
 from vfhe.arith import Field, FieldElement, Polynomial, Ring
-from vfhe.piop import Merkle, MerklePath
-from vfhe.piop.merkle import DIGEST_LEN, hash_bytes, leaf_digest
+from vfhe.crypto import Merkle, MerklePath, entropy
+from vfhe.crypto.merkle import DIGEST_LEN, hash_bytes, leaf_digest
 
 
 class HashableLeaf:
@@ -23,7 +21,7 @@ class HashableLeaf:
 
 
 def random_leaves(count: int) -> list[HashableLeaf]:
-    return [HashableLeaf(random.randbytes(48)) for _ in range(count)]
+    return [HashableLeaf(entropy.bytes(48)) for _ in range(count)]
 
 
 @pytest.mark.parametrize("size", [1, 2, 8, 64])
@@ -99,7 +97,7 @@ def test_recommit_reuses_the_tree():
 
 
 def test_explicit_hash_callable_and_missing_hash_method():
-    leaves = [random.randbytes(32) for _ in range(8)]
+    leaves = [entropy.bytes(32) for _ in range(8)]
     with pytest.raises(TypeError, match=r"no \.hash\(\) method"):
         Merkle(leaves)
     tree = Merkle(leaves, hash=hash_bytes)

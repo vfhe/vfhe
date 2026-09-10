@@ -632,7 +632,7 @@ published to the transcript, so the Fiat-Shamir subtype (`fs.FS_Verifier`,
   exceptional-set structure, so `soundness_error` accounting never sees
   these coins.
 
-### `MLE` and `SparseMLE` (`mle.py`)
+### `MLE` and `SparseMLE` (`vfhe.arith`, `arith/mle.py`)
 
 Every function `f : {0,1}^n → R` has a unique multilinear extension `f̃`,
 `f̃(x) = Σ_{w ∈ {0,1}^n} f(w)·χ_w(x)` [Tha22, §3.5, Lemma 3.6]. The module
@@ -752,7 +752,7 @@ summed variables are listed `x` first then `y`, and the prover runs the
 two-phase strategy; the verifier's end-of-layer cost is the sparse
 evaluation of the two predicates.
 
-### `Merkle` (`merkle.py`)
+### `Merkle` (`vfhe.crypto`, `crypto/merkle.py`)
 
 A binary Merkle tree [Mer88] over BLAKE3: the vector commitment that turns a
 long prover oracle into a short root plus per-query openings, which is how an
@@ -762,9 +762,9 @@ commitment (`vfhe.polycom`) needs for its codewords. Internal nodes are
 with zero digests, so the root is defined for any size (the leaf count is
 public protocol data, so the padding is not a domain separation concern).
 
-The split follows the rest of the module: the tree — building the levels,
-copying a path, replaying it — is C (`c/src/merkle.c`, one contiguous buffer
-per level), while the Python layer only decides *what a leaf hashes to*. That
+The split follows the rest of the library: the tree — building the levels,
+copying a path, replaying it — is C (one contiguous buffer per level), while
+the Python layer only decides *what a leaf hashes to*. That
 is the sole requirement on a leaf type: a `.hash()` method returning its
 digest, or a `hash=` callable given to `Merkle` / `Merkle.verify` for types
 without one. Leaves are never copied or interpreted, only referenced and
@@ -773,9 +773,9 @@ else without knowing what they are.
 
 An opening (`MerklePath`) carries the sibling digests bottom-up and
 deliberately *not* the leaf index: the verifier checks the position it
-queried, never one the prover chose. Nothing in the file is PIOP-specific —
-it is here for want of a crypto-primitives module, and should move when one
-exists (like `MLE` moving to `vfhe.arith`, §8).
+queried, never one the prover chose. Nothing in it is PIOP-specific, which
+is why it lives in `vfhe.crypto`; it is described here because the layering
+argument below is what keeps it out of this module.
 
 `Merkle` is a primitive, not a `Relation` or a `Protocol`, and that is a
 deliberate layering decision rather than an omission. The root is the
@@ -798,7 +798,7 @@ therefore lives inside the PCS's evaluation protocol
 1. **Prover kernel follow-ups**: the native Ring paths exist (§5); still
    open are multithreaded round kernels, a general-`k` product kernel
    (native is `k = 2`), the omit-`g(1)` message trick [Gru24, §3.1; DT24],
-   and Field domains once the MLE layer moves to `vfhe.arith`. The
+   and Field round kernels. The
    pure-Python fallbacks remain naive (per-round hypercube re-enumeration)
    by design — they are the reference semantics, not the fast path.
 2. **Zerocheck** (`Relation_Zero → Relation_Sum` over the virtual oracle

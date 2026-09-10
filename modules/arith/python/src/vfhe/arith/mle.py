@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Multilinear extensions (piop.md §7).
+"""Multilinear extensions.
 
 `MLE` is the dense table protocols work with; `SparseMLE` is an independent
 bookkeeping form (a sparse map of hypercube evaluations).
@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import operator
 from enum import Enum
+from typing import Any
 
-from vfhe.arith import Polynomial, Ring, repr
 from vfhe.engine import ffi, lib
 
+from .base import Field, FieldVector, Polynomial
+from .impl.rns.polynomial import RNSPolynomial, RNSRing, domain_of, repr
+
 # Which basis a dense table is written in — a property of the table, not of
-# its domain class (piop.md §7).
+# its domain class.
 MLE_Basis = Enum("MLE_Basis", ["eval", "coeff"])
 
 
@@ -23,8 +26,8 @@ class MLE_Variable:
     """A named variable identifier for MLEs, compared by identity.
 
     Any hashable works as an MLE variable; this class is the default used
-    when only `num_vars` is given. It is a plain name — protocol futures
-    (`piop.Variable`) are a different, unrelated object.
+    when only `num_vars` is given. It is a plain name, unrelated to any
+    protocol-level variable a consumer may also call `Variable`.
     """
 
     def __init__(self, name: str):
@@ -39,7 +42,7 @@ def _default_variables(num_vars: int) -> list[MLE_Variable]:
     return [MLE_Variable(f"var_{i}") for i in range(num_vars)]
 
 
-def _pair_indices(size: int, idx: int):
+def pair_indices(size: int, idx: int):
     """The (lo, hi) index pairs of the variable at position `idx` in a table
     of `size` entries: the entries differing only in bit `idx`, yielded in
     the folded table's output order. This is the index arithmetic the
@@ -96,7 +99,7 @@ def native_table(f) -> bool:
     routines, and the binding ones interpolate (`lo + a*(hi - lo)`), which
     is the evaluation-basis fold. Coefficient-basis tables, tables over
     plain Python values, and `SparseMLE` take the pure-Python path.
-    Protocols gate their native delegation on this (piop.md §5).
+    Consumers gate their native delegation on this.
     """
     return isinstance(f, MLE) and f.ring is not None and f.basis is MLE_Basis.eval
 
@@ -147,8 +150,7 @@ class MLE:
     by the verifier's own evaluation and never becomes an opening claim;
     every derived table (`copy`, out-of-place `evaluate`, `scale`, `+`/`-`
     of two public tables) inherits the mark. Anything else is a witness
-    oracle: what happens to a claim on it is decided by the protocol
-    registered for its kind (piop.md §5).
+    oracle: what happens to a claim on it is left to the consumer.
 
     `table` holds the entries (also keeping them alive across C calls) and
     `table_ptr` is the array of their handles the kernels take (None without
@@ -355,7 +357,7 @@ class MLE:
             return MLE._like(self, table, basis=MLE_Basis.coeff)
         coeffs = self._entries_copy()
         for i in range(self.num_vars):
-            for lo, hi in _pair_indices(len(coeffs), i):
+            for lo, hi in pair_indices(len(coeffs), i):
                 coeffs[hi] = coeffs[hi] - coeffs[lo]
         return MLE._like(self, coeffs, basis=MLE_Basis.coeff)
 
@@ -531,7 +533,7 @@ class MLE:
             return
         t = self._python_entries()
         self._set_table(
-            [self._fold(t[lo], t[hi], val) for lo, hi in _pair_indices(len(t), idx)]
+            [self._fold(t[lo], t[hi], val) for lo, hi in pair_indices(len(t), idx)]
         )
 
     def constant(self):

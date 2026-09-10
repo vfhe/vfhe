@@ -18,6 +18,21 @@ other module builds on.
   - `Multiprecision` (`multiprecision.py`): big-integer/RNS bridge.
   - `number_theory.py` / `residue_selection.py`: pure-Python primality, CRT,
     and RNS prime selection.
+  - `MLE` / `SparseMLE` (`mle.py`): multilinear extensions over any of the
+    above. `MLE` is a dense table of `2^n` entries carrying two orthogonal
+    properties — its `basis` (`MLE_Basis.eval` for hypercube evaluations,
+    `MLE_Basis.coeff` for monomial coefficients) and its coefficient type
+    (with a `ring` or `field`, entries are `Polynomial` / a `FieldVector` and
+    the `mle_dense_poly_*` C kernels do the work; without one, plain Python
+    values folded in Python). Supports add / sub / scale and
+    variable-by-variable evaluation at concrete points; variables are plain
+    identifiers (`MLE_Variable` or any hashable) and may be bound in any
+    order, binding dispatching on the variable's position to the best pair
+    layout (adjacent pairs for the LSB, table halves for the MSB, a strided
+    generic fallback in between). `SparseMLE` is the unrelated sparse map of
+    evaluations: add / sub / scale only, `evaluate` raises. The layer is
+    asyncio-free; a consumer's unresolved protocol values are its own concern.
 
 `python/cdef/arith.cdef` declares the C ABI Python calls (opaque handles plus a
-few structs cdef'd for field access).
+few structs cdef'd for field access); `python/cdef/mle.cdef` the dense-MLE
+kernels of `c/src/mle.c`.

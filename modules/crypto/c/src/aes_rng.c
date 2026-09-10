@@ -94,9 +94,10 @@ void aes_prgn_setup_rnd_seed()
 void aes_prgn_next_16(__m512i *out, __m512i *cnt)
 {
     const __m512i incv = {0, 4, 0, 4, 0, 4, 0, 4};
+    __m512i block[4];
     for (size_t i = 0; i < 4; i++)
     {
-        out[i] = _mm512_xor_si512(*cnt, __global_prng_aes_key[0]);
+        block[i] = _mm512_xor_si512(*cnt, __global_prng_aes_key[0]);
         *cnt = _mm512_add_epi64(*cnt, incv);
     }
 
@@ -104,18 +105,19 @@ void aes_prgn_next_16(__m512i *out, __m512i *cnt)
     {
         for (size_t j = 0; j < 4; j++)
         {
-            out[j] = _mm512_aesenc_epi128(out[j], __global_prng_aes_key[i]);
+            block[j] = _mm512_aesenc_epi128(block[j], __global_prng_aes_key[i]);
         }
     }
 
     for (size_t i = 0; i < 4; i++)
     {
-        out[i] = _mm512_aesenclast_epi128(out[i], __global_prng_aes_key[10]);
+        block[i] = _mm512_aesenclast_epi128(block[i], __global_prng_aes_key[10]);
+        _mm512_storeu_si512(&out[i * sizeof(__m512i)], block[i]);
     }
 }
 
 // Generates outlen bytes from the first 8 bytes of *input
-// Assumes: output is aligned, outlen >= 256 , inlen >= 16
+// Assumes: outlen >= 256, inlen >= 16. `output` needs no alignment.
 void aes_prng(uint8_t *output, uint64_t outlen, const uint8_t *input, uint64_t inlen)
 {
     assert(outlen >= 256);
@@ -133,23 +135,26 @@ void aes_prng(uint8_t *output, uint64_t outlen, const uint8_t *input, uint64_t i
     size_t i;
     for (i = 0; i < outlen - 255; i += 256)
     {
-        aes_prgn_next_16((__m512i *)&(output[i]), &cntv);
+        aes_prgn_next_16(&output[i], &cntv);
     }
     if (outlen > i)
     {
-        __m512i tmp[4];
+        uint8_t tmp[256];
         aes_prgn_next_16(tmp, &cntv);
         memcpy(&output[i], tmp, outlen - i);
     }
 }
 
 #else
-void aes_prgn_next_16(__m128i *out, __m128i *cnt)
+// The 256 bytes of one keystream step, written to `out` with unaligned
+// stores so a caller's buffer needs no particular alignment.
+void aes_prgn_next_16(uint8_t *out, __m128i *cnt)
 {
     const __m128i incv = {0, 4};
+    __m128i block[16];
     for (size_t i = 0; i < 16; i++)
     {
-        out[i] = _mm_xor_si128(*cnt, __global_prng_aes_key[0]);
+        block[i] = _mm_xor_si128(*cnt, __global_prng_aes_key[0]);
         *cnt = _mm_add_epi64(*cnt, incv);
     }
 
@@ -157,18 +162,19 @@ void aes_prgn_next_16(__m128i *out, __m128i *cnt)
     {
         for (size_t j = 0; j < 16; j++)
         {
-            out[j] = _mm_aesenc_si128(out[j], __global_prng_aes_key[i]);
+            block[j] = _mm_aesenc_si128(block[j], __global_prng_aes_key[i]);
         }
     }
 
     for (size_t i = 0; i < 16; i++)
     {
-        out[i] = _mm_aesenclast_si128(out[i], __global_prng_aes_key[10]);
+        block[i] = _mm_aesenclast_si128(block[i], __global_prng_aes_key[10]);
+        _mm_storeu_si128((__m128i *)&out[i * sizeof(__m128i)], block[i]);
     }
 }
 
 // Generates outlen bytes from the first 8 bytes of *input
-// Assumes: output is aligned, outlen >= 256 , inlen >= 16
+// Assumes: outlen >= 256, inlen >= 16. `output` needs no alignment.
 void aes_prng(uint8_t *output, uint64_t outlen, const uint8_t *input, uint64_t inlen)
 {
     assert(outlen >= 256);
@@ -183,11 +189,11 @@ void aes_prng(uint8_t *output, uint64_t outlen, const uint8_t *input, uint64_t i
     size_t i;
     for (i = 0; i < outlen - 255; i += 256)
     {
-        aes_prgn_next_16((__m128i *)&(output[i]), &cnt);
+        aes_prgn_next_16(&output[i], &cnt);
     }
     if (outlen > i)
     {
-        __m128i tmp[16];
+        uint8_t tmp[256];
         aes_prgn_next_16(tmp, &cnt);
         memcpy(&output[i], tmp, outlen - i);
     }

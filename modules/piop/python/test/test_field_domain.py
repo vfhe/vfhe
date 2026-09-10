@@ -9,19 +9,23 @@ end to end (interactive and Fiat-Shamir) over a field."""
 import random
 
 import pytest
-from vfhe.arith import Field, FieldVector, PseudoMersenneField
-from vfhe.piop import (
-    IOP,
+from vfhe.arith import (
     MLE,
+    Field,
+    FieldVector,
     MLE_Basis,
     MLE_Variable,
+    PseudoMersenneField,
+)
+from vfhe.arith.mle import native_table, vector_table
+from vfhe.piop import (
+    IOP,
     Relation_Sum,
     Relation_SumProd,
     Statement,
     Sumcheck,
     SumcheckProd,
 )
-from vfhe.piop.mle import native_table, vector_table
 from vfhe.piop.sumcheck import interpolate_evals
 
 # A 50-bit prime with 2-adicity 20 (x^2 - 5 is irreducible: 5 is a non-residue).
