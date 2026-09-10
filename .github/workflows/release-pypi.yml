@@ -131,7 +131,11 @@ jobs:
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: gh attestation verify dist/* --repo "$REPOSITORY" --bundle "$BUNDLE"
+        run: |
+          # verify takes one artifact; the build produces the sdist and many wheels.
+          for artifact in dist/*; do
+            gh attestation verify "$artifact" --repo "$REPOSITORY" --bundle "$BUNDLE"
+          done
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
       - name: Create release
