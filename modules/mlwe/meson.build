@@ -3,10 +3,11 @@
 
 module = {
     'sources': files(
-        'c/src/gadget.c',
+        'c/src/gadget_rns.c',
         'c/src/lwe.c',
         'c/src/mgsw.c',
         'c/src/mlwe.c',
+        'c/src/mlwe_rns.c',
     ),
     'includes': [include_directories('c/include')],
     'headers': files('c/include/mlwe.h', 'c/include/rns-rlwe.h'),

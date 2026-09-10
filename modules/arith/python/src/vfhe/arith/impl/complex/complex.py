@@ -5,8 +5,6 @@ from __future__ import annotations
 from math import log2
 from typing import ClassVar
 
-from vfhe.engine import ffi, lib
-
 # The AVX-512 complex FFT casts these buffers to __m512d and uses aligned loads,
 # so they must be 64-byte aligned; more than cffi's default. Shared with the other
 # over-aligned wrappers rather than kept private here.

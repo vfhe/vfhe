@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 // File adapted from MOSFHET
-#include <arith_config.h>
+#include <engine.h>
 
 #if VFHE_HAVE_AESNI
 
@@ -11,7 +11,7 @@
 #include <string.h>
 #include <immintrin.h>
 
-#include "misc.h"
+#include "crypto.h"
 
 // key expansion, adapted from:
 // https://www.intel.com/content/dam/doc/white-paper/advanced-encryption-standard-new-instructions-set-paper.pdf
@@ -29,7 +29,7 @@ static inline __m128i AES_128_ASSIST(__m128i temp1, __m128i temp2)
     return temp1;
 }
 
-#ifdef __VAES__
+#if VFHE_HAVE_VAES
 static __m512i __global_prng_aes_key[11];
 #else
 static __m128i __global_prng_aes_key[11];
@@ -90,8 +90,10 @@ void aes_prgn_setup_rnd_seed()
     setup_aes_prgn_key(s);
 }
 
-#ifdef __VAES__
-void aes_prgn_next_16(__m512i *out, __m512i *cnt)
+#if VFHE_HAVE_VAES
+// The 256 bytes of one keystream step, written to `out` with unaligned
+// stores so a caller's buffer needs no particular alignment.
+void aes_prgn_next_16(uint8_t *out, __m512i *cnt)
 {
     const __m512i incv = {0, 4, 0, 4, 0, 4, 0, 4};
     __m512i block[4];

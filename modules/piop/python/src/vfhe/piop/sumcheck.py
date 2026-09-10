@@ -24,7 +24,8 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any, cast
 
-from vfhe.arith import Polynomial, Ring
+from vfhe.arith import ArithParent, Field, Polynomial, Ring, RNSPolynomial
+from vfhe.arith.mle import MLE, element_array, mark_ntt, native_table, vector_table
 from vfhe.engine import lib
 
 from .piop import (
@@ -427,7 +428,7 @@ class SumcheckProd(_SumcheckRounds):
         if ring is None:
             raise ValueError("a native round needs a ring-backed MLE")
         evals = [Polynomial(ring) for _ in range(3)]
-        handles = handle_array(evals)
+        handles = element_array(evals)
         size = 1 << f.num_vars
         if idx == 0:
             lib.sumcheck_prod2_round_pairs(

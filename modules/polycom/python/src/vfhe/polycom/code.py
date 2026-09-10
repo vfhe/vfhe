@@ -36,7 +36,6 @@ from vfhe.arith import Polynomial, RNSPolynomial, RNSRing
 from vfhe.arith.mle import element_array, mark_ntt
 from vfhe.crypto import hash_bytes, leaf_digest
 from vfhe.engine import lib
-from vfhe.piop.mle import handle_array, mark_ntt
 
 
 def _bit_reverse(i: int, bits: int) -> int:

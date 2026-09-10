@@ -18,6 +18,17 @@ except ModuleNotFoundError:
 
 
 def pytest_runtest_setup():
-    from vfhe.arith.ntt import NTT_processor_instance
+    """Give every test empty arithmetic caches.
 
-    NTT_processor_instance.reset()  # the prime pool is process-global
+    An implementation's caches are process-global. RNS keys its prime pool on
+    (N, split_degree), so unrelated ring families sharing those parameters
+    accumulate primes in one growing pool, and a ring's primes occupy
+    contiguous indices from 0 only when it is the first registered for its
+    key. A few low-level paths (LWE extraction, packing key-switch) rely on
+    that contiguity. The original suites ran each test file as its own
+    process; emptying the caches before every test reproduces that isolation
+    so cross-file ordering cannot leak state.
+    """
+    from vfhe.arith import reset_state
+
+    reset_state()

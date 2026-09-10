@@ -3,6 +3,7 @@
 #include <arith.h>
 #include <blake3.h>
 #include "util.h"
+#include <crypto.h>
 
 // Helper functions for polynomial operations used in inversion
 static int poly_deg(const uint64_t *p, int n)

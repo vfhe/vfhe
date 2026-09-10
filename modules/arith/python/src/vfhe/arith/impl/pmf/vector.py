@@ -20,8 +20,6 @@ from vfhe.arith._alloc import aligned64
 from vfhe.arith.base import FieldVector
 from vfhe.engine import ffi, lib
 
-from ..._alloc import aligned64
-from ...base import FieldVector
 from .pseudo_mersenne import _LANES, PseudoMersenneElement
 
 if TYPE_CHECKING:

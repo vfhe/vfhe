@@ -49,8 +49,12 @@ def update_cffi_references(new_ffi, new_lib):
 
 
 @register_reinitializer
-def reinit_ntt(_new_ffi, _new_lib):
-    """Update NTT processor instance and flush conversion cache."""
+def reinit_arith_state(_new_ffi, _new_lib):
+    """Rebuild every arithmetic implementation's process-global state.
+
+    Which implementations exist, and which of them cache native objects, is
+    arith's business; each registers its own handler.
+    """
     try:
         from vfhe.arith import rebind_state
 

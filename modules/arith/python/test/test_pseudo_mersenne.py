@@ -19,7 +19,7 @@ import random
 import pytest
 from vfhe.arith import PseudoMersenneField
 
-rng = random.Random(0xC0FFEE)
+rng = random.Random(0xC0FFEE)  # noqa: S311 - test data, not a key
 
 LIMB_BITS = 52
 LIMB_MASK = (1 << LIMB_BITS) - 1

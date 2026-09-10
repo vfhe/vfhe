@@ -141,7 +141,8 @@ class PseudoMersenneField(Field):
                 f"C rejected n={self.bits}, c={self.c}; see stderr for the reason"
             )
         self._params = ffi.gc(params, lib.pmf_free_params)
-        assert lib.pmf_limbs(self._params) == self.limbs
+        if lib.pmf_limbs(self._params) != self.limbs:
+            raise RuntimeError("C and Python disagree on the limb count")
 
         self.zero = self(0)
         self.one = self(1)

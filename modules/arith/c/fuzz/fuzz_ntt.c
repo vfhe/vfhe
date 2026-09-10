@@ -44,13 +44,22 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
      * arith's scalar path); these are the vectorized sizes worth fuzzing. */
     static const uint64_t Ns[4] = {64, 256, 1024, 4096};
     const uint64_t n = Ns[take_u8(&c) & 3];
-    const uint64_t qbits = 20 + (take_u8(&c) % 43); /* 20..62 */
+    /* next_special_prime searches upward, so a bucket yields a prime somewhat
+     * above 2^qbits. 61 is the widest that keeps it under 2^62, which is where
+     * mod_new stops: past that a reduction's product overflows, so no kernel
+     * can hold the modulus. */
+    const uint64_t qbits = 20 + (take_u8(&c) % 42); /* 20..61 */
     const uint64_t q = next_special_prime((uint64_t)1 << qbits, n, true);
 
     Modulus mod = mod_new(q);
+    if (!mod)
+        return 0;
     NTT_Plan plan = ntt_new_plan(n, mod);
     if (!plan)
+    {
+        mod_free(mod);
         return 0;
+    }
 
     uint64_t *in = safe_aligned_malloc(n * sizeof(uint64_t));
     uint64_t *fwd = safe_aligned_malloc(n * sizeof(uint64_t));

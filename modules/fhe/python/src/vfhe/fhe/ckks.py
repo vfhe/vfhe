@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import math
 
-from vfhe.arith.complex import ComplexPolynomial, ComplexRing
+from vfhe.arith import (
+    ComplexPolynomial,
+    ComplexRing,
+    RNSPolynomial,
+    RNSRing,
+    repr,
+)
 from vfhe.engine import ffi
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
 
