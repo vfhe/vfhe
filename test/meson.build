@@ -32,8 +32,12 @@ foreach fact : engine_facts
 endforeach
 
 # ASan's leak checker counts CPython's own allocations, so it is off everywhere.
+# So is its fake stack: GCC 13 lays a frame out for the real stack and emits
+# aligned zmm accesses into it, but the fake stack's base sits at another
+# 64-byte residue, so under it those accesses fault (GCC PR sanitizer/110027).
 sanitized = 'address' in get_option('b_sanitize')
-asan_env = sanitized ? {'ASAN_OPTIONS': 'detect_leaks=0'} : {}
+asan_options = 'detect_leaks=0:detect_stack_use_after_return=0'
+asan_env = sanitized ? {'ASAN_OPTIONS': asan_options} : {}
 
 # A non-instrumented interpreter dlopens the instrumented extension too late
 # for ASan, so its runtime must load before the interpreter.
@@ -91,7 +95,7 @@ foreach engine, built : engine_builds
         pytest_env.set('VFHE_ENGINE', engine)
         pytest_env.set('PYTHONDONTWRITEBYTECODE', '1')
         if sanitized
-            pytest_env.set('ASAN_OPTIONS', 'detect_leaks=0')
+            pytest_env.set('ASAN_OPTIONS', asan_options)
             if asan_runtime != ''
                 pytest_env.set('LD_PRELOAD', asan_runtime)
             endif
