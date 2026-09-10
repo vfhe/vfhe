@@ -344,8 +344,7 @@ RNS_Polynomial *polynomial_new_array_of_RNS_polynomials(uint64_t N, uint64_t rns
 
 void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in)
 {
-    const uint64_t modMask = out->base->split_degree - 1,
-                   poly_size = out->base->N / out->base->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     uint64_t *temp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
     for (size_t i = 0; i < out->base->l; i++)
     {
@@ -362,8 +361,7 @@ void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in)
 
 void int_array_to_RNS(RNS_Polynomial out, uint64_t *in)
 {
-    const uint64_t modMask = out->base->split_degree - 1,
-                   poly_size = out->base->N / out->base->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     uint64_t *temp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
     for (size_t i = 0; i < out->base->l; i++)
     {
@@ -380,8 +378,7 @@ void int_array_to_RNS(RNS_Polynomial out, uint64_t *in)
 
 void array_to_RNS(RNS_Polynomial out, uint64_t **in)
 {
-    const uint64_t modMask = out->base->split_degree - 1,
-                   poly_size = out->base->N / out->base->split_degree;
+    const uint64_t poly_size = out->base->N / out->base->split_degree;
     for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
@@ -1543,7 +1540,6 @@ int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in)
     {
         if (in->rns_mask & (1ULL << i))
         {
-            const uint64_t q = in->base->mods[i]->q;
             Modulus mod = in->base->mods[i];
             int rc;
             if (rns_row_is_narrow(out->base, i))

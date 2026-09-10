@@ -69,7 +69,7 @@ foreach engine, built : engine_builds
             include_directories: collected['includes'] + [unity_includes],
             c_args: built['cflags'],
             link_with: [built['lib'], unity_lib],
-            dependencies: m_dep,
+            dependencies: [m_dep, threads_dep],
             override_options: ['warning_level=2'],
         )
         test(

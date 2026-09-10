@@ -132,8 +132,15 @@ void test_ntt_plan_refuses_a_modulus_without_the_root(void)
    independently of the dispatcher so that this is a check and not an echo:
    a butterfly's un-reduced operand can be as large as 4q, and the reduction is
    only in range while that is below the radix. HEXL writes it 1 << (shift - 2).
- */
-static bool family_admits(uint64_t q, uint64_t shift) { return q < (1ULL << (shift - 2)); }
+
+   Shift 0 is the scalar tables, which carry no Shoup constants and so no radix
+   bound: every modulus a plan can hold is admissible. An engine without
+   vectorized transforms reports it for every plan, and so does any plan below
+   NTT_MIN_VECTOR_LEN. */
+static bool family_admits(uint64_t q, uint64_t shift)
+{
+    return shift == 0 || q < (1ULL << (shift - 2));
+}
 
 /* The dispatcher must never hand a modulus to a family whose bound it breaks.
    A radix-2^32 plan built for a prime at or above 2^30 is not off by a

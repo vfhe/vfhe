@@ -14,6 +14,11 @@ project(
 
 fs = import('fs')
 m_dep = meson.get_compiler('c').find_library('m', required: false)
+# Kernels across the tree use pthreads: ntt_w32's one-time permutation build,
+# and the worker pools in complex.c and fhe's gp25.c. glibc 2.34 merged the
+# pthread symbols into libc, so a link that does not ask for threads still
+# resolves there and fails on anything older -- manylinux_2_28 included.
+threads_dep = dependency('threads')
 py = find_program('python3')
 
 # -Dfuzz=true configures without Python headers or protobuf. Its harnesses link
@@ -211,6 +216,7 @@ foreach fact : engine_facts
         engine_sources,
         include_directories: collected['includes'],
         c_args: cflags,
+        dependencies: threads_dep,
         pic: true,
         install: not fuzz,
         install_dir: source_dir / 'lib',
@@ -227,7 +233,7 @@ foreach fact : engine_facts
                 link_with: installed_lib,
                 link_args: get_option('fuzz_link_args').split(),
                 link_language: 'cpp',
-                dependencies: m_dep,
+                dependencies: [m_dep, threads_dep],
             )
         endforeach
         continue
@@ -240,6 +246,7 @@ foreach fact : engine_facts
         engine_sources,
         include_directories: collected['includes'],
         c_args: cflags + lto_args,
+        dependencies: threads_dep,
         pic: true,
     )
 
@@ -247,9 +254,12 @@ foreach fact : engine_facts
     # types under them.
     cargs_json = fact['cargs'].length() == 0 ? '[]' : '["' + '", "'.join(fact['cargs']) + '"]'
     sde_json = fact['sde'].length() == 0 ? '[]' : '["' + '", "'.join(fact['sde']) + '"]'
+    # -pthread for the same reason the archives declare threads: this list is
+    # what a consumer linking the archive outside meson passes, so it has to
+    # ask for the pthread symbols itself.
     # A coverage-instrumented archive needs its compiler's gcov runtime, which
     # only a link naming --coverage pulls in.
-    link_json = get_option('b_coverage') ? '["--coverage"]' : '[]'
+    link_json = get_option('b_coverage') ? '["-pthread", "--coverage"]' : '["-pthread"]'
     configure_file(
         output: 'engine-' + engine + '.json',
         command: [
@@ -285,7 +295,7 @@ foreach fact : engine_facts
         c_args: cflags,  # the wrapper #includes engine-sensitive headers
         link_whole: lto_lib,
         link_args: lto_args,
-        dependencies: m_dep,
+        dependencies: [m_dep, threads_dep],
         install: true,
     )
 
