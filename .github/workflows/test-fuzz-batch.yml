@@ -70,6 +70,10 @@ jobs:
         with:
           language: c
           sanitizer: coverage
+      - name: Clear crash artifacts before the coverage replay
+        # run_fuzzers rejects a non-empty out/artifacts, which the batch run
+        # populated; CFL's docker owns them as root.
+        run: sudo rm -rf out/artifacts
       - name: Generate coverage report
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
