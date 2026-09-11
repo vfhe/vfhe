@@ -77,6 +77,14 @@ jobs:
       - name: Smoke test an installed package
         if: ${{ !cancelled() }}
         run: make smoke
+      - name: Remove root-owned build products
+        # This job is root in the container over a bind-mounted workspace, so
+        # everything it writes (build, .cache, .tox, dist) is root-owned. A
+        # later host job on this self-hosted runner -- test-fuzz-batch, which
+        # has no container -- then cannot clean the workspace at checkout. Remove
+        # them here, where we are still root.
+        if: always()
+        run: make clean
 
   # ----------------------------------------------------------------- alert ---
 
