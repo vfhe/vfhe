@@ -1046,24 +1046,24 @@ void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in)
     }
 }
 
-void polynomial_RNSc_decompose_small(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t log_base,
-                                     uint64_t level)
+void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                                     uint64_t log_base, uint64_t level)
 {
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
     const uint64_t mask = (1ULL << log_base) - 1;
     const uint64_t shift = log_base * level;
-    int last_active = rns_mask_get_last_active_index(in->rns_mask);
-    assert(last_active >= 0);
-    if (rns_row_is_narrow(in->base, (size_t)last_active))
-        rns_row_digit_narrow(tmp, in->rows32[last_active], shift, mask, out->base->N);
+    assert(in->rns_mask & (1ULL << idx));
+    if (rns_row_is_narrow(in->base, (size_t)idx))
+        rns_row_digit_narrow(tmp, in->rows32[idx], shift, mask, out->base->N);
     else
-        rns_row_digit_wide(tmp, in->rows64[last_active], shift, mask, out->base->N);
+        rns_row_digit_wide(tmp, in->rows64[idx], shift, mask, out->base->N);
     /* The digit is below 2^log_base and so below every prime, which is why one
        array serves every row: no reduction, just a store at the row's width. */
     for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
+            assert((1ULL << log_base) <= out->base->mods[i]->q);
             if (rns_row_is_narrow(out->base, i))
                 mod_narrow_w32(out->rows32[i], tmp, out->base->N);
             else
@@ -1071,6 +1071,14 @@ void polynomial_RNSc_decompose_small(RNSc_Polynomial out, RNSc_Polynomial in, ui
         }
     }
     free(tmp);
+}
+
+void polynomial_RNSc_decompose_small(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t log_base,
+                                     uint64_t level)
+{
+    int last_active = rns_mask_get_last_active_index(in->rns_mask);
+    assert(last_active >= 0);
+    polynomial_RNSc_decompose_digit(out, in, (uint64_t)last_active, log_base, level);
 }
 
 void polynomial_RNSc_to_multiprecision(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t log_base,

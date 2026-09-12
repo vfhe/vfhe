@@ -380,7 +380,7 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
     {
         if (ksk->s[i] != NULL)
         {
-            gadget_mul_subto_polynomial(acc, ksk->s[i], &in->a[i]);
+            gadget_mul_subto_polynomial(acc, ksk->s[i], &in->a[i], ksk->log_base);
         }
     }
     // convert to RNSc and rescale to in's ring

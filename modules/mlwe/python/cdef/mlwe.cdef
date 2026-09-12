@@ -88,7 +88,7 @@ void mlwe_RNS_sub_polynomial(void *out, void *in1, ArithElement *in2);
 void mlwe_round_division(void *out, void *to);
 
 void *mlwe_extract_LWE(void *in, uint64_t idx);
-void *mlwe_new_RNS_ks_key(void *s, uint64_t count);
+void *mlwe_new_RNS_ks_key(void *s, uint64_t count, uint64_t log_base);
 void free_mlwe_RNS_ks_key(void *key);
 void mlwe_full_packing_keyswitch(void *out, void *in, uint64_t size, void *ksk, uint64_t lvl);
 void mlwe_full_packing_keyswitch_scaled(void *vec, uint64_t ell, void *ksks, uint64_t lvl);
@@ -101,6 +101,7 @@ void mlwe_tensor_product(ArithElement *out, void *in1, void *in2);
 void mlwe_multiply(void *out, void *in1, void *in2, void *ksk);
 
 // --- mgsw ---
-void mgsw_external_product(void *out, void *mgsw, void *in, uint64_t ell, uint64_t special_primes);
-void mgsw_CMUX(void *out, void *in1, void *in2, void *mgsw, uint64_t ell, uint64_t special_primes);
-void mgsw_NCMUX(void *out, void *in1, void *in2, void *mgsw, void *ksk, uint64_t ell, uint64_t special_primes);
+void mgsw_external_product(void *out, void *mgsw, void *in, uint64_t ell, uint64_t special_primes, uint64_t log_base);
+void mgsw_CMUX(void *out, void *in1, void *in2, void *mgsw, uint64_t ell, uint64_t special_primes, uint64_t log_base);
+void mgsw_NCMUX(void *out, void *in1, void *in2, void *mgsw, void *ksk, uint64_t ell, uint64_t special_primes, uint64_t log_base);
+uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base);

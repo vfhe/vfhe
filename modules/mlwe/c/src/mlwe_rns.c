@@ -170,12 +170,13 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
     free_RNS_polynomial(tmp_rns);
 }
 
-RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count)
+RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count, uint64_t log_base)
 {
     RNS_MLWE_KS_Key key = (RNS_MLWE_KS_Key)safe_malloc(sizeof(*key));
     key->s = (RNS_MLWE **)safe_malloc(count * sizeof(RNS_MLWE *));
     memcpy(key->s, s, count * sizeof(RNS_MLWE *));
     key->count = count;
+    key->log_base = log_base;
 
     // The key's ring comes from its first real component; NULL components are
     // pass-throughs and carry no samples.

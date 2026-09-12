@@ -83,6 +83,7 @@ void polynomial_RNS_to_RNSc(void *out, void *in);
 void polynomial_base_conversion_RNSc(void *out, void *in, void *params);
 void polynomial_RNSc_mod_reduce(void *out, void *in);
 void polynomial_RNSc_mod_reduce_lifted(void *out, void *in, uint64_t idx);
+void polynomial_RNSc_decompose_digit(void *out, void *in, uint64_t idx, uint64_t log_base, uint64_t level);
 void polynomial_round_division_RNSc_wo_free(void *out, uint64_t divide_mask);
 void polynomial_floor_division_RNSc_wo_free(void *out, uint64_t divide_mask);
 void polynomial_RNSc_scaled_lift(void *out, void *in, uint64_t *delta);
