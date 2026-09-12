@@ -852,10 +852,11 @@ class FieldElement(metaclass=_ImplementationDispatch):
 
         Spelled here as the exponentiation it is defined as, one power of
         the characteristic at a time rather than by raising to ``p ** k`` in
-        one go -- that exponent outgrows what an implementation's `__pow__`
-        accepts by ``k = 3`` over a 61-bit prime. An implementation that can
-        compute it as the F_p-linear map on coefficients it also is -- a
-        permutation of the positions with a constant each -- replaces this.
+        one go. The two cost the same -- both walk ``k * log2(p)`` bits -- and
+        this way the exponent stays one word wide however large ``k`` is. An
+        implementation that can compute it as the F_p-linear map on
+        coefficients it also is -- a permutation of the positions with a
+        constant each -- replaces this.
         """
         if not isinstance(k, int) or isinstance(k, bool):
             raise TypeError(f"k must be an int, not {type(k).__name__}")

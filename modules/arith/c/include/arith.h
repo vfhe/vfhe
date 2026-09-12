@@ -270,7 +270,13 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void field_ext_neg(uint64_t *c, const uint64_t *a, uint64_t d, uint64_t q);
     void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t w,
                        Modulus mod);
-    void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_t exp_hi,
+    // base^exp by square-and-multiply, with the exponent as `exp_words`
+    // little-endian 64-bit words -- the form pmf_ref_pow takes, and the reason
+    // this is not a `uint64_t`: an exponent worth raising a field element to is
+    // routinely wider than one, and every fixed width is a width some caller
+    // exceeds in silence. `exp_words` may be 0, which is the exponent 0.
+    // `res` may be `base`.
+    void field_ext_pow(uint64_t *res, const uint64_t *base, const uint64_t *exp, uint64_t exp_words,
                        uint64_t d, uint64_t w, Modulus mod);
     int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Modulus mod);
     // The Frobenius x -> x^(p^k), computed as the F_p-linear coefficient map it
