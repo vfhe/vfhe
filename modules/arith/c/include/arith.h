@@ -406,6 +406,63 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void field_vec_hash_elements(uint8_t *out, const FieldVector a, uint64_t group,
                                  uint64_t stride);
 
+    // transform over F_(p^d), with the root in the extension
+    //
+    // The negacyclic Cooley-Tukey transform of `ntt_forward`'s conventions --
+    // natural in, bit-reversed out, position p holding P(psi^(2 brv(p) + 1)) --
+    // but with psi an element of F_(p^d) rather than of the prime subfield. That
+    // is the difference that matters: running the F_p transform once per
+    // coefficient plane evaluates at points of F_p, which a code whose domain
+    // must avoid the subfield cannot use.
+    typedef struct _FieldNTTPlan
+    {
+        uint64_t n;
+        uint64_t logn;
+        uint64_t d;
+        uint64_t w;
+        Modulus mod;          // borrowed; must outlive the plan
+        uint64_t root[8];     // psi, one element
+        uint64_t inv_root[8]; // psi^-1
+        uint64_t inv_n[8];    // n^-1, applied by the inverse
+        uint64_t **ws_fwd;    // d planes of n words: coefficient
+        uint64_t **ws_inv;    // k of psi^i (psi^-i) at ws[k][brv(i)]
+    } *FieldNTTPlan;
+
+    // The degree of the smallest field holding a primitive 2n-th root of unity:
+    // the least k with p^k = 1 mod 2n. **Which subfield the root lands in is not
+    // a choice** -- every primitive 2n-th root generates that same F_(p^k) -- so
+    // a caller whose evaluation domain must avoid F_p needs this to be above 1,
+    // and one that must avoid every proper subfield needs it to equal d. Neither
+    // is checked below, because both are properties the caller wants and not
+    // conditions the transform needs; the prime is what decides them. Returns 0
+    // if n is 0 or no such k exists.
+    uint64_t field_ext_root_subfield_degree(uint64_t n, Modulus mod);
+
+    // A primitive 2n-th root of unity in F_(p^d), into `out` (d words). Returns
+    // 0, explaining on stderr, when 2n does not divide p^d - 1 and no such root
+    // exists. Deterministic: one field and one n always give the same root, so a
+    // plan is reproducible across runs and engines. See the degree above for
+    // which subfield it will lie in, which this does not get to choose.
+    int field_ext_root_of_unity(uint64_t *out, uint64_t n, uint64_t d, uint64_t w, Modulus mod);
+
+    // `root_of_unity` must satisfy psi^n == -1, which for a power-of-two n is
+    // exactly "psi has order 2n"; NULL is returned, explaining on stderr, if it
+    // does not or if n is not a power of two. Costs 2n extension multiplications
+    // and 2 * n * d words of tables.
+    FieldNTTPlan field_ntt_new_plan(uint64_t n, const uint64_t *root_of_unity, uint64_t d,
+                                    uint64_t w, Modulus mod);
+    void field_ntt_free_plan(FieldNTTPlan plan);
+
+    // In place over `blocks` transforms at once, on d planes of n * blocks
+    // words. **The layout is block-fastest**: element i of block b sits at
+    // i * blocks + b. That is what makes a stage's butterfly a contiguous run of
+    // t * blocks elements at every t, including the last stages, where a single
+    // transform's runs are 1, 2 and 4 elements and dominate its cost.
+    // `blocks == 1` is the ordinary single transform, and is the slow case this
+    // layout exists to avoid.
+    void field_ntt_forward(uint64_t *const *planes, uint64_t blocks, FieldNTTPlan plan);
+    void field_ntt_inverse(uint64_t *const *planes, uint64_t blocks, FieldNTTPlan plan);
+
     // pseudo-Mersenne prime field
     //
     // F_p for p = 2^n - c with small c (the Crandall/pseudo-Mersenne family). An

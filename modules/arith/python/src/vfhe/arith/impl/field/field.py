@@ -76,6 +76,53 @@ class ExtensionField(Field):
         below = self.prime - 1
         return (below & -below).bit_length() - 1
 
+    def root_subfield_degree(self, n: int) -> int:
+        """The degree of the smallest subfield holding a primitive 2n-th root
+        of unity: the least k with ``p**k == 1 (mod 2n)``.
+
+        **Not a choice** -- every primitive 2n-th root generates that same
+        subfield, so a transform whose evaluation domain must avoid F_p needs
+        this above 1, and one that must avoid every proper subfield needs it to
+        equal `degree`. The prime is what decides it, not the root.
+        """
+        if not isinstance(n, int) or isinstance(n, bool) or n < 1 or n & (n - 1):
+            raise ValueError(f"n must be a power of two, got {n}")
+        return lib.field_ext_root_subfield_degree(n, self.mod)
+
+    def root_of_unity(self, n: int) -> ExtensionFieldElement:
+        """A primitive 2n-th root of unity, i.e. an element with
+        ``psi ** n == -1``.
+
+        Deterministic in ``(p, d, w, n)``, so the same field gives the same
+        root on every run and engine. Raises ValueError when ``2n`` does not
+        divide ``p**d - 1``, which is when no such element exists.
+        `root_subfield_degree` says which subfield it will land in.
+        """
+        if not isinstance(n, int) or isinstance(n, bool) or n < 1 or n & (n - 1):
+            raise ValueError(f"n must be a power of two, got {n}")
+        value = ffi.new("uint64_t[]", self.d)
+        if not lib.field_ext_root_of_unity(value, n, self.d, self.w, self.mod):
+            raise ValueError(
+                f"no primitive {2 * n}-th root of unity in F_(p^{self.d}): "
+                f"{2 * n} does not divide p**{self.d} - 1"
+            )
+        return ExtensionFieldElement(self, value)
+
+    def ntt_plan(self, n: int) -> Any:
+        """The negacyclic transform of length ``n`` over this field, one per
+        length. See `ExtensionFieldNTT` for the basis, the output order and the
+        batched layout it takes."""
+        plans = getattr(self, "_plans", None)
+        if plans is None:
+            plans = self._plans = {}
+        plan = plans.get(n)
+        if plan is None:
+            # Imported here: the ntt module imports this one at load time.
+            from .ntt import ExtensionFieldNTT
+
+            plan = plans[n] = ExtensionFieldNTT(self, n)
+        return plan
+
     def _uniform_from_seed(self, seed: bytes) -> ExtensionFieldElement:
         element = ExtensionFieldElement(self)
         element.sample_random(seed)

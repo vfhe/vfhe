@@ -167,6 +167,116 @@ static inline void field_fused_scale_impl(uint64_t *const *out, uint64_t *const 
     }
 }
 
+// --- transform butterflies -------------------------------------------------
+//
+// A butterfly is a product by a twiddle and an add/sub pair. Written as three
+// vector calls it needs a whole intermediate vector; written here the product
+// never leaves the registers it was formed in, so a transform stage needs no
+// scratch at all. That, and not the multiply, is what makes the batched
+// transform in field_ntt.c one pass per stage.
+
+// Cooley-Tukey, the forward direction: v = hi * root; hi = lo - v; lo = lo + v.
+static inline void field_fused_ct_impl(uint64_t *const *lo, uint64_t *const *hi,
+                                       const uint64_t *root, uint64_t nvec, const uint64_t d,
+                                       uint64_t w, Modulus mod)
+{
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i mask52 = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const uint64_t ws = modq(w, mod);
+    __m512i bv[FIELD_MAX_FUSED_D], wb[FIELD_MAX_FUSED_D];
+    for (uint64_t j = 0; j < d; j++)
+    {
+        const uint64_t sj = modq(root[j], mod);
+        bv[j] = _mm512_set1_epi64(sj);
+        wb[j] = _mm512_set1_epi64(mul_modq(ws, sj, mod));
+    }
+
+    for (uint64_t v = 0; v < nvec; v++)
+    {
+        __m512i av[FIELD_MAX_FUSED_D], prod[FIELD_MAX_FUSED_D];
+        for (uint64_t i = 0; i < d; i++)
+            av[i] = ((const __m512i *)hi[i])[v];
+
+        for (uint64_t k = 0; k < d; k++)
+        {
+            __m512i acc_lo = zero, acc_hi = zero;
+            for (uint64_t i = 0; i < d; i++)
+            {
+                const uint64_t j = FIELD_FUSED_PARTNER(i, k, d);
+                const __m512i p = FIELD_FUSED_WRAPS(i, k, d) ? wb[j] : bv[j];
+                acc_lo = _mm512_madd52lo_epu64(acc_lo, av[i], p);
+                acc_hi = _mm512_madd52hi_epu64(acc_hi, av[i], p);
+            }
+            acc_hi = _mm512_add_epi64(acc_hi, _mm512_srli_epi64(acc_lo, 52));
+            acc_lo = _mm512_and_epi64(acc_lo, mask52);
+            prod[k] = field_reduce128(acc_hi, acc_lo, mod);
+        }
+
+        // The two outputs, from the same untouched `lo`.
+        for (uint64_t k = 0; k < d; k++)
+        {
+            const __m512i u = ((const __m512i *)lo[k])[v];
+            __m512i sum = _mm512_add_epi64(u, prod[k]);
+            sum = _mm512_min_epu64(sum, _mm512_sub_epi64(sum, q_vec));
+            __m512i diff = _mm512_sub_epi64(u, prod[k]);
+            diff = _mm512_mask_add_epi64(diff, _mm512_movepi64_mask(diff), diff, q_vec);
+            ((__m512i *)lo[k])[v] = sum;
+            ((__m512i *)hi[k])[v] = diff;
+        }
+    }
+}
+
+// Gentleman-Sande, the inverse direction: the product comes after the add/sub,
+// v = (lo - hi) * root, lo = lo + hi.
+static inline void field_fused_gs_impl(uint64_t *const *lo, uint64_t *const *hi,
+                                       const uint64_t *root, uint64_t nvec, const uint64_t d,
+                                       uint64_t w, Modulus mod)
+{
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i mask52 = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const uint64_t ws = modq(w, mod);
+    __m512i bv[FIELD_MAX_FUSED_D], wb[FIELD_MAX_FUSED_D];
+    for (uint64_t j = 0; j < d; j++)
+    {
+        const uint64_t sj = modq(root[j], mod);
+        bv[j] = _mm512_set1_epi64(sj);
+        wb[j] = _mm512_set1_epi64(mul_modq(ws, sj, mod));
+    }
+
+    for (uint64_t v = 0; v < nvec; v++)
+    {
+        __m512i av[FIELD_MAX_FUSED_D];
+        for (uint64_t k = 0; k < d; k++)
+        {
+            const __m512i u = ((const __m512i *)lo[k])[v];
+            const __m512i t = ((const __m512i *)hi[k])[v];
+            __m512i sum = _mm512_add_epi64(u, t);
+            sum = _mm512_min_epu64(sum, _mm512_sub_epi64(sum, q_vec));
+            __m512i diff = _mm512_sub_epi64(u, t);
+            diff = _mm512_mask_add_epi64(diff, _mm512_movepi64_mask(diff), diff, q_vec);
+            ((__m512i *)lo[k])[v] = sum;
+            av[k] = diff;
+        }
+
+        for (uint64_t k = 0; k < d; k++)
+        {
+            __m512i acc_lo = zero, acc_hi = zero;
+            for (uint64_t i = 0; i < d; i++)
+            {
+                const uint64_t j = FIELD_FUSED_PARTNER(i, k, d);
+                const __m512i p = FIELD_FUSED_WRAPS(i, k, d) ? wb[j] : bv[j];
+                acc_lo = _mm512_madd52lo_epu64(acc_lo, av[i], p);
+                acc_hi = _mm512_madd52hi_epu64(acc_hi, av[i], p);
+            }
+            acc_hi = _mm512_add_epi64(acc_hi, _mm512_srli_epi64(acc_lo, 52));
+            acc_lo = _mm512_and_epi64(acc_lo, mask52);
+            ((__m512i *)hi[k])[v] = field_reduce128(acc_hi, acc_lo, mod);
+        }
+    }
+}
+
 // The instantiations. A degree in between takes the runtime-`d` one, which is
 // the same source without the unrolling.
 #define FIELD_FUSED_AT(DEGREE)                                                                     \
@@ -181,6 +291,18 @@ static inline void field_fused_scale_impl(uint64_t *const *out, uint64_t *const 
                                            Modulus mod)                                            \
     {                                                                                              \
         field_fused_scale_impl(out, a, s, nvec, DEGREE, w, mod);                                   \
+    }                                                                                              \
+    static void field_fused_ct_##DEGREE(uint64_t *const *lo, uint64_t *const *hi,                  \
+                                        const uint64_t *root, uint64_t nvec, uint64_t w,           \
+                                        Modulus mod)                                               \
+    {                                                                                              \
+        field_fused_ct_impl(lo, hi, root, nvec, DEGREE, w, mod);                                   \
+    }                                                                                              \
+    static void field_fused_gs_##DEGREE(uint64_t *const *lo, uint64_t *const *hi,                  \
+                                        const uint64_t *root, uint64_t nvec, uint64_t w,           \
+                                        Modulus mod)                                               \
+    {                                                                                              \
+        field_fused_gs_impl(lo, hi, root, nvec, DEGREE, w, mod);                                   \
     }
 FIELD_FUSED_AT(2)
 FIELD_FUSED_AT(4)
@@ -216,6 +338,31 @@ void field_fused_mul(uint64_t *const *out, uint64_t *const *a, uint64_t *const *
         break;
     }
 }
+
+#define FIELD_FUSED_DISPATCH(NAME)                                                                 \
+    void field_fused_##NAME(uint64_t *const *lo, uint64_t *const *hi, const uint64_t *root,        \
+                            uint64_t n, uint64_t d, uint64_t w, Modulus mod)                       \
+    {                                                                                              \
+        const uint64_t nvec = n / FIELD_FUSED_LANES;                                               \
+        switch (d)                                                                                 \
+        {                                                                                          \
+        case 2:                                                                                    \
+            field_fused_##NAME##_2(lo, hi, root, nvec, w, mod);                                    \
+            break;                                                                                 \
+        case 4:                                                                                    \
+            field_fused_##NAME##_4(lo, hi, root, nvec, w, mod);                                    \
+            break;                                                                                 \
+        case 8:                                                                                    \
+            field_fused_##NAME##_8(lo, hi, root, nvec, w, mod);                                    \
+            break;                                                                                 \
+        default:                                                                                   \
+            field_fused_##NAME##_impl(lo, hi, root, nvec, d, w, mod);                              \
+            break;                                                                                 \
+        }                                                                                          \
+    }
+FIELD_FUSED_DISPATCH(ct)
+FIELD_FUSED_DISPATCH(gs)
+#undef FIELD_FUSED_DISPATCH
 
 void field_fused_scale(uint64_t *const *out, uint64_t *const *a, const uint64_t *s, uint64_t n,
                        uint64_t d, uint64_t w, Modulus mod)
@@ -267,6 +414,30 @@ void field_fused_scale(uint64_t *const *out, uint64_t *const *a, const uint64_t 
     (void)out;
     (void)a;
     (void)s;
+    (void)n;
+    (void)d;
+    (void)w;
+    (void)mod;
+}
+
+void field_fused_ct(uint64_t *const *lo, uint64_t *const *hi, const uint64_t *root, uint64_t n,
+                    uint64_t d, uint64_t w, Modulus mod)
+{
+    (void)lo;
+    (void)hi;
+    (void)root;
+    (void)n;
+    (void)d;
+    (void)w;
+    (void)mod;
+}
+
+void field_fused_gs(uint64_t *const *lo, uint64_t *const *hi, const uint64_t *root, uint64_t n,
+                    uint64_t d, uint64_t w, Modulus mod)
+{
+    (void)lo;
+    (void)hi;
+    (void)root;
     (void)n;
     (void)d;
     (void)w;
