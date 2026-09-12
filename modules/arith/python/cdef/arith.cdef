@@ -139,6 +139,24 @@ void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d
 void field_ext_pow(uint64_t *res, const uint64_t *base, const uint64_t *exp, uint64_t exp_words, uint64_t d, uint64_t w, void *mod);
 int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, void *mod);
 void field_ext_frobenius(uint64_t *res, const uint64_t *a, uint64_t k, uint64_t d, uint64_t w, void *mod);
+uint64_t field_ext_root_subfield_degree(uint64_t n, void *mod);
+int field_ext_root_of_unity(uint64_t *out, uint64_t n, uint64_t d, uint64_t w, void *mod);
+typedef struct _FieldNTTPlan {
+    uint64_t n;
+    uint64_t logn;
+    uint64_t d;
+    uint64_t w;
+    Modulus mod;
+    uint64_t root[8];
+    uint64_t inv_root[8];
+    uint64_t inv_n[8];
+    uint64_t **ws_fwd;
+    uint64_t **ws_inv;
+} *FieldNTTPlan;
+FieldNTTPlan field_ntt_new_plan(uint64_t n, const uint64_t *root_of_unity, uint64_t d, uint64_t w, void *mod);
+void field_ntt_free_plan(FieldNTTPlan plan);
+void field_ntt_forward(uint64_t *const *planes, uint64_t blocks, FieldNTTPlan plan);
+void field_ntt_inverse(uint64_t *const *planes, uint64_t blocks, FieldNTTPlan plan);
 void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len, uint64_t d, uint64_t mod);
 void field_hash_element(uint8_t *out, const uint64_t *a, uint64_t d);
 int field_ext_is_equal(const uint64_t *a, const uint64_t *b, uint64_t d);

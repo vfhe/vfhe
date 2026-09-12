@@ -408,5 +408,13 @@ void field_fused_mul(uint64_t *const *out, uint64_t *const *a, uint64_t *const *
                      uint64_t d, uint64_t w, Modulus mod);
 void field_fused_scale(uint64_t *const *out, uint64_t *const *a, const uint64_t *s, uint64_t n,
                        uint64_t d, uint64_t w, Modulus mod);
+// One transform butterfly over a run of `n` elements each side, in place: the
+// twiddle product never reaches memory, so a stage needs no scratch. `ct` is
+// the forward direction (multiply, then add/sub), `gs` the inverse one
+// (add/sub, then multiply). Both take the same `field_fused_applies` gate.
+void field_fused_ct(uint64_t *const *lo, uint64_t *const *hi, const uint64_t *root, uint64_t n,
+                    uint64_t d, uint64_t w, Modulus mod);
+void field_fused_gs(uint64_t *const *lo, uint64_t *const *hi, const uint64_t *root, uint64_t n,
+                    uint64_t d, uint64_t w, Modulus mod);
 
 #endif // __ARITH_INTERNAL_H__
