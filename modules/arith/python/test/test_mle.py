@@ -8,7 +8,16 @@ protocol futures live at the Transcript / Statement level (test_piop.py).
 """
 
 import pytest
-from vfhe.arith import MLE, MLE_Basis, MLE_Variable, Polynomial, Ring, SparseMLE
+from vfhe.arith import (
+    MLE,
+    Field,
+    FieldVector,
+    MLE_Basis,
+    MLE_Variable,
+    Polynomial,
+    Ring,
+    SparseMLE,
+)
 from vfhe.arith.mle import native_table
 
 
@@ -114,6 +123,42 @@ def test_mle_bind_any_position():
     assert a.constant() == b.constant() and b.constant() == c.constant()
     # The source table is untouched throughout.
     assert f.num_vars == 3 and f.table[0].get_polynomial()[0] == 1
+
+
+@pytest.mark.parametrize("basis", ["evaluations", "coefficients"])
+@pytest.mark.parametrize("num_vars", [1, 2, 5])
+def test_field_table_bind_any_position(basis, num_vars):
+    """A field table folds through whole-vector kernels at every variable
+    position, in either basis. The reference is the same table over plain
+    Python values, which takes the entry-at-a-time path."""
+    field = Field((1 << 61) - 1, 4, w=3)
+    values = FieldVector(field, 1 << num_vars)
+    values.sample_random(b"mle-field-table")
+    entries = values.to_list()
+    v = [MLE_Variable(f"x{i}") for i in range(num_vars)]
+    point = [field.random_element(bytes([i])) for i in range(num_vars)]
+
+    def build(backed: bool):
+        """The same table over the field vector, or over plain values."""
+        table = FieldVector(field, entries) if backed else list(entries)
+        parent = field if backed else None
+        if basis == "evaluations":
+            return MLE(field=parent, variables=list(v), evaluations=table)
+        return MLE(field=parent, variables=list(v), coefficients=table)
+
+    for idx in range(num_vars):
+        native, plain = build(True), build(False)
+        native._bind(v[idx], point[idx])
+        plain._bind(v[idx], point[idx])
+        assert native.table.to_list() == plain.table
+
+    # ...and binding everything, in either order, reaches the same value.
+    forward, backward = build(True), build(True)
+    for idx in range(num_vars):
+        forward._bind(v[idx], point[idx])
+    for idx in reversed(range(num_vars)):
+        backward._bind(v[idx], point[idx])
+    assert forward.constant() == backward.constant()
 
 
 def test_mle_to_coefficients():

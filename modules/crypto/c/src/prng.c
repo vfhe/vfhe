@@ -154,14 +154,31 @@ void vfhe_prng_clear_deterministic_seed(void)
 // different tags get independent streams. Pass a fixed string literal per use
 // site, never anything caller-controlled.
 
-void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char *context,
-                       const uint8_t *seed, uint64_t seed_len)
+// Initialized hashers kept for the first few attempt streams (see below). A
+// draw reaches attempt k only when the k masked words before it all landed
+// above `bound`, which is under a half each time, so past a handful the stream
+// is derived on the spot rather than held: one init on a path taken by a
+// sixteenth of the draws at worst. Each hasher is ~2 KB of stack.
+#define PRNG_ATTEMPT_STREAMS 4
+
+// The output stream one attempt draws from: the key-derivation hash of
+// `context` over the seed, separated by the attempt number so that the streams
+// are independent of each other.
+static void prng_attempt_stream(blake3_hasher *hasher, const char *context, const uint8_t *seed,
+                                uint64_t seed_len, uint64_t attempt)
+{
+    uint8_t tag[sizeof(uint64_t)];
+    for (unsigned i = 0; i < sizeof(tag); i++)
+        tag[i] = (uint8_t)(attempt >> (8 * i));
+    blake3_hasher_init_derive_key(hasher, context);
+    blake3_hasher_update(hasher, seed, seed_len);
+    blake3_hasher_update(hasher, tag, sizeof(tag));
+}
+
+void prng_sample_below_from(uint64_t *out, uint64_t count, uint64_t start, uint64_t bound,
+                            const char *context, const uint8_t *seed, uint64_t seed_len)
 {
     assert(bound > 0); // otherwise the rejection loop below never terminates
-
-    blake3_hasher hasher;
-    blake3_hasher_init_derive_key(&hasher, context);
-    blake3_hasher_update(&hasher, seed, seed_len);
 
     // Smallest 2^k - 1 that covers `bound`, so rejection discards under half
     // the draws.
@@ -173,19 +190,40 @@ void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char
     mask |= mask >> 16;
     mask |= mask >> 32;
 
-    // BLAKE3 as an XOF: `blake3_hasher_finalize` is a pure function of hasher
-    // state, so finalizing repeatedly without an intervening update returns the
-    // same bytes. Seeking along the output stream is what makes successive
-    // draws independent.
-    uint64_t offset = 0;
+    // Rejection sampling laid out so that a value's position in the sequence,
+    // not the draws before it, is what locates its bytes: index i reads word i
+    // of attempt stream 0, and falls through to word i of stream 1, 2, ... for
+    // as long as the masked word lands at or above `bound`. Letting one stream
+    // run on instead -- the obvious loop -- would make i's offset depend on how
+    // many rejections preceded it, and then the only way to reach index i would
+    // be to draw every value before it.
+    blake3_hasher cached[PRNG_ATTEMPT_STREAMS];
+    int ready[PRNG_ATTEMPT_STREAMS] = {0};
+
     for (uint64_t i = 0; i < count; i++)
     {
-        for (;;)
+        const uint64_t index = start + i;
+        for (uint64_t attempt = 0;; attempt++)
         {
-            uint8_t buf[sizeof(uint64_t)];
-            blake3_hasher_finalize_seek(&hasher, offset, buf, sizeof(buf));
-            offset += sizeof(buf);
+            blake3_hasher derived;
+            blake3_hasher *hasher;
+            if (attempt < PRNG_ATTEMPT_STREAMS)
+            {
+                if (!ready[attempt])
+                {
+                    prng_attempt_stream(&cached[attempt], context, seed, seed_len, attempt);
+                    ready[attempt] = 1;
+                }
+                hasher = &cached[attempt];
+            }
+            else
+            {
+                prng_attempt_stream(&derived, context, seed, seed_len, attempt);
+                hasher = &derived;
+            }
 
+            uint8_t buf[sizeof(uint64_t)];
+            blake3_hasher_finalize_seek(hasher, index * sizeof(buf), buf, sizeof(buf));
             uint64_t word;
             memcpy(&word, buf, sizeof(word)); // the buffer is not aligned for a cast
             const uint64_t sampled = word & mask;
@@ -196,4 +234,10 @@ void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char
             }
         }
     }
+}
+
+void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char *context,
+                       const uint8_t *seed, uint64_t seed_len)
+{
+    prng_sample_below_from(out, count, 0, bound, context, seed, seed_len);
 }

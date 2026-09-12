@@ -14,7 +14,7 @@ The C side states the layout contract at the `PMFVector` declaration in
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from vfhe.arith._alloc import aligned64
 from vfhe.arith.base import FieldVector
@@ -223,14 +223,20 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_sum(buf, self._struct)
         return self.field._wrap(buf)
 
-    def split_even_odd(self) -> tuple[PseudoMersenneVector, PseudoMersenneVector]:
+    def split_even_odd(
+        self, block: int = 1
+    ) -> tuple[PseudoMersenneVector, PseudoMersenneVector]:
         """
         Deinterleave into the even-indexed and odd-indexed halves.
 
-        Requires an even length; each half holds n / 2 elements.
+        Requires an even length; each half holds n / 2 elements. Runs of
+        `block` elements above 1 are gathered rather than deinterleaved:
+        there is no kernel for that layout here, only for the adjacent one.
         """
-        if self._n % 2:
-            raise ValueError(f"length {self._n} is odd; cannot split into halves")
+        if block != 1:
+            lo, hi = self._block_split_indices(block)
+            return self.query(lo), self.query(hi)
+        self._checked_block(block)
         half = self._n // 2
         even, odd = self._like(half), self._like(half)
         lib.pmf_vec_split_even_odd(even._struct, odd._struct, self._struct)
@@ -281,17 +287,63 @@ class PseudoMersenneVector(FieldVector):
             )
         return result
 
-    def fold(self, r) -> PseudoMersenneVector:
-        """``self[2i] + r * (self[2i+1] - self[2i])`` per pair, in one kernel pass."""
-        if self._n % 2:
-            raise ValueError(f"length {self._n} is odd; cannot fold pairs")
+    def fold(self, r, block: int = 1) -> PseudoMersenneVector:
+        """``lo + r * (hi - lo)`` per pair, in one kernel pass.
+
+        Only the adjacent layout (`block` 1) has a kernel; a wider block
+        gathers the two operands first and then runs the same three
+        whole-vector operations the front spells out.
+        """
+        if block != 1:
+            # The front's formula over the gathered operands; it is written
+            # against the base type, which this one is.
+            return cast("PseudoMersenneVector", super().fold(r, block))
+        self._checked_block(block)
         element = self._coerce_element(r)
         result = self._like(self._n // 2)
         lib.pmf_vec_fold(result._struct, self._struct, element._buf)
         return result
 
-    def sample_random(self, seed: bytes) -> None:
-        """Fill with uniform elements drawn from `seed`, in place."""
+    def view(self, start: int = 0, length: int | None = None) -> PseudoMersenneVector:
+        """`length` elements from `start`, over this vector's own planes.
+
+        The padding unit is the group width `pmf_vec_padded_length` rounds
+        to; the front states what `start` and `length` must satisfy against
+        it. The view holds a reference to this vector, so the planes outlive
+        it.
+        """
+        start, length = self._checked_view(start, length, lib.pmf_vec_padded_length(1))
+        result = PseudoMersenneVector.__new__(PseudoMersenneVector)
+        result.field = self.field
+        result._n = length
+        result._allocated_n = lib.pmf_vec_padded_length(length)
+        # The planes are the parent's, offset; `_planes` holds it alive rather
+        # than owning buffers of its own.
+        result._planes = self._planes
+        result._plane_ptrs = ffi.new(
+            "uint64_t*[]", [plane + start for plane in self._planes]
+        )
+        result._struct = ffi.new("PMFVector")
+        result._struct.limbs = result._plane_ptrs
+        result._struct.n = length
+        result._struct.allocated_n = result._allocated_n
+        result._struct.params = self.field._params
+        return result
+
+    def sample_random(self, seed: bytes, start: int = 0) -> None:
+        """Fill with uniform elements drawn from `seed`, in place.
+
+        `start` is replayed rather than seeked: this sampler's draw stream is
+        walked from the beginning, so a non-zero `start` costs the values
+        before it as well (`_sample_random_replayed`).
+        """
+        if not isinstance(start, int) or isinstance(start, bool):
+            raise TypeError(f"start must be an int, not {type(start).__name__}")
+        if start < 0:
+            raise ValueError(f"start must not be negative, got {start}")
+        if start:
+            self._sample_random_replayed(seed, start)
+            return
         lib.pmf_vec_sample_random(self._struct, seed, len(seed))
 
     def hash(self) -> bytes:

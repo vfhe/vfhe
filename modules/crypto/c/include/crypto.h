@@ -66,6 +66,17 @@ extern "C"
     void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char *context,
                            const uint8_t *seed, uint64_t seed_len);
 
+    // The same sequence from position `start`: out[i] is value start + i of the
+    // sequence prng_sample_below writes, which is that call with start = 0.
+    //
+    // Each position is located by its index rather than by the draws before it,
+    // so any window costs what its own values cost -- a verifier that needs a
+    // handful of positions of a long pseudorandom vector pays for those and not
+    // for the vector. That is a property of the definition, not an
+    // optimization: the two entry points cannot disagree.
+    void prng_sample_below_from(uint64_t *out, uint64_t count, uint64_t start, uint64_t bound,
+                                const char *context, const uint8_t *seed, uint64_t seed_len);
+
     // Test-only: makes every generator above reproducible by replacing the
     // hardware seed source with a splitmix64 stream started from `seed`. Also
     // discards pooled bytes, so the next draw comes from `seed`. Reproducible

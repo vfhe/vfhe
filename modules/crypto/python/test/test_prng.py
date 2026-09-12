@@ -53,6 +53,34 @@ def test_prefix_is_stable_as_count_grows():
     assert seeded.below(1 << 50, b"test", SEED) == long[0]
 
 
+def test_a_window_is_the_slice_it_claims_to_be():
+    """`start` must locate values by index, not draw and discard: the window
+    and the prefix it sits inside have to be the same sequence."""
+    whole = sample(64, (1 << 50) + 1)
+    for start, count in ((0, 64), (1, 8), (17, 3), (63, 1)):
+        assert (
+            seeded.below_many(count, (1 << 50) + 1, b"test", SEED, start)
+            == whole[start : start + count]
+        )
+
+
+def test_a_window_holds_where_rejection_is_heaviest():
+    """A bound just above a power of two rejects about half the draws, which
+    is where an index-local layout differs most from a running stream."""
+    whole = sample(256, 257)
+    for start in (0, 1, 128, 255):
+        assert seeded.below_many(1, 257, b"test", SEED, start) == [whole[start]]
+    assert all(0 <= v < 257 for v in whole)
+
+
+def test_a_far_window_costs_nothing_to_reach():
+    """The point of the indexed form: position 2^40 without the 2^40 before
+    it. A sequential sampler could not return from this at all."""
+    far = seeded.below_many(4, (1 << 61) - 1, b"test", SEED, 1 << 40)
+    assert len(set(far)) == 4
+    assert seeded.below_many(2, (1 << 61) - 1, b"test", SEED, (1 << 40) + 1) == far[1:3]
+
+
 def test_respects_tight_and_degenerate_bounds():
     assert sample(16, 1) == [0] * 16  # only 0 is below 1
     assert all(v < 3 for v in sample(64, 3))  # rejection-heavy: mask covers 0..3

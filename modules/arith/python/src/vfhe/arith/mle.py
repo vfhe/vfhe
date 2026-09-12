@@ -484,6 +484,17 @@ class MLE:
         mark_ntt(new_table)
         self.table, self.table_ptr = new_table, new_ptr
 
+    def _bind_vector(self, val, idx: int) -> None:
+        """Bind the variable at `idx` in a field table: whole-vector
+        operations over pairs `1 << idx` apart, whichever position it is."""
+        block = 1 << idx
+        if self.basis is MLE_Basis.eval:
+            # One fused kernel pass: lo + val * (hi - lo) over those pairs.
+            self._set_table(self._vector.fold(val, block))
+        else:
+            lo, hi = self._vector.split_even_odd(block)
+            self._set_table(lo + hi * val)
+
     def _bind_pairs(self, val) -> None:
         if native_table(self):
             self._run_bind(
@@ -494,12 +505,7 @@ class MLE:
             )
             return
         if self.field is not None:
-            if self.basis is MLE_Basis.eval:
-                # One fused kernel pass: lo + val * (hi - lo) over the pairs.
-                self._set_table(self._vector.fold(val))
-            else:
-                even, odd = self._vector.split_even_odd()
-                self._set_table(even + odd * val)
+            self._bind_vector(val, 0)
             return
         t = self._python_entries()
         self._set_table(
@@ -514,6 +520,9 @@ class MLE:
                 val,
                 1 << (self.num_vars - 1),
             )
+            return
+        if self.field is not None:
+            self._bind_vector(val, self.num_vars - 1)
             return
         t = self._python_entries()
         half = len(t) // 2
@@ -530,6 +539,9 @@ class MLE:
                 self.num_vars,
                 idx,
             )
+            return
+        if self.field is not None:
+            self._bind_vector(val, idx)
             return
         t = self._python_entries()
         self._set_table(

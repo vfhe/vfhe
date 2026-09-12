@@ -708,6 +708,20 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         """
         raise NotImplementedError
 
+    def element_from_seed(self, seed: bytes, index: int) -> FieldElement:
+        """Samples the element at position `index` based on `seed` and `index`. 
+        The result, per element, is the same as calling `FieldVector.sample_random` for the entire vector.
+
+        This is different from ``field.element_from_seed(seed, i)``, which would sample randomness based on the `seed` only.
+        """
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise TypeError(f"index must be an int, not {type(index).__name__}")
+        if index < 0:
+            raise ValueError(f"index must not be negative, got {index}")
+        one = FieldVector(self, 1)
+        one.sample_random(seed, index)
+        return one[0]
+
     def random_element(self, seed: bytes | None = None) -> FieldElement:
         """A uniform element of the field.
 
@@ -826,6 +840,31 @@ class FieldElement(metaclass=_ImplementationDispatch):
     def square(self) -> FieldElement:
         """``self * self``, which an implementation may do cheaper."""
         return self.__mul__(self)
+
+    def frobenius(self, k: int = 1) -> FieldElement:
+        """``self ** (prime ** k)``: the k-th power of the Frobenius
+        automorphism.
+
+        It generates the Galois group of the field over its prime subfield,
+        which is cyclic of order ``degree``, so ``k`` matters only modulo
+        ``degree`` and the identity is ``k = 0``. Over a prime field it is
+        the identity for every ``k``.
+
+        Spelled here as the exponentiation it is defined as, one power of
+        the characteristic at a time rather than by raising to ``p ** k`` in
+        one go -- that exponent outgrows what an implementation's `__pow__`
+        accepts by ``k = 3`` over a 61-bit prime. An implementation that can
+        compute it as the F_p-linear map on coefficients it also is -- a
+        permutation of the positions with a constant each -- replaces this.
+        """
+        if not isinstance(k, int) or isinstance(k, bool):
+            raise TypeError(f"k must be an int, not {type(k).__name__}")
+        if k < 0:
+            raise ValueError("k must not be negative; the group is cyclic of order d")
+        result = self
+        for _ in range(k % self.field.degree):
+            result = result**self.field.prime
+        return result
 
     def inverse(self) -> FieldElement:
         """The multiplicative inverse. Raises ValueError for zero."""
@@ -1075,10 +1114,97 @@ class FieldVector(metaclass=_ImplementationDispatch):
 
     # --- movement ---
 
-    def split_even_odd(self) -> tuple[FieldVector, FieldVector]:
+    def split_even_odd(self, block: int = 1) -> tuple[FieldVector, FieldVector]:
         """The elements at even and at odd positions, as two half vectors:
-        the inverse of `interleave`."""
+        the inverse of `interleave`.
+
+        ``block`` reads the vector as alternating runs of that many elements
+        rather than as single ones: run 0 goes to the first result, run 1 to
+        the second, run 2 to the first again, and so on. ``block = 1`` is the
+        plain deinterleave; ``block = len(self) // 2`` is the two halves. It
+        must divide ``len(self) // 2``.
+        """
         raise NotImplementedError
+
+    def _checked_block(self, block: int) -> int:
+        """``block`` validated against the length: a positive divisor of half
+        of it, with the length itself even."""
+        if not isinstance(block, int) or isinstance(block, bool):
+            raise TypeError(f"block must be an int, not {type(block).__name__}")
+        n = len(self)
+        if n % 2:
+            raise ValueError(f"length {n} is odd; cannot split into halves")
+        if block < 1 or (n // 2) % block:
+            raise ValueError(f"block {block} does not divide the half-length {n // 2}")
+        return block
+
+    def _block_split_indices(self, block: int) -> tuple[list[int], list[int]]:
+        """The two index lists `split_even_odd(block)` collects, for an
+        implementation with no kernel of its own for the strided case."""
+        block = self._checked_block(block)
+        n = len(self)
+        lo = [at + i for at in range(0, n, 2 * block) for i in range(block)]
+        hi = [at + block + i for at in range(0, n, 2 * block) for i in range(block)]
+        return lo, hi
+
+    def _checked_view(
+        self, start: int, length: int | None, unit: int
+    ) -> tuple[int, int]:
+        """``(start, length)`` for `view`, checked against this vector and the
+        padding unit its buffers were allocated to.
+
+        ``start`` must be a multiple of ``unit`` so that the view's planes are
+        aligned as the kernels require, and ``length`` a multiple of it too
+        unless the view runs to the end of this vector -- which is the one
+        case where the padding rounding up to ``unit`` is the parent's own.
+        """
+        n = len(self)
+        for name, value in (("start", start), ("length", length)):
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool)
+            ):
+                raise TypeError(f"{name} must be an int, not {type(value).__name__}")
+        if length is None:
+            length = n - start
+        if start < 0 or length < 0 or start + length > n:
+            raise ValueError(
+                f"view {start}..{start + length} is not inside a vector of {n}"
+            )
+        if start % unit:
+            raise ValueError(f"view start {start} is not a multiple of {unit}")
+        if length % unit and start + length != n:
+            raise ValueError(
+                f"view length {length} is not a multiple of {unit} and does "
+                "not reach the end of the vector"
+            )
+        return start, length
+
+    def view(self, start: int = 0, length: int | None = None) -> FieldVector:
+        """``length`` elements from ``start``, sharing this vector's buffers.
+
+        No copy: the result reads and writes the same memory, so a change
+        through one is visible through the other, and it keeps this vector
+        alive for as long as it lives. That is what lets a cache-blocked
+        algorithm stay in Python -- take a view per block and hand it to the
+        same whole-vector operations -- where `query` would copy each block.
+
+        The kernels' preconditions are what constrain the two arguments, and
+        an implementation states its padding unit: ``start`` must be a
+        multiple of it, so the view's buffers are aligned as they were
+        allocated to be, and ``length`` must be too unless the view reaches
+        the end of this vector. Writing through a view whose length is not a
+        whole number of units would otherwise reach into the next elements of
+        the parent, which are not the view's to touch.
+        """
+        raise NotImplementedError
+
+    def frobenius(self, k: int = 1) -> FieldVector:
+        """`FieldElement.frobenius` applied to every element.
+
+        An implementation that has the coefficient map replaces this, which
+        is the elementwise spelling of the definition.
+        """
+        return type(self)(self.field, [e.frobenius(k) for e in self.to_list()])
 
     @staticmethod
     def concat(vectors: list) -> FieldVector:
@@ -1110,38 +1236,70 @@ class FieldVector(metaclass=_ImplementationDispatch):
         """The elements at `indices`, gathered into a new vector."""
         return type(self)(self.field, [self[i] for i in indices])
 
-    def fold(self, r) -> FieldVector:
+    def fold(self, r, block: int = 1) -> FieldVector:
         """``even + r * (odd - even)`` over adjacent pairs, half the length.
 
         Position ``i`` of the result is ``self[2i] + r * (self[2i+1] -
         self[2i])``: the interpolation that binds the low variable of a
         multilinear table to ``r``, or folds a codeword. ``r`` is one element
         (or an int). Requires an even length.
+
+        ``block`` moves the pair partner ``block`` positions away instead of
+        one, pairing the runs `split_even_odd` splits on: ``block = 1`` binds
+        the low variable of a table and ``block = len(self) // 2`` the high
+        one, with the positions in between reached by the powers of two
+        between. The result is in the same order either way -- the bound
+        variable's index is the one that disappears.
         """
-        even, odd = self.split_even_odd()
+        even, odd = self.split_even_odd(block)
         return even + (odd - even).scale(r)
 
     # --- sampling and digests ---
 
-    def sample_random(self, seed: bytes) -> None:
+    def sample_random(self, seed: bytes, start: int = 0) -> None:
         """Overwrite every element with a uniform one, in place.
 
         A pure function of ``seed``: the same seed fills the same vector on
         every engine.
+
+        ``start`` fills from that position of the same sequence rather than
+        from its beginning, so a window of a long vector can be built on its
+        own -- position ``j`` here is position ``start + j`` of the sequence
+        a vector filled from 0 would hold, and `Field.element_from_seed` is
+        the single-position form of the same definition.
         """
         raise NotImplementedError
+
+    def _sample_random_replayed(self, seed: bytes, start: int) -> None:
+        """`sample_random` from `start` for an implementation whose draw
+        stream can only be walked from the beginning: the values before
+        `start` are produced and dropped, so this costs O(start + len(self)).
+        """
+        full = type(self)(self.field, start + len(self))
+        full.sample_random(seed)
+        for i in range(len(self)):
+            self[i] = full[start + i]
 
     def hash(self) -> bytes:
         """A 32-byte digest of the whole vector's contents."""
         raise NotImplementedError
 
     def hash_elements(self, group: int = 1, stride: int = 1) -> list[bytes]:
-        """One digest per group of elements: the Merkle leaves of a codeword.
+        """One digest per window of elements: the Merkle leaves of a codeword.
 
-        :param group: How many elements go into each digest.
-        :param stride: Distance between the elements of one group, so that a
-            group can be a column of an interleaved codeword rather than a
-            contiguous run.
+        A window is a **contiguous** run: window ``k`` covers elements
+        ``k * stride`` through ``k * stride + group - 1``, in index order, and
+        only whole windows count. So ``stride`` is the distance between one
+        window's start and the next -- ``group == stride`` tiles the vector,
+        a larger ``stride`` leaves gaps, a smaller one overlaps -- and there
+        is no form of this that gathers a strided fiber into one digest.
+
+        A code whose leaf is a fiber therefore has to lay that fiber out
+        contiguously in the codeword; this is a constraint on the layout, not
+        a parameter that can absorb one.
+
+        :param group: How many consecutive elements go into each digest.
+        :param stride: Distance between the starts of consecutive windows.
         """
         raise NotImplementedError
 

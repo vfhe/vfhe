@@ -62,40 +62,60 @@ void field_vec_scalar_sub(FieldVector out, const uint64_t *s, const FieldVector 
 
 // The schoolbook product of two degree-(d-1) polynomials, one plane at a time,
 // followed by the fold on x^d == w. Same shape as field_ext_mul, with each
-// coefficient-times-coefficient replaced by a whole-plane kernel call, and the
-// 2d-1 intermediate planes held in one scratch allocation.
+// coefficient-times-coefficient replaced by a whole-plane kernel call.
+//
+// Done over the whole vector at once the 2d^2 + d - 1 passes would each sweep a
+// (2d-1)-plane accumulator, so beyond the last private cache every pass reloads
+// it from memory and the rate is set by bandwidth rather than by the kernels.
+// The product is therefore tiled: the same passes run over FIELD_VEC_MUL_TILE
+// elements at a time out of one scratch that stays resident, which holds the
+// in-cache rate at any length. The tile is a multiple of the eltwise vector
+// width and the planes are 64-byte aligned, so every tile meets the kernels'
+// length and alignment preconditions -- including the last, since allocated_n
+// is itself a whole number of vector widths.
+#define FIELD_VEC_MUL_TILE 4096
+
 static void field_vec_mul_generic(FieldVector out, const FieldVector a, const void *b_or_scalar,
                                   int b_is_vector)
 {
     const uint64_t d = a->d, len = a->allocated_n;
     const uint64_t wide = 2 * d - 1;
-    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(wide * len * sizeof(uint64_t));
-    memset(scratch, 0, wide * len * sizeof(uint64_t));
+    const uint64_t tile = len < FIELD_VEC_MUL_TILE ? len : FIELD_VEC_MUL_TILE;
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(wide * tile * sizeof(uint64_t));
 
-    for (uint64_t i = 0; i < d; i++)
+    for (uint64_t base = 0; base < len; base += tile)
     {
-        for (uint64_t j = 0; j < d; j++)
+        const uint64_t run = len - base < tile ? len - base : tile;
+        for (uint64_t k = 0; k < wide; k++)
+            memset(scratch + k * tile, 0, run * sizeof(uint64_t));
+
+        for (uint64_t i = 0; i < d; i++)
         {
-            uint64_t *acc = scratch + (i + j) * len;
-            if (b_is_vector)
+            for (uint64_t j = 0; j < d; j++)
             {
-                const FieldVector b = (const FieldVector)b_or_scalar;
-                mod_eltwise_mul_addto(acc, a->coeffs[i], b->coeffs[j], len, a->mod);
-            }
-            else
-            {
-                const uint64_t *s = (const uint64_t *)b_or_scalar;
-                mod_eltwise_fma(acc, a->coeffs[i], s[j], len, a->mod);
+                uint64_t *acc = scratch + (i + j) * tile;
+                if (b_is_vector)
+                {
+                    const FieldVector b = (const FieldVector)b_or_scalar;
+                    mod_eltwise_mul_addto(acc, a->coeffs[i] + base, b->coeffs[j] + base, run,
+                                          a->mod);
+                }
+                else
+                {
+                    const uint64_t *s = (const uint64_t *)b_or_scalar;
+                    mod_eltwise_fma(acc, a->coeffs[i] + base, s[j], run, a->mod);
+                }
             }
         }
+
+        for (uint64_t i = wide; i-- > d;)
+            mod_eltwise_fma(scratch + (i - d) * tile, scratch + i * tile, a->w, run, a->mod);
+
+        // Copied only now, so `out` may alias either input: this tile's inputs
+        // are read before it is overwritten, and later tiles are untouched.
+        for (uint64_t j = 0; j < d; j++)
+            memcpy(out->coeffs[j] + base, scratch + j * tile, run * sizeof(uint64_t));
     }
-
-    for (uint64_t i = wide; i-- > d;)
-        mod_eltwise_fma(scratch + (i - d) * len, scratch + i * len, a->w, len, a->mod);
-
-    // Copied only now, so `out` may alias either input.
-    for (uint64_t j = 0; j < d; j++)
-        memcpy(out->coeffs[j], scratch + j * len, len * sizeof(uint64_t));
     free(scratch);
 }
 
@@ -241,6 +261,86 @@ void field_vec_fold(FieldVector out, const FieldVector a, const uint64_t *r)
     free(scratch);
 }
 
+// The runs of `block` elements that alternate between the two outputs: `lo`
+// collects runs 0, 2, 4, ... and `hi` runs 1, 3, 5, .... With block == 1 that
+// is field_vec_split_even_odd, which is what runs for it.
+void field_vec_split_blocks(FieldVector lo, FieldVector hi, const FieldVector a, uint64_t block)
+{
+    if (block == 1)
+    {
+        field_vec_split_even_odd(lo, hi, a);
+        return;
+    }
+    const uint64_t bytes = block * sizeof(uint64_t);
+    for (uint64_t j = 0; j < a->d; j++)
+    {
+        const uint64_t *plane = a->coeffs[j];
+        for (uint64_t c = 0, at = 0; at + 2 * block <= a->n; c++, at += 2 * block)
+        {
+            memcpy(lo->coeffs[j] + c * block, plane + at, bytes);
+            memcpy(hi->coeffs[j] + c * block, plane + at + block, bytes);
+        }
+    }
+}
+
+// field_vec_fold over pairs `block` apart rather than adjacent: out[i] is
+// lo[i] + r * (hi[i] - lo[i]) on the split field_vec_split_blocks makes, which
+// is the interpolation binding the variable that `block` indexes.
+//
+// Three whole-plane passes either way; what `block` decides is whether the two
+// operands have to be gathered first. At block == a->n / 2 -- the last variable
+// of a multilinear table -- the halves are already contiguous, so they are used
+// where they lie and the only allocation is the one temporary the passes need.
+void field_vec_fold_blocks(FieldVector out, const FieldVector a, uint64_t block, const uint64_t *r)
+{
+    if (block == 1)
+    {
+        field_vec_fold(out, a, r);
+        return;
+    }
+
+    const uint64_t d = a->d, half = out->allocated_n;
+    // The halves are contiguous runs of `half` words only when nothing was
+    // rounded up to reach it; otherwise they are gathered like any other block.
+    const int in_place = (block == a->n / 2) && (block == half);
+    const uint64_t planes_held = in_place ? 1 : 3;
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(planes_held * d * half * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)malloc(3 * d * sizeof(uint64_t *));
+    struct _FieldVector lo = *out, hi = *out, acc = *out;
+
+    memset(scratch, 0, planes_held * d * half * sizeof(uint64_t));
+    lo.coeffs = planes;
+    hi.coeffs = planes + d;
+    acc.coeffs = planes + 2 * d;
+    for (uint64_t j = 0; j < d; j++)
+        acc.coeffs[j] = scratch + j * half;
+
+    if (in_place)
+    {
+        for (uint64_t j = 0; j < d; j++)
+        {
+            lo.coeffs[j] = a->coeffs[j];
+            hi.coeffs[j] = a->coeffs[j] + block;
+        }
+    }
+    else
+    {
+        for (uint64_t j = 0; j < d; j++)
+        {
+            lo.coeffs[j] = scratch + (d + j) * half;
+            hi.coeffs[j] = scratch + (2 * d + j) * half;
+        }
+        field_vec_split_blocks(&lo, &hi, a, block);
+    }
+
+    field_vec_sub(&acc, &hi, &lo);
+    field_vec_scale(&acc, &acc, r);
+    field_vec_add(out, &lo, &acc);
+
+    free(planes);
+    free(scratch);
+}
+
 int field_vec_is_equal(const FieldVector a, const FieldVector b)
 {
     if (a->n != b->n || a->d != b->d)
@@ -294,18 +394,60 @@ int field_vec_inv(FieldVector out, const FieldVector a)
     return status;
 }
 
-void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len)
+// The Frobenius applied to every element: the same permutation of coefficient
+// positions and the same constant per position as field_ext_frobenius, which is
+// where the map is derived -- so here it is d whole-plane scalings, independent
+// of how many elements the vector holds, rather than one exponentiation each.
+//
+// Written through a scratch plane set because the map permutes the planes and
+// `out` may be `a`.
+void field_vec_frobenius(FieldVector out, const FieldVector a, uint64_t k)
 {
-    // One draw stream over all n * d coefficients, scattered into the planes.
-    // Drawing per plane from the same seed would give every plane the same
-    // values, and hence every element the same coefficient repeated.
+    const uint64_t d = a->d, len = a->allocated_n;
+    if (d <= 1 || k % d == 0)
+    {
+        field_vec_copy(out, a);
+        return;
+    }
+    uint64_t *constants = (uint64_t *)malloc(d * sizeof(uint64_t));
+    uint64_t *to = (uint64_t *)malloc(d * sizeof(uint64_t));
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(d * len * sizeof(uint64_t));
+
+    frobenius_map(constants, to, k, d, a->w, a->mod);
+    for (uint64_t j = 0; j < d; j++)
+        mod_eltwise_scale(scratch + to[j] * len, a->coeffs[j], constants[j], len, a->mod);
+    for (uint64_t j = 0; j < d; j++)
+        memcpy(out->coeffs[j], scratch + j * len, len * sizeof(uint64_t));
+
+    free(constants);
+    free(to);
+    free(scratch);
+}
+
+void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len,
+                             uint64_t start)
+{
+    // One draw stream over all the coefficients, scattered into the planes:
+    // element i takes draws i*d .. i*d + d - 1, so `start` is a position in
+    // that stream and not a second stream. Drawing per plane from the same seed
+    // would give every plane the same values, and hence every element the same
+    // coefficient repeated.
     const uint64_t d = out->d, n = out->n;
     if (n == 0)
         return;
     uint64_t *flat = (uint64_t *)malloc(n * d * sizeof(uint64_t));
-    prng_sample_below(flat, n * d, out->mod->q, "field_vec_sample", seed, seed_len);
+    prng_sample_below_from(flat, n * d, start * d, out->mod->q, "field_vec_sample", seed, seed_len);
     field_vec_set_range(out, 0, flat, n);
     free(flat);
+}
+
+void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_t seed_len,
+                                     uint64_t index, uint64_t d, uint64_t mod)
+{
+    // The same stream, at the d draws element `index` takes -- so this and the
+    // fill above agree by construction rather than by two definitions that have
+    // to be kept in step.
+    prng_sample_below_from(out, d, index * d, mod, "field_vec_sample", seed, seed_len);
 }
 
 // The elements in index order, d words each, as the bytes a digest covers.

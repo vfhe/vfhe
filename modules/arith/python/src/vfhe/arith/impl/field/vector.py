@@ -236,17 +236,19 @@ class ExtensionFieldVector(FieldVector):
             raise ValueError("vector contains an element that is not invertible")
         return result
 
-    def split_even_odd(self) -> tuple[ExtensionFieldVector, ExtensionFieldVector]:
+    def split_even_odd(
+        self, block: int = 1
+    ) -> tuple[ExtensionFieldVector, ExtensionFieldVector]:
         """
         Deinterleave into the even-indexed and odd-indexed halves.
 
-        Requires an even length; each half holds n / 2 elements.
+        Requires an even length; each half holds n / 2 elements. `block`
+        deinterleaves runs of that many elements instead of single ones.
         """
-        if self._n % 2:
-            raise ValueError(f"length {self._n} is odd; cannot split into halves")
+        block = self._checked_block(block)
         half = self._n // 2
         even, odd = self._like(half), self._like(half)
-        lib.field_vec_split_even_odd(even._struct, odd._struct, self._struct)
+        lib.field_vec_split_blocks(even._struct, odd._struct, self._struct, block)
         return even, odd
 
     @staticmethod
@@ -294,18 +296,67 @@ class ExtensionFieldVector(FieldVector):
             )
         return result
 
-    def fold(self, r) -> ExtensionFieldVector:
-        """``self[2i] + r * (self[2i+1] - self[2i])`` per pair, in one kernel pass."""
-        if self._n % 2:
-            raise ValueError(f"length {self._n} is odd; cannot fold pairs")
+    def fold(self, r, block: int = 1) -> ExtensionFieldVector:
+        """``lo + r * (hi - lo)`` per pair, in one kernel pass.
+
+        The pair partner sits `block` positions away -- adjacent by default,
+        the two halves at ``block = n // 2``.
+        """
+        block = self._checked_block(block)
         element = self._coerce_element(r)
         result = self._like(self._n // 2)
-        lib.field_vec_fold(result._struct, self._struct, element.value)
+        lib.field_vec_fold_blocks(result._struct, self._struct, block, element.value)
         return result
 
-    def sample_random(self, seed: bytes) -> None:
-        """Fill with uniform elements drawn from `seed`, in place."""
-        lib.field_vec_sample_random(self._struct, seed, len(seed))
+    def view(self, start: int = 0, length: int | None = None) -> ExtensionFieldVector:
+        """`length` elements from `start`, over this vector's own planes.
+
+        The padding unit is the eltwise kernels' vector width, which is what
+        `field_vec_padded_length` rounds to; the front states what `start`
+        and `length` must satisfy against it. The view holds a reference to
+        this vector, so the planes outlive it.
+        """
+        start, length = self._checked_view(
+            start, length, lib.field_vec_padded_length(1)
+        )
+        result = ExtensionFieldVector.__new__(ExtensionFieldVector)
+        result.field = self.field
+        result._n = length
+        result._allocated_n = lib.field_vec_padded_length(length)
+        # The planes are the parent's, offset; `_planes` holds it alive rather
+        # than owning buffers of its own.
+        result._planes = self._planes
+        result._plane_ptrs = ffi.new(
+            "uint64_t*[]", [plane + start for plane in self._planes]
+        )
+        result._struct = ffi.new("FieldVector")
+        result._struct.coeffs = result._plane_ptrs
+        result._struct.n = length
+        result._struct.allocated_n = result._allocated_n
+        result._struct.d = self.field.d
+        result._struct.w = self.field.w
+        result._struct.mod = self.field.mod
+        return result
+
+    def frobenius(self, k: int = 1) -> ExtensionFieldVector:
+        """`ExtensionFieldElement.frobenius` on every element, as the d
+        whole-plane scalings it is."""
+        if not isinstance(k, int) or isinstance(k, bool):
+            raise TypeError(f"k must be an int, not {type(k).__name__}")
+        if k < 0:
+            raise ValueError("k must not be negative; the group is cyclic of order d")
+        result = self._like()
+        lib.field_vec_frobenius(result._struct, self._struct, k)
+        return result
+
+    def sample_random(self, seed: bytes, start: int = 0) -> None:
+        """Fill with uniform elements drawn from `seed`, in place, taking the
+        sequence from position `start`."""
+        if not isinstance(start, int) or isinstance(start, bool):
+            raise TypeError(f"start must be an int, not {type(start).__name__}")
+        if start < 0:
+            raise ValueError(f"start must not be negative, got {start}")
+        lib.field_vec_sample_random(self._struct, seed, len(seed), start)
 
     def hash(self) -> bytes:
         """BLAKE3 over every element in index order, 32 bytes."""

@@ -156,21 +156,26 @@ class SeededPRNG:
         return self.below_many(1, bound, context, seed)[0]
 
     def below_many(
-        self, count: int, bound: int, context: bytes, seed: bytes
+        self, count: int, bound: int, context: bytes, seed: bytes, start: int = 0
     ) -> list[int]:
-        """`count` values uniform in `[0, bound)`.
+        """`count` values uniform in `[0, bound)`, from position `start` of
+        the sequence.
 
         Entry `i` depends on `i` alone, so raising `count` extends the
-        sequence instead of changing it.
+        sequence instead of changing it, and a window costs what its own
+        values cost: ``below_many(k, ..., start=j)`` is
+        ``below_many(j + k, ...)[j:]`` without producing the first `j`.
         """
         if bound < 1:
             raise ValueError(f"bound must be at least 1, got {bound}")
         if count < 0:
             raise ValueError(f"count must be non-negative, got {count}")
+        if start < 0:
+            raise ValueError(f"start must be non-negative, got {start}")
         if count == 0:
             return []
         out = ffi.new("uint64_t[]", count)
-        lib.prng_sample_below(out, count, bound, context, seed, len(seed))
+        lib.prng_sample_below_from(out, count, start, bound, context, seed, len(seed))
         return [out[i] for i in range(count)]
 
     def bytes(self, amount: int, context: bytes, seed: bytes) -> bytes:

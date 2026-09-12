@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <arith.h>
 #include <blake3.h>
+#include "arith_internal.h"
 #include "util.h"
 #include <crypto.h>
 
@@ -138,6 +139,76 @@ void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_
     }
     free(b);
     free(tmp);
+}
+
+// The Frobenius x -> x^(p^k) is a coefficient map, not an exponentiation: the
+// coefficients of an element lie in F_p, so Fermat leaves each of them fixed
+// and all that moves is the monomial. Writing p = q*d + r, x^(j*p) is
+// (x^d)^(j*q) * x^(j*r) = w^(j*q + (j*r)/d) * x^((j*r) mod d) -- one permutation
+// of the positions with one constant per position.
+//
+// `to[j]` and `constants[j]` are that map for a single application. The
+// exponent of w is reduced mod p - 1, its order, so it fits a 64-bit exponent
+// whatever d is.
+static void frobenius_step(uint64_t *constants, uint64_t *to, uint64_t d, uint64_t w, Modulus mod)
+{
+    const uint64_t p = mod->q, r = p % d;
+    for (uint64_t j = 0; j < d; j++)
+    {
+        const __uint128_t e = (__uint128_t)(p / d) * j + (__uint128_t)(r * j) / d;
+        constants[j] = power_mod(w, (uint64_t)(e % (p - 1)), p);
+        to[j] = (j * r) % d;
+    }
+}
+
+// The k-fold composition of that map, as one permutation and one constant. The
+// Galois group is cyclic of order d, so `k` is taken modulo d first and the
+// loop runs at most d - 1 times over d positions -- the cost does not depend on
+// how many elements the map is then applied to.
+void frobenius_map(uint64_t *constants, uint64_t *to, uint64_t k, uint64_t d, uint64_t w,
+                   Modulus mod)
+{
+    uint64_t *step_c = (uint64_t *)malloc(d * sizeof(uint64_t));
+    uint64_t *step_to = (uint64_t *)malloc(d * sizeof(uint64_t));
+    frobenius_step(step_c, step_to, d, w, mod);
+
+    for (uint64_t j = 0; j < d; j++)
+    {
+        constants[j] = 1;
+        to[j] = j;
+    }
+    for (uint64_t step = 0; step < k % d; step++)
+    {
+        for (uint64_t j = 0; j < d; j++)
+        {
+            // The step constant belongs to the position the coefficient has
+            // reached, not to where it started.
+            constants[j] = mul_modq(constants[j], step_c[to[j]], mod);
+            to[j] = step_to[to[j]];
+        }
+    }
+    free(step_c);
+    free(step_to);
+}
+
+void field_ext_frobenius(uint64_t *res, const uint64_t *a, uint64_t k, uint64_t d, uint64_t w,
+                         Modulus mod)
+{
+    if (d <= 1 || k % d == 0)
+    {
+        memmove(res, a, d * sizeof(uint64_t));
+        return;
+    }
+    uint64_t *constants = (uint64_t *)malloc(d * sizeof(uint64_t));
+    uint64_t *to = (uint64_t *)malloc(d * sizeof(uint64_t));
+    uint64_t *out = (uint64_t *)malloc(d * sizeof(uint64_t));
+    frobenius_map(constants, to, k, d, w, mod);
+    for (uint64_t j = 0; j < d; j++)
+        out[to[j]] = mul_modq(a[j], constants[j], mod);
+    memcpy(res, out, d * sizeof(uint64_t)); // written only now, so res may be a
+    free(constants);
+    free(to);
+    free(out);
 }
 
 static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *b, uint64_t d,

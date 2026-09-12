@@ -273,6 +273,12 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_t exp_hi,
                        uint64_t d, uint64_t w, Modulus mod);
     int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Modulus mod);
+    // The Frobenius x -> x^(p^k), computed as the F_p-linear coefficient map it
+    // is -- one permutation of the d positions with one constant each -- and not
+    // by exponentiation. `k` is taken modulo d, the order of the Galois group;
+    // k = 0 (and d = 1) is the identity. `res` may be `a`.
+    void field_ext_frobenius(uint64_t *res, const uint64_t *a, uint64_t k, uint64_t d, uint64_t w,
+                             Modulus mod);
     void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len,
                                      uint64_t d, uint64_t mod);
     void field_hash_element(uint8_t *out, const uint64_t *a, uint64_t d);
@@ -357,10 +363,34 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // multilinear table. `r` is one element. `a->n` must be even, out must hold
     // a->n / 2 elements with canonical padding, and may not alias a.
     void field_vec_fold(FieldVector out, const FieldVector a, const uint64_t *r);
+    // The same interpolation over pairs `block` elements apart rather than
+    // adjacent: `a` is read as alternating runs of `block` elements, the even
+    // runs supplying the lo operands and the odd runs the hi ones, so
+    // `block == 1` is field_vec_fold and `block == a->n / 2` is the two halves.
+    // Same preconditions as field_vec_fold; `block` must divide a->n / 2.
+    void field_vec_fold_blocks(FieldVector out, const FieldVector a, uint64_t block,
+                               const uint64_t *r);
+    // That split on its own: `lo` gets runs 0, 2, 4, ... and `hi` runs 1, 3,
+    // 5, .... `block == 1` is field_vec_split_even_odd. Each output holds
+    // a->n / 2 elements and may not alias `a`.
+    void field_vec_split_blocks(FieldVector lo, FieldVector hi, const FieldVector a,
+                                uint64_t block);
+    // Elementwise Frobenius, the map field_ext_frobenius describes: d whole-plane
+    // scalings, whatever the length. `out` may be `a`.
+    void field_vec_frobenius(FieldVector out, const FieldVector a, uint64_t k);
     int field_vec_is_equal(const FieldVector a, const FieldVector b);
     // Uniform elements from a seed. One draw stream covers the whole vector, so
-    // no two coefficients repeat by construction.
-    void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len);
+    // no two coefficients repeat by construction; element i takes draws
+    // i*d .. i*d + d - 1 of it. `start` fills from that position of the same
+    // stream instead of from its beginning, so a window of a long vector can be
+    // materialized on its own.
+    void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len,
+                                 uint64_t start);
+    // The single element at `index` of that stream, d coefficients, without
+    // materializing anything before it. What the fill above puts at that
+    // position, by construction: both are the same draws.
+    void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_t seed_len,
+                                         uint64_t index, uint64_t d, uint64_t mod);
     // BLAKE3 over the elements in index order, 32 bytes.
     void field_vec_hash(uint8_t *out, const FieldVector a);
     // One digest per window of `group` elements starting every `stride` indices:
