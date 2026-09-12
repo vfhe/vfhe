@@ -25,6 +25,7 @@ module = {
         # one directory per implementation
         'c/src/complex/complex.c',
         'c/src/field/field.c',
+        'c/src/field/field_fused.c',
         'c/src/field/field_vector.c',
         'c/src/mp/mp_polynomial.c',
         'c/src/pmf/pmf.c',
