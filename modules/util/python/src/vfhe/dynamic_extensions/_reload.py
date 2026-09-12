@@ -5,6 +5,7 @@ vfhe module's ffi/lib handles and re-run the registered reinitializers."""
 
 from __future__ import annotations
 
+import importlib
 import logging
 import sys
 from typing import Any
@@ -25,9 +26,16 @@ def register_reinitializer(func):
 
 def update_cffi_references(new_ffi, new_lib):
     """Update all global ffi and lib references in imported vfhe modules."""
+    # Imported here rather than read out of `sys.modules`: making
+    # `vfhe.engine` serve the new handles is this function's whole job, so it
+    # has to exist for the swap to mean anything -- and a caller that kept its
+    # own handles lazy, which is the right thing to do when a swap can replace
+    # them, may not have imported it yet. Left as a `sys.modules` lookup, such
+    # a caller got a KeyError from the one call meant to install its module.
+    #
     # Deliberate module monkeypatching; typed Any because ModuleType has no
     # ffi/lib attributes to a static checker.
-    libvfhe_mod: Any = sys.modules["vfhe.engine"]
+    libvfhe_mod: Any = importlib.import_module("vfhe.engine")
 
     old_ffi = libvfhe_mod.ffi
     old_lib = libvfhe_mod.lib

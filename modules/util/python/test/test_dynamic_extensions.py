@@ -1,10 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 import os
+import subprocess
+import sys
 import tempfile
+import textwrap
 
 import pytest
 from vfhe import dynamic_extensions, engine
+from vfhe.dynamic_extensions import _build_module
 
 # Compiles and reloads a live C extension; heavy enough for the complete suite.
 # Skipped against a gcov build: a user module links the engine archive with the
@@ -117,3 +121,70 @@ uint64_t my_custom_inline_add(uint64_t a, uint64_t b) {
         dynamic_extensions.clear_extensions()
         for f in dynamic_extensions.get_added_files():
             assert not os.path.exists(f)
+
+
+def test_the_swap_does_not_need_the_engine_already_imported():
+    """`update_cffi_references` installs the new handles on `vfhe.engine`, so
+    it has to import it rather than find it.
+
+    A caller that keeps its own handles lazy -- which is what to do when a
+    swap can replace them -- reaches this call with `vfhe.engine` unimported.
+    Reading `sys.modules` there raised `KeyError` from the one call meant to
+    install its module, and a caller guarding the load with `except
+    Exception` reads that as "this build is unusable" and recompiles on every
+    run. Run in a subprocess, because nothing can un-import the engine here.
+    """
+    script = textwrap.dedent(
+        """
+        import sys
+        from vfhe.dynamic_extensions import update_cffi_references
+
+        assert "vfhe.engine" not in sys.modules, "the engine must start unimported"
+
+        marker_ffi, marker_lib = object(), object()
+        update_cffi_references(marker_ffi, marker_lib)
+
+        import vfhe.engine
+        assert vfhe.engine.lib is marker_lib, "the swap did not stick"
+        assert vfhe.engine.ffi is marker_ffi
+        assert vfhe.engine.libvfhe.lib is marker_lib
+        print("ok")
+        """
+    )
+    result = subprocess.run(  # noqa: S603 - this interpreter, a fixed script
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
+
+
+@pytest.mark.usefixtures("restore_native_lib")
+def test_the_module_name_carries_the_engine():
+    """Two engines' builds of one set of sources are different modules.
+
+    The public headers' types change under the engine's flags and its kernels
+    need the ISA, so a name that omits the engine lets an output directory
+    hold only whichever was compiled last -- and hands a caller that loads the
+    cached module by name one its process cannot run.
+    """
+    with tempfile.TemporaryDirectory() as user_dir:
+        source = os.path.join(user_dir, "named.c")
+        with open(source, "w") as f:
+            f.write("#include <util.h>\nuint64_t named(void) { return 1; }\n")
+        dynamic_extensions.clear_extensions()
+        dynamic_extensions.add_c_file(source)
+        dynamic_extensions.add_c_definitions("uint64_t named(void);")
+
+        digest = _build_module._inputs_hash()[:16]
+        active = _build_module._active_engine()
+        dest = dynamic_extensions.compile(output_dir=user_dir)
+
+        name = os.path.basename(dest)
+        assert name.startswith(f"_vfhe_custom_{active}_{digest}")
+        # The name the other engine's build of these same sources would take
+        # must not be this one -- which is what naming by the hash alone did.
+        assert not name.startswith(f"_vfhe_custom_{digest}")
+        dynamic_extensions.clear_extensions()
