@@ -463,6 +463,26 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void field_ntt_forward(uint64_t *const *planes, uint64_t blocks, FieldNTTPlan plan);
     void field_ntt_inverse(uint64_t *const *planes, uint64_t blocks, FieldNTTPlan plan);
 
+    // The same transform for a psi that lies in F_p, which is when it is
+    // F_p-linear and splits into d independent transforms of the coefficient
+    // planes -- arith's own, which do it about 3x faster. Available exactly when
+    // 2n divides p - 1, i.e. when `field_ext_root_subfield_degree` is 1, and the
+    // root is the plan's own (`plan->root_of_unity`, lifted to a scalar).
+    //
+    // **The layout differs**, and deliberately: here block b is `n` consecutive
+    // elements at `b * n`, because that is what lets one transform run inside
+    // the cache, which is where the 3x comes from. The batched layout above buys
+    // the extension butterfly long runs, a problem this path does not have.
+    // The root a plan chose, so a caller that must agree with it does not have
+    // to re-derive the choice. `ntt_new_plan` picks its own; there is no way to
+    // hand it one.
+    uint64_t ntt_plan_root(NTT_Plan plan);
+
+    void field_ntt_forward_base(uint64_t *const *planes, uint64_t blocks, uint64_t d,
+                                NTT_Plan plan);
+    void field_ntt_inverse_base(uint64_t *const *planes, uint64_t blocks, uint64_t d,
+                                NTT_Plan plan);
+
     // pseudo-Mersenne prime field
     //
     // F_p for p = 2^n - c with small c (the Crandall/pseudo-Mersenne family). An

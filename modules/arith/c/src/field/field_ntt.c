@@ -378,6 +378,49 @@ static void field_ntt_at(uint64_t **out, uint64_t *const *base, uint64_t at, uin
         out[k] = base[k] + at;
 }
 
+uint64_t ntt_plan_root(NTT_Plan plan) { return plan == NULL ? 0 : plan->root_of_unity; }
+
+// --- the transform when psi lies in F_p ------------------------------------
+//
+// Then it is F_p-linear, and an F_p-linear map of an extension element is the
+// same map applied to each coefficient: the whole transform splits into d
+// independent F_p transforms, which arith's own kernels already do well. That
+// is worth about 3x over the extension butterfly, and the reason is not the
+// arithmetic -- it is that each block's transform fits in cache and runs there,
+// where the batched form streams the whole batch once per stage.
+//
+// **This path takes the other layout**: block b is `n` consecutive elements at
+// `b * n`, because that is what puts one transform in one cache-resident run.
+// The batched layout exists to give the extension butterfly long runs, which is
+// a vectorisation problem this path does not have.
+static void field_ntt_base(uint64_t *const *planes, uint64_t blocks, uint64_t d, NTT_Plan plan,
+                           int inverse)
+{
+    const uint64_t n = plan->n;
+    uint64_t *tmp = (uint64_t *)safe_aligned_malloc(n * sizeof(uint64_t));
+    for (uint64_t k = 0; k < d; k++)
+        for (uint64_t b = 0; b < blocks; b++)
+        {
+            uint64_t *block = planes[k] + b * n;
+            if (inverse)
+                ntt_reverse(tmp, block, plan);
+            else
+                ntt_forward(tmp, block, plan);
+            memcpy(block, tmp, n * sizeof(uint64_t));
+        }
+    free(tmp);
+}
+
+void field_ntt_forward_base(uint64_t *const *planes, uint64_t blocks, uint64_t d, NTT_Plan plan)
+{
+    field_ntt_base(planes, blocks, d, plan, 0);
+}
+
+void field_ntt_inverse_base(uint64_t *const *planes, uint64_t blocks, uint64_t d, NTT_Plan plan)
+{
+    field_ntt_base(planes, blocks, d, plan, 1);
+}
+
 void field_ntt_forward(uint64_t *const *planes, uint64_t blocks, FieldNTTPlan plan)
 {
     const uint64_t n = plan->n, d = plan->d;
