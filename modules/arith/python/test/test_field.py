@@ -143,6 +143,9 @@ def test_frobenius_is_the_map_the_exponentiation_defines(d):
         for _ in range(k % d):
             expected = expected**PRIME
         assert a.frobenius(k) == expected
+        # ...and against the definition written out, whose exponent passes
+        # 2**128 at k = 3 over this prime.
+        assert a.frobenius(k) == a ** (PRIME ** (k % d))
     assert a.frobenius(0) == a
     assert a.frobenius(d) == a  # the group is cyclic of order d
 
@@ -158,6 +161,47 @@ def test_frobenius_is_a_field_automorphism():
     assert field.one.frobenius() == field.one
     # F_p is exactly what it fixes: a scalar is its own image.
     assert field(7).frobenius() == field(7)
+
+
+@pytest.mark.parametrize("d", [1, 2, 4])
+def test_pow_uses_every_bit_of_the_exponent(d):
+    """The exponent is passed as the words it has, not squeezed into a fixed
+    width. A truncated exponent yields a plausible field element, so only a
+    reference computed a different way can tell."""
+    field = ExtensionField(PRIME, d, 3)
+    a = ExtensionFieldElement(field)
+    a.sample_random(SEED)
+
+    def by_squaring(exponent):
+        result, base = field.one, a
+        while exponent:
+            if exponent & 1:
+                result = result * base
+            exponent >>= 1
+            if exponent:
+                base = base * base
+        return result
+
+    # Around the old 128-bit boundary, and far past it.
+    for exponent in (0, 1, 127, 128, 129, 2**128 - 1, 2**128, 2**128 + 3, PRIME**3):
+        assert a**exponent == by_squaring(exponent)
+    # Fermat pins which field the result is in, which no algebraic identity does.
+    assert a ** (PRIME**d) == a
+
+
+def test_pow_inverts_for_a_negative_exponent():
+    """As `PseudoMersenneElement.__pow__` does -- one API, one meaning. It
+    used to reinterpret the sign as a huge positive exponent."""
+    field = ExtensionField(PRIME, 4, 3)
+    a = ExtensionFieldElement(field)
+    a.sample_random(SEED)
+    assert a**-1 == a.inverse()
+    assert a**-3 == a.inverse() ** 3
+    assert a**0 == field.one
+    # A bool is an int to `isinstance`, so without the explicit rejection
+    # `a ** True` would quietly mean `a ** 1`.
+    with pytest.raises(TypeError, match="must be an int"):
+        _ = a**True
 
 
 def test_frobenius_rejects_a_negative_power():

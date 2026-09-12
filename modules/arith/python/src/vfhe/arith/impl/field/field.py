@@ -217,14 +217,32 @@ class ExtensionFieldElement(FieldElement):
         return self.__mul__(other)
 
     def __pow__(self, exponent: int) -> ExtensionFieldElement:
+        """
+        Square-and-multiply. The exponent is not reduced mod the group order.
+
+        Every bit of it is passed to the kernel, as the little-endian words
+        the exponent actually has -- an exponent phrased as a power of the
+        field order outgrows any fixed width almost at once (``p ** 3`` is
+        183 bits over a 61-bit prime), and a width silently truncated to is a
+        wrong answer that looks like a right one.
+
+        A negative exponent is Python-level sugar: it inverts first, so it
+        costs two C calls rather than one.
+        """
+        if not isinstance(exponent, int) or isinstance(exponent, bool):
+            raise TypeError(f"exponent must be an int, not {type(exponent).__name__}")
+        base = self.inverse() if exponent < 0 else self
+        exponent = abs(exponent)
+        words = []
+        while exponent:
+            words.append(exponent & 0xFFFFFFFFFFFFFFFF)
+            exponent >>= 64
         res_val = ffi.new("uint64_t[]", self.field.d)
-        lo = exponent & 0xFFFFFFFFFFFFFFFF
-        hi = (exponent >> 64) & 0xFFFFFFFFFFFFFFFF
         lib.field_ext_pow(
             res_val,
-            self.value,
-            lo,
-            hi,
+            base.value,
+            ffi.new("uint64_t[]", words or [0]),
+            len(words),
             self.field.d,
             self.field.w,
             self.field.mod,

@@ -112,33 +112,39 @@ void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d
     free(tmp);
 }
 
-void field_ext_pow(uint64_t *res, const uint64_t *base, uint64_t exp_lo, uint64_t exp_hi,
+void field_ext_pow(uint64_t *res, const uint64_t *base, const uint64_t *exp, uint64_t exp_words,
                    uint64_t d, uint64_t w, Modulus mod)
 {
-    __uint128_t exp = ((__uint128_t)exp_hi << 64) | exp_lo;
     uint64_t *b = (uint64_t *)malloc(d * sizeof(uint64_t));
-    memcpy(b, base, d * sizeof(uint64_t));
-
-    res[0] = 1;
-    for (uint64_t i = 1; i < d; i++)
-    {
-        res[i] = 0;
-    }
-
     uint64_t *tmp = (uint64_t *)malloc(d * sizeof(uint64_t));
-    while (exp > 0)
+    uint64_t *out = (uint64_t *)malloc(d * sizeof(uint64_t));
+
+    memcpy(b, base, d * sizeof(uint64_t));
+    out[0] = 1;
+    for (uint64_t i = 1; i < d; i++)
+        out[i] = 0;
+
+    // Right to left over the exponent bits, least significant word first. The
+    // caller passes the words it has, so the trailing squarings past the top
+    // set bit cost at most one word's worth.
+    for (uint64_t k = 0; k < exp_words; k++)
     {
-        if (exp & 1)
+        for (unsigned bit = 0; bit < 64; bit++)
         {
-            field_ext_mul(tmp, res, b, d, w, mod);
-            memcpy(res, tmp, d * sizeof(uint64_t));
+            if ((exp[k] >> bit) & 1)
+            {
+                field_ext_mul(tmp, out, b, d, w, mod);
+                memcpy(out, tmp, d * sizeof(uint64_t));
+            }
+            field_ext_mul(tmp, b, b, d, w, mod);
+            memcpy(b, tmp, d * sizeof(uint64_t));
         }
-        field_ext_mul(tmp, b, b, d, w, mod);
-        memcpy(b, tmp, d * sizeof(uint64_t));
-        exp >>= 1;
     }
+
+    memcpy(res, out, d * sizeof(uint64_t)); // written only now, so res may be base
     free(b);
     free(tmp);
+    free(out);
 }
 
 // The Frobenius x -> x^(p^k) is a coefficient map, not an exponentiation: the
