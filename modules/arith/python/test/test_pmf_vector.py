@@ -563,3 +563,46 @@ class TestNativeMovementAndFold:
                 for k in range(field.limbs)
             )
             assert value < field.prime
+
+
+class TestBlocksViewsAndIndexedSampling:
+    """The three surfaces this implementation serves without a kernel of its
+    own -- strided splits, views, and a sampling window -- each checked
+    against the whole-vector form it is a piece of."""
+
+    @pytest.mark.parametrize("block", [1, 2, 4, 8])
+    def test_split_and_fold_match_the_index_arithmetic(self, field, block):
+        values = random_values(field, 32, 60)
+        vector = FieldVector(field, values)
+        lo = [values[at + i] for at in range(0, 32, 2 * block) for i in range(block)]
+        hi = [
+            values[at + block + i]
+            for at in range(0, 32, 2 * block)
+            for i in range(block)
+        ]
+        left, right = vector.split_even_odd(block)
+        assert [int(e) for e in left] == lo
+        assert [int(e) for e in right] == hi
+        r = field(values[0])
+        folded = vector.fold(r, block)
+        assert [int(e) for e in folded] == [
+            (a + int(r) * (b - a)) % field.prime for a, b in zip(lo, hi, strict=True)
+        ]
+
+    def test_a_view_shares_the_parent_planes(self, field):
+        values = random_values(field, 32, 61)
+        vector = FieldVector(field, values)
+        window = vector.view(8, 8)
+        assert [int(e) for e in window] == values[8:16]
+        window[0] = field.one
+        assert int(vector[8]) == 1
+        with pytest.raises(ValueError):
+            vector.view(1, 8)
+
+    def test_a_sampling_window_is_the_slice_of_the_whole_fill(self, field):
+        whole = FieldVector(field, 32)
+        whole.sample_random(b"pmf-window")
+        window = FieldVector(field, 4)
+        window.sample_random(b"pmf-window", 20)
+        assert [int(e) for e in window] == [int(e) for e in whole][20:24]
+        assert int(field.element_from_seed(b"pmf-window", 7)) == int(whole[7])

@@ -131,6 +131,41 @@ def test_field_sampling_varies_within_one_element():
     assert [again.value[i] for i in range(d)] == coeffs
 
 
+@pytest.mark.parametrize("d", [1, 2, 4, 8])
+def test_frobenius_is_the_map_the_exponentiation_defines(d):
+    """x -> x^(p^k) as a coefficient map, against raising to the p-th power k
+    times -- which is how the exponent stays inside what `__pow__` takes."""
+    field = ExtensionField(PRIME, d, 3)
+    a = ExtensionFieldElement(field)
+    a.sample_random(SEED)
+    for k in range(2 * d + 1):
+        expected = a
+        for _ in range(k % d):
+            expected = expected**PRIME
+        assert a.frobenius(k) == expected
+    assert a.frobenius(0) == a
+    assert a.frobenius(d) == a  # the group is cyclic of order d
+
+
+def test_frobenius_is_a_field_automorphism():
+    field = ExtensionField(PRIME, 4, 3)
+    a, b = ExtensionFieldElement(field), ExtensionFieldElement(field)
+    a.sample_random(SEED)
+    b.sample_random(SEED + b"b")
+    for k in (1, 2, 3):
+        assert (a * b).frobenius(k) == a.frobenius(k) * b.frobenius(k)
+        assert (a + b).frobenius(k) == a.frobenius(k) + b.frobenius(k)
+    assert field.one.frobenius() == field.one
+    # F_p is exactly what it fixes: a scalar is its own image.
+    assert field(7).frobenius() == field(7)
+
+
+def test_frobenius_rejects_a_negative_power():
+    field = ExtensionField(PRIME, 4, 3)
+    with pytest.raises(ValueError, match="negative"):
+        field.one.frobenius(-1)
+
+
 class TestFieldSurface:
     """What every `Field` offers regardless of implementation: int operands,
     the 2-adicity, and the one sampler API a protocol calls."""

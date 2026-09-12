@@ -11,5 +11,7 @@ void generate_random_bytes(uint64_t amount, uint8_t *pointer);
 double generate_normal_random(double sigma);
 void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char *context,
                        const uint8_t *seed, uint64_t seed_len);
+void prng_sample_below_from(uint64_t *out, uint64_t count, uint64_t start, uint64_t bound,
+                            const char *context, const uint8_t *seed, uint64_t seed_len);
 void vfhe_prng_set_deterministic_seed(uint64_t seed);
 void vfhe_prng_clear_deterministic_seed(void);

@@ -81,6 +81,19 @@ class ExtensionField(Field):
         element.sample_random(seed)
         return element
 
+    def element_from_seed(self, seed: bytes, index: int) -> ExtensionFieldElement:
+        """Samples the element at position `index` based on `seed` and `index`. 
+        The result, per element, is the same as calling `FieldVector.sample_random` for the entire vector."""
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise TypeError(f"index must be an int, not {type(index).__name__}")
+        if index < 0:
+            raise ValueError(f"index must not be negative, got {index}")
+        value = ffi.new("uint64_t[]", self.d)
+        lib.field_vec_sample_random_element(
+            value, seed, len(seed), index, self.d, self.prime
+        )
+        return ExtensionFieldElement(self, value)
+
     if TYPE_CHECKING:
         # `Field` spells the samplers once against `_uniform_from_seed`;
         # these say what they yield here. Declarations only -- the inherited
@@ -215,6 +228,23 @@ class ExtensionFieldElement(FieldElement):
             self.field.d,
             self.field.w,
             self.field.mod,
+        )
+        return ExtensionFieldElement(self.field, res_val)
+
+    def frobenius(self, k: int = 1) -> ExtensionFieldElement:
+        """``self ** (p ** k)``, as the coefficient map it is.
+
+        A permutation of the d coefficient positions with one constant each,
+        derived from ``(p, d, w)`` -- not the exponentiation the front
+        defines it as. ``k`` counts modulo d, the order of the group.
+        """
+        if not isinstance(k, int) or isinstance(k, bool):
+            raise TypeError(f"k must be an int, not {type(k).__name__}")
+        if k < 0:
+            raise ValueError("k must not be negative; the group is cyclic of order d")
+        res_val = ffi.new("uint64_t[]", self.field.d)
+        lib.field_ext_frobenius(
+            res_val, self.value, k, self.field.d, self.field.w, self.field.mod
         )
         return ExtensionFieldElement(self.field, res_val)
 

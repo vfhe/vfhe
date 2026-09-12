@@ -558,3 +558,202 @@ class TestNativeMovementAndFold:
             assert all(
                 plane[i] < PRIME for i in range(len(folded), folded._allocated_n)
             )
+
+
+class TestBlockSplitAndFold:
+    """The strided layouts: `block` moves the pair partner further away.
+
+    The reference is the index arithmetic itself -- runs of `block` elements
+    alternating between the two halves -- so a kernel that reads the wrong
+    stride disagrees with a list comprehension rather than with itself.
+    """
+
+    @staticmethod
+    def blocks(values, block):
+        """The two operand lists `split_even_odd(block)` produces."""
+        n = len(values)
+        lo = [values[at + i] for at in range(0, n, 2 * block) for i in range(block)]
+        hi = [
+            values[at + block + i]
+            for at in range(0, n, 2 * block)
+            for i in range(block)
+        ]
+        return lo, hi
+
+    @pytest.mark.parametrize("n", [2, 8, 16, 64])
+    def test_split_matches_the_index_arithmetic(self, n):
+        field = make_field()
+        values = random_elements(field, n, seed=30)
+        vector = FieldVector(field, values)
+        block = 1
+        while block <= n // 2:
+            lo, hi = vector.split_even_odd(block)
+            assert (lo.to_list(), hi.to_list()) == self.blocks(values, block)
+            block *= 2
+
+    @pytest.mark.parametrize("n", [2, 8, 16, 64])
+    def test_fold_matches_the_split_formula_at_every_block(self, n):
+        field = make_field()
+        values = random_elements(field, n, seed=31)
+        vector = FieldVector(field, values)
+        r = random_elements(field, 1, seed=32)[0]
+        block = 1
+        while block <= n // 2:
+            lo, hi = self.blocks(values, block)
+            folded = vector.fold(r, block)
+            assert len(folded) == n // 2
+            assert folded.to_list() == [
+                left + r * (right - left) for left, right in zip(lo, hi, strict=True)
+            ]
+            block *= 2
+
+    def test_the_contiguous_halves_case_does_not_disturb_its_input(self):
+        """`block == n // 2` reads the two halves where they lie; the source
+        must come back unchanged."""
+        field = make_field()
+        values = random_elements(field, 32, seed=33)
+        vector = FieldVector(field, values)
+        vector.fold(random_elements(field, 1, seed=34)[0], 16)
+        assert vector.to_list() == values
+
+    def test_fold_leaves_the_padding_reduced(self):
+        field = make_field()
+        folded = FieldVector(field, random_elements(field, 20, seed=35)).fold(7, 2)
+        for plane in folded._planes:
+            assert all(
+                plane[i] < PRIME for i in range(len(folded), folded._allocated_n)
+            )
+
+    @pytest.mark.parametrize("block", [0, -1, 3, 6, 16])
+    def test_a_block_that_does_not_divide_the_half_length_is_rejected(self, block):
+        vector = FieldVector(make_field(), 16)
+        with pytest.raises(ValueError, match="block"):
+            vector.split_even_odd(block)
+        with pytest.raises(ValueError, match="block"):
+            vector.fold(3, block)
+
+
+class TestView:
+    """A view shares the parent's planes, so the two see each other's writes."""
+
+    def test_a_view_reads_the_parent(self):
+        field = make_field()
+        values = random_elements(field, 64, seed=36)
+        vector = FieldVector(field, values)
+        assert vector.view(8, 16).to_list() == values[8:24]
+        assert vector.view().to_list() == values
+        assert vector.view(56).to_list() == values[56:]
+
+    def test_a_write_through_a_view_reaches_the_parent(self):
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 32, seed=37))
+        window = vector.view(8, 8)
+        window[0] = field.one
+        assert vector[8] == field.one
+        # ...and arithmetic on a view is arithmetic on those elements.
+        assert (window * window).to_list() == [e * e for e in vector.to_list()[8:16]]
+
+    def test_a_view_keeps_the_parent_alive(self):
+        field = make_field()
+        values = random_elements(field, 16, seed=38)
+        window = FieldVector(field, values).view(8, 8)
+        assert window.to_list() == values[8:16]
+
+    @pytest.mark.parametrize(
+        ("start", "length"), [(1, 8), (8, 7), (0, 65), (-8, 8), (60, 8)]
+    )
+    def test_the_alignment_and_padding_contract_is_enforced(self, start, length):
+        """Only a multiple of the padding unit may start a view, and only the
+        tail of the parent may end on a partial one."""
+        vector = FieldVector(make_field(), 64)
+        with pytest.raises(ValueError):
+            vector.view(start, length)
+
+    def test_a_partial_length_is_allowed_at_the_end(self):
+        field = make_field()
+        values = random_elements(field, 20, seed=39)
+        assert FieldVector(field, values).view(8).to_list() == values[8:]
+
+
+class TestFrobenius:
+    """The coefficient map against the exponentiation that defines it."""
+
+    @pytest.mark.parametrize("d", [1, 2, 4, 8])
+    @pytest.mark.parametrize("k", [0, 1, 2, 3])
+    def test_matches_repeated_exponentiation(self, d, k):
+        field = make_field(d)
+        vector = FieldVector(field, random_elements(field, 13, seed=40))
+        expected = []
+        for element in vector.to_list():
+            raised = element
+            for _ in range(k % d):
+                raised = raised**PRIME
+            expected.append(raised)
+        assert vector.frobenius(k).to_list() == expected
+
+    def test_agrees_with_the_element_and_with_the_generic_default(self):
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 9, seed=41))
+        for k in (1, 2, 3):
+            assert vector.frobenius(k).to_list() == [
+                e.frobenius(k) for e in vector.to_list()
+            ]
+            assert vector.frobenius(k) == FieldVector.frobenius(vector, k)
+
+    def test_is_a_field_automorphism(self):
+        field = make_field()
+        a = FieldVector(field, random_elements(field, 8, seed=42))
+        b = FieldVector(field, random_elements(field, 8, seed=43))
+        assert (a * b).frobenius() == a.frobenius() * b.frobenius()
+        assert (a + b).frobenius() == a.frobenius() + b.frobenius()
+        assert a.frobenius(field.d) == a  # the group is cyclic of order d
+
+
+class TestIndexedSampling:
+    """One sequence, reachable at any position without the ones before it."""
+
+    def test_a_window_is_the_slice_of_the_whole_fill(self):
+        field = make_field()
+        whole = FieldVector(field, 64)
+        whole.sample_random(SEED)
+        window = FieldVector(field, 8)
+        window.sample_random(SEED, 40)
+        assert window.to_list() == whole.to_list()[40:48]
+
+    def test_the_fill_does_not_depend_on_the_vector_length(self):
+        field = make_field()
+        short, long = FieldVector(field, 8), FieldVector(field, 64)
+        short.sample_random(SEED)
+        long.sample_random(SEED)
+        assert long.to_list()[:8] == short.to_list()
+
+    def test_element_from_seed_is_the_same_sequence(self):
+        field = make_field()
+        vector = FieldVector(field, 32)
+        vector.sample_random(SEED)
+        elements = vector.to_list()
+        for index in (0, 1, 17, 31):
+            assert field.element_from_seed(SEED, index) == elements[index]
+
+    def test_element_from_seed_reaches_past_any_vector_ever_built(self):
+        """The point of the indexed form: a position no fill materialized."""
+        field = make_field()
+        far = field.element_from_seed(SEED, 1 << 40)
+        window = FieldVector(field, 1)
+        window.sample_random(SEED, 1 << 40)
+        assert window[0] == far
+
+    def test_the_element_sampler_is_a_separate_stream(self):
+        """`random_element` is domain-separated from the vector fill, so one
+        seed feeding both gives independent values."""
+        field = make_field()
+        vector = FieldVector(field, 4)
+        vector.sample_random(SEED)
+        assert field.random_element(SEED) != vector[0]
+
+    def test_a_negative_start_or_index_is_rejected(self):
+        field = make_field()
+        with pytest.raises(ValueError, match="negative"):
+            FieldVector(field, 4).sample_random(SEED, -1)
+        with pytest.raises(ValueError, match="negative"):
+            field.element_from_seed(SEED, -1)

@@ -384,4 +384,11 @@ void pmf_ref_ntt_inverse(uint64_t *a, PMFNTTPlan plan);
 void pmf_sample_stream(uint64_t *out, blake3_hasher *hasher, uint64_t *stream_offset,
                        PMFParams params);
 
+// The Frobenius x -> x^(p^k) of F_p[x]/(x^d - w) as the coefficient map it is:
+// coefficient j moves to position to[j] multiplied by constants[j], both d
+// words the caller supplies. Derived once in field.c so that the element and
+// the vector entry point apply the same map.
+void frobenius_map(uint64_t *constants, uint64_t *to, uint64_t k, uint64_t d, uint64_t w,
+                   Modulus mod);
+
 #endif // __ARITH_INTERNAL_H__
