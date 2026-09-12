@@ -174,8 +174,18 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
     """Compiles the registered user code against the library and updates the
     loaded handles; returns the path of the compiled module."""
     root = find_vfhe_root()
-    archive, engine_json = _library_paths(root, _active_engine())
-    module_name = f"_vfhe_custom_{_inputs_hash()[:16]}"
+    engine = _active_engine()
+    archive, engine_json = _library_paths(root, engine)
+    # The engine is part of the name because it is part of the ABI, not just of
+    # the performance: the public headers' types change under its flags
+    # (`mp_vector_t` is one `__m512i` on a tuned engine and one `uint64_t` on
+    # the portable one) and its kernels need the ISA. Two engines' builds of
+    # one set of sources are therefore different modules, and naming them alike
+    # lets an output directory hold only whichever was compiled last -- which
+    # `compile` itself never notices, since it always rebuilds, but a caller
+    # that loads the cached module by name would get one its process cannot
+    # run.
+    module_name = f"_vfhe_custom_{engine}_{_inputs_hash()[:16]}"
 
     if output_dir is None:
         cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
