@@ -89,13 +89,13 @@ void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t 
         for (size_t j = 0; j < power; j++)
         {
             mgsw_NCMUX_to_coeff(p[out_idx][j], p[in_idx][j], p[in_idx][in_N - power + j], e[i], ksk,
-                                ell, special_primes);
+                                ell, special_primes, 0);
         }
 
         for (size_t j = 0; j < in_N - power; j++)
         {
             mgsw_CMUX_to_coeff(p[out_idx][j + power], p[in_idx][j + power], p[in_idx][j], e[i], ell,
-                               special_primes);
+                               special_primes, 0);
         }
         // _to_coeff variants already leave each output in coefficient form.
     }
@@ -153,12 +153,12 @@ void *monomial_mul_worker(void *arg)
             if (k < power)
             {
                 mgsw_NCMUX_to_coeff(p[out_idx][k], p[in_idx][k], p[in_idx][args->in_N - power + k],
-                                    args->e[i], args->ksk, args->ell, args->special_primes);
+                                    args->e[i], args->ksk, args->ell, args->special_primes, 0);
             }
             else
             {
                 mgsw_CMUX_to_coeff(p[out_idx][k], p[in_idx][k], p[in_idx][k - power], args->e[i],
-                                   args->ell, args->special_primes);
+                                   args->ell, args->special_primes, 0);
             }
         }
 
@@ -279,8 +279,8 @@ static void *suba_worker(void *arg)
         mlwe_RNSc_mul_by_xai(pax, pk, ai);                       /* pax = p[k] * X^a       */
         const uint64_t m2a = (two_n - (2 * ai) % two_n) % two_n; /* (-2a) mod 2N           */
         mlwe_RNSc_mul_by_xai_minus1(tmp, pax, m2a);              /* tmp = pax * (X^m2a - 1) */
-        mgsw_external_product(ext, A->s_sign, tmp, A->ell,
-                              A->special_primes); /* ext = s_sign (X) tmp */
+        mgsw_external_product(ext, A->s_sign, tmp, A->ell, A->special_primes,
+                              0); /* ext = s_sign (X) tmp */
         mlwe_copy_RNS_sample(pax_ntt, pax);
         mlwe_RNSc_to_RNS(pax_ntt, pax_ntt); /* pax -> NTT for the add  */
         for (size_t i = 0; i < r; i++)

@@ -76,11 +76,19 @@ extern "C"
     // own, narrower one -- so it allocates its scratch there and copies the
     // finished result out. The key stays immutable and therefore shareable:
     // gp25 hands one key to every thread of a parallel bootstrap.
+    //
+    // `log_base` is the gadget the keys were generated for, and the key switch
+    // decomposes against it: 0 for the RNS gadget (one key per prime), or the
+    // radix base's log for the radix one (one key per prime and digit; see
+    // `gadget_radix_digits`). A key generated for one and read as the other
+    // decrypts to garbage, which is why it travels with the key rather than
+    // with the call.
     typedef struct _RNS_MLWE_KS_Key
     {
         RNS_MLWE **s;
         uint64_t count;
         uint64_t mask;
+        uint64_t log_base;
         ArithRing ring;
     } *RNS_MLWE_KS_Key;
 
@@ -154,9 +162,11 @@ extern "C"
     RNS_MLWE *mlwe_create_copy_array(RNS_MLWE *in, uint64_t size);
 
     // Wrap per-component gadget key arrays (borrowed, not deep-copied) into a
-    // key-switch key, deriving the key's ring from its first real component
-    // and allocating the accumulator in it.
-    RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count);
+    // key-switch key, deriving the key's ring from its first real component.
+    // `log_base` is the gadget the arrays were generated against (0 for the
+    // RNS gadget), and each array must hold exactly as many keys as that
+    // gadget decomposes an element of the key's ring into.
+    RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count, uint64_t log_base);
     void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key);
     void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk,
                                         uint64_t lvl);
@@ -169,20 +179,35 @@ extern "C"
                                             uint64_t lvl);
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);
 
-    // gadget decomposition products
-    void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly);
-    void gadget_mul_subto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly);
+    // Gadget decomposition products: decompose `poly` against the gadget
+    // `log_base` names -- the RNS one (one digit per prime) when it is 0, the
+    // radix one (one digit per prime and power of 2^log_base) otherwise -- and
+    // accumulate the products with the matching keys into `out`. `ksk` must
+    // hold one key per digit, prime-major, generated against the same gadget.
+    void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
+                                     uint64_t log_base);
+    void gadget_mul_subto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
+                                     uint64_t log_base);
 
+    // How many base-2^log_base digits the radix gadget takes for one residue
+    // modulo `prime`: enough to cover every value below it.
+    uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base);
+
+    // `ell` is the number of gadget keys per component of the MGSW key -- one
+    // per prime for the RNS gadget (`log_base` 0), one per prime and digit for
+    // the radix one -- and `log_base` is the gadget they were generated
+    // against, as in `gadget_mul_addto_polynomial`.
     void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
-                               uint64_t special_primes);
+                               uint64_t special_primes, uint64_t log_base);
     void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
-                   uint64_t special_primes);
+                   uint64_t special_primes, uint64_t log_base);
     void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE_KS_Key ksk,
-                    uint64_t ell, uint64_t special_primes);
+                    uint64_t ell, uint64_t special_primes, uint64_t log_base);
     void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
-                            uint64_t ell, uint64_t special_primes);
+                            uint64_t ell, uint64_t special_primes, uint64_t log_base);
     void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
-                             RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes);
+                             RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
+                             uint64_t log_base);
     void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
                                 RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes);
     void gp25_RGSW_monomial_mul_mt(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,

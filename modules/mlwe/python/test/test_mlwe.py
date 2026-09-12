@@ -9,11 +9,12 @@ round_division back to the plaintext ring, so equality is exact.
 """
 
 import math
+from typing import cast
 
 import pytest
 from vfhe.arith import Polynomial, Ring
 from vfhe.crypto import entropy
-from vfhe.mlwe import LWE, LWE_Key, MGSW_Scheme, MLWE_Scheme
+from vfhe.mlwe import LWE, LWE_Key, MGSW_Scheme, MLWE_Scheme, MLWE_Set
 
 N = 256
 
@@ -309,3 +310,166 @@ def test_lwe_alloc_and_phase():
     # a-vector is length n over each RNS limb; b matches
     assert len(sample.get_a()[0]) == ring.N
     assert len(sample.get_b()) == ring.ell
+
+
+# --- radix gadget ----------------------------------------------------------
+#
+# The key-switch keys the radix gadget needs -- one per prime and per
+# base-2^w digit of it -- and what that buys: every product the decomposition
+# accumulates stays below 2^w instead of below the prime.
+RADIX_LOG_BASE = 10
+
+
+def _radix_keys(ring, log_base: int) -> int:
+    """How many gadget keys per component the radix gadget takes over `ring`."""
+    return sum(-(-p.bit_length() // log_base) for p in ring.primes[: ring.ell])
+
+
+def _keys_per_component(ksk, lvl: int) -> int:
+    """The gadget keys a leveled key-switch key holds for one component."""
+    component = cast("list[MLWE_Set]", ksk)[lvl].mlwe[0]
+    assert component is not None
+    return len(component)
+
+
+@pytest.mark.parametrize("scheme_fixture", ["bv", "ghs"])
+def test_keyswitch_radix_gadget(scheme_fixture, request):
+    # The gadget is chosen when the key is generated and travels with it, so
+    # the key switch itself is the same call either way.
+    _Rq, Rp, scheme = request.getfixturevalue(scheme_fixture)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    m0 = Rp.random_element()
+    c0 = enc(scheme, Rp, m0, key)
+
+    ksk = scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE)
+    assert _keys_per_component(ksk, c0.lvl) == _radix_keys(
+        scheme.special_rings[c0.lvl], RADIX_LOG_BASE
+    )
+
+    c_out = scheme.keyswitch(c0, ksk)
+    assert scheme.phase(c_out, key2).round_division(Rp) == m0
+
+
+def test_keyswitch_radix_beats_the_rns_gadget():
+    # Two primes, no special ones, and a plaintext ring one prime below the
+    # ciphertext's, so the noise budget is a single prime. Decomposing into
+    # residues puts a whole prime into the noise, which that budget cannot
+    # absorb; the radix gadget keeps every product below 2^w.
+    Rq = Ring(N, prime_size=[45, 45], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=1)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    m0 = Rp.random_element()
+
+    radix = scheme.keyswitch(
+        enc(scheme, Rp, m0, key),
+        scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE),
+    )
+    assert scheme.phase(radix, key2).round_division(Rp) == m0
+
+    rns = scheme.keyswitch(enc(scheme, Rp, m0, key), scheme.gen_ksk(key2, key))
+    assert scheme.phase(rns, key2).round_division(Rp) != m0
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+@pytest.mark.parametrize("special_primes", [0, 1])
+def test_keyswitch_radix_module_rank(r, N_r, special_primes):
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes)
+    key = _rank_key(scheme, N_r, r)
+    key2 = _rank_key(scheme, N_r, r)
+    m0 = Rp.random_element()
+    c0 = enc(scheme, Rp, m0, key)
+
+    ksk = scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE)
+    c_out = scheme.keyswitch(c0, ksk)
+    assert c_out.r == r
+    assert scheme.phase(c_out, key2).round_division(Rp) == m0
+
+
+@pytest.mark.parametrize("scheme_fixture", ["bv", "ghs"])
+def test_mlwe_multiplication_radix_rlk(scheme_fixture, request):
+    # Relinearization reads the same gadget, around the key's NULL slots.
+    Rq, Rp, scheme = request.getfixturevalue(scheme_fixture)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    s_0 = key.poly[0]
+    scheme.rlk = scheme.gen_rlk(key, [-(s_0 * s_0)], radix_log_base=RADIX_LOG_BASE)
+
+    m1 = Polynomial(Rp).from_array(_ternary(N))
+    m2 = Polynomial(Rp).from_array(_ternary(N))
+    c1 = enc(scheme, Rp, m1, key)
+    c2 = enc(scheme, Rp, m2, key)
+
+    m_out = scheme.phase(c1 * c2, key).round_division(Rp)
+    assert _mul_error(Rq, Rp, scheme, m_out, m1, m2) < 1000
+
+
+def test_mgsw_external_product_radix(bv):
+    _Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    mgsw_scheme = MGSW_Scheme(scheme, radix_log_base=RADIX_LOG_BASE)
+
+    m1 = Rp.random_element()
+    ct1 = enc(scheme, Rp, m1, key)
+
+    ct_id = mgsw_scheme.encrypt(Polynomial(Rp).from_array([1] + [0] * (N - 1)), key)
+    assert ct_id.gadget_size == _radix_keys(mgsw_scheme.ring, RADIX_LOG_BASE)
+
+    res = ct_id.external_product(ct1)
+    assert scheme.phase(res, key).round_division(Rp) == m1
+
+
+def test_keyswitch_radix_single_component():
+    # One prime left in the ciphertext ring: each residue is the value itself,
+    # so the gadget degenerates to the plain powers of 2^w. The level has no
+    # room left to round noise away, so the key switch is measured directly --
+    # the phase it produces under the new key against the one it consumed.
+    Rq = Ring(N, prime_size=[45, 45], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=0, max_lvl=2)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+
+    c1 = enc(scheme, Rp, Rp.random_element(), key).round_division(lvl=1)
+    assert c1.ell == 1
+
+    ksk = scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE)
+    assert _keys_per_component(ksk, c1.lvl) == _radix_keys(
+        scheme.special_rings[c1.lvl], RADIX_LOG_BASE
+    )
+
+    before = scheme.phase(c1, key)
+    after = scheme.phase(scheme.keyswitch(c1, ksk), key2)
+    before.to_coeff()
+    after.to_coeff()
+    err = (after - before).get_polynomial(signed=True)
+    assert max(abs(c) for c in err) < 1 << 25
+
+
+def test_keyswitch_radix_at_a_level(ghs):
+    # Above level 0 the key's ring keeps the special prime while the
+    # ciphertext's has dropped a base one, so the gadget the key switch
+    # consumes is a prefix of the one the key carries -- one whose digit
+    # counts have to line up prime by prime.
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    m0 = Rp.random_element()
+
+    c1 = enc(scheme, Rp, m0, key).round_division(lvl=1)
+    assert c1.lvl == 1
+
+    ksk = scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE)
+    assert _keys_per_component(ksk, c1.lvl) == _radix_keys(
+        scheme.special_rings[c1.lvl], RADIX_LOG_BASE
+    )
+    c_out = scheme.keyswitch(c1, ksk)
+    assert scheme.phase(c_out, key2).round_division(Rp) == m0
+
+
+def test_gen_ksk_rejects_a_radix_larger_than_the_primes(bv):
+    _Rq, _Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    with pytest.raises(ValueError, match="smallest prime"):
+        scheme.gen_ksk(key, key, radix_log_base=64)

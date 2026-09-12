@@ -697,6 +697,16 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void polynomial_multo_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in);
     int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in);
     void polynomial_RNSc_mod_reduce_lifted(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx);
+    /* Digit `level` of residue `idx` of `in`, in base 2^log_base, written to
+       every active row of `out`.
+       `in` is in the coefficient domain and its row `idx` must be active; the
+       digit is read from that row alone, so the result is the base-2^log_base
+       digit of the residue, not of the value `in` represents mod Q. The digit
+       is below 2^log_base, which must be below every prime of `out`, so the
+       same value serves every row and no reduction happens. `out` may be over
+       a wider base than `in`. */
+    void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                                         uint64_t log_base, uint64_t level);
     void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in);
     void polynomial_RNS_broadcast_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t slot_idx);
     void polynomial_RNS_rotate_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t rot);

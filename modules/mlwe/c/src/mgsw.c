@@ -4,7 +4,7 @@
 #include "util.h"
 
 void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
-                           uint64_t special_primes)
+                           uint64_t special_primes, uint64_t log_base)
 {
     const uint64_t r = in->r;
     (void)special_primes;
@@ -18,9 +18,9 @@ void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t 
 
     for (size_t j = 0; j < r; j++)
     {
-        gadget_mul_addto_polynomial(acc, &mgsw[j * ell], &in->a[j]);
+        gadget_mul_addto_polynomial(acc, &mgsw[j * ell], &in->a[j], log_base);
     }
-    gadget_mul_addto_polynomial(acc, &mgsw[r * ell], &in->b);
+    gadget_mul_addto_polynomial(acc, &mgsw[r * ell], &in->b, log_base);
 
     mlwe_RNS_to_RNSc(acc, acc);
     mlwe_round_division(acc, out->ring);
@@ -30,7 +30,7 @@ void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t 
 }
 
 void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
-               uint64_t special_primes)
+               uint64_t special_primes, uint64_t log_base)
 {
     const uint64_t r = in1->r;
     ArithRing ring = in1->ring;
@@ -38,7 +38,7 @@ void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint6
     RNSc_MLWE diff = mlwe_alloc_sample(ring, r);
     mlwe_sub_RNSc_sample(diff, in2, in1);
 
-    mgsw_external_product(out, mgsw, diff, ell, special_primes);
+    mgsw_external_product(out, mgsw, diff, ell, special_primes, log_base);
 
     RNS_MLWE in1_NTT = mlwe_alloc_sample(ring, r);
     mlwe_copy_RNS_sample(in1_NTT, in1);
@@ -50,7 +50,7 @@ void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint6
 }
 
 void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE_KS_Key ksk,
-                uint64_t ell, uint64_t special_primes)
+                uint64_t ell, uint64_t special_primes, uint64_t log_base)
 {
     const uint64_t r = in1->r;
     ArithRing ring = in1->ring;
@@ -60,7 +60,7 @@ void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_
 
     mlwe_automorphism_RNSc_GHS(tmp, in2, gen, ksk, ell);
 
-    mgsw_CMUX(out, in1, tmp, mgsw, ell, special_primes);
+    mgsw_CMUX(out, in1, tmp, mgsw, ell, special_primes, log_base);
 
     free_mlwe_RNS_sample(tmp);
 }
@@ -77,7 +77,7 @@ void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_
  * ------------------------------------------------------------------------------------------------
  */
 void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
-                        uint64_t special_primes)
+                        uint64_t special_primes, uint64_t log_base)
 {
     const uint64_t r = in1->r;
     ArithRing ring = in1->ring;
@@ -85,15 +85,16 @@ void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mg
     RNSc_MLWE diff = mlwe_alloc_sample(ring, r);
     mlwe_sub_RNSc_sample(diff, in2, in1);
 
-    mgsw_external_product(out, mgsw, diff, ell, special_primes); /* out in NTT  */
-    mlwe_RNS_to_RNSc(out, out);                                  /* out -> coeff */
+    mgsw_external_product(out, mgsw, diff, ell, special_primes, log_base); /* out in NTT  */
+    mlwe_RNS_to_RNSc(out, out);                                            /* out -> coeff */
     mlwe_addto_RNSc_sample(out, in1); /* out += in1 (coeff; no fwd NTT of in1) */
 
     free_mlwe_RNS_sample(diff);
 }
 
 void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
-                         RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes)
+                         RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
+                         uint64_t log_base)
 {
     const uint64_t r = in1->r;
     ArithRing ring = in1->ring;
@@ -103,7 +104,7 @@ void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *m
 
     mlwe_automorphism_RNSc_GHS(tmp, in2, gen, ksk, ell);
 
-    mgsw_CMUX_to_coeff(out, in1, tmp, mgsw, ell, special_primes);
+    mgsw_CMUX_to_coeff(out, in1, tmp, mgsw, ell, special_primes, log_base);
 
     free_mlwe_RNS_sample(tmp);
 }
