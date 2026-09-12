@@ -139,6 +139,54 @@ void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s)
     field_vec_mul_generic(out, a, (const void *)s, 0);
 }
 
+// out = a + b * c, in one pass where the fused kernel applies. Everywhere else
+// it is the product into a scratch vector and then the add -- the same answer,
+// and the allocation this exists to avoid.
+static void field_vec_fma_generic(FieldVector out, const FieldVector a, const FieldVector b,
+                                  const void *c_or_scalar, int c_is_vector)
+{
+    const uint64_t d = a->d, len = a->allocated_n;
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(d * len * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)malloc(d * sizeof(uint64_t *));
+    struct _FieldVector prod = *out;
+
+    prod.coeffs = planes;
+    for (uint64_t j = 0; j < d; j++)
+        planes[j] = scratch + j * len;
+
+    if (c_is_vector)
+        field_vec_mul(&prod, b, (const FieldVector)c_or_scalar);
+    else
+        field_vec_scale(&prod, b, (const uint64_t *)c_or_scalar);
+    field_vec_add(out, a, &prod);
+
+    free(planes);
+    free(scratch);
+}
+
+void field_vec_fma(FieldVector out, const FieldVector a, const FieldVector b, const FieldVector c)
+{
+    if (field_fused_applies(a->mod, a->d, a->allocated_n))
+    {
+        field_fused_fma(out->coeffs, a->coeffs, b->coeffs, c->coeffs, a->allocated_n, a->d, a->w,
+                        a->mod);
+        return;
+    }
+    field_vec_fma_generic(out, a, b, (const void *)c, 1);
+}
+
+void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVector b,
+                          const uint64_t *s)
+{
+    if (field_fused_applies(a->mod, a->d, a->allocated_n))
+    {
+        field_fused_fma_scalar(out->coeffs, a->coeffs, b->coeffs, s, a->allocated_n, a->d, a->w,
+                               a->mod);
+        return;
+    }
+    field_vec_fma_generic(out, a, b, (const void *)s, 0);
+}
+
 void field_vec_sum(uint64_t *out, const FieldVector a)
 {
     for (uint64_t j = 0; j < a->d; j++)

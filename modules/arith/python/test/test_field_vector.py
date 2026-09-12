@@ -878,3 +878,107 @@ class TestFusedProduct:
             for k in range(2 * d - 2, d - 1, -1):
                 wide[k - d] += self.FUSED_W * wide[k]
             assert got[i] == [c % prime for c in wide[:d]]
+
+
+#: Below 2^50 the fma takes the fused kernel; PRIME (61 bits) does not, so
+#: parametrising over both is what covers the two implementations.
+_FUSED_PRIME, _FUSED_W = 562949953421201, 3
+_DESTINATION_FIELDS = [
+    pytest.param(_FUSED_PRIME, _FUSED_W, id="fused"),
+    pytest.param(PRIME, W, id="generic"),
+]
+
+
+class TestDestinations:
+    """The operations with a destination, and the fused multiply-add.
+
+    Together with `view` these are what let an expression be written per chunk
+    without allocating: the intermediates are the same shape every time and
+    want one buffer. The checks are against the allocating forms, which are
+    the same arithmetic and are what a caller would otherwise write.
+    """
+
+    FUSED_PRIME, FUSED_W = _FUSED_PRIME, _FUSED_W
+
+    @staticmethod
+    def vectors(prime, w, n, count):
+        field = ExtensionField(prime, 4, w)
+        out = []
+        for i in range(count):
+            vector = FieldVector(field, n)
+            vector.sample_random(b"destination-%d" % i)
+            out.append(vector)
+        return field, out
+
+    @pytest.mark.parametrize(("prime", "w"), _DESTINATION_FIELDS)
+    @pytest.mark.parametrize("n", [8, 13, 64])
+    def test_out_gets_the_result_and_is_returned(self, prime, w, n):
+        field, (a, b) = self.vectors(prime, w, n, 2)
+        element = b[0]
+        for got, want in (
+            (lambda d: a.add(b, out=d), a + b),
+            (lambda d: a.add(element, out=d), a + element),
+            (lambda d: a.sub(b, out=d), a - b),
+            (lambda d: a.rsub(element, out=d), element - a),
+            (lambda d: a.mul(b, out=d), a * b),
+            (lambda d: a.neg(out=d), -a),
+            (lambda d: a.scale(element, out=d), a.scale(element)),
+        ):
+            dest = FieldVector(field, n)
+            assert got(dest) is dest
+            assert dest.to_list() == want.to_list()
+
+    @pytest.mark.parametrize(("prime", "w"), _DESTINATION_FIELDS)
+    @pytest.mark.parametrize("n", [8, 13, 64])
+    def test_fma_is_the_expression_it_names(self, prime, w, n):
+        """``a + b * c``, against the two-operation form it replaces."""
+        field, (a, b, c) = self.vectors(prime, w, n, 3)
+        assert a.fma(b, c).to_list() == (a + b * c).to_list()
+        element = c[0]
+        assert a.fma(b, element).to_list() == (a + b.scale(element)).to_list()
+        dest = FieldVector(field, n)
+        assert a.fma(b, c, out=dest) is dest
+        assert dest.to_list() == (a + b * c).to_list()
+
+    @pytest.mark.parametrize(("prime", "w"), _DESTINATION_FIELDS)
+    def test_a_destination_may_be_an_operand(self, prime, w):
+        """The kernels promise it, and a chunked expression will do it."""
+        _, (a, b, c) = self.vectors(prime, w, 16, 3)
+        want = (a + b * c).to_list()
+        into_a = a.copy()
+        assert into_a.fma(b, c, out=into_a).to_list() == want
+        into_b = b.copy()
+        assert a.fma(into_b, c, out=into_b).to_list() == want
+        sum_want = (a + b).to_list()
+        into = a.copy()
+        assert into.add(b, out=into).to_list() == sum_want
+
+    @pytest.mark.parametrize(("prime", "w"), _DESTINATION_FIELDS)
+    def test_a_destination_is_checked(self, prime, w):
+        field, (a, b) = self.vectors(prime, w, 16, 2)
+        other = ExtensionField(prime + 4, 4, w)
+        with pytest.raises(ValueError, match="holds"):
+            a.add(b, out=FieldVector(field, 8))
+        with pytest.raises(ValueError, match="different field"):
+            a.add(b, out=FieldVector(other, 16))
+        with pytest.raises(TypeError, match="out must be"):
+            a.add(b, out=[0] * 16)
+        with pytest.raises(TypeError, match="b must be"):
+            a.fma([0] * 16, b)
+
+    def test_a_chunked_expression_matches_the_whole_vector_one(self):
+        """What the destination and `view` are for: the same expression, one
+        buffer reused per chunk, no allocation inside the loop."""
+        field, (a, b, u) = self.vectors(self.FUSED_PRIME, self.FUSED_W, 256, 3)
+        lam = u[0]
+        whole = a + b * (u + lam)
+
+        chunk = 64
+        out = FieldVector(field, 256)
+        scratch = FieldVector(field, chunk)
+        for start in range(0, 256, chunk):
+            u.view(start, chunk).add(lam, out=scratch)
+            a.view(start, chunk).fma(
+                b.view(start, chunk), scratch, out=out.view(start, chunk)
+            )
+        assert out.to_list() == whole.to_list()

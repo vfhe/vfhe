@@ -20,6 +20,7 @@ it.
 from __future__ import annotations
 
 import random
+from typing import Any
 
 import pytest
 from vfhe.arith import FieldVector, PseudoMersenneField, PseudoMersenneVector
@@ -606,3 +607,49 @@ class TestBlocksViewsAndIndexedSampling:
         window.sample_random(b"pmf-window", 20)
         assert [int(e) for e in window] == [int(e) for e in whole][20:24]
         assert int(field.element_from_seed(b"pmf-window", 7)) == int(whole[7])
+
+
+class TestDestinations:
+    """The same surface here, where `fma` has no fused kernel.
+
+    It still avoids the intermediate a caller would allocate -- the product
+    goes straight into the destination and the addend folds in after -- so the
+    API is the same shape even though one pass more runs.
+    """
+
+    def test_out_gets_the_result_and_is_returned(self, field):
+        values = random_values(field, 13, 80)
+        other = random_values(field, 13, 81)
+        a, b = FieldVector(field, values), FieldVector(field, other)
+        element = b[0]
+        for got, want in (
+            (lambda d: a.add(b, out=d), a + b),
+            (lambda d: a.sub(b, out=d), a - b),
+            (lambda d: a.rsub(element, out=d), element - a),
+            (lambda d: a.mul(b, out=d), a * b),
+            (lambda d: a.neg(out=d), -a),
+            (lambda d: a.scale(element, out=d), a.scale(element)),
+        ):
+            dest = FieldVector(field, 13)
+            assert got(dest) is dest
+            assert [int(e) for e in dest] == [int(e) for e in want]
+
+    def test_fma_is_the_expression_it_names(self, field):
+        a = FieldVector(field, random_values(field, 9, 82))
+        b = FieldVector(field, random_values(field, 9, 83))
+        c = FieldVector(field, random_values(field, 9, 84))
+        want = [int(e) for e in (a + b * c)]
+        assert [int(e) for e in a.fma(b, c)] == want
+        dest = FieldVector(field, 9)
+        assert a.fma(b, c, out=dest) is dest
+        assert [int(e) for e in dest] == want
+        assert [int(e) for e in a.fma(b, c[0])] == [int(e) for e in (a + b.scale(c[0]))]
+
+    def test_a_destination_is_checked(self, field):
+        a = FieldVector(field, random_values(field, 8, 85))
+        b = FieldVector(field, random_values(field, 8, 86))
+        with pytest.raises(ValueError, match="holds"):
+            a.add(b, out=FieldVector(field, 4))
+        not_a_vector: Any = [0] * 8  # the check is a runtime one
+        with pytest.raises(TypeError, match="out must be"):
+            a.add(b, out=not_a_vector)

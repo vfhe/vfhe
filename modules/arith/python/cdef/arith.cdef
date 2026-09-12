@@ -190,6 +190,8 @@ void field_vec_sub_scalar(FieldVector out, const FieldVector a, const uint64_t *
 void field_vec_scalar_sub(FieldVector out, const uint64_t *s, const FieldVector a);
 void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b);
 void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s);
+void field_vec_fma(FieldVector out, const FieldVector a, const FieldVector b, const FieldVector c);
+void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVector b, const uint64_t *s);
 void field_vec_sum(uint64_t *out, const FieldVector a);
 int field_vec_inv(FieldVector out, const FieldVector a);
 void field_vec_get_element(uint64_t *out, const FieldVector a, uint64_t index);

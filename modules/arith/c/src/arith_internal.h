@@ -416,5 +416,12 @@ void field_fused_ct(uint64_t *const *lo, uint64_t *const *hi, const uint64_t *ro
                     uint64_t d, uint64_t w, Modulus mod);
 void field_fused_gs(uint64_t *const *lo, uint64_t *const *hi, const uint64_t *root, uint64_t n,
                     uint64_t d, uint64_t w, Modulus mod);
+// out = a + b * c, with the product never reaching memory: four streams rather
+// than the six a multiply and an add take, and no allocation for an
+// intermediate nothing else reads. Same `field_fused_applies` gate.
+void field_fused_fma(uint64_t *const *out, uint64_t *const *a, uint64_t *const *b,
+                     uint64_t *const *c, uint64_t n, uint64_t d, uint64_t w, Modulus mod);
+void field_fused_fma_scalar(uint64_t *const *out, uint64_t *const *a, uint64_t *const *b,
+                            const uint64_t *s, uint64_t n, uint64_t d, uint64_t w, Modulus mod);
 
 #endif // __ARITH_INTERNAL_H__

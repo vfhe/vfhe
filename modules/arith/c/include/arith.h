@@ -338,6 +338,14 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // Elementwise (Hadamard) product, and the product with one element.
     void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b);
     void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s);
+    // out = a + b * c, the product formed and consumed in one pass rather than
+    // written out and read back: four streams through memory instead of six,
+    // and no intermediate vector. `c` is a vector or one broadcast element.
+    // Outputs may alias inputs, as everywhere here.
+    void field_vec_fma(FieldVector out, const FieldVector a, const FieldVector b,
+                       const FieldVector c);
+    void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVector b,
+                              const uint64_t *s);
     // Sum of the first n elements, into d coefficients.
     void field_vec_sum(uint64_t *out, const FieldVector a);
     // Elementwise inverse by Montgomery's trick: one inversion and three

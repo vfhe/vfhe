@@ -152,18 +152,69 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_copy(result._struct, self._struct)
         return result
 
-    def _binary(self, other, vector_kernel, scalar_kernel):
+    def _destination(self, out, n: int | None = None) -> PseudoMersenneVector:
+        """Where a result goes: `out` when given, a fresh vector otherwise."""
+        if out is None:
+            return self._like(n)
+        if not isinstance(out, PseudoMersenneVector):
+            raise TypeError(f"out must be a FieldVector, not {type(out).__name__}")
+        if out.field.prime != self.field.prime:
+            raise ValueError("out belongs to a different field")
+        want = self._n if n is None else n
+        if len(out) != want:
+            raise ValueError(f"out holds {len(out)} elements, not {want}")
+        return out
+
+    def add(self, other, out=None) -> PseudoMersenneVector:
+        """`self + other` into `out` when given."""
+        return self._binary(other, lib.pmf_vec_add, lib.pmf_vec_add_scalar, out)
+
+    def sub(self, other, out=None) -> PseudoMersenneVector:
+        """`self - other` into `out` when given."""
+        return self._binary(other, lib.pmf_vec_sub, lib.pmf_vec_sub_scalar, out)
+
+    def mul(self, other, out=None) -> PseudoMersenneVector:
+        """`self * other` into `out` when given."""
+        return self._binary(other, lib.pmf_vec_mul, lib.pmf_vec_scale, out)
+
+    def rsub(self, other, out=None) -> PseudoMersenneVector:
+        """`other - self` for one element `other`, in one pass."""
+        element = self._coerce_element(other)
+        result = self._destination(out)
+        lib.pmf_vec_scalar_sub(result._struct, element._buf, self._struct)
+        return result
+
+    def neg(self, out=None) -> PseudoMersenneVector:
+        """`-self` into `out` when given."""
+        result = self._destination(out)
+        lib.pmf_vec_neg(result._struct, self._struct)
+        return result
+
+    def fma(self, b, c, out=None) -> PseudoMersenneVector:
+        """`self + b * c`, the long way round.
+
+        There is no fused kernel over this field, so the product is formed
+        into `out` and the addend folded in after: the right answer, one pass
+        more than a fused one, and still free of the intermediate a caller
+        would otherwise allocate.
+        """
+        if not isinstance(b, PseudoMersenneVector):
+            raise TypeError(f"b must be a FieldVector, not {type(b).__name__}")
+        result = self._destination(out)
+        b.mul(c, out=result)
+        return result.add(self, out=result)
+
+    def _binary(self, other, vector_kernel, scalar_kernel, out=None):
         """Apply the elementwise kernel, or the broadcast one for an element."""
+        result = self._destination(out)
         if isinstance(other, PseudoMersenneVector):
             if other.field.prime != self.field.prime:
                 raise ValueError("vectors belong to different fields")
             if len(other) != self._n:
                 raise ValueError(f"length mismatch: {self._n} and {len(other)}")
-            result = self._like()
             vector_kernel(result._struct, self._struct, other._struct)
             return result
         element = self._coerce_element(other)
-        result = self._like()
         scalar_kernel(result._struct, self._struct, element._buf)
         return result
 
@@ -186,10 +237,7 @@ class PseudoMersenneVector(FieldVector):
         NOT symmetric with `__sub__`: subtraction does not commute, so this is
         the reversed-operand kernel rather than a delegation.
         """
-        element = self._coerce_element(other)
-        result = self._like()
-        lib.pmf_vec_scalar_sub(result._struct, element._buf, self._struct)
-        return result
+        return self.rsub(other)
 
     def __neg__(self) -> PseudoMersenneVector:
         """Elementwise negation."""
@@ -210,10 +258,10 @@ class PseudoMersenneVector(FieldVector):
         """``other * self``; multiplication commutes, so this is `__mul__`."""
         return self.__mul__(other)
 
-    def scale(self, value) -> PseudoMersenneVector:
-        """Every element multiplied by one field element."""
+    def scale(self, value, out=None) -> PseudoMersenneVector:
+        """Every element multiplied by one field element, into `out` when given."""
         element = self._coerce_element(value)
-        result = self._like()
+        result = self._destination(out)
         lib.pmf_vec_scale(result._struct, self._struct, element._buf)
         return result
 

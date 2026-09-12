@@ -1058,9 +1058,55 @@ class FieldVector(metaclass=_ImplementationDispatch):
     def __rmul__(self, other) -> FieldVector:
         raise NotImplementedError
 
-    def scale(self, value) -> FieldVector:
+    def scale(self, value, out: FieldVector | None = None) -> FieldVector:
         """Every element multiplied by one element (or int): the broadcast
         `__mul__` under the name that says there is no second vector."""
+        raise NotImplementedError
+
+    # --- the same operations, with a destination ---
+    #
+    # Every dunder above allocates its result, which is right for an expression
+    # written once and wrong for one written per chunk: there the intermediates
+    # are the same shape every time and want one buffer, not a new one. These
+    # take `out` for that, and `view` supplies the chunks -- the two together
+    # are what let a fused expression stay in Python.
+
+    def add(self, other, out: FieldVector | None = None) -> FieldVector:
+        """`self + other`, into `out` when given."""
+        raise NotImplementedError
+
+    def sub(self, other, out: FieldVector | None = None) -> FieldVector:
+        """`self - other`, into `out` when given."""
+        raise NotImplementedError
+
+    def mul(self, other, out: FieldVector | None = None) -> FieldVector:
+        """`self * other`, into `out` when given."""
+        raise NotImplementedError
+
+    def rsub(self, other, out: FieldVector | None = None) -> FieldVector:
+        """``other - self`` for one element ``other``, into `out` when given.
+
+        Not `sub` with the operands swapped: subtraction does not commute, and
+        this is the one kernel for it. Worth a name because the alternative --
+        negate, then add -- is two passes where this is one.
+        """
+        raise NotImplementedError
+
+    def neg(self, out: FieldVector | None = None) -> FieldVector:
+        """`-self`, into `out` when given."""
+        raise NotImplementedError
+
+    def fma(self, b, c, out: FieldVector | None = None) -> FieldVector:
+        """``self + b * c``, with the product formed and consumed in one pass.
+
+        The one fused expression worth a primitive, because it is the shape
+        most of them reduce to. A multiply and an add move the product through
+        memory twice and allocate a vector nothing else reads; this does
+        neither. ``c`` is a vector or one element.
+
+        An implementation without a fused kernel still gives the right answer
+        the long way round, so a caller may always write it.
+        """
         raise NotImplementedError
 
     def sum(self) -> FieldElement:

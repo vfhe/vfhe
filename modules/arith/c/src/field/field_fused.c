@@ -167,6 +167,103 @@ static inline void field_fused_scale_impl(uint64_t *const *out, uint64_t *const 
     }
 }
 
+// --- fused multiply-add ----------------------------------------------------
+//
+// `out = a + b * c`. Written as a multiply and then an add it is six streams
+// through memory -- read b and c, write the product, read a and the product,
+// write out -- and one allocation for a product nothing else ever looks at.
+// Here it is four, and the product never leaves the registers it was formed in.
+//
+// That is the piece a chunked expression needs: with a view per chunk and a
+// destination to write into, an intermediate stays in cache instead of being
+// allocated and streamed.
+#define FIELD_FUSED_ADDEND(K)                                                                      \
+    {                                                                                              \
+        __m512i sum = _mm512_add_epi64(((const __m512i *)a[K])[v], prod);                          \
+        ((__m512i *)out[K])[v] = _mm512_min_epu64(sum, _mm512_sub_epi64(sum, q_vec));              \
+    }
+
+static inline void field_fused_fma_impl(uint64_t *const *out, uint64_t *const *a,
+                                        uint64_t *const *b, uint64_t *const *c, uint64_t nvec,
+                                        const uint64_t d, uint64_t w, Modulus mod)
+{
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i mask52 = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i neg_q = _mm512_set1_epi64(-(int64_t)mod->q);
+    const uint64_t ws = modq(w, mod);
+    const __m512i w_vec = _mm512_set1_epi64(ws);
+    const __m512i w_pre = _mm512_set1_epi64((uint64_t)(((unsigned __int128)ws << 52) / mod->q));
+
+    for (uint64_t v = 0; v < nvec; v++)
+    {
+        __m512i bv[FIELD_MAX_FUSED_D], cv[FIELD_MAX_FUSED_D], wc[FIELD_MAX_FUSED_D];
+        for (uint64_t i = 0; i < d; i++)
+        {
+            bv[i] = ((const __m512i *)b[i])[v];
+            cv[i] = ((const __m512i *)c[i])[v];
+        }
+        for (uint64_t j = 1; j < d; j++)
+            wc[j] = field_shoup(cv[j], w_vec, w_pre, q_vec, neg_q);
+
+        for (uint64_t k = 0; k < d; k++)
+        {
+            __m512i lo = zero, hi = zero;
+            for (uint64_t i = 0; i < d; i++)
+            {
+                const uint64_t j = FIELD_FUSED_PARTNER(i, k, d);
+                const __m512i p = FIELD_FUSED_WRAPS(i, k, d) ? wc[j] : cv[j];
+                lo = _mm512_madd52lo_epu64(lo, bv[i], p);
+                hi = _mm512_madd52hi_epu64(hi, bv[i], p);
+            }
+            hi = _mm512_add_epi64(hi, _mm512_srli_epi64(lo, 52));
+            lo = _mm512_and_epi64(lo, mask52);
+            const __m512i prod = field_reduce128(hi, lo, mod);
+            FIELD_FUSED_ADDEND(k)
+        }
+    }
+}
+
+static inline void field_fused_fma_scalar_impl(uint64_t *const *out, uint64_t *const *a,
+                                               uint64_t *const *b, const uint64_t *s, uint64_t nvec,
+                                               const uint64_t d, uint64_t w, Modulus mod)
+{
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i mask52 = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const uint64_t ws = modq(w, mod);
+    __m512i cv[FIELD_MAX_FUSED_D], wc[FIELD_MAX_FUSED_D];
+    for (uint64_t j = 0; j < d; j++)
+    {
+        const uint64_t sj = modq(s[j], mod);
+        cv[j] = _mm512_set1_epi64(sj);
+        wc[j] = _mm512_set1_epi64(mul_modq(ws, sj, mod));
+    }
+
+    for (uint64_t v = 0; v < nvec; v++)
+    {
+        __m512i bv[FIELD_MAX_FUSED_D];
+        for (uint64_t i = 0; i < d; i++)
+            bv[i] = ((const __m512i *)b[i])[v];
+
+        for (uint64_t k = 0; k < d; k++)
+        {
+            __m512i lo = zero, hi = zero;
+            for (uint64_t i = 0; i < d; i++)
+            {
+                const uint64_t j = FIELD_FUSED_PARTNER(i, k, d);
+                const __m512i p = FIELD_FUSED_WRAPS(i, k, d) ? wc[j] : cv[j];
+                lo = _mm512_madd52lo_epu64(lo, bv[i], p);
+                hi = _mm512_madd52hi_epu64(hi, bv[i], p);
+            }
+            hi = _mm512_add_epi64(hi, _mm512_srli_epi64(lo, 52));
+            lo = _mm512_and_epi64(lo, mask52);
+            const __m512i prod = field_reduce128(hi, lo, mod);
+            FIELD_FUSED_ADDEND(k)
+        }
+    }
+}
+
 // --- transform butterflies -------------------------------------------------
 //
 // A butterfly is a product by a twiddle and an add/sub pair. Written as three
@@ -364,6 +461,66 @@ FIELD_FUSED_DISPATCH(ct)
 FIELD_FUSED_DISPATCH(gs)
 #undef FIELD_FUSED_DISPATCH
 
+#define FIELD_FUSED_FMA_AT(DEGREE)                                                                 \
+    static void field_fused_fma_##DEGREE(uint64_t *const *out, uint64_t *const *a,                 \
+                                         uint64_t *const *b, uint64_t *const *c, uint64_t nvec,    \
+                                         uint64_t w, Modulus mod)                                  \
+    {                                                                                              \
+        field_fused_fma_impl(out, a, b, c, nvec, DEGREE, w, mod);                                  \
+    }                                                                                              \
+    static void field_fused_fma_scalar_##DEGREE(uint64_t *const *out, uint64_t *const *a,          \
+                                                uint64_t *const *b, const uint64_t *s,             \
+                                                uint64_t nvec, uint64_t w, Modulus mod)            \
+    {                                                                                              \
+        field_fused_fma_scalar_impl(out, a, b, s, nvec, DEGREE, w, mod);                           \
+    }
+FIELD_FUSED_FMA_AT(2)
+FIELD_FUSED_FMA_AT(4)
+FIELD_FUSED_FMA_AT(8)
+#undef FIELD_FUSED_FMA_AT
+
+void field_fused_fma(uint64_t *const *out, uint64_t *const *a, uint64_t *const *b,
+                     uint64_t *const *c, uint64_t n, uint64_t d, uint64_t w, Modulus mod)
+{
+    const uint64_t nvec = n / FIELD_FUSED_LANES;
+    switch (d)
+    {
+    case 2:
+        field_fused_fma_2(out, a, b, c, nvec, w, mod);
+        break;
+    case 4:
+        field_fused_fma_4(out, a, b, c, nvec, w, mod);
+        break;
+    case 8:
+        field_fused_fma_8(out, a, b, c, nvec, w, mod);
+        break;
+    default:
+        field_fused_fma_impl(out, a, b, c, nvec, d, w, mod);
+        break;
+    }
+}
+
+void field_fused_fma_scalar(uint64_t *const *out, uint64_t *const *a, uint64_t *const *b,
+                            const uint64_t *s, uint64_t n, uint64_t d, uint64_t w, Modulus mod)
+{
+    const uint64_t nvec = n / FIELD_FUSED_LANES;
+    switch (d)
+    {
+    case 2:
+        field_fused_fma_scalar_2(out, a, b, s, nvec, w, mod);
+        break;
+    case 4:
+        field_fused_fma_scalar_4(out, a, b, s, nvec, w, mod);
+        break;
+    case 8:
+        field_fused_fma_scalar_8(out, a, b, s, nvec, w, mod);
+        break;
+    default:
+        field_fused_fma_scalar_impl(out, a, b, s, nvec, d, w, mod);
+        break;
+    }
+}
+
 void field_fused_scale(uint64_t *const *out, uint64_t *const *a, const uint64_t *s, uint64_t n,
                        uint64_t d, uint64_t w, Modulus mod)
 {
@@ -438,6 +595,32 @@ void field_fused_gs(uint64_t *const *lo, uint64_t *const *hi, const uint64_t *ro
     (void)lo;
     (void)hi;
     (void)root;
+    (void)n;
+    (void)d;
+    (void)w;
+    (void)mod;
+}
+
+void field_fused_fma(uint64_t *const *out, uint64_t *const *a, uint64_t *const *b,
+                     uint64_t *const *c, uint64_t n, uint64_t d, uint64_t w, Modulus mod)
+{
+    (void)out;
+    (void)a;
+    (void)b;
+    (void)c;
+    (void)n;
+    (void)d;
+    (void)w;
+    (void)mod;
+}
+
+void field_fused_fma_scalar(uint64_t *const *out, uint64_t *const *a, uint64_t *const *b,
+                            const uint64_t *s, uint64_t n, uint64_t d, uint64_t w, Modulus mod)
+{
+    (void)out;
+    (void)a;
+    (void)b;
+    (void)s;
     (void)n;
     (void)d;
     (void)w;
