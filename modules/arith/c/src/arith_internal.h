@@ -384,11 +384,29 @@ void pmf_ref_ntt_inverse(uint64_t *a, PMFNTTPlan plan);
 void pmf_sample_stream(uint64_t *out, blake3_hasher *hasher, uint64_t *stream_offset,
                        PMFParams params);
 
+// Extension degrees whose coefficient scratch is taken from the stack rather
+// than allocated. The degrees anything here is built for are far below it; past
+// it the schoolbook product is d^2 multiplications, beside which one allocation
+// does not register. It also bounds the stack a scalar field routine uses,
+// which is why the fallback exists rather than a VLA.
+#define FIELD_MAX_STACK_D 16
+
 // The Frobenius x -> x^(p^k) of F_p[x]/(x^d - w) as the coefficient map it is:
 // coefficient j moves to position to[j] multiplied by constants[j], both d
 // words the caller supplies. Derived once in field.c so that the element and
 // the vector entry point apply the same map.
 void frobenius_map(uint64_t *constants, uint64_t *to, uint64_t k, uint64_t d, uint64_t w,
                    Modulus mod);
+
+// The extension product as one pass with the reductions delayed
+// (field/field_fused.c), in place of field_vector.c's schoolbook passes.
+// `field_fused_applies` is the only thing a caller checks: it answers for the
+// engine, the modulus family, the degree and the length together, and is false
+// wherever the fused form has no advantage or does not exist.
+int field_fused_applies(Modulus mod, uint64_t d, uint64_t n);
+void field_fused_mul(uint64_t *const *out, uint64_t *const *a, uint64_t *const *b, uint64_t n,
+                     uint64_t d, uint64_t w, Modulus mod);
+void field_fused_scale(uint64_t *const *out, uint64_t *const *a, const uint64_t *s, uint64_t n,
+                       uint64_t d, uint64_t w, Modulus mod);
 
 #endif // __ARITH_INTERNAL_H__

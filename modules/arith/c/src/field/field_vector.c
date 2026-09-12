@@ -121,11 +121,21 @@ static void field_vec_mul_generic(FieldVector out, const FieldVector a, const vo
 
 void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b)
 {
+    if (field_fused_applies(a->mod, a->d, a->allocated_n))
+    {
+        field_fused_mul(out->coeffs, a->coeffs, b->coeffs, a->allocated_n, a->d, a->w, a->mod);
+        return;
+    }
     field_vec_mul_generic(out, a, (const void *)b, 1);
 }
 
 void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s)
 {
+    if (field_fused_applies(a->mod, a->d, a->allocated_n))
+    {
+        field_fused_scale(out->coeffs, a->coeffs, s, a->allocated_n, a->d, a->w, a->mod);
+        return;
+    }
     field_vec_mul_generic(out, a, (const void *)s, 0);
 }
 

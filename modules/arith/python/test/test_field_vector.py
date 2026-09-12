@@ -16,6 +16,7 @@ import random
 import pytest
 from vfhe.arith import (
     ExtensionField,
+    ExtensionFieldElement,
     ExtensionFieldVector,
     Field,
     FieldElement,
@@ -757,3 +758,123 @@ class TestIndexedSampling:
             FieldVector(field, 4).sample_random(SEED, -1)
         with pytest.raises(ValueError, match="negative"):
             field.element_from_seed(SEED, -1)
+
+
+class TestFusedProduct:
+    """The extension product where the fused kernel takes over.
+
+    `field_fused_applies` gates on the modulus family, so **the prime below is
+    what selects the path**: under 2^50 it takes the 2^52 Shoup family, which
+    is the only one with a widening multiply that accumulates. Every other test
+    in this file uses a 61-bit prime and therefore exercises the schoolbook
+    passes instead -- these two primes are how both paths stay covered, and
+    raising this one above 2^50 would silently stop testing the kernel.
+
+    The reference is `FieldElement.__mul__`, which is the scalar coefficient
+    product in `field.c`: a different implementation, not a rearrangement of
+    the same one.
+    """
+
+    #: 49 bits, 1 mod 4, with 3 a non-residue -- so x^d - 3 is irreducible.
+    FUSED_PRIME = 562949953421201
+    FUSED_W = 3
+
+    def field(self, d: int) -> ExtensionField:
+        return ExtensionField(self.FUSED_PRIME, d, self.FUSED_W)
+
+    def values(self, field, n, seed) -> list[ExtensionFieldElement]:
+        """The concrete element type, not the front: these tests reach for
+        `value`, the native coefficient array, which is this implementation's
+        and not part of the declared API."""
+        rng = random.Random(seed)  # noqa: S311 - test data, not a key
+        return [
+            ExtensionFieldElement(
+                field, [rng.randrange(self.FUSED_PRIME) for _ in range(field.d)]
+            )
+            for _ in range(n)
+        ]
+
+    @pytest.mark.parametrize("d", [1, 2, 3, 4, 5, 8, 9])
+    @pytest.mark.parametrize("n", [1, 7, 8, 9, 16, 100])
+    def test_matches_the_element_product(self, d, n):
+        """Degrees on both sides of the instantiations (2, 4, 8) and of the
+        cap, and lengths on both sides of the kernel's vector width."""
+        field = self.field(d)
+        left = self.values(field, n, seed=50 + d)
+        right = self.values(field, n, seed=80 + d)
+        a, b = FieldVector(field, left), FieldVector(field, right)
+        assert (a * b).to_list() == [x * y for x, y in zip(left, right, strict=True)]
+        assert (a * right[0]).to_list() == [x * right[0] for x in left]
+        assert a.scale(right[0]).to_list() == [x * right[0] for x in left]
+
+    @pytest.mark.parametrize("d", [2, 4, 8])
+    def test_the_padding_stays_reduced_and_carries_no_meaning(self, d):
+        """The kernel writes whole vectors, so it touches the padding; and a
+        dirty padding must not reach the answer."""
+        field = self.field(d)
+        left = self.values(field, 13, seed=60)
+        right = self.values(field, 13, seed=61)
+        a, b = FieldVector(field, left), FieldVector(field, right)
+        product = a * b
+        for plane in product._planes:
+            assert all(plane[i] < self.FUSED_PRIME for i in range(product._allocated_n))
+
+        dirty = FieldVector(field, right)
+        for plane in dirty._planes:
+            for i in range(13, dirty._allocated_n):
+                plane[i] = self.FUSED_PRIME - 1
+        assert (a * dirty).to_list() == product.to_list()
+
+    @pytest.mark.parametrize("d", [2, 4, 8])
+    def test_the_output_may_alias_an_input(self, d):
+        """The header's promise, on this path too: the kernel loads a block's
+        operands before it writes any of that block's outputs, which is the
+        only reason it holds."""
+        from vfhe.engine import lib
+
+        field = self.field(d)
+        left = self.values(field, 13, seed=70 + d)
+        right = self.values(field, 13, seed=71 + d)
+        a, b = FieldVector(field, left), FieldVector(field, right)
+        expected = (a * b).to_list()
+
+        lib.field_vec_mul(a._struct, a._struct, b._struct)
+        assert a.to_list() == expected
+        assert b.to_list() == right
+
+        a = FieldVector(field, left)
+        expected = a.scale(right[0]).to_list()
+        lib.field_vec_scale(a._struct, a._struct, right[0].value)
+        assert a.to_list() == expected
+
+    def test_matches_the_product_worked_out_over_the_integers(self):
+        """An oracle the kernel shares no code with.
+
+        `test_matches_the_element_product` checks it against `field.c`'s scalar
+        product, which is a different implementation but still the same
+        definition compiled the same way. This one forms the polynomial product
+        and the fold on x^d = w in Python over plain integers, and only then
+        reduces -- so a shared misunderstanding of the quotient ring would show
+        up here and nowhere else.
+        """
+        d, n = 4, 24
+        prime = self.FUSED_PRIME
+        rng = random.Random(99)  # noqa: S311 - test data, not a key
+        left = [[rng.randrange(prime) for _ in range(d)] for _ in range(n)]
+        right = [[rng.randrange(prime) for _ in range(d)] for _ in range(n)]
+
+        field = self.field(d)
+        a = ExtensionFieldVector(field, [ExtensionFieldElement(field, v) for v in left])
+        b = ExtensionFieldVector(
+            field, [ExtensionFieldElement(field, v) for v in right]
+        )
+        got = [[e.value[j] for j in range(d)] for e in (a * b).to_list()]
+
+        for i in range(n):
+            wide = [0] * (2 * d - 1)
+            for p_i in range(d):
+                for r_i in range(d):
+                    wide[p_i + r_i] += left[i][p_i] * right[i][r_i]
+            for k in range(2 * d - 2, d - 1, -1):
+                wide[k - d] += self.FUSED_W * wide[k]
+            assert got[i] == [c % prime for c in wide[:d]]

@@ -87,7 +87,12 @@ void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d
                    Modulus mod)
 {
     const uint64_t q = mod->q;
-    uint64_t *tmp = (uint64_t *)malloc((2 * d - 1) * sizeof(uint64_t));
+    // Off the stack for every degree a caller realistically has: this runs once
+    // per element of a scalar path -- a transform's short stages, an inverse
+    // over a vector -- where an allocation per call is a measurable share.
+    uint64_t scratch[2 * FIELD_MAX_STACK_D - 1];
+    uint64_t *tmp =
+        d <= FIELD_MAX_STACK_D ? scratch : (uint64_t *)malloc((2 * d - 1) * sizeof(uint64_t));
     memset(tmp, 0, (2 * d - 1) * sizeof(uint64_t));
 
     for (uint64_t i = 0; i < d; i++)
@@ -109,7 +114,8 @@ void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d
     {
         c[i] = tmp[i];
     }
-    free(tmp);
+    if (tmp != scratch)
+        free(tmp);
 }
 
 void field_ext_pow(uint64_t *res, const uint64_t *base, const uint64_t *exp, uint64_t exp_words,
@@ -221,7 +227,9 @@ static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *
                               uint64_t w, Modulus mod)
 {
     uint64_t q = mod->q;
-    uint64_t *tmp = (uint64_t *)malloc((2 * d + 1) * sizeof(uint64_t));
+    uint64_t scratch[2 * FIELD_MAX_STACK_D + 1];
+    uint64_t *tmp =
+        d <= FIELD_MAX_STACK_D ? scratch : (uint64_t *)malloc((2 * d + 1) * sizeof(uint64_t));
     memset(tmp, 0, (2 * d + 1) * sizeof(uint64_t));
 
     for (uint64_t i = 0; i <= d; i++)
@@ -245,7 +253,8 @@ static void poly_mul_mod_xd_w(uint64_t *res, const uint64_t *a, const uint64_t *
     {
         res[i] = tmp[i];
     }
-    free(tmp);
+    if (tmp != scratch)
+        free(tmp);
 }
 
 int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Modulus mod)
