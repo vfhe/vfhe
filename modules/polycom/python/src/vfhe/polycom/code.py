@@ -38,9 +38,15 @@ from vfhe.crypto import hash_bytes, leaf_digest
 from vfhe.engine import lib
 
 
-def _bit_reverse(i: int, bits: int) -> int:
+def bit_reverse(i: int, bits: int) -> int:
     """`i` with its low `bits` bits reversed — the index permutation
-    `ntt_forward` (CT_NR) leaves in its output."""
+    `ntt_forward` (CT_NR) leaves in its output.
+
+    Public because it is not this code family's: any code built on that
+    transform needs it to say which evaluation point a position holds, and
+    a second one carrying its own copy is a second place for the convention
+    to drift from arith's.
+    """
     out = 0
     for _ in range(bits):
         out = (out << 1) | (i & 1)
@@ -126,7 +132,7 @@ class FoldableRS:
             roots = self.roots[level + 1]
             row, row_inv = [], []
             for i in range(n):
-                exponent = 2 * _bit_reverse(i, bits) + 1
+                exponent = 2 * bit_reverse(i, bits) + 1
                 t = [
                     pow(psi, exponent, p)
                     for psi, p in zip(roots, ring.primes, strict=True)

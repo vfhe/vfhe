@@ -34,7 +34,7 @@ from vfhe.arith import (
 )
 from vfhe.engine import ffi, lib
 
-from .code import _bit_reverse
+from .code import bit_reverse
 
 if TYPE_CHECKING:
     from vfhe.arith import FieldElement
@@ -195,7 +195,7 @@ class FieldFoldableRS:
             n = self.n0 << level  # positions of the folded (level) codeword
             bits = n.bit_length() - 1
             psi = self.roots[level + 1]
-            row = [pow(psi, 2 * _bit_reverse(i, bits) + 1, p) for i in range(n)]
+            row = [pow(psi, 2 * bit_reverse(i, bits) + 1, p) for i in range(n)]
             self.twists.append(row)
             self.twists2_inv.append([pow(2 * t, p - 2, p) for t in row])
         self._twist_elements = [[self._element(t) for t in row] for row in self.twists]
