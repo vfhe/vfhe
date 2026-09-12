@@ -153,19 +153,89 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_copy(result._struct, self._struct)
         return result
 
-    def _binary(self, other, vector_kernel, scalar_kernel):
+    def _destination(self, out, n: int | None = None) -> ExtensionFieldVector:
+        """Where a result goes: `out` when given, a fresh vector otherwise.
+
+        An `out` is what lets a chunked expression reuse one buffer instead of
+        allocating per operation -- the half of the fusion story that `view`
+        does not cover.
+        """
+        if out is None:
+            return self._like(n)
+        if not isinstance(out, ExtensionFieldVector):
+            raise TypeError(f"out must be a FieldVector, not {type(out).__name__}")
+        if out.field is not self.field:
+            raise ValueError("out belongs to a different field")
+        want = self._n if n is None else n
+        if len(out) != want:
+            raise ValueError(f"out holds {len(out)} elements, not {want}")
+        return out
+
+    def _binary(self, other, vector_kernel, scalar_kernel, out=None):
         """Apply the elementwise kernel, or the broadcast one for an element."""
+        result = self._destination(out)
         if isinstance(other, ExtensionFieldVector):
             if other.field is not self.field:
                 raise ValueError("vectors belong to different fields")
             if len(other) != self._n:
                 raise ValueError(f"length mismatch: {self._n} and {len(other)}")
-            result = self._like()
             vector_kernel(result._struct, self._struct, other._struct)
             return result
         element = self._coerce_element(other)
-        result = self._like()
         scalar_kernel(result._struct, self._struct, element.value)
+        return result
+
+    def add(self, other, out=None) -> ExtensionFieldVector:
+        """`self + other` into `out` when given -- `__add__` with a destination."""
+        return self._binary(other, lib.field_vec_add, lib.field_vec_add_scalar, out)
+
+    def sub(self, other, out=None) -> ExtensionFieldVector:
+        """`self - other` into `out` when given."""
+        return self._binary(other, lib.field_vec_sub, lib.field_vec_sub_scalar, out)
+
+    def mul(self, other, out=None) -> ExtensionFieldVector:
+        """`self * other` into `out` when given."""
+        return self._binary(other, lib.field_vec_mul, lib.field_vec_scale, out)
+
+    def rsub(self, other, out=None) -> ExtensionFieldVector:
+        """`other - self` for one element `other`, in one pass."""
+        element = self._coerce_element(other)
+        result = self._destination(out)
+        lib.field_vec_scalar_sub(result._struct, element.value, self._struct)
+        return result
+
+    def neg(self, out=None) -> ExtensionFieldVector:
+        """`-self` into `out` when given."""
+        result = self._destination(out)
+        lib.field_vec_neg(result._struct, self._struct)
+        return result
+
+    def fma(self, b, c, out=None) -> ExtensionFieldVector:
+        """`self + b * c`, the product formed and consumed in one pass.
+
+        Four streams through memory rather than the six a multiply and an add
+        take, and no intermediate vector at all. `c` is a vector or one
+        element; with `out` and `view` it is what makes a chunked expression
+        allocation-free.
+        """
+        if not isinstance(b, ExtensionFieldVector):
+            raise TypeError(f"b must be a FieldVector, not {type(b).__name__}")
+        if b.field is not self.field:
+            raise ValueError("vectors belong to different fields")
+        if len(b) != self._n:
+            raise ValueError(f"length mismatch: {self._n} and {len(b)}")
+        result = self._destination(out)
+        if isinstance(c, ExtensionFieldVector):
+            if c.field is not self.field:
+                raise ValueError("vectors belong to different fields")
+            if len(c) != self._n:
+                raise ValueError(f"length mismatch: {self._n} and {len(c)}")
+            lib.field_vec_fma(result._struct, self._struct, b._struct, c._struct)
+        else:
+            element = self._coerce_element(c)
+            lib.field_vec_fma_scalar(
+                result._struct, self._struct, b._struct, element.value
+            )
         return result
 
     def __add__(self, other) -> ExtensionFieldVector:
@@ -187,10 +257,7 @@ class ExtensionFieldVector(FieldVector):
         NOT symmetric with `__sub__`: subtraction does not commute, so this is
         the reversed-operand kernel rather than a delegation.
         """
-        element = self._coerce_element(other)
-        result = self._like()
-        lib.field_vec_scalar_sub(result._struct, element.value, self._struct)
-        return result
+        return self.rsub(other)
 
     def __neg__(self) -> ExtensionFieldVector:
         """Elementwise negation."""
@@ -211,10 +278,10 @@ class ExtensionFieldVector(FieldVector):
         """``other * self``; multiplication commutes, so this is `__mul__`."""
         return self.__mul__(other)
 
-    def scale(self, value) -> ExtensionFieldVector:
-        """Every element multiplied by one field element."""
+    def scale(self, value, out=None) -> ExtensionFieldVector:
+        """Every element multiplied by one field element, into `out` when given."""
         element = self._coerce_element(value)
-        result = self._like()
+        result = self._destination(out)
         lib.field_vec_scale(result._struct, self._struct, element.value)
         return result
 
