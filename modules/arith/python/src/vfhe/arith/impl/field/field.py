@@ -89,17 +89,61 @@ class ExtensionField(Field):
             raise ValueError(f"n must be a power of two, got {n}")
         return lib.field_ext_root_subfield_degree(n, self.mod)
 
-    def root_of_unity(self, n: int) -> ExtensionFieldElement:
+    def _resolve_ntt_domain(self, n: int, domain: str) -> str:
+        """Which of the two transforms a request names, with the reason it
+        cannot be served when it cannot.
+
+        ``'auto'`` takes the base domain wherever it exists, that being the
+        faster one. ``'extension'`` is refused rather than silently downgraded
+        when every 2n-th root lies in F_p: a caller asking for it wants the
+        domain *outside* the prime subfield, and the prime is what decides
+        whether that is available.
+        """
+        if domain not in ("auto", "base", "extension"):
+            raise ValueError(
+                f"domain must be 'auto', 'base' or 'extension', got {domain!r}"
+            )
+        in_base = (self.prime - 1) % (2 * n) == 0
+        if domain == "auto":
+            return "base" if in_base else "extension"
+        if domain == "base":
+            if not in_base:
+                raise ValueError(
+                    f"no primitive {2 * n}-th root of unity in F_p: {2 * n} does "
+                    f"not divide p - 1. The extension has one; pass "
+                    f"domain='extension' for it."
+                )
+            return "base"
+        if in_base:
+            raise ValueError(
+                f"every primitive {2 * n}-th root of unity lies in F_p for this "
+                f"prime, so no extension domain exists at this length: {2 * n} "
+                f"divides p - 1. A domain outside F_p needs a prime where it "
+                f"does not (see root_subfield_degree)."
+            )
+        return "extension"
+
+    def root_of_unity(self, n: int, domain: str = "auto") -> ExtensionFieldElement:
         """A primitive 2n-th root of unity, i.e. an element with
         ``psi ** n == -1``.
 
-        Deterministic in ``(p, d, w, n)``, so the same field gives the same
-        root on every run and engine. Raises ValueError when ``2n`` does not
-        divide ``p**d - 1``, which is when no such element exists.
-        `root_subfield_degree` says which subfield it will land in.
+        ``domain`` says where it must live: ``'base'`` for F_p, ``'extension'``
+        for outside it, ``'auto'`` (the default) for whichever exists, base
+        first. A base-domain root is the one arith's own transform plan chose,
+        so the two agree; an extension one is deterministic in
+        ``(p, d, w, n)``, so the same field gives the same root on every run
+        and engine.
+
+        Raises ValueError when the requested domain has no such element --
+        `root_subfield_degree` is what predicts that.
         """
         if not isinstance(n, int) or isinstance(n, bool) or n < 1 or n & (n - 1):
             raise ValueError(f"n must be a power of two, got {n}")
+        if self._resolve_ntt_domain(n, domain) == "base":
+            # Read off arith's plan rather than re-derived: `ntt_new_plan` picks
+            # its own root and takes none, so agreeing with it is the only way
+            # a caller's twists match what the transform actually used.
+            return self(lib.ntt_plan_root(self.ntt_plan(n, "base")._base_plan))
         value = ffi.new("uint64_t[]", self.d)
         if not lib.field_ext_root_of_unity(value, n, self.d, self.w, self.mod):
             raise ValueError(
@@ -108,19 +152,26 @@ class ExtensionField(Field):
             )
         return ExtensionFieldElement(self, value)
 
-    def ntt_plan(self, n: int) -> Any:
+    def ntt_plan(self, n: int, domain: str = "auto") -> Any:
         """The negacyclic transform of length ``n`` over this field, one per
-        length. See `ExtensionFieldNTT` for the basis, the output order and the
-        batched layout it takes."""
+        length and domain.
+
+        ``domain`` says where the root of unity lives and therefore which of
+        the two implementations runs; ``'auto'`` takes the base domain wherever
+        it exists, that being about 3x the faster. See `ExtensionFieldNTT` for
+        the basis, the output order, and the batch layout -- **which is not the
+        same for the two domains**.
+        """
         plans = getattr(self, "_plans", None)
         if plans is None:
             plans = self._plans = {}
-        plan = plans.get(n)
+        key = (n, self._resolve_ntt_domain(n, domain))
+        plan = plans.get(key)
         if plan is None:
             # Imported here: the ntt module imports this one at load time.
             from .ntt import ExtensionFieldNTT
 
-            plan = plans[n] = ExtensionFieldNTT(self, n)
+            plan = plans[key] = ExtensionFieldNTT(self, n, key[1])
         return plan
 
     def _uniform_from_seed(self, seed: bytes) -> ExtensionFieldElement:

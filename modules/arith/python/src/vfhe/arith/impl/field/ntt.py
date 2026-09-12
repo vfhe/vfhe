@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """The negacyclic NTT over an `ExtensionField`, with the root in F_(p^d).
 
-The difference from running arith's F_p transform once per coefficient plane
-is the evaluation domain: there the points are in the prime subfield, here
-they are odd powers of a psi that lives in the extension. A code whose domain
-must avoid F_p needs this one; a code that does not is better served by the
-per-plane transform, which is cheaper.
+Two transforms behind one class, differing in where the root of unity lives.
+With it in F_p the map is F_p-linear and splits across the coefficient planes,
+so arith's own kernels do it -- cheaper, and the default. With it outside F_p,
+which is what a code whose evaluation domain must avoid the prime subfield
+needs, the butterflies are extension multiplications and a batched layout is
+what makes them vectorise.
 
 The C side states the conventions at the `FieldNTTPlan` declaration in
-``arith.h``, and the batched layout `forward` requires.
+``arith.h``, and the layout each path takes.
 """
 
 from __future__ import annotations
@@ -32,32 +33,60 @@ class ExtensionFieldNTT:
     ``j`` holding ``P(psi ** (2 * brv(j) + 1))`` -- natural in, bit-reversed
     out, so positions ``2i`` and ``2i + 1`` hold ``P(x)`` and ``P(-x)``.
 
-    **It transforms a batch, and that is the point.** A stage's butterfly
-    works on runs of ``t`` elements and ``t`` halves every stage, so a single
-    transform ends in runs of 1, 2 and 4 -- far too short to be worth a kernel
-    call, and they dominate its cost. With ``blocks`` transforms laid out
-    block-fastest (element ``i`` of block ``b`` at ``i * blocks + b``) every
-    run is ``t * blocks`` elements instead, so every stage of every block is
-    one call. `blocks=1` is the ordinary single transform and is exactly the
-    case this layout exists to avoid.
+    **Two implementations, chosen by where the root lives** -- `domain`, and
+    the reason `batch_layout` is not the same for both:
 
-    Plans cost ``2 * n`` field elements of tables;
-    `ExtensionField.ntt_plan` memoizes one per length.
+    - ``'base'``, when 2n divides ``p - 1``. The root is then in F_p, the
+      transform is F_p-linear, and it splits into ``d`` independent transforms
+      of the coefficient planes on arith's own kernels. About **3x** faster,
+      because each block's transform then fits in cache and runs there.
+    - ``'extension'``, otherwise. A stage's butterfly works on runs of ``t``
+      elements and ``t`` halves every stage, so a single transform ends in runs
+      of 1, 2 and 4 -- too short to vectorise, and they carry most of its cost.
+      Batching sidesteps that by making every run ``t * blocks`` elements.
+
+    The base domain is the default wherever it exists, being the faster one.
+    **A caller whose evaluation domain must avoid F_p has to say
+    ``domain='extension'``** -- and gets an error rather than the subfield if
+    the prime cannot supply it.
+
+    Plans cost ``2 * n`` field elements of tables (the base domain, arith's
+    own); `ExtensionField.ntt_plan` memoizes one per length and domain.
     """
 
-    def __init__(self, field: ExtensionField, n: int) -> None:
+    def __init__(self, field: ExtensionField, n: int, domain: str = "auto") -> None:
         """
         Build the plan for length ``n`` over ``field``.
 
-        Raises ValueError unless ``n`` is a power of two for which a primitive
-        2n-th root of unity exists, i.e. unless ``2n`` divides ``p**d - 1``.
+        ``domain`` says where the root of unity must live -- see
+        `ExtensionField.ntt_plan`. Raises ValueError unless ``n`` is a power of
+        two for which the chosen domain has a primitive 2n-th root.
         """
         if not isinstance(n, int) or isinstance(n, bool) or n < 1 or n & (n - 1):
             raise ValueError(f"transform length must be a power of two, got {n}")
         self.field = field
         self.n = n
-        #: psi, the primitive 2n-th root of unity the transform evaluates at.
-        self.root_of_unity: ExtensionFieldElement = field.root_of_unity(n)
+        #: Where the root lives: ``'base'`` (F_p) or ``'extension'``.
+        self.domain: str = field._resolve_ntt_domain(n, domain)
+
+        if self.domain == "base":
+            plan = lib.ntt_new_plan(n, field.mod)
+            if plan == ffi.NULL:
+                raise RuntimeError(
+                    "arith rejected the transform plan; see stderr for the reason"
+                )
+            self._base_plan = ffi.gc(plan, lib.ntt_free_plan)
+            self._plan = None
+            #: psi, the primitive 2n-th root the transform evaluates at. Read
+            #: back from arith's plan rather than derived: `ntt_new_plan` picks
+            #: its own and takes no root, so this is the only way the two agree.
+            self.root_of_unity: ExtensionFieldElement = field(
+                lib.ntt_plan_root(self._base_plan)
+            )
+            return
+
+        self._base_plan = None
+        self.root_of_unity = field.root_of_unity(n, domain="extension")
         plan = lib.field_ntt_new_plan(
             n, self.root_of_unity.value, field.d, field.w, field.mod
         )
@@ -66,6 +95,25 @@ class ExtensionFieldNTT:
                 "C rejected the transform plan; see stderr for the reason"
             )
         self._plan = ffi.gc(plan, lib.field_ntt_free_plan)
+
+    @property
+    def batch_layout(self) -> str:
+        """How a batch of transforms must be laid out, which **differs by
+        domain** and is not a detail a caller can ignore.
+
+        - ``'blocks'`` (the base domain): block ``b`` is the ``n`` consecutive
+          elements at ``b * n``. That is what lets one transform run inside the
+          cache, which is where this path's speed comes from.
+        - ``'interleaved'`` (the extension domain): element ``i`` of block ``b``
+          sits at ``i * blocks + b``. That is what gives the extension butterfly
+          runs long enough to vectorise at every stage -- a problem the base
+          path does not have, since each of its butterflies is a scalar
+          multiply that arith's kernels already handle.
+
+        A caller picks a domain once, from what its evaluation domain has to
+        avoid, and lays its data out to match.
+        """
+        return "blocks" if self.domain == "base" else "interleaved"
 
     @property
     def subfield_degree(self) -> int:
@@ -93,14 +141,21 @@ class ExtensionFieldNTT:
         return vector._plane_ptrs
 
     def forward(self, vector: ExtensionFieldVector, blocks: int = 1) -> None:
-        """Transform ``blocks`` batched transforms in place, natural to
-        bit-reversed order. The vector's layout is block-fastest; see the class
-        docstring."""
-        lib.field_ntt_forward(self._checked(vector, blocks), blocks, self._plan)
+        """Transform ``blocks`` transforms in place, natural to bit-reversed
+        order. `batch_layout` says how the batch must be laid out."""
+        planes = self._checked(vector, blocks)
+        if self.domain == "base":
+            lib.field_ntt_forward_base(planes, blocks, self.field.d, self._base_plan)
+        else:
+            lib.field_ntt_forward(planes, blocks, self._plan)
 
     def inverse(self, vector: ExtensionFieldVector, blocks: int = 1) -> None:
         """The inverse of `forward`, 1/n scaling included."""
-        lib.field_ntt_inverse(self._checked(vector, blocks), blocks, self._plan)
+        planes = self._checked(vector, blocks)
+        if self.domain == "base":
+            lib.field_ntt_inverse_base(planes, blocks, self.field.d, self._base_plan)
+        else:
+            lib.field_ntt_inverse(planes, blocks, self._plan)
 
     def __repr__(self) -> str:
-        return f"ExtensionFieldNTT(n={self.n}, field={self.field!r})"
+        return f"ExtensionFieldNTT(n={self.n}, domain={self.domain!r})"
