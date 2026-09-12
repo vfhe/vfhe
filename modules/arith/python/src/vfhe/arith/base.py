@@ -709,7 +709,7 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         raise NotImplementedError
 
     def element_from_seed(self, seed: bytes, index: int) -> FieldElement:
-        """Samples the element at position `index` based on `seed` and `index`. 
+        """Samples the element at position `index` based on `seed` and `index`.
         The result, per element, is the same as calling `FieldVector.sample_random` for the entire vector.
 
         This is different from ``field.element_from_seed(seed, i)``, which would sample randomness based on the `seed` only.

@@ -9,9 +9,8 @@ codeword equals encoding the folded message."""
 
 import pytest
 from vfhe.arith import Ring, RNSRing
-from vfhe.polycom import FoldableRS
+from vfhe.polycom import FoldableRS, bit_reverse
 from vfhe.polycom import code as code_module
-from vfhe.polycom.code import _bit_reverse
 
 
 def _ring() -> RNSRing:
@@ -53,7 +52,7 @@ def test_encode_matches_naive_evaluation():
     bits = n.bit_length() - 1
     for j in range(n):
         # Position j evaluates at psi^(2*brv(j)+1) — bit-reversed output.
-        x = pow(psi, 2 * _bit_reverse(j, bits) + 1, p)
+        x = pow(psi, 2 * bit_reverse(j, bits) + 1, p)
         naive = None
         for m, coeff in enumerate(message):
             term = coeff * [pow(x, m, p)]
@@ -73,7 +72,7 @@ def test_encode_pairs_are_plus_minus():
     for i in range(len(word) // 2):
         x = code.twists[code.d - 1][i][0]
         assert x == pow(
-            psi, 2 * _bit_reverse(i, (len(word) // 2).bit_length() - 1) + 1, p
+            psi, 2 * bit_reverse(i, (len(word) // 2).bit_length() - 1) + 1, p
         )
         plus = minus = None
         for m, coeff in enumerate(message):

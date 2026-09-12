@@ -82,7 +82,7 @@ class ExtensionField(Field):
         return element
 
     def element_from_seed(self, seed: bytes, index: int) -> ExtensionFieldElement:
-        """Samples the element at position `index` based on `seed` and `index`. 
+        """Samples the element at position `index` based on `seed` and `index`.
         The result, per element, is the same as calling `FieldVector.sample_random` for the entire vector."""
         if not isinstance(index, int) or isinstance(index, bool):
             raise TypeError(f"index must be an int, not {type(index).__name__}")

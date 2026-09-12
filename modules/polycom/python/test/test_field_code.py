@@ -13,8 +13,7 @@ five and six limbs, transformed by arith's `PseudoMersenneNTT`."""
 
 import pytest
 from vfhe.arith import Field, FieldVector, PseudoMersenneField
-from vfhe.polycom import FieldFoldableRS
-from vfhe.polycom.code import _bit_reverse
+from vfhe.polycom import FieldFoldableRS, bit_reverse
 
 # Extension fields over primes with 2-adicity 20 and 22 (x^2 - w irreducible
 # for the given w), and pseudo-Mersenne fields of five and six limbs.
@@ -80,7 +79,7 @@ def test_encode_matches_naive_evaluation(field):
     psi = code.roots[level]
     bits = n.bit_length() - 1
     for j in range(n):
-        x = pow(psi, 2 * _bit_reverse(j, bits) + 1, field.prime)
+        x = pow(psi, 2 * bit_reverse(j, bits) + 1, field.prime)
         assert word[j] == _naive(field, message, x)
     # A list of elements encodes the same as the vector holding them.
     assert code.encode(message.to_list()) == word
@@ -97,7 +96,7 @@ def test_encode_pairs_are_plus_minus(field):
     half_bits = (len(word) // 2).bit_length() - 1
     for i in range(len(word) // 2):
         x = code.twists[code.d - 1][i]
-        assert x == pow(psi, 2 * _bit_reverse(i, half_bits) + 1, p)
+        assert x == pow(psi, 2 * bit_reverse(i, half_bits) + 1, p)
         assert code.pair_at(word, i) == (
             _naive(field, message, x),
             _naive(field, message, p - x),

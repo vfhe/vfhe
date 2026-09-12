@@ -78,6 +78,7 @@ from vfhe.piop.sumcheck import _exceptional_set_size, interpolate_evals
 from .code import FoldableRS
 from .code import pair_digest as pair_digest
 from .field_code import FieldFoldableRS
+from .queries import query_positions
 
 #: A coefficient table or a codeword, in whichever form the domain's code
 #: takes: a list of ring elements, or one `FieldVector`. A `Basefold` is built
@@ -326,39 +327,18 @@ class BasefoldEval(Protocol):
         """The `rep` spot-check positions derived from a bit-string
         challenge: pair indices at level d, in [0, n_d / 2).
 
-        The seed is expanded with the tree's own hash in counter mode
-        (`BLAKE3(seed || counter)`, eight candidates per digest); a candidate
-        is a masked 64-bit word — the range is a power of two, so masking is
-        unbiased — and is **rejection-sampled on its projection to the
-        level-0 codeword** (`q >> (d - 1)`): two queries meeting at the
-        bottom would run the same final fold check twice, so with-
-        replacement sampling silently buys less soundness than its `rep`
-        claims. Distinct bottom projections imply distinct positions at
-        every level (the higher projections extend the bottom one), and the
-        constructor guarantees termination (`rep < n0`).
+        This scheme's geometry handed to `polycom.query_positions`, which is
+        where the sampler and its rejection rule are: one fold per level, so
+        a walk from level d consumes `d - 1` index bits to reach the level-0
+        codeword, and the positions are rejection-sampled to land there
+        pairwise distinct. The constructor's `rep < n0` guarantees
+        termination.
 
         Deterministic in the seed, so both parties derive the same positions
         from the published challenge — the prover to answer, the verifier to
         check.
         """
-        top = self.code.n_d // 2
-        shift = self.code.d - 1
-        positions: list[int] = []
-        seen: set[int] = set()
-        counter = 0
-        while len(positions) < self.rep:
-            digest = hash_bytes(seed + counter.to_bytes(8, "little"))
-            counter += 1
-            for off in range(0, DIGEST_LEN, 8):
-                candidate = int.from_bytes(digest[off : off + 8], "little") & (top - 1)
-                base = candidate >> shift
-                if base in seen:
-                    continue
-                seen.add(base)
-                positions.append(candidate)
-                if len(positions) == self.rep:
-                    break
-        return tuple(positions)
+        return query_positions(seed, self.code.n_d // 2, self.code.d - 1, self.rep)
 
     def _walk(self, query: int, d: int):
         """The (level, pair index) chain one query position visits, top level
