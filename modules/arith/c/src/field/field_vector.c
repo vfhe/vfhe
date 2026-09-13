@@ -509,39 +509,45 @@ void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_
 }
 
 // The elements in index order, d words each, as the bytes a digest covers.
-static void hash_span(uint8_t *out, const FieldVector a, uint64_t start, uint64_t count)
+// `element` is d words of scratch the caller owns. It is a parameter and not a
+// local because these run once per digest: at a window count in the millions an
+// allocation each is a measurable share of hashing a whole vector, and the
+// callers below loop over the windows.
+static void hash_span(uint8_t *out, const FieldVector a, uint64_t start, uint64_t count,
+                      uint64_t *element)
 {
     const uint64_t d = a->d;
     blake3_hasher hasher;
     blake3_hasher_init(&hasher);
-    uint64_t *element = (uint64_t *)malloc(d * sizeof(uint64_t));
     for (uint64_t i = 0; i < count; i++)
     {
         field_vec_get_element(element, a, start + i);
         blake3_hasher_update(&hasher, (const uint8_t *)element, d * sizeof(uint64_t));
     }
-    free(element);
     blake3_hasher_finalize(&hasher, out, BLAKE3_OUT_LEN);
 }
 
-void field_vec_hash(uint8_t *out, const FieldVector a) { hash_span(out, a, 0, a->n); }
+void field_vec_hash(uint8_t *out, const FieldVector a)
+{
+    uint64_t *element = (uint64_t *)malloc(a->d * sizeof(uint64_t));
+    hash_span(out, a, 0, a->n, element);
+    free(element);
+}
 
 // The elements of one fiber -- `group` of them, `stride` apart, from `first` --
 // as the bytes a digest covers. The gather `hash_span` does not do: that one
 // walks a contiguous run.
 static void hash_fiber(uint8_t *out, const FieldVector a, uint64_t first, uint64_t group,
-                       uint64_t stride)
+                       uint64_t stride, uint64_t *element)
 {
     const uint64_t d = a->d;
     blake3_hasher hasher;
     blake3_hasher_init(&hasher);
-    uint64_t *element = (uint64_t *)malloc(d * sizeof(uint64_t));
     for (uint64_t j = 0; j < group; j++)
     {
         field_vec_get_element(element, a, first + j * stride);
         blake3_hasher_update(&hasher, (const uint8_t *)element, d * sizeof(uint64_t));
     }
-    free(element);
     blake3_hasher_finalize(&hasher, out, BLAKE3_OUT_LEN);
 }
 
@@ -555,8 +561,10 @@ uint64_t field_vec_hash_fiber_count(const FieldVector a, uint64_t group, uint64_
 void field_vec_hash_fibers(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride)
 {
     const uint64_t count = field_vec_hash_fiber_count(a, group, stride);
+    uint64_t *element = (uint64_t *)malloc(a->d * sizeof(uint64_t));
     for (uint64_t k = 0; k < count; k++)
-        hash_fiber(out + k * BLAKE3_OUT_LEN, a, k, group, stride);
+        hash_fiber(out + k * BLAKE3_OUT_LEN, a, k, group, stride, element);
+    free(element);
 }
 
 uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stride)
@@ -569,6 +577,8 @@ uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stri
 void field_vec_hash_elements(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride)
 {
     const uint64_t count = field_vec_hash_count(a, group, stride);
+    uint64_t *element = (uint64_t *)malloc(a->d * sizeof(uint64_t));
     for (uint64_t k = 0; k < count; k++)
-        hash_span(out + k * BLAKE3_OUT_LEN, a, k * stride, group);
+        hash_span(out + k * BLAKE3_OUT_LEN, a, k * stride, group, element);
+    free(element);
 }

@@ -89,11 +89,13 @@ def test_recommit_reuses_the_tree():
     leaves = random_leaves(8)
     tree = Merkle(leaves)
     first = tree.root
-    tree.leaves[2] = HashableLeaf(b"replaced")
+    held = tree.leaves
+    assert held is not None  # a tree built from leaves keeps them
+    held[2] = HashableLeaf(b"replaced")
     second = tree.commit()
     assert second != first
     assert tree.root == second
-    assert Merkle.verify(second, 2, tree.open(2), tree.leaves[2])
+    assert Merkle.verify(second, 2, tree.open(2), held[2])
 
 
 def test_explicit_hash_callable_and_missing_hash_method():
@@ -131,3 +133,43 @@ def test_rejects_bad_hash_values_and_empty_leaves():
     with pytest.raises(TypeError, match="64-bit words"):
         Merkle([1], hash=lambda leaf: leaf)
     assert leaf_digest(b"", hash=hash_bytes) == hash_bytes(b"")
+
+
+class TestFromDigests:
+    """A tree over leaf digests that were never Python objects.
+
+    The point of the constructor is what it does *not* do, so the checks are
+    that it agrees exactly with the tree built the ordinary way -- same root,
+    same openings, same length -- for inputs where both are possible.
+    """
+
+    @staticmethod
+    def digests(count: int) -> list[bytes]:
+        return [hash_bytes(b"leaf-%d" % i) for i in range(count)]
+
+    @pytest.mark.parametrize("count", [1, 2, 3, 8, 17])
+    def test_agrees_with_the_object_path(self, count):
+        leaves = self.digests(count)
+        packed = Merkle.from_digests(b"".join(leaves))
+        objects = Merkle(leaves, hash=lambda leaf: leaf)
+        assert packed.root == objects.root
+        assert len(packed) == len(objects) == count
+        for index in range(count):
+            assert packed.open(index).siblings == objects.open(index).siblings
+            # the leaves are already digests, so verify needs the identity too
+            assert Merkle.verify(
+                packed.root, index, packed.open(index), leaves[index], hash=lambda x: x
+            )
+
+    def test_recommits_from_the_buffer_it_kept(self):
+        """`commit()` has no leaf list to walk here, so it must re-read the
+        digests it was given."""
+        leaves = self.digests(8)
+        tree = Merkle.from_digests(b"".join(leaves))
+        first = tree.root
+        assert tree.commit() == first
+
+    def test_a_buffer_that_is_not_whole_digests_is_refused(self):
+        for bad in (b"", b"\x00" * 31, b"\x00" * 33):
+            with pytest.raises(ValueError, match="multiple of"):
+                Merkle.from_digests(bad)

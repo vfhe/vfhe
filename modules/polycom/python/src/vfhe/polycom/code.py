@@ -254,9 +254,17 @@ class FoldableRS:
         """The Merkle leaf digest of one `±x` pair (`pair_digest`)."""
         return pair_digest(pair)
 
-    def leaf_digests(self, word: list) -> list[bytes]:
-        """The leaf digests of every `±x` pair of `word`."""
-        return [pair_digest(pair) for pair in self.pair_leaves(word)]
+    def leaf_digests(self, word: list) -> bytes:
+        """The leaf digests of every `±x` pair of `word`, packed: leaf `i` is
+        ``digests[32 * i : 32 * (i + 1)]``.
+
+        This family digests a pair at a time -- the entries are ring elements
+        with their own hash -- so the leaves still cost an object each here,
+        unlike the field codes, where a kernel writes the whole buffer. What
+        the packing saves is the tree builder's half of that: it reads the
+        buffer rather than walking a sequence.
+        """
+        return b"".join(pair_digest(pair) for pair in self.pair_leaves(word))
 
     def fold_at(
         self, word: list, r: RNSPolynomial, level: int, i: int

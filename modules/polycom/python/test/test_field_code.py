@@ -152,11 +152,11 @@ def test_leaf_digests(field):
     code = _code(field)
     word = code.encode(_random(field, code.k_d, b"m"))
     digests = code.leaf_digests(word)
-    assert len(digests) == len(word) // 2
-    for i, digest in enumerate(digests):
-        assert digest == code.leaf_digest(code.pair_at(word, i))
+    assert len(digests) == 32 * (len(word) // 2)
+    for i in range(len(word) // 2):
+        assert digests[32 * i : 32 * (i + 1)] == code.leaf_digest(code.pair_at(word, i))
     lo, hi = code.pair_at(word, 0)
-    assert code.leaf_digest((hi, lo)) != digests[0]  # an ordered pair
+    assert code.leaf_digest((hi, lo)) != digests[:32]  # an ordered pair
 
 
 def test_parameter_validation(field):
@@ -197,3 +197,17 @@ def test_short_codeword_round_trips(field):
     for level in range(code.d, 0, -1):
         word = code.fold(word, field.random_element(bytes([level])), level=level)
     assert code.decode(word)[0]
+
+
+def test_leaf_digests_go_straight_into_a_tree(field):
+    """The digests are packed, which is exactly what `Merkle.from_digests`
+    reads -- the codeword reaches a root with no object per leaf."""
+    from vfhe.crypto import Merkle
+
+    code = FieldFoldableRS(field, k0=4, c=2, d=2)
+    word = code.encode(FieldVector(field, [field(i + 1) for i in range(code.k_d)]))
+    digests = code.leaf_digests(word)
+    tree = Merkle.from_digests(digests)
+    leaves = [digests[i : i + 32] for i in range(0, len(digests), 32)]
+    assert len(tree) == len(word) // 2
+    assert tree.root == Merkle(leaves, hash=lambda leaf: leaf).root
