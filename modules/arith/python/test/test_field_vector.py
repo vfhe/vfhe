@@ -883,6 +883,42 @@ class TestIndexedSampling:
         window.sample_random(SEED, 1 << 40)
         assert window[0] == far
 
+    #: A prime sitting just above a power of two, so the rejection mask throws
+    #: away about half of every draw and positions keep falling through to
+    #: later attempt streams. `make_field`'s Mersenne prime almost never
+    #: rejects, so it never reaches that part of the sampler at all.
+    REJECTING_PRIME, REJECTING_W = 1099511627791, 3
+
+    def rejecting_field(self):
+        return ExtensionField(self.REJECTING_PRIME, 2, self.REJECTING_W)
+
+    @pytest.mark.parametrize("index", [0, 1, 2047, 2048, 2049, 4095, 4096, 4097, 9000])
+    def test_the_fill_agrees_with_the_indexed_form_across_a_bulk_boundary(self, index):
+        """A long fill is drawn a run at a time, so the run boundaries are
+        where a batched sampler stops agreeing with the definition: a value
+        must depend on its index and on nothing about how the fill was cut up.
+        Checked on a prime that rejects about half of every draw, so positions
+        really do fall through to later streams."""
+        field = self.rejecting_field()
+        vector = FieldVector(field, 9001)
+        vector.sample_random(SEED)
+        assert vector[index] == field.element_from_seed(SEED, index)
+
+    def test_a_window_is_the_slice_of_the_long_fill_it_names(self):
+        """`start` moves the window, not the sequence -- including when the
+        window and the fill are cut into runs differently."""
+        field = self.rejecting_field()
+        whole = FieldVector(field, 9001)
+        whole.sample_random(SEED)
+        entries = whole.to_list()
+        # The last runs to the end of the fill: 9001 - 5000.
+        for start, length in ((0, 10), (4090, 20), (4096, 4096), (5000, 4001)):
+            window = FieldVector(field, length)
+            window.sample_random(SEED, start)
+            assert window.to_list() == entries[start : start + length], (
+                f"window {start}..{start + length}"
+            )
+
     def test_the_element_sampler_is_a_separate_stream(self):
         """`random_element` is domain-separated from the vector fill, so one
         seed feeding both gives independent values."""

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "crypto.h"
 #include <engine.h>
+
+#include "util.h"
 #if VFHE_HAVE_X86_64
 #include <immintrin.h>
 #endif
@@ -175,10 +177,27 @@ static void prng_attempt_stream(blake3_hasher *hasher, const char *context, cons
     blake3_hasher_update(hasher, tag, sizeof(tag));
 }
 
+// Values one bulk draw resolves. 4096 words is 32 KiB of stream per attempt,
+// which stays in cache and bounds the scratch however long `count` is.
+#define PRNG_BULK_VALUES 4096
+
+// Below this share of a run still unresolved, drawing each remaining position
+// on its own beats another pass over the whole run. The two are far apart --
+// a bulk draw costs a few ns a value where a single-value seek costs over a
+// hundred -- so the crossover sits near a thirtieth; a sixteenth stays on the
+// safe side of it without measuring the prime.
+#define PRNG_SPARSE_SHARE 16
+
+// Runs up to this length work entirely on the stack, which is what keeps
+// drawing a single element by its index free of an allocation.
+#define PRNG_STACK_VALUES 64
+
 void prng_sample_below_from(uint64_t *out, uint64_t count, uint64_t start, uint64_t bound,
                             const char *context, const uint8_t *seed, uint64_t seed_len)
 {
     assert(bound > 0); // otherwise the rejection loop below never terminates
+    if (count == 0)
+        return;
 
     // Smallest 2^k - 1 that covers `bound`, so rejection discards under half
     // the draws.
@@ -197,16 +216,45 @@ void prng_sample_below_from(uint64_t *out, uint64_t count, uint64_t start, uint6
     // run on instead -- the obvious loop -- would make i's offset depend on how
     // many rejections preceded it, and then the only way to reach index i would
     // be to draw every value before it.
+    //
+    // Those offsets are fixed, so a whole run of them can be drawn at once, and
+    // that is the difference between this costing a BLAKE3 compression per
+    // value and costing a fraction of one. Asking a stream for eight bytes
+    // gives you a compression whose other fifty-six are discarded, and it takes
+    // the scalar path; asking for a run of whole blocks goes through the
+    // lane-parallel XOF instead. The same bytes either way -- the sequence this
+    // defines does not change -- at about a thirtieth of the time.
+    //
+    // So each attempt draws the whole outstanding run in one seek, resolves
+    // what it can, and carries the rest to the next attempt. Once few enough
+    // positions are left that another full pass would be wasted on values
+    // already settled, the stragglers go back to a seek apiece.
     blake3_hasher cached[PRNG_ATTEMPT_STREAMS];
     int ready[PRNG_ATTEMPT_STREAMS] = {0};
 
-    for (uint64_t i = 0; i < count; i++)
+    const uint64_t chunk = count < PRNG_BULK_VALUES ? count : PRNG_BULK_VALUES;
+    uint8_t stack_stream[PRNG_STACK_VALUES * sizeof(uint64_t)];
+    uint64_t stack_pending[PRNG_STACK_VALUES];
+    uint8_t *stream = stack_stream;
+    uint64_t *pending = stack_pending;
+    if (chunk > PRNG_STACK_VALUES)
     {
-        const uint64_t index = start + i;
-        for (uint64_t attempt = 0;; attempt++)
+        stream = (uint8_t *)safe_malloc(chunk * sizeof(uint64_t));
+        pending = (uint64_t *)safe_malloc(chunk * sizeof(uint64_t));
+    }
+
+    for (uint64_t base = 0; base < count; base += chunk)
+    {
+        const uint64_t run = (count - base) < chunk ? (count - base) : chunk;
+        // Offsets within this run that no attempt has settled yet.
+        uint64_t left = run;
+        for (uint64_t k = 0; k < run; k++)
+            pending[k] = k;
+
+        for (uint64_t attempt = 0; left > 0; attempt++)
         {
             blake3_hasher derived;
-            blake3_hasher *hasher;
+            const blake3_hasher *hasher;
             if (attempt < PRNG_ATTEMPT_STREAMS)
             {
                 if (!ready[attempt])
@@ -222,17 +270,43 @@ void prng_sample_below_from(uint64_t *out, uint64_t count, uint64_t start, uint6
                 hasher = &derived;
             }
 
-            uint8_t buf[sizeof(uint64_t)];
-            blake3_hasher_finalize_seek(hasher, index * sizeof(buf), buf, sizeof(buf));
-            uint64_t word;
-            memcpy(&word, buf, sizeof(word)); // the buffer is not aligned for a cast
-            const uint64_t sampled = word & mask;
-            if (sampled < bound)
+            const bool bulk = left * PRNG_SPARSE_SHARE >= run;
+            if (bulk)
+                blake3_hasher_finalize_seek(hasher, (start + base) * sizeof(uint64_t), stream,
+                                            run * sizeof(uint64_t));
+
+            uint64_t kept = 0;
+            for (uint64_t k = 0; k < left; k++)
             {
-                out[i] = sampled;
-                break;
+                const uint64_t at = pending[k];
+                uint8_t buf[sizeof(uint64_t)];
+                const uint8_t *bytes;
+                if (bulk)
+                {
+                    bytes = stream + at * sizeof(uint64_t);
+                }
+                else
+                {
+                    blake3_hasher_finalize_seek(hasher, (start + base + at) * sizeof(uint64_t), buf,
+                                                sizeof(buf));
+                    bytes = buf;
+                }
+                uint64_t word;
+                memcpy(&word, bytes, sizeof(word)); // the buffer is not aligned for a cast
+                const uint64_t sampled = word & mask;
+                if (sampled < bound)
+                    out[base + at] = sampled;
+                else
+                    pending[kept++] = at;
             }
+            left = kept;
         }
+    }
+
+    if (chunk > PRNG_STACK_VALUES)
+    {
+        free(stream);
+        free(pending);
     }
 }
 
