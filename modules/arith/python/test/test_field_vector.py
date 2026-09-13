@@ -90,6 +90,30 @@ class TestDispatch:
 class TestConstruction:
     """A vector is built from a length or from a sequence of values."""
 
+    def test_a_result_vector_is_still_fully_defined(self):
+        """Destinations are allocated unzeroed, so every operation that makes
+        one has to write all of it. Checked against the same computation on a
+        vector that was zeroed -- the contents must not depend on what the
+        allocator happened to hand over."""
+        field = make_field()
+        a = FieldVector(field, random_elements(field, 13, seed=150))
+        b = FieldVector(field, random_elements(field, 13, seed=151))
+        for got, want in (
+            (a + b, a.add(b, out=FieldVector(field, 13))),
+            (a * b, a.mul(b, out=FieldVector(field, 13))),
+            (a - b, a.sub(b, out=FieldVector(field, 13))),
+            (-a, a.scale(-1)),
+            (a.copy(), a),
+            (a.query([3, 0, 12, 12]), FieldVector(field, [a[3], a[0], a[12], a[12]])),
+        ):
+            assert got.to_list() == want.to_list()
+
+        # An even length of its own: the halves only exist for one.
+        c = FieldVector(field, random_elements(field, 12, seed=152))
+        even, odd = c.split_even_odd()
+        assert even.to_list() == [c[i] for i in range(0, 12, 2)]
+        assert odd.to_list() == [c[i] for i in range(1, 12, 2)]
+
     @pytest.mark.parametrize("n", LENGTHS)
     def test_a_length_gives_zeros(self, n):
         field = make_field()

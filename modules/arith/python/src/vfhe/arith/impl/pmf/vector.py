@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from vfhe.arith._alloc import aligned64
+from vfhe.arith._alloc import aligned64, aligned64_unset
 from vfhe.arith.base import FieldVector, index_buffer
 from vfhe.engine import ffi, lib
 
@@ -55,15 +55,26 @@ class PseudoMersenneVector(FieldVector):
         if values:
             self._write_range(0, values)
 
-    def _allocate(self, n: int) -> None:
-        """Reserve L padded planes and the struct the kernels read them from."""
+    def _allocate(self, n: int, zeroed: bool = True) -> None:
+        """Reserve L padded planes and the struct the kernels read them from.
+
+        `zeroed` false leaves the first `n` words of each plane undefined, for
+        a vector a kernel is about to fill; the padding past `n` is zeroed
+        either way, since the arithmetic reads and writes it and it must stay
+        canonical. See the field vector, which says why at more length.
+        """
         field = self.field
         self._n = n
         self._allocated_n = lib.pmf_vec_padded_length(n)
         # Kept alive as attributes: the struct holds borrowed pointers into them.
+        allocator = aligned64 if zeroed else aligned64_unset
         self._planes = [
-            aligned64("uint64_t[]", self._allocated_n) for _ in range(field.limbs)
+            allocator("uint64_t[]", self._allocated_n) for _ in range(field.limbs)
         ]
+        if not zeroed and self._allocated_n > n:
+            tail = [0] * (self._allocated_n - n)
+            for plane in self._planes:
+                plane[n : self._allocated_n] = tail
         self._plane_ptrs = ffi.new("uint64_t*[]", self._planes)
         self._struct = ffi.new("PMFVector")
         self._struct.limbs = self._plane_ptrs
@@ -72,8 +83,16 @@ class PseudoMersenneVector(FieldVector):
         self._struct.params = field._params
 
     def _like(self, n: int | None = None) -> PseudoMersenneVector:
-        """A fresh vector over the same field, this length unless told another."""
-        return PseudoMersenneVector(self.field, self._n if n is None else n)
+        """A destination over the same field, this length unless told another.
+
+        Left **unzeroed**, as the field vector's is and for the same reason:
+        every caller hands it straight to a kernel that writes all of it.
+        `PseudoMersenneVector(field, n)` is the one that promises zeros.
+        """
+        result = PseudoMersenneVector.__new__(PseudoMersenneVector)
+        result.field = self.field
+        result._allocate(self._n if n is None else n, zeroed=False)
+        return result
 
     def _coerce_element(self, value) -> PseudoMersenneElement:
         """Promote `value` to an element of this field, or raise."""
