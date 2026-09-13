@@ -110,11 +110,6 @@ def _one(domain):
     return Polynomial(domain).from_array([1])
 
 
-def _digest_leaf(leaf: bytes) -> bytes:
-    """The Merkle `hash=` for trees whose leaves are already digests."""
-    return leaf
-
-
 class BasefoldCommitment:
     """A commitment to a multilinear polynomial: public instance data,
     created once by `Basefold.commit` and referenced by any number of
@@ -205,8 +200,16 @@ class Basefold:
         """The Merkle tree commitment to a codeword — the vector-commitment
         step of the scheme, one leaf per `±x` pair (digested by the code,
         `leaf_digests`); its `root` is what travels (as the polynomial
-        commitment or as a round message)."""
-        return Merkle(self.code.leaf_digests(word), hash=_digest_leaf)
+        commitment or as a round message).
+
+        The digests reach the tree **packed**, which is why nothing here
+        builds a Python object per leaf. A codeword has a leaf per pair, so an
+        object per leaf would be one on the way in and another on the way back
+        out when the builder rejoined them -- at a large codeword more than
+        either the hashing or the tree costs, and paid once per fold level as
+        well as once per commit.
+        """
+        return Merkle.from_digests(self.code.leaf_digests(word))
 
     def commit(self, f: MLE) -> tuple[BasefoldCommitment, BasefoldOpening]:
         """Commit to f: encode, build the Merkle tree, return the root as the

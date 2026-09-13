@@ -1360,7 +1360,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
         """A 32-byte digest of the whole vector's contents."""
         raise NotImplementedError
 
-    def hash_elements(self, group: int = 1, stride: int = 1) -> list[bytes]:
+    def hash_elements(self, group: int = 1, stride: int = 1) -> bytes:
         """One digest per window of elements: the Merkle leaves of a codeword.
 
         A window is a **contiguous** run: window ``k`` covers elements
@@ -1368,6 +1368,14 @@ class FieldVector(metaclass=_ImplementationDispatch):
         only whole windows count. So ``stride`` is the distance between one
         window's start and the next -- ``group == stride`` tiles the vector,
         a larger ``stride`` leaves gaps, a smaller one overlaps.
+
+        The digests come back **packed**: 32 bytes per window in window order,
+        empty when no whole window fits, so window ``k`` is
+        ``digests[32 * k : 32 * (k + 1)]``. That is the layout the kernel
+        writes and the layout a tree builder or a transcript reads, so neither
+        end has to slice. A caller that wants an object per window can cut
+        them out, but at a codeword's window count that is the expensive form
+        and should be its own decision rather than the default.
 
         A *gather* is the other shape and is `hash_fibers`, not this with
         different arguments: neither is a special case of the other, which is
@@ -1378,7 +1386,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
         """
         raise NotImplementedError
 
-    def hash_fibers(self, group: int = 1, stride: int = 1) -> list[bytes]:
+    def hash_fibers(self, group: int = 1, stride: int = 1) -> bytes:
         """One digest per **fiber**: the gather `hash_elements` cannot do.
 
         Fiber ``k`` covers the ``group`` elements at ``k``, ``k + stride``,
@@ -1394,6 +1402,9 @@ class FieldVector(metaclass=_ImplementationDispatch):
         instead. Requires ``group * stride <= len(self)``; yields nothing
         otherwise.
 
+        Packed as `hash_elements` is: 32 bytes per fiber, fiber ``k`` at
+        ``digests[32 * k : 32 * (k + 1)]``.
+
         An implementation without a kernel gathers each fiber and hashes it,
         which is the same digest one call at a time.
         """
@@ -1402,11 +1413,11 @@ class FieldVector(metaclass=_ImplementationDispatch):
                 f"group and stride must be positive, got {group}, {stride}"
             )
         if group * stride > len(self):
-            return []
-        return [
+            return b""
+        return b"".join(
             self.query(range(k, k + group * stride, stride)).hash()
             for k in range(stride)
-        ]
+        )
 
     def __eq__(self, other: object) -> bool:
         raise NotImplementedError

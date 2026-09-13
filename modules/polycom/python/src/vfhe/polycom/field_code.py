@@ -318,9 +318,11 @@ class FieldFoldableRS:
         `leaf_digests` and binds the pair as an ordered unit."""
         return FieldVector(self.field, list(pair)).hash()
 
-    def leaf_digests(self, word: FieldVector) -> list[bytes]:
-        """The leaf digests of every `±x` pair of `word`, in one pass over
-        the codeword (`FieldVector.hash_elements` with adjacent windows)."""
+    def leaf_digests(self, word: FieldVector) -> bytes:
+        """The leaf digests of every `±x` pair of `word`, packed, in one pass
+        over the codeword (`FieldVector.hash_elements` with adjacent
+        windows). Leaf `i` is ``digests[32 * i : 32 * (i + 1)]``, and equals
+        `leaf_digest` of `pair_at(word, i)`."""
         return word.hash_elements(group=2, stride=2)
 
     def fold_at(self, word: FieldVector, r, level: int, i: int):

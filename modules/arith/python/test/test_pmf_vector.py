@@ -60,6 +60,11 @@ def edge_values(f):
     ]
 
 
+def digest_list(packed: bytes) -> list[bytes]:
+    """A packed digest buffer as one bytes per window."""
+    return [packed[i : i + 32] for i in range(0, len(packed), 32)]
+
+
 def random_values(f, n, seed=1):
     local = random.Random(seed)  # noqa: S311 - test data, not a key
     return [local.randrange(f.prime) for _ in range(n)]
@@ -432,28 +437,28 @@ class TestSamplingAndHashing:
         """The digest is over the encoding, so it is representation-free."""
         values = random_values(field, 4, 26)
         vector = FieldVector(field, values)
-        assert vector.hash_elements()[2] == field(values[2]).digest()
+        assert digest_list(vector.hash_elements())[2] == field(values[2]).digest()
 
     def test_hash_elements_windows(self, field):
         values = random_values(field, 8, 27)
         vector = FieldVector(field, values)
 
-        singles = vector.hash_elements()
+        singles = digest_list(vector.hash_elements())
         assert len(singles) == 8
         assert singles[3] == FieldVector(field, [values[3]]).hash()
 
-        pairs = vector.hash_elements(group=2, stride=2)
+        pairs = digest_list(vector.hash_elements(group=2, stride=2))
         assert len(pairs) == 4
         assert pairs[1] == FieldVector(field, values[2:4]).hash()
 
-        sliding = vector.hash_elements(group=3, stride=1)
+        sliding = digest_list(vector.hash_elements(group=3, stride=1))
         assert len(sliding) == 6
         assert sliding[2] == FieldVector(field, values[2:5]).hash()
 
     def test_hash_elements_drops_a_partial_window(self, field):
         vector = FieldVector(field, random_values(field, 7, 28))
-        assert len(vector.hash_elements(group=2, stride=2)) == 3
-        assert vector.hash_elements(group=9, stride=1) == []
+        assert len(vector.hash_elements(group=2, stride=2)) == 3 * 32
+        assert vector.hash_elements(group=9, stride=1) == b""
 
     def test_hash_elements_rejects_a_zero_step(self, field):
         with pytest.raises(ValueError, match="must be positive"):

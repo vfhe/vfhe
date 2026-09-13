@@ -39,6 +39,12 @@ def make_field(d: int = 4) -> ExtensionField:
     return ExtensionField(PRIME, d, W)
 
 
+def digest_list(packed: bytes) -> list[bytes]:
+    """A packed digest buffer as one bytes per window -- what a caller that
+    really wants an object per window writes for itself."""
+    return [packed[i : i + 32] for i in range(0, len(packed), 32)]
+
+
 def random_elements(field, n, seed=42):
     rng = random.Random(seed)  # noqa: S311 - test data, not a key
     return [
@@ -375,23 +381,23 @@ class TestSamplingAndHashing:
         values = random_elements(field, 8, seed=24)
         vector = FieldVector(field, values)
 
-        singles = vector.hash_elements()
+        singles = digest_list(vector.hash_elements())
         assert len(singles) == 8
         assert singles[3] == FieldVector(field, [values[3]]).hash()
 
-        pairs = vector.hash_elements(group=2, stride=2)
+        pairs = digest_list(vector.hash_elements(group=2, stride=2))
         assert len(pairs) == 4
         assert pairs[1] == FieldVector(field, values[2:4]).hash()
 
-        sliding = vector.hash_elements(group=3, stride=1)
+        sliding = digest_list(vector.hash_elements(group=3, stride=1))
         assert len(sliding) == 6
         assert sliding[2] == FieldVector(field, values[2:5]).hash()
 
     def test_hash_elements_drops_a_partial_window(self):
         field = make_field()
         vector = FieldVector(field, random_elements(field, 7, seed=25))
-        assert len(vector.hash_elements(group=2, stride=2)) == 3
-        assert vector.hash_elements(group=9, stride=1) == []
+        assert len(vector.hash_elements(group=2, stride=2)) == 3 * 32
+        assert vector.hash_elements(group=9, stride=1) == b""
 
     def test_hash_elements_rejects_a_zero_step(self):
         vector = FieldVector(make_field(), 4)
@@ -998,7 +1004,7 @@ class TestFiberHashing:
     def test_matches_the_gathered_digest(self, group, stride):
         field = make_field()
         vector = FieldVector(field, random_elements(field, 32, seed=90))
-        got = vector.hash_fibers(group, stride)
+        got = digest_list(vector.hash_fibers(group, stride))
         assert len(got) == stride
         for k in range(stride):
             fiber = [vector[k + j * stride] for j in range(group)]
@@ -1021,7 +1027,7 @@ class TestFiberHashing:
     def test_a_fiber_set_that_does_not_fit_yields_nothing(self):
         field = make_field()
         vector = FieldVector(field, random_elements(field, 16, seed=93))
-        assert vector.hash_fibers(3, 8) == []  # 24 elements needed, 16 present
+        assert vector.hash_fibers(3, 8) == b""  # 24 elements needed, 16 present
         with pytest.raises(ValueError, match="must be positive"):
             vector.hash_fibers(0, 4)
 
@@ -1084,3 +1090,25 @@ class TestMovementDestinations:
         not_a_pair: Any = FieldVector(field, 4)  # the check is a runtime one
         with pytest.raises(TypeError, match="pair of vectors"):
             vector.split_even_odd(out=not_a_pair)
+
+
+class TestDigestsReachATreeUntouched:
+    """The digests come back as one buffer, and that buffer is what a Merkle
+    tree takes -- no Python object per window at either end.
+
+    What each window digests is pinned down in `TestSamplingAndHashing` and
+    `TestFiberHashing`; what is left here is that the buffer reaches a tree
+    unchanged, and gives the root the per-leaf path gives.
+    """
+
+    @pytest.mark.parametrize(("group", "stride"), [(1, 1), (2, 2), (4, 4)])
+    def test_the_buffer_is_what_a_tree_takes(self, group, stride):
+        from vfhe.crypto import Merkle
+
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 32, seed=104))
+        digests = vector.hash_elements(group, stride)
+        packed = Merkle.from_digests(digests)
+        objects = Merkle(digest_list(digests), hash=lambda leaf: leaf)
+        assert packed.root == objects.root
+        assert len(packed) == len(vector) // stride

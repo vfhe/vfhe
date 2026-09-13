@@ -412,26 +412,24 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_hash(out, self._struct)
         return bytes(out)
 
-    def hash_elements(self, group: int = 1, stride: int = 1) -> list[bytes]:
-        """
-        One digest per window of `group` elements, taken every `stride` indices.
+    def _digests(self, count: int, kernel, group: int, stride: int) -> bytes:
+        """The kernel's own output buffer, handed back whole -- it already
+        writes one digest per window, contiguously, which is the packed
+        layout the front promises."""
+        if count == 0:
+            return b""
+        out = ffi.new("uint8_t[]", count * 32)
+        kernel(out, self._struct, group, stride)
+        return bytes(ffi.buffer(out))
 
-        Window k covers elements ``k * stride`` through
-        ``k * stride + group - 1``, and only whole windows count -- so the
-        Merkle-leaf case of adjacent pairs is ``group=2, stride=2``. Empty
-        when no whole window fits.
-        """
+    def hash_elements(self, group: int = 1, stride: int = 1) -> bytes:
+        """Every window's digest, packed; the front states the contract."""
         if group < 1 or stride < 1:
             raise ValueError(
                 f"group and stride must be positive, got {group}, {stride}"
             )
         count = lib.pmf_vec_hash_count(self._struct, group, stride)
-        if count == 0:
-            return []
-        out = ffi.new("uint8_t[]", count * 32)
-        lib.pmf_vec_hash_elements(out, self._struct, group, stride)
-        raw = bytes(ffi.buffer(out))
-        return [raw[k * 32 : (k + 1) * 32] for k in range(count)]
+        return self._digests(count, lib.pmf_vec_hash_elements, group, stride)
 
     def __eq__(self, other: object) -> bool:
         """Equal length and equal elements, over the same field."""
