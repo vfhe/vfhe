@@ -4,10 +4,12 @@
 module = {
     'sources': files(
         'c/src/aes_rng.c',
+        'c/src/hash.c',
         'c/src/merkle.c',
         'c/src/normal.c',
         'c/src/prng.c',
     ),
+    'c_tests': files('c/test/test_hash.c'),
     'includes': [include_directories('c/include')],
     'headers': files('c/include/crypto.h', 'c/include/merkle.h'),
     'cdefs': files('python/cdef/merkle.cdef', 'python/cdef/prng.cdef'),

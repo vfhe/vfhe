@@ -1,12 +1,40 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
+
+    // --- Hashing (hash.c) ------------------------------------------------
+
+    // Whether hash_batch can take inputs of `len` bytes: a nonzero multiple
+    // of 64, at most 1024.
+    //
+    // Both bounds are the lane-parallel core's, not this module's. It
+    // compresses whole 64-byte blocks, so a length leaving a partial block
+    // would have to carry that block's true length, which the many-input form
+    // has no argument for; and it hashes a single BLAKE3 chunk, so past 1024
+    // bytes an input is a tree of chunks rather than one compression chain.
+    bool hash_batch_fits(uint64_t len);
+
+    // BLAKE3 over `count` independent inputs of `len` bytes each, laid out end
+    // to end in `in`; writes `count` 32-byte digests to `out`. Each digest is
+    // exactly what hashing that input on its own gives.
+    //
+    // Many short independent inputs are what BLAKE3's SIMD lanes are for -- 8
+    // at a time under AVX2, 16 under AVX-512 -- and hashing them one at a time
+    // leaves the lanes idle and pays a hasher init and finalize each. At
+    // 64-byte inputs the batch is ~9x, and reaches the same throughput BLAKE3
+    // gets on one long buffer.
+    //
+    // A `len` that hash_batch_fits rejects is still hashed, one input at a
+    // time: callers need not branch, they only lose the speedup. `in` and
+    // `out` must not overlap.
+    void hash_batch(uint8_t *out, const uint8_t *in, uint64_t count, uint64_t len);
 
     // --- Randomness (prng.c) ---------------------------------------------
 
