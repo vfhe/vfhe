@@ -431,7 +431,26 @@ int field_vec_is_equal(const FieldVector a, const FieldVector b)
     return 1;
 }
 
-int field_vec_inv(FieldVector out, const FieldVector a)
+// A window of `length` elements from `start`, as a vector in its own right:
+// the planes are the parent's, offset. Both bounds are multiples of
+// MOD_MIN_VECTOR_LEN, so every plane stays 64-byte aligned and the eltwise
+// kernels keep their no-tail contract.
+static struct _FieldVector field_vec_window(const FieldVector v, uint64_t start, uint64_t length,
+                                            uint64_t **planes)
+{
+    struct _FieldVector window = *v;
+    for (uint64_t j = 0; j < v->d; j++)
+        planes[j] = v->coeffs[j] + start;
+    window.coeffs = planes;
+    window.n = length;
+    window.allocated_n = length;
+    return window;
+}
+
+// Montgomery's trick an element at a time: prefix products, one inversion of
+// the last, then a reverse sweep peeling each factor back off. 3(n-1)
+// multiplications and one inversion, all on single elements.
+static int field_vec_inv_serial(FieldVector out, const FieldVector a)
 {
     const uint64_t d = a->d, n = a->n;
     if (n == 0)
@@ -469,6 +488,104 @@ int field_vec_inv(FieldVector out, const FieldVector a)
     free(element);
     free(running);
     free(tmp);
+    return status;
+}
+
+// Rows the parallel sweep aims for. The trick's two sweeps are a serial chain
+// -- each step needs the one before it -- so one chain advances an element at a
+// time however wide the vector is. Cut the vector into rows and the chains
+// become the columns: a step is one whole-vector multiply over a row, and the
+// chain is only as long as there are rows. More rows means fewer columns and so
+// fewer of the single inversions the backward sweep starts from; 256 keeps
+// those to about a nanosecond an element while leaving rows wide enough to be
+// worth handing to a kernel.
+#define FIELD_VEC_INV_ROWS 256
+
+int field_vec_inv(FieldVector out, const FieldVector a)
+{
+    const uint64_t d = a->d, n = a->n;
+    if (n == 0)
+        return 1;
+
+    // Rows must be a whole number of SIMD vectors for the windows to be
+    // aligned; below one row's worth there is nothing to parallelise anyway.
+    const uint64_t width = (n / FIELD_VEC_INV_ROWS) & ~(uint64_t)(MOD_MIN_VECTOR_LEN - 1);
+    if (width == 0)
+        return field_vec_inv_serial(out, a);
+    const uint64_t rows = n / width, body = rows * width;
+
+    uint64_t *prefix_block = (uint64_t *)safe_aligned_malloc(d * body * sizeof(uint64_t));
+    uint64_t *carry_block = (uint64_t *)safe_aligned_malloc(3 * d * width * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)safe_malloc(8 * d * sizeof(uint64_t *));
+
+    struct _FieldVector prefix = *a, running = *a, folded = *a, next = *a;
+    for (uint64_t j = 0; j < d; j++)
+    {
+        planes[j] = prefix_block + j * body;
+        planes[d + j] = carry_block + j * width;
+        planes[2 * d + j] = carry_block + (d + j) * width;
+        planes[3 * d + j] = carry_block + (2 * d + j) * width;
+    }
+    prefix.coeffs = planes;
+    prefix.n = prefix.allocated_n = body;
+    running.coeffs = planes + d;
+    folded.coeffs = planes + 2 * d;
+    next.coeffs = planes + 3 * d;
+    running.n = running.allocated_n = width;
+    folded.n = folded.allocated_n = width;
+    next.n = next.allocated_n = width;
+
+    uint64_t **a_planes = planes + 4 * d, **p_planes = planes + 5 * d;
+    uint64_t **q_planes = planes + 6 * d, **o_planes = planes + 7 * d;
+
+    // Forward: prefix row t is the product of rows 0..t, column by column.
+    struct _FieldVector head = field_vec_window(&prefix, 0, width, p_planes);
+    struct _FieldVector head_in = field_vec_window(a, 0, width, a_planes);
+    field_vec_copy(&head, &head_in);
+    for (uint64_t t = 1; t < rows; t++)
+    {
+        struct _FieldVector to = field_vec_window(&prefix, t * width, width, p_planes);
+        struct _FieldVector from = field_vec_window(&prefix, (t - 1) * width, width, q_planes);
+        struct _FieldVector row = field_vec_window(a, t * width, width, a_planes);
+        field_vec_mul(&to, &from, &row);
+    }
+
+    // One inversion per column, which is the trick again over a single row.
+    struct _FieldVector last = field_vec_window(&prefix, (rows - 1) * width, width, p_planes);
+    int status = field_vec_inv_serial(&running, &last);
+
+    if (status)
+    {
+        // Backward: out row t is the running product times prefix row t-1, and
+        // the running product then absorbs row t. Row t of `a` is read into
+        // `next` before out row t is written, because `out` may be `a`.
+        for (uint64_t t = rows; t-- > 1;)
+        {
+            struct _FieldVector below = field_vec_window(&prefix, (t - 1) * width, width, p_planes);
+            struct _FieldVector row = field_vec_window(a, t * width, width, a_planes);
+            struct _FieldVector dest = field_vec_window(out, t * width, width, o_planes);
+            field_vec_mul(&folded, &running, &below);
+            field_vec_mul(&next, &running, &row);
+            field_vec_copy(&dest, &folded);
+            struct _FieldVector spare = running;
+            running = next;
+            next = spare;
+        }
+        struct _FieldVector first = field_vec_window(out, 0, width, o_planes);
+        field_vec_copy(&first, &running);
+
+        // Whatever did not fit into whole rows is its own chain.
+        if (body < n)
+        {
+            struct _FieldVector tail_in = field_vec_window(a, body, n - body, a_planes);
+            struct _FieldVector tail_out = field_vec_window(out, body, n - body, o_planes);
+            status = field_vec_inv_serial(&tail_out, &tail_in);
+        }
+    }
+
+    free(prefix_block);
+    free(carry_block);
+    free(planes);
     return status;
 }
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import random
 from array import array
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from vfhe.arith import (
@@ -266,6 +266,56 @@ class TestArithmetic:
         values[3] = field.zero
         with pytest.raises(ValueError, match="not invertible"):
             FieldVector(field, values).inverse()
+
+    #: Around the point `inverse` stops working an element at a time. It runs
+    #: its two sweeps as whole-vector multiplies over rows, which needs a row
+    #: to be at least a SIMD vector wide with 256 of them -- so under about
+    #: 2048 elements it stays serial. `LENGTHS` is entirely on that side of
+    #: the line, which is why these exist: 5000 and 8200 also leave a tail of
+    #: elements the whole rows do not cover.
+    ROW_SPLIT_LENGTHS: ClassVar[list[int]] = [2047, 2048, 2049, 5000, 8200]
+
+    @pytest.mark.parametrize("n", ROW_SPLIT_LENGTHS)
+    @pytest.mark.parametrize("d", [1, 4])
+    def test_batch_inverse_across_the_row_split(self, n, d):
+        field = make_field(d)
+        a = FieldVector(field, n)
+        a.sample_random(b"row-split")
+        inverses = a.inverse()
+
+        assert (a * inverses).to_list() == [field.one] * n
+        # And the values themselves at the seams: the ends, the middle, and
+        # either side of where the last whole row stops.
+        entries, got = a.to_list(), inverses.to_list()
+        for i in (0, 1, n // 2, n - 2, n - 1):
+            assert got[i] == entries[i].inverse(), f"position {i} of {n}"
+
+    @pytest.mark.parametrize("n", [2048, 2049, 5000])
+    @pytest.mark.parametrize("where", [0, 1, "middle", "last"])
+    def test_batch_inverse_rejects_a_zero_in_any_chain(self, n, where):
+        """The chains are independent, so a zero has to be caught whichever
+        one it lands in -- including the leftover the whole rows leave over,
+        which is a chain of its own."""
+        field = make_field()
+        a = FieldVector(field, n)
+        a.sample_random(b"row-split")
+        a[{"middle": n // 2, "last": n - 1}.get(where, where)] = 0
+        with pytest.raises(ValueError, match="not invertible"):
+            a.inverse()
+
+    def test_batch_inverse_result_may_be_its_input(self):
+        """The C entry allows `out == a`. The row sweep has to read a row
+        before writing over it, which the element-at-a-time form got for free
+        and this one does not."""
+        from vfhe.engine import lib
+
+        field = make_field()
+        a = FieldVector(field, 5000)
+        a.sample_random(b"in-place")
+        want = a.inverse().to_list()
+        b = a.copy()
+        assert lib.field_vec_inv(b._struct, b._struct) == 1
+        assert b.to_list() == want
 
     def test_an_operand_may_be_the_result_of_another(self):
         """Chained expressions: no operand is written through."""
