@@ -10,6 +10,7 @@
 // planes satisfy is stated at the declaration in arith.h.
 #include <arith.h>
 #include <blake3.h>
+#include <string.h>
 #include "arith_internal.h"
 #include "util.h"
 #include <crypto.h>
@@ -18,6 +19,15 @@ uint64_t field_vec_padded_length(uint64_t n)
 {
     const uint64_t unit = MOD_MIN_VECTOR_LEN;
     return ((n + unit - 1) / unit) * unit;
+}
+
+void field_vec_clear_padding(FieldVector a)
+{
+    if (a->allocated_n <= a->n)
+        return;
+    const size_t tail = (size_t)(a->allocated_n - a->n) * sizeof(uint64_t);
+    for (uint64_t j = 0; j < a->d; j++)
+        memset(a->coeffs[j] + a->n, 0, tail);
 }
 
 void field_vec_add(FieldVector out, const FieldVector a, const FieldVector b)

@@ -369,6 +369,15 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void field_vec_interleave(FieldVector out, const FieldVector even, const FieldVector odd);
     // The `count` vectors one after another; out->n is the sum of their lengths.
     void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count);
+    // Zero words n..allocated_n-1 of every plane, establishing the padding
+    // half of the layout contract above for a buffer that was not allocated
+    // zeroed. A caller that allocates without clearing -- because a kernel is
+    // about to write all n meaningful words -- still owes the padding, since
+    // the arithmetic reads and writes it and it must hold reduced values.
+    // Under one SIMD vector's worth of words per plane, so it costs nothing
+    // measured against the allocation it follows.
+    void field_vec_clear_padding(FieldVector a);
+
     // out[i] = a[indices[i]] for i < count. Returns false, having written
     // nothing, if any index is at or above a->n -- the bound is checked here
     // because a caller outside C cannot test it per index for anything like
@@ -662,6 +671,9 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // The `count` vectors one after another; out->n is the sum of their lengths.
     void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count);
     // out[i] = a[indices[i]] for i < count. Every index must be below a->n.
+    // Zero the padding of every plane; see field_vec_clear_padding.
+    void pmf_vec_clear_padding(PMFVector a);
+
     // out[i] = a[indices[i]]; false and nothing written if an index is out of
     // range. See field_vec_gather.
     bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
