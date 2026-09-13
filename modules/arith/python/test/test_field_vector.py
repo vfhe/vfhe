@@ -90,6 +90,27 @@ class TestDispatch:
 class TestConstruction:
     """A vector is built from a length or from a sequence of values."""
 
+    @pytest.mark.parametrize("n", [1, 2, 7, 13, 17])
+    def test_padding_is_zero_however_the_vector_was_made(self, n):
+        """Buffers are allocated undefined, so the padding is established by
+        `field_vec_clear_padding` rather than by the allocator. The kernels
+        read and write those words, so they have to be reduced -- and nothing
+        above the C boundary can see them, which is why this reaches for the
+        planes directly."""
+        from vfhe.engine import lib
+
+        field = make_field()
+        values = random_elements(field, n, seed=160)
+        a = FieldVector(field, values)
+        b = FieldVector(field, random_elements(field, n, seed=161))
+
+        for vector in (a, a + b, a * b, a.copy(), -a, FieldVector(field, n)):
+            allocated = lib.field_vec_padded_length(len(vector))
+            for plane in vector._planes:
+                assert list(plane[len(vector) : allocated]) == [0] * (
+                    allocated - len(vector)
+                ), f"padding of a {len(vector)}-element vector"
+
     def test_a_result_vector_is_still_fully_defined(self):
         """Destinations are allocated unzeroed, so every operation that makes
         one has to write all of it. Checked against the same computation on a

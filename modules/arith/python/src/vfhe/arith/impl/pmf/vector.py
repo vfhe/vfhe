@@ -48,20 +48,20 @@ class PseudoMersenneVector(FieldVector):
         if isinstance(values, int):
             if values < 0:
                 raise ValueError(f"length must not be negative, got {values}")
-            self._allocate(values)
+            self._allocate(values, zeroed=True)
             return
         values = list(values)
+        # Not zeroed: `_write_range` below writes every one of them.
         self._allocate(len(values))
         if values:
             self._write_range(0, values)
 
-    def _allocate(self, n: int, zeroed: bool = True) -> None:
+    def _allocate(self, n: int, zeroed: bool = False) -> None:
         """Reserve L padded planes and the struct the kernels read them from.
 
-        `zeroed` false leaves the first `n` words of each plane undefined, for
-        a vector a kernel is about to fill; the padding past `n` is zeroed
-        either way, since the arithmetic reads and writes it and it must stay
-        canonical. See the field vector, which says why at more length.
+        Undefined by default and zeroed only when a caller asks for zeros; the
+        padding is cleared either way, by `pmf_vec_clear_padding`. See the
+        field vector, which says why at more length.
         """
         field = self.field
         self._n = n
@@ -71,16 +71,14 @@ class PseudoMersenneVector(FieldVector):
         self._planes = [
             allocator("uint64_t[]", self._allocated_n) for _ in range(field.limbs)
         ]
-        if not zeroed and self._allocated_n > n:
-            tail = [0] * (self._allocated_n - n)
-            for plane in self._planes:
-                plane[n : self._allocated_n] = tail
         self._plane_ptrs = ffi.new("uint64_t*[]", self._planes)
         self._struct = ffi.new("PMFVector")
         self._struct.limbs = self._plane_ptrs
         self._struct.n = n
         self._struct.allocated_n = self._allocated_n
         self._struct.params = field._params
+        if not zeroed:
+            lib.pmf_vec_clear_padding(self._struct)
 
     def _like(self, n: int | None = None) -> PseudoMersenneVector:
         """A destination over the same field, this length unless told another.
@@ -91,7 +89,7 @@ class PseudoMersenneVector(FieldVector):
         """
         result = PseudoMersenneVector.__new__(PseudoMersenneVector)
         result.field = self.field
-        result._allocate(self._n if n is None else n, zeroed=False)
+        result._allocate(self._n if n is None else n)
         return result
 
     def _coerce_element(self, value) -> PseudoMersenneElement:

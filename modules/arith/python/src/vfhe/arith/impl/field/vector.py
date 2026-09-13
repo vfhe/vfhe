@@ -45,21 +45,25 @@ class ExtensionFieldVector(FieldVector):
         if isinstance(values, int):
             if values < 0:
                 raise ValueError(f"length must not be negative, got {values}")
-            self._allocate(values)
+            self._allocate(values, zeroed=True)
             return
         values = list(values)
+        # Not zeroed: `_write_range` below writes every one of them.
         self._allocate(len(values))
         if values:
             self._write_range(0, values)
 
-    def _allocate(self, n: int, zeroed: bool = True) -> None:
+    def _allocate(self, n: int, zeroed: bool = False) -> None:
         """Reserve d padded planes and the struct the kernels read them from.
 
-        `zeroed` false leaves the first `n` words of each plane undefined, for
-        a vector a kernel is about to fill. The padding past `n` is zeroed
-        either way: the arithmetic reads and writes it, so it has to hold
-        reduced values whatever the data words hold, and it is under a SIMD
-        vector's worth of words so zeroing it costs nothing.
+        **Undefined by default**, because almost every vector here is about to
+        be written whole -- by a kernel, or by `_write_range`. `zeroed` is for
+        the one case that is not: a caller asking for a vector of zeros.
+
+        The padding past `n` is zeroed either way. The arithmetic reads and
+        writes it, so it must hold reduced values whatever the data words
+        hold; `field_vec_clear_padding` does it in one call over d planes
+        rather than a slice assignment per plane from Python.
         """
         field = self.field
         self._n = n
@@ -69,10 +73,6 @@ class ExtensionFieldVector(FieldVector):
         self._planes = [
             allocator("uint64_t[]", self._allocated_n) for _ in range(field.d)
         ]
-        if not zeroed and self._allocated_n > n:
-            tail = [0] * (self._allocated_n - n)
-            for plane in self._planes:
-                plane[n : self._allocated_n] = tail
         self._plane_ptrs = ffi.new("uint64_t*[]", self._planes)
         self._struct = ffi.new("FieldVector")
         self._struct.coeffs = self._plane_ptrs
@@ -81,6 +81,8 @@ class ExtensionFieldVector(FieldVector):
         self._struct.d = field.d
         self._struct.w = field.w
         self._struct.mod = field.mod
+        if not zeroed:
+            lib.field_vec_clear_padding(self._struct)
 
     def _like(self, n: int | None = None) -> ExtensionFieldVector:
         """A destination over the same field, this length unless told another.
@@ -93,7 +95,7 @@ class ExtensionFieldVector(FieldVector):
         """
         result = ExtensionFieldVector.__new__(ExtensionFieldVector)
         result.field = self.field
-        result._allocate(self._n if n is None else n, zeroed=False)
+        result._allocate(self._n if n is None else n)
         return result
 
     def _coerce_element(self, value) -> ExtensionFieldElement:

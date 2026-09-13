@@ -398,6 +398,15 @@ static void pmf_vec_hash_span(uint8_t *out, const PMFVector a, uint64_t start, u
 
 void pmf_vec_hash(uint8_t *out, const PMFVector a) { pmf_vec_hash_span(out, a, 0, a->n); }
 
+void pmf_vec_clear_padding(PMFVector a)
+{
+    if (a->allocated_n <= a->n)
+        return;
+    const size_t tail = (size_t)(a->allocated_n - a->n) * sizeof(uint64_t);
+    for (uint64_t k = 0; k < a->params->limbs; k++)
+        memset(a->limbs[k] + a->n, 0, tail);
+}
+
 uint64_t pmf_vec_hash_count(const PMFVector a, uint64_t group, uint64_t stride)
 {
     if (group == 0 || stride == 0 || a->n < group)
