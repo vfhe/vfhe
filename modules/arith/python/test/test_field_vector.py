@@ -12,6 +12,7 @@ vector width is the case that catches a wrong `allocated_n`.
 from __future__ import annotations
 
 import random
+from typing import Any
 
 import pytest
 from vfhe.arith import (
@@ -982,3 +983,104 @@ class TestDestinations:
                 b.view(start, chunk), scratch, out=out.view(start, chunk)
             )
         assert out.to_list() == whole.to_list()
+
+
+class TestFiberHashing:
+    """`hash_fibers`: the gather `hash_elements` deliberately cannot do.
+
+    Fiber k is ``{k, k + stride, ...}``, so a vector held as `group` blocks of
+    `stride` gets one digest per position across all of them. Checked against
+    the digest of the same elements gathered by hand, which is the definition,
+    and against the front's generic form, which is a second implementation.
+    """
+
+    @pytest.mark.parametrize(("group", "stride"), [(1, 8), (2, 4), (4, 8), (8, 4)])
+    def test_matches_the_gathered_digest(self, group, stride):
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 32, seed=90))
+        got = vector.hash_fibers(group, stride)
+        assert len(got) == stride
+        for k in range(stride):
+            fiber = [vector[k + j * stride] for j in range(group)]
+            assert got[k] == FieldVector(field, fiber).hash()
+
+    def test_agrees_with_the_generic_form(self):
+        from vfhe.arith.base import FieldVector as Front
+
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 24, seed=91))
+        assert vector.hash_fibers(3, 8) == Front.hash_fibers(vector, 3, 8)
+
+    def test_is_not_the_contiguous_windowing(self):
+        """The two window shapes are different digests, which is the point of
+        having both -- a fiber is a gather, a window is a run."""
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 16, seed=92))
+        assert vector.hash_fibers(2, 8) != vector.hash_elements(2, 8)
+
+    def test_a_fiber_set_that_does_not_fit_yields_nothing(self):
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 16, seed=93))
+        assert vector.hash_fibers(3, 8) == []  # 24 elements needed, 16 present
+        with pytest.raises(ValueError, match="must be positive"):
+            vector.hash_fibers(0, 4)
+
+
+class TestMovementDestinations:
+    """`interleave`, `concat` and `split_even_odd` with somewhere to write.
+
+    They are the movement half of a fused expression: every other operation
+    can write into a reused buffer now, so an expression that ends by
+    interleaving or concatenating two results was left allocating for that
+    step alone.
+    """
+
+    def test_interleave_and_split_take_destinations(self):
+        field = make_field()
+        values = random_elements(field, 32, seed=94)
+        vector = FieldVector(field, values)
+        lo, hi = FieldVector(field, 16), FieldVector(field, 16)
+        even, odd = vector.split_even_odd(out=(lo, hi))
+        assert even is lo and odd is hi
+        assert lo.to_list() == values[0::2]
+        assert hi.to_list() == values[1::2]
+
+        dest = FieldVector(field, 32)
+        assert FieldVector.interleave(lo, hi, out=dest) is dest
+        assert dest.to_list() == values
+
+    def test_concat_takes_a_destination(self):
+        field = make_field()
+        left = random_elements(field, 5, seed=95)
+        right = random_elements(field, 3, seed=96)
+        dest = FieldVector(field, 8)
+        got = FieldVector.concat(
+            [FieldVector(field, left), FieldVector(field, right)], out=dest
+        )
+        assert got is dest
+        assert dest.to_list() == left + right
+
+    def test_the_front_dispatches_to_the_implementation(self):
+        """`FieldVector.interleave(...)` is the documented spelling, so it must
+        reach the kernel rather than the generic body the front keeps for an
+        implementation that has none."""
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 8, seed=97))
+        even, odd = vector.split_even_odd()
+        # A destination is what the generic path would have to emulate; the
+        # implementation's own takes it directly.
+        dest = FieldVector(field, 8)
+        assert FieldVector.interleave(even, odd, out=dest).to_list() == vector.to_list()
+        assert FieldVector.concat([even, odd], out=dest).to_list() == (
+            even.to_list() + odd.to_list()
+        )
+
+    def test_a_destination_of_the_wrong_shape_is_refused(self):
+        field = make_field()
+        vector = FieldVector(field, random_elements(field, 8, seed=98))
+        even, odd = vector.split_even_odd()
+        with pytest.raises(ValueError, match="holds"):
+            FieldVector.interleave(even, odd, out=FieldVector(field, 4))
+        not_a_pair: Any = FieldVector(field, 4)  # the check is a runtime one
+        with pytest.raises(TypeError, match="pair of vectors"):
+            vector.split_even_odd(out=not_a_pair)

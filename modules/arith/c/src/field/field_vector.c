@@ -526,6 +526,39 @@ static void hash_span(uint8_t *out, const FieldVector a, uint64_t start, uint64_
 
 void field_vec_hash(uint8_t *out, const FieldVector a) { hash_span(out, a, 0, a->n); }
 
+// The elements of one fiber -- `group` of them, `stride` apart, from `first` --
+// as the bytes a digest covers. The gather `hash_span` does not do: that one
+// walks a contiguous run.
+static void hash_fiber(uint8_t *out, const FieldVector a, uint64_t first, uint64_t group,
+                       uint64_t stride)
+{
+    const uint64_t d = a->d;
+    blake3_hasher hasher;
+    blake3_hasher_init(&hasher);
+    uint64_t *element = (uint64_t *)malloc(d * sizeof(uint64_t));
+    for (uint64_t j = 0; j < group; j++)
+    {
+        field_vec_get_element(element, a, first + j * stride);
+        blake3_hasher_update(&hasher, (const uint8_t *)element, d * sizeof(uint64_t));
+    }
+    free(element);
+    blake3_hasher_finalize(&hasher, out, BLAKE3_OUT_LEN);
+}
+
+uint64_t field_vec_hash_fiber_count(const FieldVector a, uint64_t group, uint64_t stride)
+{
+    if (group == 0 || stride == 0 || group > a->n / stride)
+        return 0;
+    return stride;
+}
+
+void field_vec_hash_fibers(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride)
+{
+    const uint64_t count = field_vec_hash_fiber_count(a, group, stride);
+    for (uint64_t k = 0; k < count; k++)
+        hash_fiber(out + k * BLAKE3_OUT_LEN, a, k, group, stride);
+}
+
 uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stride)
 {
     if (group == 0 || stride == 0 || a->n < group)

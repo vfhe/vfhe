@@ -410,6 +410,17 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // One digest per window of `group` elements starting every `stride` indices:
     // window k covers elements k * stride .. k * stride + group - 1, and the
     // count is the number of whole windows that fit. `out` takes 32 bytes each.
+    // The other window shape: one digest per *fiber*, where fiber k covers the
+    // `group` elements at k, k + stride, k + 2*stride, ... There are `stride`
+    // fibers and together they cover the first group * stride elements, so a
+    // vector read as `group` runs of `stride` gets one digest per position
+    // across all of the runs.
+    //
+    // Neither shape is the other with different arguments: the windows above
+    // digest a contiguous run, these digest a gather. Requires
+    // group * stride <= n, and yields no fibers otherwise.
+    uint64_t field_vec_hash_fiber_count(const FieldVector a, uint64_t group, uint64_t stride);
+    void field_vec_hash_fibers(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride);
     uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stride);
     void field_vec_hash_elements(uint8_t *out, const FieldVector a, uint64_t group,
                                  uint64_t stride);
@@ -481,6 +492,28 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // elements at `b * n`, because that is what lets one transform run inside
     // the cache, which is where the 3x comes from. The batched layout above buys
     // the extension butterfly long runs, a problem this path does not have.
+    // Between the two ways a batch of `blocks` transforms can be laid out:
+    // `to_interleaved` moves element i of block b from b*n + i to i*blocks + b,
+    // `to_blocks` moves it back, and n is in->n / blocks. The transform above
+    // takes the interleaved one, so a caller that holds each block's elements
+    // together needs both directions -- and neither `field_vec_gather` nor any
+    // other operation here can express the move, which is why it lives with the
+    // transform that asks for it. `out` may not alias `in`.
+    void field_ntt_to_interleaved(FieldVector out, const FieldVector in, uint64_t blocks);
+    void field_ntt_to_blocks(FieldVector out, const FieldVector in, uint64_t blocks);
+
+    // The points the transform above evaluates at, as a table: after
+    // `field_ntt_forward` of a length-2^bits block, position i of it holds
+    // P(out[i]). Equivalently out[i] = psi^(2 * r(i) + 1), where r reverses
+    // the low `bits` bits of i -- the permutation Cooley-Tukey leaves in its
+    // output, which is why the table is in that order and not in i's.
+    //
+    // `out` must hold at least 2^bits elements. `psi` is a single word, so
+    // this serves a root lying in F_p: plane 0 is written and the others are
+    // cleared. Under the reversal the entries are consecutive odd powers of
+    // psi, which is what lets one pass of multiplications produce them all.
+    void field_ntt_points(FieldVector out, uint64_t psi, uint64_t bits);
+
     // The root a plan chose, so a caller that must agree with it does not have
     // to re-derive the choice. `ntt_new_plan` picks its own; there is no way to
     // hand it one.

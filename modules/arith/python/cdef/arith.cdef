@@ -190,6 +190,9 @@ void field_vec_sub_scalar(FieldVector out, const FieldVector a, const uint64_t *
 void field_vec_scalar_sub(FieldVector out, const uint64_t *s, const FieldVector a);
 void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b);
 void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s);
+void field_ntt_to_interleaved(FieldVector out, const FieldVector in, uint64_t blocks);
+void field_ntt_to_blocks(FieldVector out, const FieldVector in, uint64_t blocks);
+void field_ntt_points(FieldVector out, uint64_t psi, uint64_t bits);
 void field_vec_fma(FieldVector out, const FieldVector a, const FieldVector b, const FieldVector c);
 void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVector b, const uint64_t *s);
 void field_vec_sum(uint64_t *out, const FieldVector a);
@@ -211,6 +214,8 @@ int field_vec_is_equal(const FieldVector a, const FieldVector b);
 void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len, uint64_t start);
 void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_t seed_len, uint64_t index, uint64_t d, uint64_t mod);
 void field_vec_hash(uint8_t *out, const FieldVector a);
+uint64_t field_vec_hash_fiber_count(const FieldVector a, uint64_t group, uint64_t stride);
+void field_vec_hash_fibers(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride);
 uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stride);
 void field_vec_hash_elements(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride);
 NTT_Plan ntt_new_plan(uint64_t n, void *mod);

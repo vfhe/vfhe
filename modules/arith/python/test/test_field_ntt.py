@@ -68,6 +68,11 @@ def polynomials(field, n, blocks, seed):
     return out
 
 
+def values(field, n, seed):
+    """`n` elements as a flat list, deterministic in `seed`."""
+    return polynomials(field, n, 1, seed)[0]
+
+
 def lay_out(polys, layout):
     """The flat vector a plan of this layout takes.
 
@@ -266,3 +271,106 @@ class TestTransform:
         other = ExtensionField(GENERIC_PRIME, 4, GENERIC_W)
         with pytest.raises(ValueError, match="different field"):
             plan.forward(FieldVector(other, n), 1)
+
+
+class TestPoints:
+    """`ntt_points`: the transform's evaluation domain, as a table.
+
+    Checked against the definition written out -- `root ** (2*brv(i) + 1)` per
+    index -- which is the n modular exponentiations the running product
+    replaces, and the only independent way to say what the table should hold.
+    """
+
+    @pytest.mark.parametrize(("prime", "w"), FIELDS)
+    @pytest.mark.parametrize("n", [1, 2, 8, 32])
+    def test_matches_the_definition(self, prime, w, n):
+        from vfhe.polycom import bit_reverse
+
+        field = ExtensionField(prime, 4, w)
+        root = int(field.ntt_plan(8, domain="base").root_of_unity)
+        bits = n.bit_length() - 1
+        got = [int(value) for value in field.ntt_points(root, n)]
+        assert got == [pow(root, 2 * bit_reverse(i, bits) + 1, prime) for i in range(n)]
+
+    def test_the_points_are_the_transform_s_own(self):
+        """Position j of a transform evaluates at point j: the table and the
+        transform have to be reading the same domain."""
+        field = ExtensionField(FUSED_PRIME, 4, FUSED_W)
+        n = 8
+        plan = field.ntt_plan(n, domain="base")
+        points = field.ntt_points(int(plan.root_of_unity), n)
+
+        coefficients = values(field, n, seed=41)
+        vector = FieldVector(field, coefficients)
+        plan.forward(vector, 1)
+        got = vector.to_list()
+        for j in range(n):
+            assert got[j] == horner(coefficients, points[j], field)
+
+    def test_rejects_a_length_that_is_not_a_power_of_two(self):
+        field = ExtensionField(FUSED_PRIME, 4, FUSED_W)
+        for bad in (0, 3, -8):
+            with pytest.raises(ValueError, match="power of two"):
+                field.ntt_points(5, bad)
+
+
+class TestBatchLayout:
+    """`pack` / `unpack`: the conversion the extension domain's layout forces.
+
+    The transform takes a batch interleaved and a caller holding each block's
+    elements together has them contiguous, so both directions are needed.
+    These are that, and for the base domain -- whose layout is already the
+    contiguous one -- they are nothing.
+    """
+
+    @pytest.mark.parametrize(("prime", "w"), FIELDS)
+    @pytest.mark.parametrize("blocks", [1, 3, 8])
+    def test_pack_is_the_index_arithmetic_and_unpack_inverts_it(self, prime, w, blocks):
+        field = ExtensionField(prime, 4, w)
+        n = 16  # the extension domain for these primes
+        plan = field.ntt_plan(n, domain="extension")
+        source = values(field, n * blocks, seed=43)
+        vector = FieldVector(field, source)
+
+        packed = plan.pack(vector, blocks)
+        assert packed.to_list() == [
+            source[b * n + i] for i in range(n) for b in range(blocks)
+        ]
+        assert plan.unpack(packed, blocks).to_list() == source
+
+    @pytest.mark.parametrize(("prime", "w"), FIELDS)
+    def test_pack_takes_a_destination(self, prime, w):
+        field = ExtensionField(prime, 4, w)
+        n, blocks = 16, 4
+        plan = field.ntt_plan(n, domain="extension")
+        vector = FieldVector(field, values(field, n * blocks, seed=44))
+        dest = FieldVector(field, n * blocks)
+        assert plan.pack(vector, blocks, out=dest) is dest
+        assert dest.to_list() == plan.pack(vector, blocks).to_list()
+        with pytest.raises(ValueError, match="into its input"):
+            plan.pack(vector, blocks, out=vector)
+
+    def test_the_base_domain_needs_no_conversion(self):
+        field = ExtensionField(FUSED_PRIME, 4, FUSED_W)
+        plan = field.ntt_plan(8, domain="base")
+        vector = FieldVector(field, values(field, 8 * 3, seed=45))
+        assert plan.pack(vector, 3) is vector
+        assert plan.unpack(vector, 3) is vector
+
+    def test_a_packed_batch_transforms_to_the_same_thing(self):
+        """The round trip that makes the pair worth having: hold the batch by
+        blocks, pack, transform, unpack, and each block is transformed."""
+        field = ExtensionField(FUSED_PRIME, 4, FUSED_W)
+        n, blocks = 16, 4
+        plan = field.ntt_plan(n, domain="extension")
+        polys = polynomials(field, n, blocks, seed=46)
+        by_blocks = FieldVector(field, [e for block in polys for e in block])
+
+        work = plan.pack(by_blocks, blocks)
+        plan.forward(work, blocks)
+        result = plan.unpack(work, blocks).to_list()
+
+        for b in range(blocks):
+            alone = FieldVector(field, polys[b])
+            plan.forward(alone, 1)
+            assert result[b * n : (b + 1) * n] == alone.to_list()

@@ -34,7 +34,7 @@ from vfhe.arith import (
 )
 from vfhe.engine import ffi, lib
 
-from .code import bit_reverse
+from .code import bit_reverse_permutation
 
 if TYPE_CHECKING:
     from vfhe.arith import FieldElement
@@ -78,6 +78,11 @@ class _ExtensionTransforms:
         """psi, the 2*n_level-th root the level's transform evaluates at."""
         return lib.rs_field_plan_root(self._plans[level])
 
+    def points(self, root: int, n: int) -> FieldVector:
+        """The `n` evaluation points of a transform at `root`, in its output
+        order -- arith's running product, not `n` exponentiations."""
+        return self.field.ntt_points(root, n)
+
     def encode(self, message: FieldVector, level: int) -> FieldVector:
         """The forward transform of `message`, zero-padded to the level's
         codeword length by the kernel."""
@@ -111,6 +116,24 @@ class _PseudoMersenneTransforms:
     def root(self, level: int) -> int:
         """psi, the 2*n_level-th root the level's transform evaluates at."""
         return int(self._plans[level].root_of_unity)
+
+    def points(self, root: int, n: int) -> FieldVector:
+        """The `n` evaluation points of a transform at `root`, in its output
+        order.
+
+        The same running product as the extension provider's, written here in
+        Python: this field has no kernel for it, and its codes are short --
+        the 2-adicity that bounds a codeword bounds this table with it.
+        """
+        prime = self.field.prime
+        reversed_index = bit_reverse_permutation(n.bit_length() - 1)
+        row = [0] * n
+        step = root * root % prime
+        power = root % prime
+        for j in range(n):
+            row[reversed_index[j]] = power
+            power = power * step % prime
+        return FieldVector(self.field, row)
 
     def encode(self, message: FieldVector, level: int) -> FieldVector:
         """The forward transform of `message` zero-padded to the level's
@@ -188,22 +211,44 @@ class FieldFoldableRS:
         # the pair (2i, 2i+1) folding level l+1 -> l, and twists2_inv their
         # (2 x_i)^-1, as integers mod p; `_twist_*` hold them as field
         # elements (for one pair) and as vectors (for a whole codeword).
-        p = field.prime
-        self.twists: list[list[int]] = []
-        self.twists2_inv: list[list[int]] = []
+        # x_i and (2 x_i)^-1 per level, as vectors and nothing else. The tables
+        # are Theta(n) entries, so anything per entry -- an exponentiation, an
+        # inversion, a Python object -- is Theta(n) interpreted work and used to
+        # dominate a large instance. The points come from the transform's own
+        # running product, and the inverses from one batch inversion.
+        self._twist_vectors: list[FieldVector] = []
+        self._twist2_inv_vectors: list[FieldVector] = []
         for level in range(d):
             n = self.n0 << level  # positions of the folded (level) codeword
-            bits = n.bit_length() - 1
-            psi = self.roots[level + 1]
-            row = [pow(psi, 2 * bit_reverse(i, bits) + 1, p) for i in range(n)]
-            self.twists.append(row)
-            self.twists2_inv.append([pow(2 * t, p - 2, p) for t in row])
-        self._twist_elements = [[self._element(t) for t in row] for row in self.twists]
-        self._twist2_inv_elements = [
-            [self._element(t) for t in row] for row in self.twists2_inv
-        ]
-        self._twist_vectors = [FieldVector(field, row) for row in self.twists]
-        self._twist2_inv_vectors = [FieldVector(field, row) for row in self.twists2_inv]
+            vector = self._transforms.points(self.roots[level + 1], n)
+            self._twist_vectors.append(vector)
+            # Montgomery's trick: one inversion and three multiplications per
+            # entry, in place of n Fermat exponentiations.
+            self._twist2_inv_vectors.append(vector.scale(2).inverse())
+        self._twist_ints: list[list[list[int]] | None] = [None, None]
+
+    def _as_ints(self, which: int) -> list[list[int]]:
+        """One of the twist tables as integers, materialized on first use.
+
+        The folds read these as vectors; only a caller that wants the integers
+        pays for n Python objects per level.
+        """
+        cached = self._twist_ints[which]
+        if cached is None:
+            vectors = (self._twist_vectors, self._twist2_inv_vectors)[which]
+            cached = [[int(v) for v in row] for row in vectors]
+            self._twist_ints[which] = cached
+        return cached
+
+    @property
+    def twists(self) -> list[list[int]]:
+        """``x_i = psi_{l+1}^(2 brv(i) + 1)`` per level, as integers."""
+        return self._as_ints(0)
+
+    @property
+    def twists2_inv(self) -> list[list[int]]:
+        """``(2 x_i)^-1`` per level, as integers."""
+        return self._as_ints(1)
 
     def _element(self, value: int):
         """`value` as an element of the field (a constant of F_p)."""
@@ -255,8 +300,8 @@ class FieldFoldableRS:
         This is the form a Merkle verifier uses — it holds one authenticated
         pair per queried position, never a whole codeword.
         """
-        coeff = (lo - hi) * self._twist2_inv_elements[level - 1][i]
-        return hi + coeff * self._twist_elements[level - 1][i] + coeff * r
+        coeff = (lo - hi) * self._twist2_inv_vectors[level - 1][i]
+        return hi + coeff * self._twist_vectors[level - 1][i] + coeff * r
 
     def pair_at(self, word: FieldVector, i: int) -> tuple[FieldElement, FieldElement]:
         """Position i's `±x` pair, `(word[2i], word[2i + 1])` — the unit the

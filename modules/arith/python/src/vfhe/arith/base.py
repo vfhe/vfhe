@@ -1161,7 +1161,9 @@ class FieldVector(metaclass=_ImplementationDispatch):
 
     # --- movement ---
 
-    def split_even_odd(self, block: int = 1) -> tuple[FieldVector, FieldVector]:
+    def split_even_odd(
+        self, block: int = 1, out: tuple[FieldVector, FieldVector] | None = None
+    ) -> tuple[FieldVector, FieldVector]:
         """The elements at even and at odd positions, as two half vectors:
         the inverse of `interleave`.
 
@@ -1254,22 +1256,45 @@ class FieldVector(metaclass=_ImplementationDispatch):
         return type(self)(self.field, [e.frobenius(k) for e in self.to_list()])
 
     @staticmethod
-    def concat(vectors: list) -> FieldVector:
-        """One vector holding every element of `vectors`, in order."""
+    def concat(vectors: list, out: FieldVector | None = None) -> FieldVector:
+        """One vector holding every element of `vectors`, in order.
+
+        Reached on the front, so it **dispatches to the operands' own
+        implementation** rather than running the generic body below. Without
+        that, the documented spelling `FieldVector.concat(...)` would take the
+        Python path even where a kernel exists -- the body here is the fallback
+        for an implementation that has none, not the normal route.
+        """
+        vectors = list(vectors)
         if not vectors:
             raise ValueError("concat needs at least one vector")
+        own = type(vectors[0]).concat
+        if own is not FieldVector.concat:
+            return own(vectors, out)
         field = vectors[0].field
         for vector in vectors:
             if vector.field != field:
                 raise ValueError("cannot concatenate vectors over different fields")
-        return type(vectors[0])(field, [e for v in vectors for e in v])
+        values = [e for v in vectors for e in v]
+        if out is None:
+            return type(vectors[0])(field, values)
+        for i, value in enumerate(values):
+            out[i] = value
+        return out
 
     @staticmethod
-    def interleave(even, odd) -> FieldVector:
+    def interleave(even, odd, out: FieldVector | None = None) -> FieldVector:
         """The vector with `even` at the even positions and `odd` at the odd
-        ones: the inverse of `split_even_odd`. Both must have the same length."""
+        ones: the inverse of `split_even_odd`. Both must have the same length.
+
+        Dispatches to the operands' own implementation, for the reason `concat`
+        gives.
+        """
         if not isinstance(even, FieldVector) or not isinstance(odd, FieldVector):
             raise TypeError("interleave takes two vectors")
+        own = type(even).interleave
+        if own is not FieldVector.interleave:
+            return own(even, odd, out)
         if len(even) != len(odd):
             raise ValueError(f"length mismatch: {len(even)} and {len(odd)}")
         if even.field != odd.field:
@@ -1277,7 +1302,11 @@ class FieldVector(metaclass=_ImplementationDispatch):
         merged: list[Any] = [None] * (2 * len(even))
         merged[0::2] = even.to_list()
         merged[1::2] = odd.to_list()
-        return type(even)(even.field, merged)
+        if out is None:
+            return type(even)(even.field, merged)
+        for i, value in enumerate(merged):
+            out[i] = value
+        return out
 
     def query(self, indices) -> FieldVector:
         """The elements at `indices`, gathered into a new vector."""
@@ -1338,17 +1367,46 @@ class FieldVector(metaclass=_ImplementationDispatch):
         ``k * stride`` through ``k * stride + group - 1``, in index order, and
         only whole windows count. So ``stride`` is the distance between one
         window's start and the next -- ``group == stride`` tiles the vector,
-        a larger ``stride`` leaves gaps, a smaller one overlaps -- and there
-        is no form of this that gathers a strided fiber into one digest.
+        a larger ``stride`` leaves gaps, a smaller one overlaps.
 
-        A code whose leaf is a fiber therefore has to lay that fiber out
-        contiguously in the codeword; this is a constraint on the layout, not
-        a parameter that can absorb one.
+        A *gather* is the other shape and is `hash_fibers`, not this with
+        different arguments: neither is a special case of the other, which is
+        why they are two names.
 
         :param group: How many consecutive elements go into each digest.
         :param stride: Distance between the starts of consecutive windows.
         """
         raise NotImplementedError
+
+    def hash_fibers(self, group: int = 1, stride: int = 1) -> list[bytes]:
+        """One digest per **fiber**: the gather `hash_elements` cannot do.
+
+        Fiber ``k`` covers the ``group`` elements at ``k``, ``k + stride``,
+        ``k + 2 * stride``, ... There are ``stride`` fibers and together they
+        cover the first ``group * stride`` elements, so a vector read as
+        ``group`` runs of ``stride`` gets one digest per position across all
+        of the runs.
+
+        Neither window shape is the other with different arguments:
+        `hash_elements` digests a contiguous run, this digests a gather. A
+        caller whose digest spans positions rather than a run needs this one,
+        and without it the spacing would have to be built into the layout
+        instead. Requires ``group * stride <= len(self)``; yields nothing
+        otherwise.
+
+        An implementation without a kernel gathers each fiber and hashes it,
+        which is the same digest one call at a time.
+        """
+        if group < 1 or stride < 1:
+            raise ValueError(
+                f"group and stride must be positive, got {group}, {stride}"
+            )
+        if group * stride > len(self):
+            return []
+        return [
+            self.query(range(k, k + group * stride, stride)).hash()
+            for k in range(stride)
+        ]
 
     def __eq__(self, other: object) -> bool:
         raise NotImplementedError

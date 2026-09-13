@@ -87,14 +87,30 @@ class ExtensionFieldVector(FieldVector):
         raise TypeError(f"cannot use {type(value).__name__} as a field element")
 
     def _write_range(self, start: int, values: list) -> None:
-        """Transpose `values` into the planes with one call, not one per value."""
+        """Transpose `values` into the planes with one call, not one per value.
+
+        Plain integers take a shortcut. They are scalars of F_p, so only plane
+        0 is nonzero, and a whole run of them goes in with one slice assignment
+        per plane -- the copying then happens in C. The general path below
+        builds an element per value, which is the right cost for a handful and
+        the wrong one for a table of n constants: that was most of what
+        building a code's twist tables used to spend.
+        """
         d = self.field.d
-        flat = ffi.new("uint64_t[]", len(values) * d)
+        count = len(values)
+        if count and all(type(value) is int for value in values):
+            prime = self.field.prime
+            self._planes[0][start : start + count] = [v % prime for v in values]
+            zeros = [0] * count
+            for j in range(1, d):
+                self._planes[j][start : start + count] = zeros
+            return
+        flat = ffi.new("uint64_t[]", count * d)
         for i, value in enumerate(values):
             element = self._coerce_element(value)
             for j in range(d):
                 flat[i * d + j] = element.value[j]
-        lib.field_vec_set_range(self._struct, start, flat, len(values))
+        lib.field_vec_set_range(self._struct, start, flat, count)
 
     def __len__(self) -> int:
         return self._n
@@ -152,6 +168,16 @@ class ExtensionFieldVector(FieldVector):
         result = self._like()
         lib.field_vec_copy(result._struct, self._struct)
         return result
+
+    def _destinations(
+        self, out, n: int
+    ) -> tuple[ExtensionFieldVector, ExtensionFieldVector]:
+        """The two destinations `split_even_odd` writes, checked as a pair."""
+        if out is None:
+            return self._like(n), self._like(n)
+        if not isinstance(out, tuple) or len(out) != 2:
+            raise TypeError("out must be a pair of vectors, one per half")
+        return self._destination(out[0], n), self._destination(out[1], n)
 
     def _destination(self, out, n: int | None = None) -> ExtensionFieldVector:
         """Where a result goes: `out` when given, a fresh vector otherwise.
@@ -304,7 +330,9 @@ class ExtensionFieldVector(FieldVector):
         return result
 
     def split_even_odd(
-        self, block: int = 1
+        self,
+        block: int = 1,
+        out: tuple[ExtensionFieldVector, ExtensionFieldVector] | None = None,
     ) -> tuple[ExtensionFieldVector, ExtensionFieldVector]:
         """
         Deinterleave into the even-indexed and odd-indexed halves.
@@ -314,12 +342,12 @@ class ExtensionFieldVector(FieldVector):
         """
         block = self._checked_block(block)
         half = self._n // 2
-        even, odd = self._like(half), self._like(half)
+        even, odd = self._destinations(out, half)
         lib.field_vec_split_blocks(even._struct, odd._struct, self._struct, block)
         return even, odd
 
     @staticmethod
-    def interleave(even, odd) -> ExtensionFieldVector:
+    def interleave(even, odd, out=None) -> ExtensionFieldVector:
         """Even positions from `even`, odd from `odd`: the inverse of `split_even_odd`."""
         if not isinstance(even, ExtensionFieldVector) or not isinstance(
             odd, ExtensionFieldVector
@@ -329,12 +357,12 @@ class ExtensionFieldVector(FieldVector):
             raise ValueError("cannot interleave vectors over different fields")
         if len(even) != len(odd):
             raise ValueError(f"length mismatch: {len(even)} and {len(odd)}")
-        result = even._like(2 * len(even))
+        result = even._destination(out, 2 * len(even))
         lib.field_vec_interleave(result._struct, even._struct, odd._struct)
         return result
 
     @staticmethod
-    def concat(vectors: list) -> ExtensionFieldVector:
+    def concat(vectors: list, out=None) -> ExtensionFieldVector:
         """One vector holding every element of `vectors`, in order."""
         vectors = list(vectors)
         if not vectors:
@@ -345,7 +373,7 @@ class ExtensionFieldVector(FieldVector):
                 raise TypeError(f"cannot concatenate a {type(vector).__name__}")
             if vector.field is not first.field:
                 raise ValueError("cannot concatenate vectors over different fields")
-        result = first._like(sum(len(v) for v in vectors))
+        result = first._destination(out, sum(len(v) for v in vectors))
         parts = ffi.new("FieldVector[]", [v._struct for v in vectors])
         lib.field_vec_concat(result._struct, parts, len(vectors))
         return result
@@ -449,6 +477,21 @@ class ExtensionFieldVector(FieldVector):
             return []
         out = ffi.new("uint8_t[]", count * 32)
         lib.field_vec_hash_elements(out, self._struct, group, stride)
+        raw = bytes(ffi.buffer(out))
+        return [raw[k * 32 : (k + 1) * 32] for k in range(count)]
+
+    def hash_fibers(self, group: int = 1, stride: int = 1) -> list[bytes]:
+        """One digest per fiber ``{k, k + stride, ...}``; the front states the
+        contract."""
+        if group < 1 or stride < 1:
+            raise ValueError(
+                f"group and stride must be positive, got {group}, {stride}"
+            )
+        count = lib.field_vec_hash_fiber_count(self._struct, group, stride)
+        if count == 0:
+            return []
+        out = ffi.new("uint8_t[]", count * 32)
+        lib.field_vec_hash_fibers(out, self._struct, group, stride)
         raw = bytes(ffi.buffer(out))
         return [raw[k * 32 : (k + 1) * 32] for k in range(count)]
 

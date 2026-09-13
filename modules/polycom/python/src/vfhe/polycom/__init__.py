@@ -8,7 +8,7 @@ from .basefold import (
     BasefoldOpening,
     pair_digest,
 )
-from .code import FoldableRS, bit_reverse
+from .code import FoldableRS, bit_reverse, bit_reverse_permutation
 from .field_code import FieldFoldableRS
 from .queries import query_positions
 
@@ -20,6 +20,7 @@ __all__ = [
     "FieldFoldableRS",
     "FoldableRS",
     "bit_reverse",
+    "bit_reverse_permutation",
     "pair_digest",
     "query_positions",
 ]

@@ -152,6 +152,16 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_copy(result._struct, self._struct)
         return result
 
+    def _destinations(
+        self, out, n: int
+    ) -> tuple[PseudoMersenneVector, PseudoMersenneVector]:
+        """The two destinations `split_even_odd` writes, checked as a pair."""
+        if out is None:
+            return self._like(n), self._like(n)
+        if not isinstance(out, tuple) or len(out) != 2:
+            raise TypeError("out must be a pair of vectors, one per half")
+        return self._destination(out[0], n), self._destination(out[1], n)
+
     def _destination(self, out, n: int | None = None) -> PseudoMersenneVector:
         """Where a result goes: `out` when given, a fresh vector otherwise."""
         if out is None:
@@ -272,7 +282,9 @@ class PseudoMersenneVector(FieldVector):
         return self.field._wrap(buf)
 
     def split_even_odd(
-        self, block: int = 1
+        self,
+        block: int = 1,
+        out: tuple[PseudoMersenneVector, PseudoMersenneVector] | None = None,
     ) -> tuple[PseudoMersenneVector, PseudoMersenneVector]:
         """
         Deinterleave into the even-indexed and odd-indexed halves.
@@ -286,12 +298,12 @@ class PseudoMersenneVector(FieldVector):
             return self.query(lo), self.query(hi)
         self._checked_block(block)
         half = self._n // 2
-        even, odd = self._like(half), self._like(half)
+        even, odd = self._destinations(out, half)
         lib.pmf_vec_split_even_odd(even._struct, odd._struct, self._struct)
         return even, odd
 
     @staticmethod
-    def interleave(even, odd) -> PseudoMersenneVector:
+    def interleave(even, odd, out=None) -> PseudoMersenneVector:
         """Even positions from `even`, odd from `odd`: the inverse of `split_even_odd`."""
         if not isinstance(even, PseudoMersenneVector) or not isinstance(
             odd, PseudoMersenneVector
@@ -301,12 +313,12 @@ class PseudoMersenneVector(FieldVector):
             raise ValueError("cannot interleave vectors over different fields")
         if len(even) != len(odd):
             raise ValueError(f"length mismatch: {len(even)} and {len(odd)}")
-        result = even._like(2 * len(even))
+        result = even._destination(out, 2 * len(even))
         lib.pmf_vec_interleave(result._struct, even._struct, odd._struct)
         return result
 
     @staticmethod
-    def concat(vectors: list) -> PseudoMersenneVector:
+    def concat(vectors: list, out=None) -> PseudoMersenneVector:
         """One vector holding every element of `vectors`, in order."""
         vectors = list(vectors)
         if not vectors:
@@ -317,7 +329,7 @@ class PseudoMersenneVector(FieldVector):
                 raise TypeError(f"cannot concatenate a {type(vector).__name__}")
             if vector.field.prime != first.field.prime:
                 raise ValueError("cannot concatenate vectors over different fields")
-        result = first._like(sum(len(v) for v in vectors))
+        result = first._destination(out, sum(len(v) for v in vectors))
         parts = ffi.new("PMFVector[]", [v._struct for v in vectors])
         lib.pmf_vec_concat(result._struct, parts, len(vectors))
         return result

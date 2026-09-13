@@ -54,6 +54,24 @@ def bit_reverse(i: int, bits: int) -> int:
     return out
 
 
+def bit_reverse_permutation(bits: int) -> list[int]:
+    """``[bit_reverse(i, bits) for i in range(1 << bits)]``, in one pass.
+
+    Each entry follows from the one at half its index -- the low bit becomes
+    the high one, and the rest is the shorter reversal already computed -- so
+    the whole permutation costs O(n) where calling `bit_reverse` per index
+    costs O(n log n). That difference is the whole cost of a twist table once
+    the modular exponentiations are gone.
+    """
+    if bits < 0:
+        raise ValueError(f"bits must not be negative, got {bits}")
+    n = 1 << bits
+    rev = [0] * n
+    for i in range(1, n):
+        rev[i] = (rev[i >> 1] >> 1) | ((i & 1) << (bits - 1))
+    return rev
+
+
 def _element_hash(element: RNSPolynomial):
     """The element's own digest, dispatched through its class."""
     return element.get_hash()
