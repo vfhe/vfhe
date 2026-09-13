@@ -911,6 +911,31 @@ class FieldElement(metaclass=_ImplementationDispatch):
         return not self.__eq__(other)
 
 
+#: Buffer formats `index_buffer` accepts: unsigned, and 8 bytes wide once the
+#: itemsize agrees. Signed ones are excluded on purpose -- a negative index
+#: means "from the end" in a sequence and would be a huge positive here.
+_INDEX_FORMATS = frozenset({"Q", "L", "N"})
+
+
+def index_buffer(indices):
+    """`indices` as a one-dimensional buffer of unsigned 64-bit items, or None
+    when it is not one and has to be walked as a sequence.
+
+    Kept here rather than in an implementation because the fast path is part
+    of `FieldVector.query`'s contract, and every implementation with a gather
+    kernel decides the same way.
+    """
+    try:
+        view = memoryview(indices)
+    except TypeError:
+        return None
+    if view.ndim != 1 or not view.c_contiguous:
+        return None
+    if view.itemsize != 8 or view.format not in _INDEX_FORMATS:
+        return None
+    return view
+
+
 class FieldVector(metaclass=_ImplementationDispatch):
     """Many elements of one `Field`, held together in one buffer.
 
@@ -1309,7 +1334,25 @@ class FieldVector(metaclass=_ImplementationDispatch):
         return out
 
     def query(self, indices) -> FieldVector:
-        """The elements at `indices`, gathered into a new vector."""
+        """The elements at `indices`, gathered into a new vector.
+
+        `indices` is any sequence of ints, negative ones counting from the
+        end.
+
+        It may instead be a **buffer of unsigned 64-bit indices** -- an
+        ``array("Q")``, a memoryview cast to one, anything with 8-byte
+        unsigned items -- and then nothing is converted or checked per index:
+        the buffer goes to the kernel as it stands and the bound is tested
+        there. That matters at a gather the size of a message, where a Python
+        call per index costs many times the gather; permuting a table is the
+        case it exists for, and a caller doing it repeatedly builds the buffer
+        once and keeps it.
+
+        Negative indices cannot be written in that form, so a buffer's
+        indices must already be in range; one that is not raises `IndexError`
+        as the sequence form does. A buffer of *signed* items is taken as a
+        plain sequence rather than silently read as unsigned.
+        """
         return type(self)(self.field, [self[i] for i in indices])
 
     def fold(self, r, block: int = 1) -> FieldVector:

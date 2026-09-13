@@ -20,6 +20,7 @@ it.
 from __future__ import annotations
 
 import random
+from array import array
 from typing import Any
 
 import pytest
@@ -539,6 +540,18 @@ class TestNativeMovementAndFold:
         assert len(vector.query([])) == 0
         with pytest.raises(IndexError):
             vector.query([9])
+
+    def test_query_takes_a_prebuilt_index_buffer(self, field):
+        """The fast path, on the other vector family: same elements as the
+        sequence form, with nothing checked per index."""
+        values = random_values(field, 9, 61)
+        vector = FieldVector(field, values)
+        positions = [8, 0, 8, 3, 3]
+        assert vector.query(array("Q", positions)) == vector.query(positions)
+        assert len(vector.query(array("Q", []))) == 0
+        with pytest.raises(IndexError, match="out of range"):
+            vector.query(array("Q", [0, 9]))
+        assert vector.query(array("q", [8, -1])) == vector.query([8, -1])
 
     @pytest.mark.parametrize("n", [2, 8, 18, 26, 50])
     def test_fold_matches_the_split_formula(self, field, n):
