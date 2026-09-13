@@ -509,14 +509,10 @@ void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_
 }
 
 // The elements in index order, d words each, as the bytes a digest covers.
-// `element` is d words of scratch the caller owns. It is a parameter and not a
-// local because these run once per digest: at a window count in the millions an
-// allocation each is a measurable share of hashing a whole vector, and the
-// callers below loop over the windows.
-static void hash_span(uint8_t *out, const FieldVector a, uint64_t start, uint64_t count,
-                      uint64_t *element)
+static void hash_span(uint8_t *out, const FieldVector a, uint64_t start, uint64_t count)
 {
     const uint64_t d = a->d;
+    uint64_t *element = (uint64_t *)safe_malloc(d * sizeof(uint64_t));
     blake3_hasher hasher;
     blake3_hasher_init(&hasher);
     for (uint64_t i = 0; i < count; i++)
@@ -525,30 +521,72 @@ static void hash_span(uint8_t *out, const FieldVector a, uint64_t start, uint64_
         blake3_hasher_update(&hasher, (const uint8_t *)element, d * sizeof(uint64_t));
     }
     blake3_hasher_finalize(&hasher, out, BLAKE3_OUT_LEN);
-}
-
-void field_vec_hash(uint8_t *out, const FieldVector a)
-{
-    uint64_t *element = (uint64_t *)malloc(a->d * sizeof(uint64_t));
-    hash_span(out, a, 0, a->n, element);
     free(element);
 }
 
-// The elements of one fiber -- `group` of them, `stride` apart, from `first` --
-// as the bytes a digest covers. The gather `hash_span` does not do: that one
-// walks a contiguous run.
-static void hash_fiber(uint8_t *out, const FieldVector a, uint64_t first, uint64_t group,
-                       uint64_t stride, uint64_t *element)
+void field_vec_hash(uint8_t *out, const FieldVector a) { hash_span(out, a, 0, a->n); }
+
+// Windows staged per batch, as a byte budget rather than a count: a window is
+// anywhere from one element to a hundred, and what has to stay in cache is the
+// bytes. The gather writes them and the hasher reads them straight back, so
+// this wants to be small; 32 KiB also keeps the batch at 32 windows or more
+// however large a window is, which is what keeps the SIMD lanes full.
+#define FIELD_VEC_HASH_STAGE_BYTES (32 * 1024)
+
+// One digest per window, where window k covers the `group` elements at
+// `k * window_step + i * element_step`, i < group. Both window shapes this
+// file offers are that: a contiguous run is (stride, 1) and a fiber is
+// (1, stride), which is the whole difference between them.
+//
+// The digests go through the lane-parallel `hash_batch`, which is an order of
+// magnitude over a hasher per window. It needs the windows laid end to end,
+// and an element's d words live one per plane -- so a window's bytes are never
+// already contiguous and a batch has to be staged. The gather is a pass over
+// the vector either way; staging only decides where it writes.
+static void hash_windows(uint8_t *out, const FieldVector a, uint64_t count, uint64_t group,
+                         uint64_t window_step, uint64_t element_step)
 {
     const uint64_t d = a->d;
-    blake3_hasher hasher;
-    blake3_hasher_init(&hasher);
-    for (uint64_t j = 0; j < group; j++)
+    const uint64_t leaf = group * d * sizeof(uint64_t);
+    if (count == 0)
+        return;
+
+    if (!hash_batch_fits(leaf))
     {
-        field_vec_get_element(element, a, first + j * stride);
-        blake3_hasher_update(&hasher, (const uint8_t *)element, d * sizeof(uint64_t));
+        // A window the lanes cannot take (not whole 64-byte blocks, or past a
+        // BLAKE3 chunk): one hasher per window, fed element by element.
+        uint64_t *element = (uint64_t *)safe_malloc(d * sizeof(uint64_t));
+        for (uint64_t k = 0; k < count; k++)
+        {
+            blake3_hasher hasher;
+            blake3_hasher_init(&hasher);
+            for (uint64_t i = 0; i < group; i++)
+            {
+                field_vec_get_element(element, a, k * window_step + i * element_step);
+                blake3_hasher_update(&hasher, (const uint8_t *)element, d * sizeof(uint64_t));
+            }
+            blake3_hasher_finalize(&hasher, &out[k * BLAKE3_OUT_LEN], BLAKE3_OUT_LEN);
+        }
+        free(element);
+        return;
     }
-    blake3_hasher_finalize(&hasher, out, BLAKE3_OUT_LEN);
+
+    // hash_batch_fits caps `leaf` at a BLAKE3 chunk, so this is at least 32.
+    const uint64_t batch = FIELD_VEC_HASH_STAGE_BYTES / leaf;
+    uint64_t *staged = (uint64_t *)safe_aligned_malloc(batch * leaf);
+    for (uint64_t k = 0; k < count;)
+    {
+        uint64_t run = count - k;
+        if (run > batch)
+            run = batch;
+        for (uint64_t j = 0; j < run; j++)
+            for (uint64_t i = 0; i < group; i++)
+                field_vec_get_element(&staged[(j * group + i) * d], a,
+                                      (k + j) * window_step + i * element_step);
+        hash_batch(&out[k * BLAKE3_OUT_LEN], (const uint8_t *)staged, run, leaf);
+        k += run;
+    }
+    free(staged);
 }
 
 uint64_t field_vec_hash_fiber_count(const FieldVector a, uint64_t group, uint64_t stride)
@@ -560,11 +598,7 @@ uint64_t field_vec_hash_fiber_count(const FieldVector a, uint64_t group, uint64_
 
 void field_vec_hash_fibers(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride)
 {
-    const uint64_t count = field_vec_hash_fiber_count(a, group, stride);
-    uint64_t *element = (uint64_t *)malloc(a->d * sizeof(uint64_t));
-    for (uint64_t k = 0; k < count; k++)
-        hash_fiber(out + k * BLAKE3_OUT_LEN, a, k, group, stride, element);
-    free(element);
+    hash_windows(out, a, field_vec_hash_fiber_count(a, group, stride), group, 1, stride);
 }
 
 uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stride)
@@ -576,9 +610,5 @@ uint64_t field_vec_hash_count(const FieldVector a, uint64_t group, uint64_t stri
 
 void field_vec_hash_elements(uint8_t *out, const FieldVector a, uint64_t group, uint64_t stride)
 {
-    const uint64_t count = field_vec_hash_count(a, group, stride);
-    uint64_t *element = (uint64_t *)malloc(a->d * sizeof(uint64_t));
-    for (uint64_t k = 0; k < count; k++)
-        hash_span(out + k * BLAKE3_OUT_LEN, a, k * stride, group, element);
-    free(element);
+    hash_windows(out, a, field_vec_hash_count(a, group, stride), group, stride, 1);
 }
