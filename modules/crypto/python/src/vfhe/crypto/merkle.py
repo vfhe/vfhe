@@ -159,7 +159,7 @@ class Merkle:
         leaves: Sequence | None = None,
         hash: Callable | None = None,
         *,
-        digests: bytes | None = None,
+        digests: bytes | bytearray | memoryview | None = None,
     ):
         """A tree over `leaves`, or over `digests` already packed end to end.
 
@@ -176,7 +176,11 @@ class Merkle:
                 )
             self.leaves = None
             self.hash = None
-            self._packed: bytes | None = bytes(digests)
+            # Kept, not copied: at a codeword's worth of leaves the copy is
+            # tens of milliseconds and buys nothing, since `commit` hands the
+            # bytes to C and C takes its own. The cost is that `commit()`
+            # re-reads whatever the buffer holds then -- see `from_digests`.
+            self._packed: bytes | bytearray | memoryview | None = digests
             self._size = len(digests) // DIGEST_LEN
         else:
             self.leaves = list(leaves)  # type: ignore[arg-type]
@@ -190,7 +194,7 @@ class Merkle:
         self.root = self.commit()
 
     @classmethod
-    def from_digests(cls, digests: bytes) -> Merkle:
+    def from_digests(cls, digests: bytes | bytearray | memoryview) -> Merkle:
         """A tree over leaf digests already packed end to end.
 
         `digests` is `DIGEST_LEN` bytes per leaf, contiguous -- the layout the
@@ -199,9 +203,17 @@ class Merkle:
         through it; past a few hundred thousand leaves that object churn, not
         the hashing and not the tree, is most of what committing costs.
 
-        The tree keeps the buffer, so `commit()` still works. It has no
-        `leaves` list, since not building one is the point -- `open` and
-        `verify` need only the digests and the index.
+        `digests` is anything bytes-like: `bytes`, or the read-only view of
+        a kernel's own output buffer that `FieldVector.hash_elements`
+        returns, which reaches the tree builder without being copied at all.
+
+        The tree **keeps the buffer rather than copying it**, so a mutable one
+        handed in here stays connected: `commit()` reads it again and would
+        see any change. Pass `bytes(...)`, or the read-only view the arith
+        side produces, if that matters.
+
+        It has no `leaves` list, since not building one is the point -- `open`
+        and `verify` need only the digests and the index.
         """
         return cls(digests=digests)
 
@@ -221,7 +233,9 @@ class Merkle:
             digests = b"".join(leaf_digest(leaf, self.hash) for leaf in self.leaves)
         else:  # __init__ sets exactly one of the two, so this cannot happen
             raise RuntimeError("a Merkle tree with neither leaves nor digests")
-        lib.merkle_commit(self.obj, digests)
+        # from_buffer rather than letting cffi convert: it takes any bytes-like
+        # without copying, which is the whole point of keeping the buffer.
+        lib.merkle_commit(self.obj, ffi.from_buffer("uint8_t[]", digests))
         out = ffi.new("uint8_t[]", DIGEST_LEN)
         lib.merkle_get_root(out, self.obj)
         self.root = bytes(out)

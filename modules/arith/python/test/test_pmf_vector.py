@@ -61,9 +61,9 @@ def edge_values(f):
     ]
 
 
-def digest_list(packed: bytes) -> list[bytes]:
+def digest_list(packed: bytes | memoryview) -> list[bytes]:
     """A packed digest buffer as one bytes per window."""
-    return [packed[i : i + 32] for i in range(0, len(packed), 32)]
+    return [bytes(packed[i : i + 32]) for i in range(0, len(packed), 32)]
 
 
 def random_values(f, n, seed=1):

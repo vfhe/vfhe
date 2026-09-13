@@ -40,10 +40,10 @@ def make_field(d: int = 4) -> ExtensionField:
     return ExtensionField(PRIME, d, W)
 
 
-def digest_list(packed: bytes) -> list[bytes]:
+def digest_list(packed: bytes | memoryview) -> list[bytes]:
     """A packed digest buffer as one bytes per window -- what a caller that
     really wants an object per window writes for itself."""
-    return [packed[i : i + 32] for i in range(0, len(packed), 32)]
+    return [bytes(packed[i : i + 32]) for i in range(0, len(packed), 32)]
 
 
 def random_elements(field, n, seed=42):
@@ -701,6 +701,33 @@ class TestBlockSplitAndFold:
             vector.fold(3, block)
 
 
+class TestPaddingUnit:
+    """`padding_unit` is the number `view` states its rule against, so the
+    two have to agree: a view on a multiple of it is accepted and one off it
+    is not."""
+
+    def test_it_is_what_view_accepts(self):
+        field = make_field()
+        vector = FieldVector(field, 64)
+        unit = vector.padding_unit
+        assert unit >= 1 and 64 % unit == 0
+
+        assert len(vector.view(unit, unit)) == unit
+        if unit > 1:
+            with pytest.raises(ValueError, match="multiple"):
+                vector.view(1, unit)
+            with pytest.raises(ValueError, match="multiple"):
+                vector.view(unit, unit + 1)
+
+    def test_a_view_may_run_to_the_end(self):
+        """The one length that need not be a multiple: the parent's own
+        padding covers the rounding."""
+        field = make_field()
+        vector = FieldVector(field, 20)
+        unit = vector.padding_unit
+        assert len(vector.view(unit)) == 20 - unit
+
+
 class TestView:
     """A view shares the parent's planes, so the two see each other's writes."""
 
@@ -1186,6 +1213,53 @@ class TestMovementDestinations:
         not_a_pair: Any = FieldVector(field, 4)  # the check is a runtime one
         with pytest.raises(TypeError, match="pair of vectors"):
             vector.split_even_odd(out=not_a_pair)
+
+
+class TestDigestsAreAViewNotACopy:
+    """`hash_elements` hands back the kernel's own buffer.
+
+    A view rather than a copy, because a codeword's digests are tens of
+    megabytes and copying them costs more than hashing them. It has to behave
+    like the bytes it views for everything a caller does with digests, and it
+    has to be read-only -- a tree that will not copy it either is only safe if
+    nobody can write through it.
+    """
+
+    @staticmethod
+    def vector():
+        field = make_field()
+        return FieldVector(field, random_elements(field, 32, seed=130))
+
+    def test_it_reads_as_the_bytes_it_views(self):
+        digests = self.vector().hash_elements(2, 2)
+        assert isinstance(digests, memoryview)
+        assert len(digests) == 16 * 32
+        copied = bytes(digests)
+        assert digests == copied
+        assert digests[32:64] == copied[32:64]
+        assert b"".join([digests[:32], digests[32:64]]) == copied[:64]
+
+    def test_it_is_read_only(self):
+        digests = self.vector().hash_elements(2, 2)
+        assert digests.readonly
+        with pytest.raises(TypeError):
+            digests[0] = 0  # pyright: ignore[reportIndexIssue]
+
+    def test_it_outlives_the_vector_it_came_from(self):
+        """The view owns a reference to the C buffer, so dropping the vector
+        must not leave it reading freed memory."""
+        import gc
+
+        vector = self.vector()
+        digests = vector.hash_elements(2, 2)
+        expected = bytes(digests)
+        del vector
+        gc.collect()
+        assert bytes(digests) == expected
+
+    def test_the_empty_case_is_still_a_view(self):
+        assert self.vector().hash_elements(33, 1) == b""
+        assert len(self.vector().hash_elements(33, 1)) == 0
 
 
 class TestDigestsReachATreeUntouched:
