@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "crypto.h"
 #include "util.h"
 
 // -------------------------------------------------------------
@@ -69,16 +70,13 @@ void merkle_commit(Merkle mk, const uint8_t *leaf_digests)
     memcpy(leaves, leaf_digests, mk->size * MERKLE_DIGEST_LEN);
     memset(&leaves[mk->size * MERKLE_DIGEST_LEN], 0, (padded - mk->size) * MERKLE_DIGEST_LEN);
 
+    // A level's nodes are independent, and node j's two children are already
+    // adjacent -- so the level below *is* the batch, one 64-byte input per
+    // node, with nothing to gather. hash_batch fills the SIMD lanes with them,
+    // which is an order of magnitude over a hasher per node and is most of
+    // what building a large tree costs.
     for (int64_t i = (int64_t)mk->log_size - 1; i >= 0; i--)
-    {
-        const uint8_t *below = mk->levels[i + 1];
-        uint8_t *level = mk->levels[i];
-        for (uint64_t j = 0; j < (1ULL << i); j++)
-        {
-            merkle_hash_pair(&level[j * MERKLE_DIGEST_LEN], &below[(2 * j) * MERKLE_DIGEST_LEN],
-                             &below[(2 * j + 1) * MERKLE_DIGEST_LEN]);
-        }
-    }
+        hash_batch(mk->levels[i], mk->levels[i + 1], 1ULL << i, 2 * MERKLE_DIGEST_LEN);
 }
 
 void merkle_get_root(uint8_t *out, Merkle mk) { memcpy(out, mk->levels[0], MERKLE_DIGEST_LEN); }
