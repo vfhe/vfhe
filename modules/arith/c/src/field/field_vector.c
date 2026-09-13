@@ -519,6 +519,29 @@ void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed
     free(flat);
 }
 
+void field_vec_sample_random_at(FieldVector out, const uint8_t *seed, uint64_t seed_len,
+                                const uint64_t *indices, uint64_t count)
+{
+    const uint64_t d = out->d;
+    if (count == 0)
+        return;
+    uint64_t *flat = (uint64_t *)safe_malloc(count * d * sizeof(uint64_t));
+    // Consecutive indices are one run of the same draw stream, so a sorted
+    // window costs what that window of a whole fill costs; anything scattered
+    // falls back to a draw apiece, which is what a scattered request is.
+    for (uint64_t k = 0; k < count;)
+    {
+        uint64_t run = 1;
+        while (k + run < count && indices[k + run] == indices[k] + run)
+            run++;
+        prng_sample_below_from(&flat[k * d], run * d, indices[k] * d, out->mod->q,
+                               "field_vec_sample", seed, seed_len);
+        k += run;
+    }
+    field_vec_set_range(out, 0, flat, count);
+    free(flat);
+}
+
 void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_t seed_len,
                                      uint64_t index, uint64_t d, uint64_t mod)
 {

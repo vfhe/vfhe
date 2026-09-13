@@ -213,6 +213,7 @@ void field_vec_split_blocks(FieldVector lo, FieldVector hi, const FieldVector a,
 void field_vec_frobenius(FieldVector out, const FieldVector a, uint64_t k);
 int field_vec_is_equal(const FieldVector a, const FieldVector b);
 void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len, uint64_t start);
+void field_vec_sample_random_at(FieldVector out, const uint8_t *seed, uint64_t seed_len, const uint64_t *indices, uint64_t count);
 void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_t seed_len, uint64_t index, uint64_t d, uint64_t mod);
 void field_vec_hash(uint8_t *out, const FieldVector a);
 uint64_t field_vec_hash_fiber_count(const FieldVector a, uint64_t group, uint64_t stride);

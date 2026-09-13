@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vfhe.arith._alloc import aligned64, aligned64_unset
-from vfhe.arith.base import FieldVector, index_buffer
+from vfhe.arith.base import FieldVector, _sample_positions, index_buffer
 from vfhe.engine import ffi, lib
 
 from .field import ExtensionFieldElement
@@ -489,6 +489,21 @@ class ExtensionFieldVector(FieldVector):
         result = self._like()
         lib.field_vec_frobenius(result._struct, self._struct, k)
         return result
+
+    def sample_random_at(self, seed: bytes, indices) -> None:
+        """The front states the contract."""
+        view = index_buffer(indices)
+        if view is None:
+            positions = _sample_positions(indices, self._n)
+            buffer = ffi.new("uint64_t[]", positions) if positions else ffi.NULL
+        else:
+            if len(view) != self._n:
+                raise ValueError(f"expected {self._n} indices, got {len(view)}")
+            buffer = ffi.from_buffer("uint64_t[]", view) if self._n else ffi.NULL
+        if self._n:
+            lib.field_vec_sample_random_at(
+                self._struct, seed, len(seed), buffer, self._n
+            )
 
     def sample_random(self, seed: bytes, start: int = 0) -> None:
         """Fill with uniform elements drawn from `seed`, in place, taking the

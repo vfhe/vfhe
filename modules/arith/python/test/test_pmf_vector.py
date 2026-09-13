@@ -553,6 +553,19 @@ class TestNativeMovementAndFold:
         with pytest.raises(IndexError):
             vector.query([9])
 
+    def test_sample_random_at_on_the_generic_route(self, field):
+        """This family has no kernel for it, so the front's default runs --
+        and must read the same sequence a fill holds."""
+        whole = FieldVector(field, 60)
+        whole.sample_random(b"seed-at")
+        entries = whole.to_list()
+        positions = [5, 0, 59, 5, 17]
+        got = FieldVector(field, len(positions))
+        got.sample_random_at(b"seed-at", positions)
+        assert [int(e) for e in got] == [int(entries[i]) for i in positions]
+        with pytest.raises(ValueError, match="expected 2 indices"):
+            FieldVector(field, 2).sample_random_at(b"seed-at", [1])
+
     def test_query_takes_a_prebuilt_index_buffer(self, field):
         """The fast path, on the other vector family: same elements as the
         sequence form, with nothing checked per index."""

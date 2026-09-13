@@ -919,6 +919,71 @@ class TestIndexedSampling:
                 f"window {start}..{start + length}"
             )
 
+    def test_sample_random_at_reads_the_fill_at_those_positions(self):
+        """Scattered, repeated and unsorted positions of the same sequence a
+        fill holds -- so a whole fill is the reference for all of them."""
+        field = make_field()
+        whole = FieldVector(field, 300)
+        whole.sample_random(SEED)
+        entries = whole.to_list()
+
+        positions = [7, 0, 299, 7, 42, 1, 299]
+        got = FieldVector(field, len(positions))
+        got.sample_random_at(SEED, positions)
+        assert got.to_list() == [entries[i] for i in positions]
+        assert got.to_list() == [field.element_from_seed(SEED, i) for i in positions]
+
+    def test_sample_random_at_merges_consecutive_positions(self):
+        """Consecutive indices are drawn as one run rather than one at a
+        time. A different code path, so it owes the same values -- checked
+        against the window `sample_random(start)` fills and against the
+        scattered path reading the same positions out of order."""
+        field = make_field()
+        run = list(range(500, 700))
+        got = FieldVector(field, len(run))
+        got.sample_random_at(SEED, run)
+
+        window = FieldVector(field, len(run))
+        window.sample_random(SEED, 500)
+        assert got.to_list() == window.to_list()
+
+        shuffled = run[::-1]
+        other = FieldVector(field, len(shuffled))
+        other.sample_random_at(SEED, shuffled)
+        assert other.to_list() == got.to_list()[::-1]
+
+        # A run broken in the middle exercises both halves of the merge.
+        split = [*range(10, 20), 900, *range(20, 30)]
+        broken = FieldVector(field, len(split))
+        broken.sample_random_at(SEED, split)
+        assert broken.to_list() == [field.element_from_seed(SEED, i) for i in split]
+
+    def test_sample_random_at_takes_an_index_buffer(self):
+        field = make_field()
+        positions = [9, 3, 3, 77]
+        sequence = FieldVector(field, len(positions))
+        sequence.sample_random_at(SEED, positions)
+        buffered = FieldVector(field, len(positions))
+        buffered.sample_random_at(SEED, array("Q", positions))
+        assert buffered.to_list() == sequence.to_list()
+
+    def test_sample_random_at_reaches_past_any_vector_ever_built(self):
+        field = make_field()
+        far = FieldVector(field, 2)
+        far.sample_random_at(SEED, [1 << 40, (1 << 40) + 1])
+        window = FieldVector(field, 2)
+        window.sample_random(SEED, 1 << 40)
+        assert far.to_list() == window.to_list()
+
+    def test_sample_random_at_checks_its_arguments(self):
+        field = make_field()
+        with pytest.raises(ValueError, match="expected 3 indices"):
+            FieldVector(field, 3).sample_random_at(SEED, [1, 2])
+        with pytest.raises(ValueError, match="expected 2 indices"):
+            FieldVector(field, 2).sample_random_at(SEED, array("Q", [1, 2, 3]))
+        with pytest.raises(ValueError, match="negative"):
+            FieldVector(field, 2).sample_random_at(SEED, [1, -1])
+
     def test_the_element_sampler_is_a_separate_stream(self):
         """`random_element` is domain-separated from the vector fill, so one
         seed feeding both gives independent values."""
