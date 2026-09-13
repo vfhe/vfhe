@@ -933,6 +933,22 @@ class FieldElement(metaclass=_ImplementationDispatch):
 _INDEX_FORMATS = frozenset({"Q", "L", "N"})
 
 
+def _sample_positions(indices, length: int) -> list[int]:
+    """`indices` as a list of sequence positions, checked, for an
+    implementation with no kernel to hand them to.
+
+    Positions into the draw stream rather than into a vector, so the only
+    bound is that they are not negative -- a caller may ask for a position no
+    fill has ever reached.
+    """
+    positions = [int(i) for i in indices]
+    if len(positions) != length:
+        raise ValueError(f"expected {length} indices, got {len(positions)}")
+    if any(i < 0 for i in positions):
+        raise ValueError("indices must not be negative")
+    return positions
+
+
 def index_buffer(indices):
     """`indices` as a one-dimensional buffer of unsigned 64-bit items, or None
     when it is not one and has to be walked as a sequence.
@@ -1416,6 +1432,28 @@ class FieldVector(metaclass=_ImplementationDispatch):
         the single-position form of the same definition.
         """
         raise NotImplementedError
+
+    def sample_random_at(self, seed: bytes, indices) -> None:
+        """Overwrite every element with the seeded one at the matching entry
+        of `indices`, in place.
+
+        The **same sequence** `sample_random` fills from, read at scattered
+        positions rather than a contiguous window: entry ``k`` becomes what
+        position ``indices[k]`` of that sequence holds, which is what
+        `Field.element_from_seed` returns for it. Positions may repeat and
+        need not be sorted, and they are positions in the sequence, not in
+        this vector -- there is no upper bound on them. `indices` must be as
+        long as this vector.
+
+        `indices` takes the forms `query` does, a buffer of unsigned 64-bit
+        values included, and for the same reason: the point of this over a
+        call per position is that nothing happens per position outside C.
+        """
+        positions = _sample_positions(indices, len(self))
+        for k, index in enumerate(positions):
+            window = type(self)(self.field, 1)
+            window.sample_random(seed, index)
+            self[k] = window[0]
 
     def _sample_random_replayed(self, seed: bytes, start: int) -> None:
         """`sample_random` from `start` for an implementation whose draw

@@ -415,6 +415,14 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // The single element at `index` of that stream, d coefficients, without
     // materializing anything before it. What the fill above puts at that
     // position, by construction: both are the same draws.
+    // out[k] is the element `indices[k]` of the same sequence field_vec_sample_random
+    // fills, so this is that fill read at scattered positions rather than a
+    // second stream. `out` holds `count` elements. Consecutive indices are
+    // drawn as one run, so a sorted window costs what the fill's own window
+    // does.
+    void field_vec_sample_random_at(FieldVector out, const uint8_t *seed, uint64_t seed_len,
+                                    const uint64_t *indices, uint64_t count);
+
     void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_t seed_len,
                                          uint64_t index, uint64_t d, uint64_t mod);
     // BLAKE3 over the elements in index order, 32 bytes.
