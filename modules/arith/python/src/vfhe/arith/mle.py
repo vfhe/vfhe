@@ -104,6 +104,45 @@ def native_table(f) -> bool:
     return isinstance(f, MLE) and f.ring is not None and f.basis is MLE_Basis.eval
 
 
+def _eq_table(field, point: list) -> FieldVector:
+    """The eq~ table over a field, written into one buffer.
+
+    Appending variable i doubles the table: the low half keeps the
+    `(1 - z_i)` branch and the new high half the `z_i` one. Done with
+    operators that is three vectors a variable -- two products and the
+    concatenation joining them -- each allocated and read straight back,
+    when the halves are already two views of the answer.
+
+    So the final table is allocated once and every variable is two passes
+    over it in place. The first few variables are still built the doubling
+    way: a view has to start on a multiple of `padding_unit`, and until the
+    table reaches that width its halves are too short to be views at all.
+    """
+    one = field.one
+    table = FieldVector(field, [one])
+    unit = table.padding_unit
+    bound = 0
+    while bound < len(point) and len(table) < unit:
+        z = point[bound]
+        table = type(table).concat([table * (one - z), table * z])
+        bound += 1
+    if bound == len(point):
+        return table
+
+    full = FieldVector(field, 1 << len(point))
+    size = len(table)
+    for i in range(size):
+        full[i] = table[i]
+    for z in point[bound:]:
+        low = full.view(0, size)
+        # The high half first: it reads the low half, which the next line
+        # overwrites.
+        low.scale(z, out=full.view(size, size))
+        low.scale(one - z, out=low)
+        size *= 2
+    return full
+
+
 def vector_table(f) -> bool:
     """Whether `f` is a field-backed table in the evaluation basis.
 
@@ -290,11 +329,7 @@ class MLE:
         if variables is None:
             variables = _default_variables(len(point))
         if isinstance(domain, Field):
-            one = domain.one
-            table = FieldVector(domain, [one])
-            for z in point:
-                # Same doubling as below, on whole vectors.
-                table = type(table).concat([table * (one - z), table * z])
+            table = _eq_table(domain, point)
             return cls(
                 field=domain, variables=variables, evaluations=table, public=True
             )

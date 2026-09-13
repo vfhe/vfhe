@@ -321,11 +321,15 @@ class FieldFoldableRS:
         to build was most of the cost and none of the hashing."""
         return self.field.digest_elements(pair)
 
-    def leaf_digests(self, word: FieldVector) -> bytes:
+    def leaf_digests(self, word: FieldVector) -> memoryview:
         """The leaf digests of every `±x` pair of `word`, packed, in one pass
         over the codeword (`FieldVector.hash_elements` with adjacent
         windows). Leaf `i` is ``digests[32 * i : 32 * (i + 1)]``, and equals
-        `leaf_digest` of `pair_at(word, i)`."""
+        `leaf_digest` of `pair_at(word, i)`.
+
+        A read-only view of the kernel's buffer, not a copy of it -- so a
+        codeword reaches its root without its digests being duplicated on the
+        way. `bytes(...)` is how a caller takes a copy."""
         return word.hash_elements(group=2, stride=2)
 
     def fold_at(self, word: FieldVector, r, level: int, i: int):

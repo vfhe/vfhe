@@ -169,6 +169,38 @@ class TestFromDigests:
         first = tree.root
         assert tree.commit() == first
 
+    def test_any_bytes_like_buffer_is_accepted(self):
+        """The producer hands over a read-only view of a C buffer, not
+        `bytes`; a tree has to take that and anything else bytes-like, and
+        give the same root for the same bytes."""
+        leaves = self.digests(8)
+        packed = b"".join(leaves)
+        roots = {
+            Merkle.from_digests(form).root
+            for form in (packed, bytearray(packed), memoryview(packed))
+        }
+        assert len(roots) == 1
+
+    def test_the_buffer_is_kept_rather_than_copied(self):
+        """Deliberate, and the reason `from_digests` says so: copying a
+        codeword's worth of digests costs more than the tree. The visible
+        consequence is that a mutable buffer stays connected -- `commit()`
+        reads it again."""
+        leaves = self.digests(8)
+        buffer = bytearray(b"".join(leaves))
+        tree = Merkle.from_digests(buffer)
+        first = tree.root
+
+        buffer[0] ^= 0xFF
+        assert tree.commit() != first, "a kept buffer must be re-read"
+        assert tree.root == Merkle.from_digests(bytes(buffer)).root
+
+        # `bytes` is what a caller passes to be insulated from that.
+        held = Merkle.from_digests(bytes(buffer))
+        before = held.root
+        buffer[0] ^= 0xFF
+        assert held.commit() == before
+
     def test_a_buffer_that_is_not_whole_digests_is_refused(self):
         for bad in (b"", b"\x00" * 31, b"\x00" * 33):
             with pytest.raises(ValueError, match="multiple of"):

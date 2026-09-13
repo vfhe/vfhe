@@ -254,7 +254,7 @@ class FoldableRS:
         """The Merkle leaf digest of one `±x` pair (`pair_digest`)."""
         return pair_digest(pair)
 
-    def leaf_digests(self, word: list) -> bytes:
+    def leaf_digests(self, word: list) -> bytes | memoryview:
         """The leaf digests of every `±x` pair of `word`, packed: leaf `i` is
         ``digests[32 * i : 32 * (i + 1)]``.
 

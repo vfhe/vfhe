@@ -1237,6 +1237,18 @@ class FieldVector(metaclass=_ImplementationDispatch):
         hi = [at + block + i for at in range(0, n, 2 * block) for i in range(block)]
         return lo, hi
 
+    @property
+    def padding_unit(self) -> int:
+        """What `view`'s `start` and `length` must be multiples of.
+
+        The width the implementation's buffers are padded to -- its eltwise
+        kernels' vector length. `view` states the rule in terms of it; this is
+        how a caller learns the number, so that code laying a computation out
+        in views can decide where the views can begin rather than guessing a
+        kernel constant.
+        """
+        raise NotImplementedError
+
     def _checked_view(
         self, start: int, length: int | None, unit: int
     ) -> tuple[int, int]:
@@ -1419,7 +1431,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
         """A 32-byte digest of the whole vector's contents."""
         raise NotImplementedError
 
-    def hash_elements(self, group: int = 1, stride: int = 1) -> bytes:
+    def hash_elements(self, group: int = 1, stride: int = 1) -> memoryview:
         """One digest per window of elements: the Merkle leaves of a codeword.
 
         A window is a **contiguous** run: window ``k`` covers elements
@@ -1436,6 +1448,15 @@ class FieldVector(metaclass=_ImplementationDispatch):
         them out, but at a codeword's window count that is the expensive form
         and should be its own decision rather than the default.
 
+        The return is a **read-only memoryview of the kernel's own buffer**,
+        not a copy of it: it compares, slices, joins and converts like
+        `bytes`, and `ffi.from_buffer` hands it back to C without copying, so
+        a codeword's digests reach a Merkle tree without ever being
+        duplicated. It keeps the C allocation alive for as long as it lives.
+        `bytes(digests)` is the copy, when a caller wants one -- and it is
+        what a caller needs to hash the digests or key a dict by them, which
+        a view over mutable storage cannot do.
+
         A *gather* is the other shape and is `hash_fibers`, not this with
         different arguments: neither is a special case of the other, which is
         why they are two names.
@@ -1445,7 +1466,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
         """
         raise NotImplementedError
 
-    def hash_fibers(self, group: int = 1, stride: int = 1) -> bytes:
+    def hash_fibers(self, group: int = 1, stride: int = 1) -> memoryview:
         """One digest per **fiber**: the gather `hash_elements` cannot do.
 
         Fiber ``k`` covers the ``group`` elements at ``k``, ``k + stride``,
@@ -1461,7 +1482,8 @@ class FieldVector(metaclass=_ImplementationDispatch):
         instead. Requires ``group * stride <= len(self)``; yields nothing
         otherwise.
 
-        Packed as `hash_elements` is: 32 bytes per fiber, fiber ``k`` at
+        Packed as `hash_elements` is, and a read-only view for the same
+        reasons: 32 bytes per fiber, fiber ``k`` at
         ``digests[32 * k : 32 * (k + 1)]``.
 
         An implementation without a kernel gathers each fiber and hashes it,
@@ -1472,10 +1494,12 @@ class FieldVector(metaclass=_ImplementationDispatch):
                 f"group and stride must be positive, got {group}, {stride}"
             )
         if group * stride > len(self):
-            return b""
-        return b"".join(
-            self.query(range(k, k + group * stride, stride)).hash()
-            for k in range(stride)
+            return memoryview(b"")
+        return memoryview(
+            b"".join(
+                self.query(range(k, k + group * stride, stride)).hash()
+                for k in range(stride)
+            )
         )
 
     def __eq__(self, other: object) -> bool:

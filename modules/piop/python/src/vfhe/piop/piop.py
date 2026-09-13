@@ -60,8 +60,43 @@ def _hypercube(variables: list):
         yield {v: (bits >> i) & 1 for i, v in enumerate(variables)}
 
 
+def _aligned_tables(oracles) -> list | None:
+    """The oracles' tables when the hypercube sum is whole-vector work, else
+    None.
+
+    Every oracle has to be a field-backed table in the evaluation basis over
+    the same variables in the same order. Then entry `i` of each table is the
+    value at the point `_hypercube` yields `i`-th -- both are LSB-first over
+    the variable list -- so the tables line up index for index and a sum over
+    the hypercube is a `sum()`, a sum of products one elementwise product and
+    a `sum()`. Anything else (a ring table, the monomial basis, an implicit
+    oracle, oracles over different variables) returns None and is walked.
+    """
+    # Deferred, as `fs` is below: imported where it is used, not at module load.
+    from vfhe.arith.mle import vector_table
+
+    first = oracles[0]
+    if not vector_table(first):
+        return None
+    tables = []
+    for f in oracles:
+        # `is not` on the field is deliberately strict: two equal fields that
+        # are separate objects only cost the walk, which is always correct.
+        if (
+            not vector_table(f)
+            or f.field is not first.field
+            or f.variables != first.variables
+        ):
+            return None
+        tables.append(f.table)
+    return tables
+
+
 def _hypercube_sum(f):
     """sum_{b in {0,1}^n} f(b), as a plain coefficient value."""
+    tables = _aligned_tables([f])
+    if tables is not None:
+        return tables[0].sum()
     total = None
     for b in _hypercube(f.variables):
         e = _constant(f.evaluate(b, in_place=False))
@@ -258,6 +293,18 @@ class Relation_SumProd(Relation):
     fields = ("oracles", "value")
 
     def check(self, statement: Statement) -> bool:
+        tables = _aligned_tables(statement.oracles)
+        if tables is not None:
+            # One product vector, then folded in place: the first multiply
+            # allocates it, the rest write through it. Never into `tables[0]`,
+            # which belongs to the oracle.
+            product = tables[0]
+            if len(tables) > 1:
+                product = product * tables[1]
+                for table in tables[2:]:
+                    product.mul(table, out=product)
+            return product.sum() == _value_of(statement.value)
+
         total = None
         for b in _hypercube(statement.oracles[0].variables):
             prod = None

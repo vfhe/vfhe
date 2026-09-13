@@ -142,6 +142,38 @@ def test_eq_table(field):
     )
 
 
+@pytest.mark.parametrize("num_vars", [1, 2, 3, 4, 5, 8])
+def test_eq_table_across_the_view_boundary(field, num_vars):
+    """eq~ is built by doubling until the table is wide enough for its halves
+    to be views, then in place. The switch happens at `padding_unit`, so the
+    entries either side of it are what this spans -- the definition has to
+    hold identically on both.
+    """
+    v = [MLE_Variable(f"x{i}") for i in range(num_vars)]
+    zs = [field.random_exceptional() for _ in v]
+    eq = MLE.eq(field, zs, variables=v)
+    one = field.one
+
+    assert vector_table(eq) and len(eq.table) == 1 << num_vars
+    for b in range(1 << num_vars):
+        expected = one
+        for i, z in enumerate(zs):
+            expected = expected * (z if (b >> i) & 1 else one - z)
+        assert eq.table[b] == expected, f"entry {b} of {num_vars} variables"
+
+    # The table is a distribution over the cube: its entries sum to one.
+    assert eq.table.sum() == one
+
+
+def test_eq_table_spans_the_switch(field):
+    """The boundary is not hypothetical: with the unit this build uses, some
+    of the sizes above are built purely by doubling and some run the in-place
+    half, and the test is only worth having if both happen."""
+    unit = FieldVector(field, 1).padding_unit
+    assert unit > 1, "a unit of 1 would leave the doubling path unexercised"
+    assert unit < (1 << 8), "8 variables must reach the in-place half"
+
+
 def test_vector_round_messages_match_python(field):
     # The pure-Python path (hypercube re-enumeration through the table's own
     # binds) is the reference the whole-vector shortcuts must reproduce.
@@ -198,6 +230,55 @@ def test_challenge_sampling(field):
     s1 = field.exceptional_from_seed(b"seed")
     assert s1 == field.exceptional_from_seed(b"seed")
     assert s1 != field.exceptional_from_seed(b"other")
+
+
+def test_sumprod_check_agrees_with_the_walk(field):
+    """The whole-vector path and the point-by-point walk decide the same
+    statements. `_tables` gives the same entries in both forms and only the
+    field-backed one qualifies, so the plain-Python oracles *are* the
+    reference: same entries, the old code path."""
+    v, f_vec, f_py = _tables(field, 4, seed=11)
+    _, g_vec, g_py = _tables(field, 4, seed=12, variables=v)
+    _, h_vec, h_py = _tables(field, 4, seed=13, variables=v)
+    zero = _element(field, 0)
+
+    # Three oracles, so the in-place fold past the first product runs.
+    total = sum(
+        (f_py.table[i] * g_py.table[i] * h_py.table[i] for i in range(16)), zero
+    )
+    wrong = total + _element(field, 1)
+    relation = Relation_SumProd()
+    for oracles in ([f_py, g_py, h_py], [f_vec, g_vec, h_vec], [f_vec, g_py, h_vec]):
+        assert relation.check(Statement(relation, oracles=oracles, value=total))
+        assert not relation.check(Statement(relation, oracles=oracles, value=wrong))
+
+    # The product is built in a vector of its own: no oracle was written to.
+    assert [int(e) for e in f_vec.table] == [int(e) for e in f_py.table]
+    assert [int(e) for e in g_vec.table] == [int(e) for e in g_py.table]
+
+    # One oracle, and the plain sum relation, take the same route.
+    assert Relation_Sum().check(
+        Statement(Relation_Sum(), oracles=[f_vec], value=sum(f_py.table, zero))
+    )
+    assert Relation_SumProd().check(
+        Statement(Relation_SumProd(), oracles=[f_vec], value=sum(f_py.table, zero))
+    )
+
+
+def test_sumprod_check_walks_when_the_tables_do_not_line_up(field):
+    """Oracles over different variables cannot be read index for index, so
+    the fast path has to decline rather than compare the wrong entries."""
+    v, f_vec, _ = _tables(field, 3, seed=14)
+    other = [MLE_Variable(f"y{i}") for i in range(3)]
+    _, g_vec, g_py = _tables(field, 3, seed=15, variables=other)
+    relation = Relation_SumProd()
+    statement = Statement(relation, oracles=[f_vec, g_vec], value=_element(field, 0))
+    # Decided by the walk over f's variables; the point is that it runs at all
+    # and agrees with the same oracles read as Python tables.
+    _, f_py, _ = (v, *_tables(field, 3, seed=14)[1:])
+    assert relation.check(statement) == relation.check(
+        Statement(relation, oracles=[f_py, g_py], value=_element(field, 0))
+    )
 
 
 @pytest.mark.parametrize("fiat_shamir", [False, True])

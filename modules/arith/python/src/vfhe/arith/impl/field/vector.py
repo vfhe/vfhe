@@ -420,6 +420,11 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_fold_blocks(result._struct, self._struct, block, element.value)
         return result
 
+    @property
+    def padding_unit(self) -> int:
+        """The eltwise kernels' vector width; the front says what it governs."""
+        return lib.field_vec_padded_length(1)
+
     def view(self, start: int = 0, length: int | None = None) -> ExtensionFieldVector:
         """`length` elements from `start`, over this vector's own planes.
 
@@ -476,17 +481,21 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_hash(out, self._struct)
         return bytes(out)
 
-    def _digests(self, count: int, kernel, group: int, stride: int) -> bytes:
-        """The kernel's own output buffer, handed back whole -- it already
-        writes one digest per window, contiguously, which is the packed
-        layout the front promises."""
+    def _digests(self, count: int, kernel, group: int, stride: int) -> memoryview:
+        """The kernel's own output buffer, viewed rather than copied.
+
+        It already writes one digest per window, contiguously, which is the
+        packed layout the front promises -- so there is nothing to do but
+        hand it over. The view holds the buffer alive and is read-only, which
+        is what makes it safe to pass somewhere that will not copy it either.
+        """
         if count == 0:
-            return b""
+            return memoryview(b"")
         out = ffi.new("uint8_t[]", count * 32)
         kernel(out, self._struct, group, stride)
-        return bytes(ffi.buffer(out))
+        return memoryview(ffi.buffer(out)).toreadonly()
 
-    def hash_elements(self, group: int = 1, stride: int = 1) -> bytes:
+    def hash_elements(self, group: int = 1, stride: int = 1) -> memoryview:
         """Every window's digest, packed; the front states the contract."""
         if group < 1 or stride < 1:
             raise ValueError(
@@ -495,7 +504,7 @@ class ExtensionFieldVector(FieldVector):
         count = lib.field_vec_hash_count(self._struct, group, stride)
         return self._digests(count, lib.field_vec_hash_elements, group, stride)
 
-    def hash_fibers(self, group: int = 1, stride: int = 1) -> bytes:
+    def hash_fibers(self, group: int = 1, stride: int = 1) -> memoryview:
         """Every fiber's digest, packed; the front states the contract."""
         if group < 1 or stride < 1:
             raise ValueError(
