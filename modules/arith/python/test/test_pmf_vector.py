@@ -440,6 +440,18 @@ class TestSamplingAndHashing:
         vector = FieldVector(field, values)
         assert digest_list(vector.hash_elements())[2] == field(values[2]).digest()
 
+    def test_digest_elements_is_the_vector_digest(self, field):
+        """The generic route: this family has no flat-buffer path, so the
+        front's default builds the vector -- and must still agree."""
+        values = random_values(field, 8, 29)
+        vector = FieldVector(field, values)
+        elements = vector.to_list()
+        assert field.digest_elements(elements) == vector.hash()
+        assert (
+            field.digest_elements(elements[2:4])
+            == digest_list(vector.hash_elements(group=2, stride=2))[1]
+        )
+
     def test_hash_elements_windows(self, field):
         values = random_values(field, 8, 27)
         vector = FieldVector(field, values)
@@ -662,6 +674,27 @@ class TestDestinations:
         assert a.fma(b, c, out=dest) is dest
         assert [int(e) for e in dest] == want
         assert [int(e) for e in a.fma(b, c[0])] == [int(e) for e in (a + b.scale(c[0]))]
+
+    def test_fma_accumulating_in_place(self, field):
+        """``x.fma(b, c, out=x)`` -- the shape a caller accumulating in place
+        writes, and the one an unfused implementation gets wrong by forming
+        the product in the destination before adding what is still there."""
+        a = FieldVector(field, random_values(field, 9, 87))
+        b = FieldVector(field, random_values(field, 9, 88))
+        c = FieldVector(field, random_values(field, 9, 89))
+        want = [int(e) for e in (a + b * c)]
+        assert [int(e) for e in a.fma(b, c, out=a)] == want
+        assert [int(e) for e in a] == want  # and a is what was written
+
+        # The broadcast form, and a destination aliasing the other operands.
+        d = FieldVector(field, random_values(field, 9, 90))
+        scalar = c[0]
+        want = [int(e) for e in (d + b.scale(scalar))]
+        assert [int(e) for e in d.fma(b, scalar, out=d)] == want
+
+        e = FieldVector(field, random_values(field, 9, 91))
+        want = [int(x) for x in (e + b * c)]
+        assert [int(x) for x in e.fma(b, c, out=b)] == want
 
     def test_a_destination_is_checked(self, field):
         a = FieldVector(field, random_values(field, 8, 85))

@@ -202,6 +202,32 @@ class ExtensionField(Field):
         element.sample_random(seed)
         return element
 
+    def digest_elements(self, elements) -> bytes:
+        """The front states the contract.
+
+        An element already holds its d coefficients contiguously, and a
+        vector's digest is those coefficients one element after another -- so
+        the bytes the hash covers can be laid out directly and handed to the
+        single-element kernel with a width of `count * d`. No vector, and one
+        buffer instead of a plane apiece.
+        """
+        elements = [
+            e
+            if isinstance(e, ExtensionFieldElement)
+            else ExtensionFieldElement(self, e)
+            for e in elements
+        ]
+        if any(e.field.prime != self.prime or e.field.d != self.d for e in elements):
+            raise ValueError("element belongs to a different field")
+        d = self.d
+        flat = ffi.new("uint64_t[]", len(elements) * d)
+        base = ffi.cast("uint64_t *", flat)
+        for i, element in enumerate(elements):
+            ffi.memmove(base + i * d, element.value, d * 8)
+        out = ffi.new("uint8_t[32]")
+        lib.field_hash_element(out, flat, len(elements) * d)
+        return bytes(out)
+
     def element_from_seed(self, seed: bytes, index: int) -> ExtensionFieldElement:
         """Samples the element at position `index` based on `seed` and `index`.
         The result, per element, is the same as calling `FieldVector.sample_random` for the entire vector."""

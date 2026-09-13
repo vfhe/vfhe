@@ -81,19 +81,61 @@ class MerklePath:
     is `log2(size)` long. The leaf index is deliberately *not* part of the
     path: a verifier checks the position it queried itself, never one the
     prover sent.
+
+    The path is held as **one buffer**, not a digest object per sibling.
+    That is the layout `merkle_open` writes and the layout `merkle_verify`
+    reads, so both ends of a query answer touch it whole; cutting it into
+    `log2(size)` objects and validating each, only to join them again on the
+    way into the verifier, is work no one asked for. A caller that does want
+    them apart reads `siblings`, which builds the tuple then.
     """
 
-    __slots__ = ("siblings",)
+    __slots__ = ("_packed", "_siblings")
 
-    def __init__(self, siblings: Sequence[bytes]):
-        self.siblings = tuple(_as_digest(s) for s in siblings)
+    def __init__(
+        self,
+        siblings: Sequence[bytes] | None = None,
+        *,
+        packed: bytes | None = None,
+    ):
+        """A path from the sibling digests, or from them already packed end
+        to end. Exactly one of the two; `from_bytes` names the second."""
+        if (siblings is None) == (packed is None):
+            raise TypeError("a path takes either siblings or a packed buffer")
+        if packed is not None:
+            if len(packed) % DIGEST_LEN:
+                raise ValueError(
+                    f"a packed path must be a multiple of {DIGEST_LEN} bytes, "
+                    f"got {len(packed)}"
+                )
+            self._packed = bytes(packed)
+        else:
+            self._packed = b"".join(_as_digest(s) for s in siblings or ())
+        self._siblings: tuple[bytes, ...] | None = None
+
+    @classmethod
+    def from_bytes(cls, packed: bytes) -> MerklePath:
+        """A path from the siblings already packed end to end -- what
+        `merkle_open` produces, taken without being cut up."""
+        return cls(packed=packed)
+
+    @property
+    def siblings(self) -> tuple[bytes, ...]:
+        """The sibling digests, one object each -- cut from the buffer on
+        first use, since most callers only ever hand the whole path on."""
+        if self._siblings is None:
+            self._siblings = tuple(
+                self._packed[i : i + DIGEST_LEN]
+                for i in range(0, len(self._packed), DIGEST_LEN)
+            )
+        return self._siblings
 
     def __len__(self) -> int:
-        return len(self.siblings)
+        return len(self._packed) // DIGEST_LEN
 
     def to_bytes(self) -> bytes:
         """The siblings concatenated, the layout the C verifier reads."""
-        return b"".join(self.siblings)
+        return self._packed
 
     def __repr__(self) -> str:
         return f"MerklePath({[s.hex() for s in self.siblings]})"
@@ -193,10 +235,7 @@ class Merkle:
             return MerklePath([])
         out = ffi.new("uint8_t[]", DIGEST_LEN * self.log_size)
         lib.merkle_open(out, self.obj, index)
-        path = bytes(out)
-        return MerklePath(
-            [path[i * DIGEST_LEN : (i + 1) * DIGEST_LEN] for i in range(self.log_size)]
-        )
+        return MerklePath.from_bytes(ffi.buffer(out))
 
     @staticmethod
     def verify(
