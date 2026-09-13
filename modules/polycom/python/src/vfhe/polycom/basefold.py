@@ -502,25 +502,42 @@ class BasefoldEval(Protocol):
         if len(answers) != len(queries):
             raise Rejection(f"{label}: wrong number of query answers")
 
+        walks = []
         for q, answer in zip(queries, answers, strict=True):
             steps = list(self._walk(q, d))
             if len(answer) != len(steps):
                 raise Rejection(f"{label}: query {q} answered for {len(answer)} levels")
-            for i, ((level, j), (pair, path)) in enumerate(
-                zip(steps, answer, strict=True)
-            ):
+            walks.append(steps)
+
+        # Every query visits the same levels in the same order, so step `i` is
+        # one level for all of them. Checking a level at a time rather than a
+        # query at a time is what lets the fold be one set of whole-vector
+        # operations instead of a handful of element ones per (query, level);
+        # the paths are independent and stay one at a time.
+        for i in range(d):
+            level = d - i
+            positions = []
+            los, his, belows = [], [], []
+            for steps, answer in zip(walks, answers, strict=True):
+                _, j = steps[i]
+                pair, path = answer[i]
                 if not Merkle.verify(
                     roots[level], j, path, pair, hash=self.code.leaf_digest
                 ):
                     raise Rejection(
                         f"{label}: Merkle path rejected at level {level}, pair {j}"
                     )
-                folded = self.code.fold_pair(pair[0], pair[1], rs[d - level], level, j)
+                positions.append(j)
+                los.append(pair[0])
+                his.append(pair[1])
                 # The folded value must reappear in the next level down: at
                 # offset j & 1 of the pair the walk moves to, or — at the
                 # bottom — in the level-0 codeword the verifier built itself.
-                below = word0[j] if level == 1 else answer[i + 1][0][j & 1]
-                if not (below == folded):
+                belows.append(word0[j] if level == 1 else answer[i + 1][0][j & 1])
+
+            folded = self.code.fold_pairs(los, his, rs[d - level], level, positions)
+            for j, below, value in zip(positions, belows, folded, strict=True):
+                if not (below == value):
                     raise Rejection(
                         f"{label}: fold check failed at level {level - 1}, position {j}"
                     )
