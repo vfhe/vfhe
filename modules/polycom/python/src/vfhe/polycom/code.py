@@ -239,6 +239,17 @@ class FoldableRS:
         coeff = (lo - hi) * self.twists2_inv[level - 1][i]
         return hi + coeff * self.twists[level - 1][i] + r * coeff
 
+    def fold_pairs(self, los, his, r, level: int, indices) -> list:
+        """`fold_pair` at many positions at once; see `FieldFoldableRS`, which
+        has a vectorised one. Over a ring the entries are polynomials with
+        their own arithmetic, so this is the loop a caller would write -- the
+        uniform name is what lets a verifier fold a level without knowing
+        which code family answers."""
+        return [
+            self.fold_pair(lo, hi, r, level, i)
+            for lo, hi, i in zip(los, his, indices, strict=True)
+        ]
+
     def pair_at(self, word: list, i: int) -> tuple[RNSPolynomial, RNSPolynomial]:
         """Position i's `±x` pair, `(word[2i], word[2i + 1])` — the unit the
         fold reads, and the Merkle leaf (see `pair_leaves`)."""

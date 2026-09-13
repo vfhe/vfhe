@@ -303,6 +303,29 @@ class FieldFoldableRS:
         coeff = (lo - hi) * self._twist2_inv_vectors[level - 1][i]
         return hi + coeff * self._twist_vectors[level - 1][i] + coeff * r
 
+    def fold_pairs(self, los, his, r, level: int, indices) -> list:
+        """`fold_pair` at many positions at once.
+
+        `los[k]`, `his[k]` are the pair at `indices[k]`, and the result is
+        that position's folded value -- exactly what `fold_pair` returns for
+        it, one entry per position.
+
+        A verifier holds one pair per queried position and folds it at every
+        level, so the scalar form costs a handful of element operations per
+        (query, level), each its own crossing into C. Here a level's positions
+        are one set of whole-vector operations instead, and the twist tables
+        are read with one gather rather than an index at a time.
+        """
+        positions = list(indices)
+        twist = self._twist_vectors[level - 1].query(positions)
+        coeff = FieldVector(self.field, list(los))
+        highs = FieldVector(self.field, list(his))
+        coeff.sub(highs, out=coeff)
+        coeff.mul(self._twist2_inv_vectors[level - 1].query(positions), out=coeff)
+        # `twist` is this call's own, so it can hold the running result.
+        folded = highs.fma(coeff, twist, out=twist)
+        return folded.fma(coeff, r, out=folded).to_list()
+
     def pair_at(self, word: FieldVector, i: int) -> tuple[FieldElement, FieldElement]:
         """Position i's `±x` pair, `(word[2i], word[2i + 1])` — the unit the
         fold reads, and the Merkle leaf (see `leaf_digest`)."""
