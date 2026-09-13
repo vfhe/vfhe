@@ -717,10 +717,10 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
 
         What it avoids is the vector. A vector of two elements still
         allocates a plane per coefficient, the pointer table and the struct
-        the kernels read, which for a Merkle leaf recomputed once per query
-        is most of what a leaf digest costs and none of the hashing. Use it
-        where the elements are already objects and a vector would exist only
-        to be hashed; hash a vector you already have.
+        the kernels read -- at a handful of elements that is most of the cost
+        and none of it is hashing. Use it where the elements are already
+        objects and a vector would exist only to be hashed; hash a vector you
+        already have.
         """
         return FieldVector(self, list(elements)).hash()
 
@@ -1371,10 +1371,10 @@ class FieldVector(metaclass=_ImplementationDispatch):
         ``array("Q")``, a memoryview cast to one, anything with 8-byte
         unsigned items -- and then nothing is converted or checked per index:
         the buffer goes to the kernel as it stands and the bound is tested
-        there. That matters at a gather the size of a message, where a Python
-        call per index costs many times the gather; permuting a table is the
-        case it exists for, and a caller doing it repeatedly builds the buffer
-        once and keeps it.
+        there. That matters once the gather is as long as the vector, where
+        a Python call per index costs many times the gather itself; and a
+        caller gathering the same positions more than once builds the buffer
+        a single time and keeps it.
 
         Negative indices cannot be written in that form, so a buffer's
         indices must already be in range; one that is not raises `IndexError`

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from vfhe.arith._alloc import aligned64
+from vfhe.arith._alloc import aligned64, aligned64_unset
 from vfhe.arith.base import FieldVector, index_buffer
 from vfhe.engine import ffi, lib
 
@@ -52,15 +52,27 @@ class ExtensionFieldVector(FieldVector):
         if values:
             self._write_range(0, values)
 
-    def _allocate(self, n: int) -> None:
-        """Reserve d padded planes and the struct the kernels read them from."""
+    def _allocate(self, n: int, zeroed: bool = True) -> None:
+        """Reserve d padded planes and the struct the kernels read them from.
+
+        `zeroed` false leaves the first `n` words of each plane undefined, for
+        a vector a kernel is about to fill. The padding past `n` is zeroed
+        either way: the arithmetic reads and writes it, so it has to hold
+        reduced values whatever the data words hold, and it is under a SIMD
+        vector's worth of words so zeroing it costs nothing.
+        """
         field = self.field
         self._n = n
         self._allocated_n = lib.field_vec_padded_length(n)
         # Kept alive as attributes: the struct holds borrowed pointers into them.
+        allocator = aligned64 if zeroed else aligned64_unset
         self._planes = [
-            aligned64("uint64_t[]", self._allocated_n) for _ in range(field.d)
+            allocator("uint64_t[]", self._allocated_n) for _ in range(field.d)
         ]
+        if not zeroed and self._allocated_n > n:
+            tail = [0] * (self._allocated_n - n)
+            for plane in self._planes:
+                plane[n : self._allocated_n] = tail
         self._plane_ptrs = ffi.new("uint64_t*[]", self._planes)
         self._struct = ffi.new("FieldVector")
         self._struct.coeffs = self._plane_ptrs
@@ -71,8 +83,18 @@ class ExtensionFieldVector(FieldVector):
         self._struct.mod = field.mod
 
     def _like(self, n: int | None = None) -> ExtensionFieldVector:
-        """A fresh vector over the same field, this length unless told another."""
-        return ExtensionFieldVector(self.field, self._n if n is None else n)
+        """A destination over the same field, this length unless told another.
+
+        Left **unzeroed**: every caller here hands it straight to a kernel
+        that writes all of it. That is the internal counterpart of
+        `FieldVector(field, n)`, which does promise zeros -- so an operation
+        producing a result uses this and a caller asking for a vector gets
+        that one.
+        """
+        result = ExtensionFieldVector.__new__(ExtensionFieldVector)
+        result.field = self.field
+        result._allocate(self._n if n is None else n, zeroed=False)
+        return result
 
     def _coerce_element(self, value) -> ExtensionFieldElement:
         """Promote `value` to an element of this field, or raise."""
