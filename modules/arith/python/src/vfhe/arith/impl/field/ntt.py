@@ -140,6 +140,47 @@ class ExtensionFieldNTT:
             )
         return vector._plane_ptrs
 
+    def pack(
+        self, vector: ExtensionFieldVector, blocks: int = 1, out=None
+    ) -> ExtensionFieldVector:
+        """`vector`, laid out the way this plan's `forward` needs it.
+
+        A caller that holds each transform's elements together has its blocks
+        contiguous, and the extension domain needs them interleaved. `pack`
+        converts, `unpack` converts back, and neither the caller nor its data
+        structure has to know which domain is in play.
+
+        The base domain already takes the contiguous layout, so there is
+        nothing to do: the input is returned as it is unless `out` is given,
+        in which case it is copied there. A conversion is a tiled transpose,
+        one pass.
+        """
+        return self._reshape(vector, blocks, out, to_plan=True)
+
+    def unpack(
+        self, vector: ExtensionFieldVector, blocks: int = 1, out=None
+    ) -> ExtensionFieldVector:
+        """The inverse of `pack`: a transformed batch back to blocks."""
+        return self._reshape(vector, blocks, out, to_plan=False)
+
+    def _reshape(self, vector, blocks, out, to_plan: bool):
+        self._checked(vector, blocks)
+        if self.domain == "base":
+            if out is None:
+                return vector
+            return vector.copy() if out is vector else self._copy_into(vector, out)
+        result = vector._destination(out, len(vector))
+        if result is vector:
+            raise ValueError("a layout conversion cannot write into its input")
+        kernel = lib.field_ntt_to_interleaved if to_plan else lib.field_ntt_to_blocks
+        kernel(result._struct, vector._struct, blocks)
+        return result
+
+    @staticmethod
+    def _copy_into(vector, out):
+        lib.field_vec_copy(out._struct, vector._struct)
+        return out
+
     def forward(self, vector: ExtensionFieldVector, blocks: int = 1) -> None:
         """Transform ``blocks`` transforms in place, natural to bit-reversed
         order. `batch_layout` says how the batch must be laid out."""

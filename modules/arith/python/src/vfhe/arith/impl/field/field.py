@@ -152,6 +152,29 @@ class ExtensionField(Field):
             )
         return ExtensionFieldElement(self, value)
 
+    def ntt_points(self, root: int, n: int) -> Any:
+        """The points a length-`n` negacyclic transform at `root` evaluates
+        at, in the transform's own output order.
+
+        Position `i` holds ``root ** (2 * r(i) + 1)``, where ``r`` reverses
+        the ``log2(n)`` index bits -- the permutation the transform leaves in
+        its output, so after `ExtensionFieldNTT.forward` position `i` of a
+        block holds the polynomial's value at entry `i` of this table.
+
+        Under that reversal the entries are consecutive odd powers of `root`,
+        so one pass of multiplications produces the whole table where writing
+        the definition out is a modular exponentiation per entry. `root` is a
+        scalar of F_p.
+        """
+        if not isinstance(n, int) or isinstance(n, bool) or n < 1 or n & (n - 1):
+            raise ValueError(f"n must be a power of two, got {n}")
+        # Imported here: the vector module imports this one at load time.
+        from .vector import ExtensionFieldVector
+
+        points = ExtensionFieldVector(self, n)
+        lib.field_ntt_points(points._struct, root % self.prime, n.bit_length() - 1)
+        return points
+
     def ntt_plan(self, n: int, domain: str = "auto") -> Any:
         """The negacyclic transform of length ``n`` over this field, one per
         length and domain.

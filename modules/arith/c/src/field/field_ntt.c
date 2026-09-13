@@ -138,6 +138,44 @@ int field_ext_root_of_unity(uint64_t *out, uint64_t n, uint64_t d, uint64_t w, M
     return 0;
 }
 
+// --- moving between the two batch layouts ----------------------------------
+//
+// Both directions are a transpose of the same rows-by-columns picture, which is
+// why one routine serves them: to interleave is to transpose a blocks-by-n
+// array, and to undo it is to transpose the n-by-blocks one. Reading down a
+// column while writing along a row touches a new cache line per element, so it
+// goes in tiles.
+#define FIELD_NTT_TILE 32
+
+static void field_ntt_transpose(uint64_t *out, const uint64_t *in, uint64_t rows, uint64_t cols)
+{
+    for (uint64_t i0 = 0; i0 < rows; i0 += FIELD_NTT_TILE)
+    {
+        const uint64_t imax = i0 + FIELD_NTT_TILE < rows ? i0 + FIELD_NTT_TILE : rows;
+        for (uint64_t j0 = 0; j0 < cols; j0 += FIELD_NTT_TILE)
+        {
+            const uint64_t jmax = j0 + FIELD_NTT_TILE < cols ? j0 + FIELD_NTT_TILE : cols;
+            for (uint64_t i = i0; i < imax; i++)
+                for (uint64_t j = j0; j < jmax; j++)
+                    out[j * rows + i] = in[i * cols + j];
+        }
+    }
+}
+
+void field_ntt_to_interleaved(FieldVector out, const FieldVector in, uint64_t blocks)
+{
+    const uint64_t n = in->n / blocks;
+    for (uint64_t k = 0; k < in->d; k++)
+        field_ntt_transpose(out->coeffs[k], in->coeffs[k], blocks, n);
+}
+
+void field_ntt_to_blocks(FieldVector out, const FieldVector in, uint64_t blocks)
+{
+    const uint64_t n = in->n / blocks;
+    for (uint64_t k = 0; k < in->d; k++)
+        field_ntt_transpose(out->coeffs[k], in->coeffs[k], n, blocks);
+}
+
 uint64_t field_ext_root_subfield_degree(uint64_t n, Modulus mod)
 {
     // Every primitive 2n-th root of unity generates the same field, and which
@@ -376,6 +414,28 @@ static void field_ntt_at(uint64_t **out, uint64_t *const *base, uint64_t at, uin
 {
     for (uint64_t k = 0; k < d; k++)
         out[k] = base[k] + at;
+}
+
+// out[i] = psi^(2 * r(i) + 1); the contract is stated at the declaration.
+//
+// Taken in the natural order the entries are psi, psi^3, psi^5, ... -- each the
+// one before it times psi^2 -- so a single running product yields them all.
+// The bit reversal is an involution, so the j-th of those belongs at position
+// r(j) and writing it straight there is the whole permutation.
+void field_ntt_points(FieldVector out, uint64_t psi, uint64_t bits)
+{
+    const uint64_t n = 1ULL << bits, d = out->d;
+    const Modulus mod = out->mod;
+    uint64_t power = modq(psi, mod);
+    const uint64_t step = mul_modq(power, power, mod);
+
+    for (uint64_t j = 0; j < d; j++)
+        memset(out->coeffs[j], 0, out->allocated_n * sizeof(uint64_t));
+    for (uint64_t j = 0; j < n; j++)
+    {
+        out->coeffs[0][field_ntt_brv(j, bits)] = power;
+        power = mul_modq(power, step, mod);
+    }
 }
 
 uint64_t ntt_plan_root(NTT_Plan plan) { return plan == NULL ? 0 : plan->root_of_unity; }
