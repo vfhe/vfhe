@@ -277,11 +277,21 @@ void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count)
     }
 }
 
-void field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices, uint64_t count)
+bool field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices, uint64_t count)
 {
+    // Checked here rather than by the caller: a gather is one pass over the
+    // indices and so is validating them, but a caller outside C pays a call
+    // per index, which at a message-sized gather costs many times the gather.
+    // A pass of its own, before anything is written, so a rejected gather
+    // leaves `out` untouched and the bound is tested once per index and not
+    // once per plane.
+    for (uint64_t i = 0; i < count; i++)
+        if (indices[i] >= a->n)
+            return false;
     for (uint64_t j = 0; j < a->d; j++)
         for (uint64_t i = 0; i < count; i++)
             out->coeffs[j][i] = a->coeffs[j][indices[i]];
+    return true;
 }
 
 // Deinterleave into two scratch vectors of out's shape, then three whole-plane

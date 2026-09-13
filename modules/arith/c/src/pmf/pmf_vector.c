@@ -333,11 +333,16 @@ void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count)
     }
 }
 
-void pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count)
+bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count)
 {
+    // Validated in its own pass, for the reasons field_vec_gather gives.
+    for (uint64_t i = 0; i < count; i++)
+        if (indices[i] >= a->n)
+            return false;
     for (uint64_t k = 0; k < a->params->limbs; k++)
         for (uint64_t i = 0; i < count; i++)
             out->limbs[k][i] = a->limbs[k][indices[i]];
+    return true;
 }
 
 int pmf_vec_is_equal(const PMFVector a, const PMFVector b)

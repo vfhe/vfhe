@@ -12,6 +12,7 @@ vector width is the case that catches a wrong `allocated_n`.
 from __future__ import annotations
 
 import random
+from array import array
 from typing import Any
 
 import pytest
@@ -535,6 +536,34 @@ class TestNativeMovementAndFold:
         assert len(vector.query([])) == 0
         with pytest.raises(IndexError):
             vector.query([9])
+
+    def test_query_takes_a_prebuilt_index_buffer(self):
+        """The fast path: an unsigned 64-bit buffer goes to the kernel as it
+        stands. Same elements as the sequence form, which is the whole
+        contract -- what changes is only that nothing is checked per index."""
+        field = make_field()
+        vector = FieldVector(field, self.values(field, 9))
+        positions = [8, 0, 8, 3, 3]
+        assert vector.query(array("Q", positions)) == vector.query(positions)
+        assert len(vector.query(array("Q", []))) == 0
+
+        # A memoryview of the same bytes is the same buffer.
+        buffer = array("Q", positions)
+        assert vector.query(memoryview(buffer)) == vector.query(positions)
+
+    def test_a_buffer_index_out_of_range_is_still_an_IndexError(self):
+        """The bound moved into the kernel; the error it reports must not."""
+        field = make_field()
+        vector = FieldVector(field, self.values(field, 9))
+        with pytest.raises(IndexError, match="out of range"):
+            vector.query(array("Q", [0, 9]))
+
+    def test_a_signed_buffer_is_read_as_a_sequence(self):
+        """Signed items are deliberately not the fast path: -1 has to keep
+        meaning the last element rather than becoming a huge index."""
+        field = make_field()
+        vector = FieldVector(field, self.values(field, 9))
+        assert vector.query(array("q", [8, 0, -1, 3])) == vector.query([8, 0, -1, 3])
 
     @pytest.mark.parametrize("n", [2, 8, 18, 26, 50])
     def test_fold_matches_the_split_formula(self, n):

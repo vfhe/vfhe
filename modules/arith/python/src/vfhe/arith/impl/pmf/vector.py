@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from vfhe.arith._alloc import aligned64
-from vfhe.arith.base import FieldVector
+from vfhe.arith.base import FieldVector, index_buffer
 from vfhe.engine import ffi, lib
 
 from .pseudo_mersenne import _LANES, PseudoMersenneElement
@@ -335,15 +335,30 @@ class PseudoMersenneVector(FieldVector):
         return result
 
     def query(self, indices) -> PseudoMersenneVector:
-        """The elements at `indices` (negative ones count from the end), gathered."""
-        indices = [self._checked_index(i) for i in indices]
-        result = self._like(len(indices))
-        if indices:
-            lib.pmf_vec_gather(
-                result._struct,
-                self._struct,
-                ffi.new("uint64_t[]", indices),
-                len(indices),
+        """The elements at `indices`, gathered; the front states the contract."""
+        view = index_buffer(indices)
+        if view is None:
+            positions = [self._checked_index(i) for i in indices]
+            result = self._like(len(positions))
+            if positions:
+                # Already range-checked one at a time, so the kernel's answer
+                # cannot be false on this path.
+                lib.pmf_vec_gather(
+                    result._struct,
+                    self._struct,
+                    ffi.new("uint64_t[]", positions),
+                    len(positions),
+                )
+            return result
+
+        count = len(view)
+        result = self._like(count)
+        if count and not lib.pmf_vec_gather(
+            result._struct, self._struct, ffi.from_buffer("uint64_t[]", view), count
+        ):
+            raise IndexError(
+                f"index out of range for a vector of {self._n}: "
+                f"{next(i for i in view if i >= self._n)}"
             )
         return result
 

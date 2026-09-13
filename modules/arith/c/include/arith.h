@@ -369,8 +369,11 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void field_vec_interleave(FieldVector out, const FieldVector even, const FieldVector odd);
     // The `count` vectors one after another; out->n is the sum of their lengths.
     void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count);
-    // out[i] = a[indices[i]] for i < count. Every index must be below a->n.
-    void field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices,
+    // out[i] = a[indices[i]] for i < count. Returns false, having written
+    // nothing, if any index is at or above a->n -- the bound is checked here
+    // because a caller outside C cannot test it per index for anything like
+    // the cost of the gather itself.
+    bool field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices,
                           uint64_t count);
     // out[i] = a[2i] + r * (a[2i+1] - a[2i]) for i < a->n / 2, in one pass: the
     // interpolation between adjacent pairs that binds one variable of a
@@ -659,7 +662,9 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // The `count` vectors one after another; out->n is the sum of their lengths.
     void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count);
     // out[i] = a[indices[i]] for i < count. Every index must be below a->n.
-    void pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
+    // out[i] = a[indices[i]]; false and nothing written if an index is out of
+    // range. See field_vec_gather.
+    bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
     // out[i] = a[2i] + r * (a[2i+1] - a[2i]) for i < a->n / 2, in one pass: the
     // interpolation between adjacent pairs that binds one variable of a
     // multilinear table. `r` is one element. `a->n` must be even, out must hold
