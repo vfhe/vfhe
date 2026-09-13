@@ -207,10 +207,18 @@ class PseudoMersenneVector(FieldVector):
         into `out` and the addend folded in after: the right answer, one pass
         more than a fused one, and still free of the intermediate a caller
         would otherwise allocate.
+
+        Except when `out` is `self`, which is the shape a caller accumulating
+        in place writes. Forming the product there first would overwrite the
+        addend before it is added, so that one case takes a vector for the
+        product -- the answer the aliasing contract promises, at the cost the
+        fused path does not pay.
         """
         if not isinstance(b, PseudoMersenneVector):
             raise TypeError(f"b must be a FieldVector, not {type(b).__name__}")
         result = self._destination(out)
+        if result is self:
+            return b.mul(c).add(self, out=result)
         b.mul(c, out=result)
         return result.add(self, out=result)
 

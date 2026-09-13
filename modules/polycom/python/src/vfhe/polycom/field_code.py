@@ -315,8 +315,11 @@ class FieldFoldableRS:
     def leaf_digest(self, pair: tuple) -> bytes:
         """The Merkle leaf digest of one `±x` pair: the vector digest of the
         two elements in order, so it equals the matching entry of
-        `leaf_digests` and binds the pair as an ordered unit."""
-        return FieldVector(self.field, list(pair)).hash()
+        `leaf_digests` and binds the pair as an ordered unit.
+
+        A verifier recomputes this once per query, where the vector it used
+        to build was most of the cost and none of the hashing."""
+        return self.field.digest_elements(pair)
 
     def leaf_digests(self, word: FieldVector) -> bytes:
         """The leaf digests of every `±x` pair of `word`, packed, in one pass
@@ -334,6 +337,14 @@ class FieldFoldableRS:
         """The full fold of a level-`level` codeword with challenge r (the
         level-(level-1) codeword of the r-folded message), as whole-vector
         operations over the even (`P(x_i)`) and odd (`P(-x_i)`) halves."""
+        # Written with destinations rather than as the expression above it,
+        # because every operator here would allocate a half-codeword and read
+        # its result straight back: the dunder form is seven passes over
+        # memory and six vectors, this is four passes and the two the split
+        # already made. `split_even_odd` gives fresh vectors, so overwriting
+        # them is overwriting nothing the caller can see.
         lo, hi = word.split_even_odd()
-        coeff = (lo - hi) * self._twist2_inv_vectors[level - 1]
-        return hi + coeff * self._twist_vectors[level - 1] + coeff * r
+        coeff = lo.sub(hi, out=lo)
+        coeff.mul(self._twist2_inv_vectors[level - 1], out=coeff)
+        folded = hi.fma(coeff, self._twist_vectors[level - 1], out=hi)
+        return folded.fma(coeff, r, out=folded)

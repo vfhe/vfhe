@@ -708,6 +708,22 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         """
         raise NotImplementedError
 
+    def digest_elements(self, elements) -> bytes:
+        """The digest of a handful of elements, without building a vector.
+
+        Exactly ``FieldVector(self, elements).hash()``, and so exactly the
+        matching entry of `FieldVector.hash_elements` -- the same bytes, in
+        index order, one element after another.
+
+        What it avoids is the vector. A vector of two elements still
+        allocates a plane per coefficient, the pointer table and the struct
+        the kernels read, which for a Merkle leaf recomputed once per query
+        is most of what a leaf digest costs and none of the hashing. Use it
+        where the elements are already objects and a vector would exist only
+        to be hashed; hash a vector you already have.
+        """
+        return FieldVector(self, list(elements)).hash()
+
     def element_from_seed(self, seed: bytes, index: int) -> FieldElement:
         """Samples the element at position `index` based on `seed` and `index`.
         The result, per element, is the same as calling `FieldVector.sample_random` for the entire vector.

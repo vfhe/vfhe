@@ -377,6 +377,37 @@ class TestSamplingAndHashing:
         assert vector.hash() == FieldVector(field, values).hash()
         assert vector.hash() != FieldVector(field, values[:8]).hash()
 
+    def test_digest_elements_is_the_vector_digest(self):
+        """`field.digest_elements` skips the vector; it must not skip any of
+        the bytes, so it has to equal both the vector's own digest and the
+        matching window of `hash_elements`."""
+        field = make_field()
+        values = random_elements(field, 8, seed=140)
+        vector = FieldVector(field, values)
+
+        assert field.digest_elements(values) == vector.hash()
+        assert (
+            field.digest_elements(values[2:4]) == FieldVector(field, values[2:4]).hash()
+        )
+        assert (
+            field.digest_elements(values[2:4])
+            == digest_list(vector.hash_elements(group=2, stride=2))[1]
+        )
+        assert (
+            field.digest_elements([values[3]]) == digest_list(vector.hash_elements())[3]
+        )
+
+        # Order binds: the same two elements the other way round differ.
+        assert field.digest_elements(values[2:4]) != field.digest_elements(
+            values[3:1:-1]
+        )
+
+    def test_digest_elements_rejects_a_foreign_element(self):
+        field = make_field()
+        other = make_field(2)
+        with pytest.raises(ValueError, match="different field"):
+            field.digest_elements(random_elements(other, 2, seed=141))
+
     def test_hash_elements_windows(self):
         field = make_field()
         values = random_elements(field, 8, seed=24)
@@ -923,6 +954,42 @@ _DESTINATION_FIELDS = [
     pytest.param(_FUSED_PRIME, _FUSED_W, id="fused"),
     pytest.param(PRIME, W, id="generic"),
 ]
+
+
+class TestFusedAccumulation:
+    """``x.fma(b, c, out=x)``: the destination is also the addend.
+
+    The shape a caller accumulating in place writes, and the one an
+    implementation without a fused kernel gets wrong -- forming the product in
+    the destination overwrites the addend before it is added. The C header
+    promises outputs may alias inputs, so both families owe the same answer
+    here whether or not a fused kernel exists.
+    """
+
+    def test_the_destination_may_be_the_addend(self):
+        field = make_field()
+        a = FieldVector(field, random_elements(field, 13, seed=120))
+        b = FieldVector(field, random_elements(field, 13, seed=121))
+        c = FieldVector(field, random_elements(field, 13, seed=122))
+        want = (a + b * c).to_list()
+        assert a.fma(b, c, out=a).to_list() == want
+        assert a.to_list() == want
+
+    def test_the_destination_may_be_a_factor(self):
+        field = make_field()
+        a = FieldVector(field, random_elements(field, 13, seed=123))
+        b = FieldVector(field, random_elements(field, 13, seed=124))
+        c = FieldVector(field, random_elements(field, 13, seed=125))
+        want = (a + b * c).to_list()
+        assert a.fma(b, c, out=b).to_list() == want
+
+    def test_the_broadcast_form_may_accumulate_in_place(self):
+        field = make_field()
+        a = FieldVector(field, random_elements(field, 13, seed=126))
+        b = FieldVector(field, random_elements(field, 13, seed=127))
+        scalar = random_elements(field, 1, seed=128)[0]
+        want = (a + b.scale(scalar)).to_list()
+        assert a.fma(b, scalar, out=a).to_list() == want
 
 
 class TestDestinations:
