@@ -255,6 +255,12 @@ class FoldableRS:
         fold reads, and the Merkle leaf (see `pair_leaves`)."""
         return word[2 * i], word[2 * i + 1]
 
+    def leaf_digests_of(self, pairs) -> bytes:
+        """The leaf digests of `pairs`, packed; see `FieldFoldableRS`, which
+        digests them together. Here a pair is digested at a time, as
+        `leaf_digests` does for a whole codeword of ring elements."""
+        return b"".join(self.leaf_digest(pair) for pair in pairs)
+
     def pair_leaves(self, word: list) -> list[tuple[RNSPolynomial, RNSPolynomial]]:
         """`word` as the leaf vector its Merkle tree commits to: one leaf per
         `±x` pair, so a single path authenticates both operands of a fold

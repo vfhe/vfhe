@@ -179,11 +179,15 @@ class ExtensionFieldVector(FieldVector):
             return []
         flat = ffi.new("uint64_t[]", self._n * d)
         lib.field_vec_get_range(flat, self._struct, 0, self._n)
+        # One memmove an element rather than a word at a time: the d words are
+        # already contiguous and adjacent in `flat`, so the split is a copy,
+        # not a gather, and Python has no business doing it a word at a time.
+        width = d * 8
+        source = ffi.cast("char *", flat)
         elements = []
         for i in range(self._n):
             out = ffi.new("uint64_t[]", d)
-            for j in range(d):
-                out[j] = flat[i * d + j]
+            ffi.memmove(out, source + i * width, width)
             elements.append(ExtensionFieldElement(self.field, out))
         return elements
 

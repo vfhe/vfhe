@@ -331,6 +331,18 @@ class FieldFoldableRS:
         fold reads, and the Merkle leaf (see `leaf_digest`)."""
         return word[2 * i], word[2 * i + 1]
 
+    def leaf_digests_of(self, pairs) -> memoryview:
+        """The leaf digests of `pairs`, packed -- `leaf_digest` for a set of
+        pairs rather than one.
+
+        The pairs go into one vector and are digested with the adjacent
+        windows `leaf_digests` uses on a codeword, so entry `k` is
+        `leaf_digest(pairs[k])` and the lane-parallel hashing applies to a
+        handful of pairs as much as to a whole codeword.
+        """
+        flat = FieldVector(self.field, [e for pair in pairs for e in pair])
+        return flat.hash_elements(group=2, stride=2)
+
     def pair_leaves(self, word: FieldVector) -> list[tuple]:
         """`word` as the list of `±x` pairs its Merkle tree commits to."""
         return [self.pair_at(word, i) for i in range(len(word) // 2)]
