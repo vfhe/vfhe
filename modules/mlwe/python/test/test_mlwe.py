@@ -473,3 +473,18 @@ def test_gen_ksk_rejects_a_radix_larger_than_the_primes(bv):
     key = scheme.key_gen_sparse(N // 8, 3.2)
     with pytest.raises(ValueError, match="smallest prime"):
         scheme.gen_ksk(key, key, radix_log_base=64)
+
+
+def test_special_primes_of_a_ring_that_is_not_the_first_of_its_base():
+    # Prime indices are global to the (N, split_degree) base, so a ring built
+    # after another one starts above index 0. The derived level chain has to
+    # take its special primes from the full ring's mask; taking them from a
+    # prime count gave the scheme a special ring equal to its level 0, which
+    # silently downgrades every GHS key switch to BV.
+    Ring(N, prime_size=[45, 45, 45, 50], split_degree=1)
+    Rq = Ring(N, prime_size=[32, 32, 32, 32], split_degree=1)
+    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=2)
+
+    assert scheme.special_primes == 1
+    assert scheme.special_rings[0].mask == Rq.mask
+    assert scheme.special_rings[0].ell == scheme.rings[0].ell + 1

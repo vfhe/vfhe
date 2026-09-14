@@ -185,6 +185,55 @@ def test_multiprecision_from_rns():
     assert mp.poly_to_list(a_mp) == a.get_polynomial()
 
 
+# The RNS base is shared by every ring of the same (N, split_degree) and grows
+# as rings are built, so a ring's primes sit at arbitrary base indices and the
+# rows between them belong to other rings. Reconstruction has to follow the
+# polynomial's own mask; walking the base instead read rows it does not own.
+@pytest.mark.parametrize(
+    "sizes",
+    [
+        [30, 30],  # narrow rows, and primes far below a 52-bit digit
+        [20, 50, 20, 50],  # narrow and wide rows in one ring
+        [49] * 9,  # more primes than a 52-bit CRT quotient would allow
+    ],
+)
+def test_multiprecision_from_rns_off_the_start_of_the_base(sizes):
+    N_mp = 2**10
+    Ring(N_mp, prime_size=[31, 31], split_degree=1)  # claims the first indices
+    r = Ring(N_mp, prime_size=sizes, split_degree=1)
+    mp = Multiprecision()
+    a = r.random_element()
+    a_mp = mp.from_polynomial(a, mp.compute_crt_consts(r.primes))
+    assert mp.poly_to_list(a_mp) == a.get_polynomial()
+
+
+def test_multiprecision_from_rns_over_a_non_contiguous_quotient():
+    r = Ring(2**10, prime_size=[35, 40, 45, 50], split_degree=1)
+    sub = r.quotient_ring(mask=(1 << r.prime_indices[0]) | (1 << r.prime_indices[3]))
+    mp = Multiprecision()
+    a = sub.random_element()
+    a_mp = mp.from_polynomial(a, mp.compute_crt_consts(sub.primes))
+    assert mp.poly_to_list(a_mp) == a.get_polynomial()
+
+
+def test_compute_crt_consts_rejects_primes_wider_than_a_digit():
+    r = Ring(2**10, prime_size=[60, 60], split_degree=1)
+    with pytest.raises(ValueError, match="52 bits"):
+        Multiprecision().compute_crt_consts(r.primes)
+
+
+def test_quotient_ring_rejects_mask_bits_outside_its_primes():
+    big = Ring(2**10, prime_size=[17, 17, 17, 17, 22], split_degree=1)
+    small = Ring(2**10, prime_size=[32, 32], split_degree=1)
+    with pytest.raises(ValueError, match="not among the given primes"):
+        big.quotient_ring(mask=big.mask | small.mask)
+
+    # `union` is the way to name both rings' primes at once.
+    both = big.union(small)
+    assert both.mask == big.mask | small.mask
+    assert both.quotient_ring(mask=small.mask).primes == small.primes
+
+
 @pytest.mark.parametrize("split_degree", [2, 4, 8])
 def test_fast_inverse_generic(split_degree):
     r = Ring(128, prime_size=[30], split_degree=split_degree)

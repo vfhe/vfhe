@@ -906,7 +906,15 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void setup_mod_switch_delta(uint64_t d, uint64_t p);
     void mp_scale(MPScalar out, MPScalar in, mp_vector_t *m);
     void mp_sub(MPScalar out, MPScalar a, MPScalar b);
+    /* Reduce every coefficient of `out` modulo `q` in place, with the Barrett
+       constants m = floor(2^k / q) and k. `out` must hold values below 2^k,
+       and both m and the quotient it estimates must fit a base-2^52 digit. */
     void mp_polynomial_mod_reduce(MPPolynomial out, MPScalar q, mp_vector_t *m, uint64_t k);
+    /* Reconstruct `in`'s coefficients modulo q = prod(p_i) into `out`.
+       `in` must already carry x_i * (q/p_i)^-1 mod p_i in its rows, and PW the
+       matching q/p_i, one per prime of `in`'s RNS mask, ordered by base index.
+       `out` needs enough digits for sum_i (p_i - 1) * q/p_i and one more than
+       `q` has; `q`, `m` and `k` are as in mp_polynomial_mod_reduce. */
     void mp_polynomial_from_RNS(MPPolynomial out, RNS_Polynomial in, MPScalar *PW, MPScalar q,
                                 mp_vector_t *m, uint64_t k);
     void mp_polynomial_to_RNSc(RNSc_Polynomial out, MPPolynomial in);

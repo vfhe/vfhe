@@ -12,6 +12,35 @@ versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix `MLWE_Scheme(ring, special_primes=n)` dropping the special primes for
+  any ring but the first one built over its RNS base. The mask was derived
+  from the working primes' *count*, which is their base index only when the
+  ring starts at index 0; every other ring got a special ring equal to its
+  level 0, so key switching silently ran BV instead of the GHS hybrid, at
+  about a prime's worth of extra noise.
+- Fix multiprecision reconstruction (`Multiprecision.from_polynomial`) reading
+  rows of the shared RNS base that the polynomial does not own, which crashed
+  as soon as a second ring existed in the process, and pairing its CRT
+  constants with the wrong primes. It now follows the polynomial's own prime
+  mask.
+- Fix multiprecision reconstruction returning values that were not reduced
+  modulo q. The Barrett constants were sized from the prime width, which put
+  the quotient's digit read out of range whenever the primes were narrower
+  than a base-2^52 digit; they now come from the moduli themselves, and the
+  reconstruction reduces each residue before accumulating, so the number of
+  primes no longer bounds what can be reconstructed.
+
+### Changed
+
+- `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` now raise when
+  the mask names primes outside the pool they are given, instead of dropping
+  them silently. `RNSRing.union` builds the ring over two rings' primes.
+- `Multiprecision.compute_crt_consts` raises for moduli its single-digit
+  Barrett step cannot serve (primes wider than 52 bits) rather than returning
+  constants that reconstruct incorrectly.
+
 ## [0.0.3] - 2026-09-10
 
 ### Added
