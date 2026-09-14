@@ -7,6 +7,7 @@ product, CRT for reconstruction. Also covers domain conversion, automorphism,
 slot inversion, the CKKS complex FFT roundtrip, and the multiprecision bridge.
 """
 
+import math
 import random
 
 import pytest
@@ -220,6 +221,53 @@ def test_compute_crt_consts_rejects_primes_wider_than_a_digit():
     r = Ring(2**10, prime_size=[60, 60], split_degree=1)
     with pytest.raises(ValueError, match="52 bits"):
         Multiprecision().compute_crt_consts(r.primes)
+
+
+def _round_scaled(c, q, k):
+    """``round(2**k * c / q)`` mod 2**k on the centered representative, in
+    exact integer arithmetic -- the oracle for the native rescale."""
+    c = c - q if c > q // 2 else c
+    num = c << k
+    t = (2 * num + q) // (2 * q) if num >= 0 else -((-2 * num + q) // (2 * q))
+    return t % (1 << k)
+
+
+@pytest.mark.parametrize("sizes", [[40], [30, 30], [32, 32, 32], [20, 50, 20, 50]])
+@pytest.mark.parametrize("k", [1, 8, 32, 52, 63, 64])
+def test_rescale_to_power_of_two(sizes, k):
+    Ring(2**9, prime_size=[31, 31], split_degree=1)  # not the first of its base
+    r = Ring(2**9, prime_size=sizes, split_degree=1)
+    q = math.prod(r.primes)
+    # The halves are where the rounding and the centering both turn over.
+    values = [0, 1, q - 1, q // 2, q // 2 + 1] + [
+        rng.randrange(q) for _ in range(2**9 - 5)
+    ]
+    poly = Polynomial(r).from_bigint_array(values)
+
+    got = list(poly.rescale_to_power_of_two(k))
+    assert got == [_round_scaled(c, q, k) for c in values]
+    # The rescale reads; it must not have changed the polynomial's value.
+    assert poly.get_polynomial() == values
+
+
+@pytest.mark.parametrize("k", [8, 64])
+def test_rescale_to_power_of_two_at_the_exact_half(k):
+    # The rescale rounds on `2**k * c mod q >= (q+1)/2`, and the tie is the one
+    # case an oracle over random coefficients will not reach: it needs the
+    # comparison to run out of digits with every one of them equal.
+    r = Ring(2**9, prime_size=[30, 30, 30], split_degree=1)
+    q = math.prod(r.primes)
+    tie = (q + 1) // 2 * pow(pow(2, k, q), -1, q) % q
+    assert (tie << k) % q == (q + 1) // 2  # the tie really is one
+    values = [tie, (tie + 1) % q, (tie - 1) % q] + [0] * (2**9 - 3)
+    got = list(Polynomial(r).from_bigint_array(values).rescale_to_power_of_two(k))
+    assert got == [_round_scaled(c, q, k) for c in values]
+
+
+def test_rescale_to_power_of_two_rejects_a_width_over_a_word():
+    r = Ring(2**9, prime_size=[30, 30], split_degree=1)
+    with pytest.raises(ValueError, match="between 1 and 64"):
+        r.random_element().rescale_to_power_of_two(65)
 
 
 def test_quotient_ring_rejects_mask_bits_outside_its_primes():

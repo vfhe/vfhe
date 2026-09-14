@@ -12,7 +12,20 @@ versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Add `Polynomial.rescale_to_power_of_two(k)`: `round(2^k * c / q)` for every
+  coefficient, on centered representatives, as `N` machine words. It is the
+  rescale for a target modulus that is not a product of base primes -- how an
+  element leaves for a scheme that works at a power of two -- which
+  `round_division` and `scaled_lift` between them cannot express. Exact, with
+  no floating point anywhere in the rounding.
+
 ### Fixed
+
+- Fix `Multiprecision.from_polynomial` leaking its result. `free_mp_polynomial`
+  was never exposed, so no caller could release one; the returned handle now
+  owns its native allocation.
 
 - Fix `MLWE_Scheme(ring, special_primes=n)` dropping the special primes for
   any ring but the first one built over its RNS base. The mask was derived
