@@ -508,6 +508,20 @@ class Polynomial(metaclass=_ImplementationDispatch):
         """`round_division` truncating instead of rounding, in place."""
         raise NotImplementedError
 
+    def rescale_to_power_of_two(self, k: int):
+        """``round(2^k * c / q)`` for each coefficient, as ``N`` machine words.
+
+        The rescale for a target modulus that is not one this ring's moduli can
+        express, which is how an element leaves for a scheme that works at a
+        power of two. Coefficients are taken as centered representatives and
+        the results modulo 2^k, so a word is the two's-complement pattern of a
+        signed value. Exact: the rounding is not carried out in floating point.
+
+        :param k: Width of the target modulus, 1 to 64.
+        :returns: A native ``uint64_t[N]``.
+        """
+        raise NotImplementedError
+
     def scaled_lift(self, ring: Ring, delta=None) -> Polynomial:
         """This value lifted to a larger ring and scaled by ``delta``.
 

@@ -9,6 +9,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith.base import Polynomial, Ring, check_spec_keywords
+from vfhe.arith.impl.mp.multiprecision import Multiprecision
 from vfhe.arith.number_theory import crt, is_prime
 from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
@@ -74,6 +75,9 @@ class RNSRing(Ring):
     split_degree: int
     #: The product of `primes`, as a Python int.
     q_l: int
+    #: Per-`k` constants for `RNSPolynomial.rescale_to_power_of_two`, built on
+    #: first use and held for the ring's lifetime.
+    _pow2_consts: dict[int, tuple]
 
     def __init__(
         self,
@@ -170,6 +174,7 @@ class RNSRing(Ring):
         )
         self.base = registry().bases[(self.N, self.split_degree)]
         self.mask = sum(1 << idx for idx in self.prime_indices)
+        self._pow2_consts: dict[int, tuple] = {}
 
     @property
     def arith_ring(self):
@@ -179,6 +184,25 @@ class RNSRing(Ring):
         a ring may point at it, and nothing can prove the last one is gone.
         """
         return self.lib.arith_rns_ring_get(self.N, self.mask, self.base)
+
+    def _pow2_rescale_consts(self, k: int) -> tuple:
+        """Everything `rescale_to_power_of_two` needs for this ``k``.
+
+        The reconstruction constants with 2^k folded into their per-prime
+        factor, so the scaling costs nothing beyond the multiply the CRT
+        already does; (q+1)/2 as native digits; and -q^-1 mod 2^k.
+        """
+        if k not in self._pow2_consts:
+            mp = Multiprecision()
+            consts = dict(mp.compute_crt_consts(self.primes))
+            consts["hat_q"] = [
+                h * pow(2, k, p) % p
+                for h, p in zip(consts["hat_q"], self.primes, strict=True)
+            ]
+            half = ffi.new("uint64_t[]", mp.limbs((self.q_l + 1) // 2, consts["d"]))
+            q_inv_neg = -pow(self.q_l, -1, 1 << k) % (1 << k)
+            self._pow2_consts[k] = (mp, consts, half, q_inv_neg)
+        return self._pow2_consts[k]
 
     @property
     def exceptional_set_size(self) -> int:
@@ -602,6 +626,32 @@ class RNSPolynomial(Polynomial):
         self.ring.lib.polynomial_round_division_RNSc_wo_free(self.obj, divide_mask)
         self.ring = ring
         return self
+
+    def rescale_to_power_of_two(self, k: int):
+        """``round(2^k * c / q)`` for each coefficient, as ``N`` machine words.
+
+        The rescale for a target modulus that is not a product of base primes,
+        which is what `round_division` and `scaled_lift` between them cannot
+        express. Coefficients are taken as centered representatives and the
+        results modulo 2^k, so the words are the two's-complement pattern of a
+        signed value for any ``k`` up to 64 -- at 64 exactly what a `uint64_t`
+        holds. Exact: the rounding is not carried out in floating point.
+
+        Leaves this polynomial in the coefficient domain and does not otherwise
+        change it.
+
+        :param k: Width of the target modulus, 1 to 64.
+        :returns: A native ``uint64_t[N]``; ``ffi.buffer`` of it is the bytes,
+            ``list`` of it the coefficients.
+        """
+        if not 1 <= k <= 64:
+            raise ValueError(f"k must be between 1 and 64, got {k}")
+        mp, consts, half, q_inv_neg = self.ring._pow2_rescale_consts(k)
+        out = ffi.new("uint64_t[]", self.ring.N)
+        self.ring.lib.mp_polynomial_scale_to_2k(
+            out, mp.from_polynomial(self, consts), half, q_inv_neg, k
+        )
+        return out
 
     def scaled_lift(self, ring: RNSRing, delta=None) -> RNSPolynomial:
         """Lifts the polynomial to a larger ring and scales it by the delta factor."""

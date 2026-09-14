@@ -97,8 +97,8 @@ class Multiprecision:
         # that many and write the full d of their destination, so a shorter
         # operand is read past its end and leaves stale digits behind.
         digits = d - 1
-        q = self.load(self._limbs(ql, digits))
-        pw = [ffi.cast("MPScalar", self.load(self._limbs(v, digits))) for v in Q]
+        q = self.load(self.limbs(ql, digits))
+        pw = [ffi.cast("MPScalar", self.load(self.limbs(v, digits))) for v in Q]
         m = self.load_small(m_val)
 
         return {
@@ -112,7 +112,7 @@ class Multiprecision:
         }
 
     @staticmethod
-    def _limbs(x: int, d: int) -> list[int]:
+    def limbs(x: int, d: int) -> list[int]:
         """``x`` as exactly ``d`` base-2^52 digits."""
         return [(x >> (52 * i)) & ((1 << 52) - 1) for i in range(d)]
 
@@ -124,6 +124,9 @@ class Multiprecision:
         neither of the ones in play is the caller's: the per-prime scaling
         takes its factors in `RNSRing.primes` order, and the native
         reconstruction walks the ring's mask, so in ascending base index.
+
+        ``poly`` is left in the coefficient domain. The returned handle frees
+        its native allocation when it is collected.
         """
         ring = poly.ring
         position = {p: i for i, p in enumerate(crt_consts["primes"])}
@@ -141,7 +144,13 @@ class Multiprecision:
         # The reconstruction wants x_i * hat_q_i mod p_i, which is a per-prime
         # scaling in RNS; `poly` is the caller's, so it goes to a temporary.
         scaled = poly * hat_q
-        res = self.lib.new_mp_polynomial(ring.N, crt_consts["d"])
+        # The native allocation is owned by the returned handle: nothing else
+        # holds it, and a caller reconstructing in a loop has no other way to
+        # release it.
+        res = ffi.gc(
+            self.lib.new_mp_polynomial(ring.N, crt_consts["d"]),
+            self.lib.free_mp_polynomial,
+        )
         self.lib.mp_polynomial_from_RNS(
             res,
             scaled.obj,

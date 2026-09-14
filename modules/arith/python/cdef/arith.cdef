@@ -128,6 +128,9 @@ mp_vector_t *load_m512(uint64_t in);
 void *new_mp_polynomial(uint64_t N, uint64_t d);
 void mp_polynomial_from_RNS(void *out, void *in, MPScalar *PW, void *q, mp_vector_t *m, uint64_t k);
 void mp_polynomial_to_RNSc(void *out, void *in);
+void free_mp_polynomial(void *p);
+void mp_polynomial_scale_to_2k(uint64_t *out, void *in, const uint64_t *half,
+                               uint64_t q_inv_neg, uint64_t k);
 
 // --- field extensions ---
 Modulus mod_new(uint64_t q);

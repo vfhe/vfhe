@@ -679,6 +679,70 @@ void mp_polynomial_from_RNS(MPPolynomial out, RNS_Polynomial in, MPScalar *PW, M
     mp_polynomial_mod_reduce(out, q, m, k);
 }
 
+void mp_polynomial_scale_to_2k(uint64_t *out, MPPolynomial in, const uint64_t *half,
+                               uint64_t q_inv_neg, uint64_t k)
+{
+    /* `in` holds w = 2^k * c mod q, so the quotient this wants,
+       floor((2^k * c + (q-1)/2) / q), is (w_0 - w) / q rounded up when w
+       reaches half, and 2^k * c vanishes modulo 2^k -- which leaves a
+       multiply by -q^-1 on w's low word and a carry from the comparison.
+       Digits at 2^104 and above vanish modulo 2^64, so the low word is the
+       first two.
+
+       `w >= half` is read from the top digit down, and equality throughout
+       rounds up. The scalar body stops at the first digit that differs; the
+       vector one cannot, so it carries the comparison in two mask registers --
+       `eq` for the lanes still equal above the digit in hand, `gt` for those
+       already decided greater. Loads are unaligned because `out` belongs to
+       the caller. */
+    const uint64_t mask = (k >= 64) ? UINT64_MAX : ((UINT64_C(1) << k) - 1);
+#if VFHE_HAVE_AVX512IFMA
+    const __m512i maskv = _mm512_set1_epi64((long long)mask);
+    const __m512i scalev = _mm512_set1_epi64((long long)q_inv_neg);
+    const __m512i onev = _mm512_set1_epi64(1);
+    for (size_t i = 0; i < in->N / 8; i++)
+    {
+        __m512i word = _mm512_loadu_si512(in->coeffs[0] + i * 8);
+        if (in->d > 1)
+        {
+            const __m512i hi = _mm512_loadu_si512(in->coeffs[1] + i * 8);
+            word = _mm512_add_epi64(word, _mm512_slli_epi64(hi, 52));
+        }
+        __mmask8 gt = 0, eq = 0xFF;
+        for (int64_t j = (int64_t)in->d - 1; j >= 0; j--)
+        {
+            const __m512i digit = _mm512_loadu_si512(in->coeffs[j] + i * 8);
+            const __m512i h = _mm512_set1_epi64((long long)half[j]);
+            gt = (__mmask8)(gt | (eq & _mm512_cmpgt_epu64_mask(digit, h)));
+            eq = (__mmask8)(eq & _mm512_cmpeq_epi64_mask(digit, h));
+        }
+        __m512i res = _mm512_mullo_epi64(word, scalev);
+        res = _mm512_mask_add_epi64(res, (__mmask8)(gt | eq), res, onev);
+        _mm512_storeu_si512(out + i * 8, _mm512_and_si512(res, maskv));
+    }
+#else
+    const uint64_t *lo = in->coeffs[0];
+    const uint64_t *hi = (in->d > 1) ? in->coeffs[1] : NULL;
+    for (uint64_t i = 0; i < in->N; i++)
+    {
+        uint64_t word = lo[i];
+        if (hi)
+            word += hi[i] << 52;
+        uint64_t round_up = 1; /* every digit equal so far */
+        for (int64_t j = (int64_t)in->d - 1; j >= 0; j--)
+        {
+            const uint64_t digit = in->coeffs[j][i];
+            if (digit != half[j])
+            {
+                round_up = digit > half[j];
+                break;
+            }
+        }
+        out[i] = (q_inv_neg * word + round_up) & mask;
+    }
+#endif
+}
+
 mp_vector_t *_delta = NULL;
 uint64_t _p = 0, _d = 0;
 void setup_mod_switch_delta(uint64_t d, uint64_t p)

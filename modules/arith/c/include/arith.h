@@ -918,6 +918,15 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void mp_polynomial_from_RNS(MPPolynomial out, RNS_Polynomial in, MPScalar *PW, MPScalar q,
                                 mp_vector_t *m, uint64_t k);
     void mp_polynomial_to_RNSc(RNSc_Polynomial out, MPPolynomial in);
+    /* Finish a rescale to the modulus 2^k, one word per coefficient into `out`
+       (`in`'s length). `in` must hold 2^k * c mod q for each coefficient c,
+       with normalized digits; `half` is (q+1)/2 as `in->d` base-2^52 digits
+       and `q_inv_neg` is -q^-1 mod 2^k, which exists because q is odd. The
+       result is round(2^k * c / q) taken modulo 2^k, where the representative
+       chosen for c does not matter: shifting it by q shifts the result by
+       exactly 2^k. k is at most 64. */
+    void mp_polynomial_scale_to_2k(uint64_t *out, MPPolynomial in, const uint64_t *half,
+                                   uint64_t q_inv_neg, uint64_t k);
     MPScalar mp_load(uint64_t *in, uint64_t d);
     mp_vector_t *load_m512(uint64_t in);
     int get_mp_vector_size(void);
