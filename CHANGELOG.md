@@ -14,6 +14,15 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add `FieldVector.sample_random_at(seed, indices)`: the seeded elements at
+  scattered positions of the sequence `sample_random` fills from, in one call.
+- Add `Field.digest_elements(elements)`: the digest of a few elements without
+  building a vector to hold them.
+- Add `FieldVector.padding_unit`, the width `view`'s `start` and `length` must
+  be multiples of -- stated by `view` before, but not obtainable.
+- Add `MerklePath.from_bytes(packed)`, and `FoldableRS.fold_pairs` /
+  `leaf_digests_of` for a set of positions rather than one.
+
 - Add `Polynomial.rescale_to_power_of_two(k)`: `round(2^k * c / q)` for every
   coefficient, on centered representatives, as `N` machine words. It is the
   rescale for a target modulus that is not a product of base primes -- how an
@@ -46,6 +55,15 @@ versions may contain breaking changes.
   primes no longer bounds what can be reconstructed.
 
 ### Changed
+
+- `FieldVector.query` also accepts a buffer of unsigned 64-bit indices, handed
+  to the gather as it stands; the kernel now range-checks them itself.
+- `FieldVector.hash_elements` / `hash_fibers` return a read-only `memoryview`
+  of the kernel's buffer rather than a copy. It compares, slices and converts
+  like `bytes`; `bytes(digests)` is the copy, and is what hashing or keying by
+  them needs.
+- `Merkle.from_digests` accepts any bytes-like and keeps it rather than
+  copying, so a mutable buffer stays connected -- `commit()` re-reads it.
 
 - `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` now raise when
   the mask names primes outside the pool they are given, instead of dropping
