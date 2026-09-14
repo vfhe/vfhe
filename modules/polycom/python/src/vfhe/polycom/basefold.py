@@ -87,6 +87,11 @@ from .queries import query_positions
 Word = Any
 
 
+def _identity(digest):
+    """`Merkle.verify`'s leaf hash when the digest is already in hand."""
+    return digest
+
+
 def _coefficients(f: MLE) -> Word:
     """`f`'s coefficient table, in the form its own domain's code encodes."""
     return f.to_coefficients().table
@@ -517,23 +522,35 @@ class BasefoldEval(Protocol):
         for i in range(d):
             level = d - i
             positions = []
-            los, his, belows = [], [], []
+            los, his, belows, paths, pairs = [], [], [], [], []
             for steps, answer in zip(walks, answers, strict=True):
                 _, j = steps[i]
                 pair, path = answer[i]
-                if not Merkle.verify(
-                    roots[level], j, path, pair, hash=self.code.leaf_digest
-                ):
-                    raise Rejection(
-                        f"{label}: Merkle path rejected at level {level}, pair {j}"
-                    )
                 positions.append(j)
+                paths.append(path)
+                pairs.append(pair)
                 los.append(pair[0])
                 his.append(pair[1])
                 # The folded value must reappear in the next level down: at
                 # offset j & 1 of the pair the walk moves to, or — at the
                 # bottom — in the level-0 codeword the verifier built itself.
                 belows.append(word0[j] if level == 1 else answer[i + 1][0][j & 1])
+
+            # The leaf digests of a level's pairs together, then one path check
+            # apiece: a digest is the hashing this whole check is made of, and
+            # hashing a set of leaves is what the codeword path already does.
+            digests = self.code.leaf_digests_of(pairs)
+            for k, (j, path) in enumerate(zip(positions, paths, strict=True)):
+                if not Merkle.verify(
+                    roots[level],
+                    j,
+                    path,
+                    digests[32 * k : 32 * (k + 1)],
+                    hash=_identity,
+                ):
+                    raise Rejection(
+                        f"{label}: Merkle path rejected at level {level}, pair {j}"
+                    )
 
             folded = self.code.fold_pairs(los, his, rs[d - level], level, positions)
             for j, below, value in zip(positions, belows, folded, strict=True):
