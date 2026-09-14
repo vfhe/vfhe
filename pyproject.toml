@@ -80,7 +80,7 @@ test = [
 ]
 lint = [
     { include-group = "test" },
-    "ruff==0.16.5",
+    "ruff==0.16.6",
     "clang-format==23.1.0",
     "zizmor==1.30.0",
     "pre-commit>=4.3",
