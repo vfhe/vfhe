@@ -116,6 +116,19 @@ class RNSRing(Ring):
 
             key = (N, temp_split_degree)
             prime_map = registry().prime_to_index[key]
+            pool_mask = sum(1 << prime_map[p] for p in primes)
+            # ``mask`` indexes the shared base, so it can name primes outside
+            # ``primes``; those would be dropped without a trace, leaving a
+            # smaller ring than was asked for.
+            if mask & ~pool_mask:
+                missing = mask & ~pool_mask
+                raise ValueError(
+                    "mask selects base indices "
+                    f"{[i for i in range(missing.bit_length()) if (missing >> i) & 1]}"
+                    " that are not among the given primes; pass a pool that "
+                    "covers them (RNSRing.union builds the ring over two "
+                    "rings' primes)"
+                )
             active_primes = [p for p in primes if ((mask >> prime_map[p]) & 1)]
             prime_size = [math.ceil(math.log2(p)) for p in active_primes]
             primes = active_primes

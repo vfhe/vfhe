@@ -650,26 +650,29 @@ void mp_polynomial_from_RNS(MPPolynomial out, RNS_Polynomial in, MPScalar *PW, M
        vectorized pass per row, into the scratch the accumulator reads. */
     const uint64_t N = in->base->N;
     uint64_t *sv = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
-    uint64_t *row0 = in->rows64[0];
-    if (rns_row_is_narrow(in->base, 0))
+    /* The base is shared by every ring of this (N, split_degree), so it holds
+       rows this polynomial does not own; only the primes in `rns_mask` have a
+       row, and PW is indexed by their position within it, not by base index. */
+    size_t j = 0;
+    for (size_t i = 0; i < in->base->l; i++)
     {
-        mod_widen_w32(sv, in->rows32[0], N);
-        row0 = sv;
-    }
-    mp_polynomial_int_sp_scale_mp(out, row0, PW[0]);
-    for (size_t i = 1; i < in->base->l; i++)
-    {
+        if (!(in->rns_mask & (1ULL << i)))
+            continue;
         uint64_t *row = in->rows64[i];
         if (rns_row_is_narrow(in->base, i))
         {
             mod_widen_w32(sv, in->rows32[i], N);
             row = sv;
         }
-        mp_polynomial_int_sp_scale_addto_mp(out, row, PW[i]);
-        if ((i & 0xFF) == 0)
+        if (j == 0)
+            mp_polynomial_int_sp_scale_mp(out, row, PW[0]);
+        else
+            mp_polynomial_int_sp_scale_addto_mp(out, row, PW[j]);
+        if (j && (j & 0xFF) == 0)
         {
             mp_polynomial_propagate_carry(out);
         }
+        j++;
     }
     mp_polynomial_propagate_carry(out);
     free(sv);

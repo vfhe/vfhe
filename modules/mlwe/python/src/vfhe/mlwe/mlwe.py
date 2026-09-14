@@ -78,7 +78,11 @@ class MLWE_Scheme:
                     rings.quotient_ring(ell=rings.ell - i)
                     for i in range(special_primes, special_primes + max_lvl)
                 ]
-                special_mask = ((1 << special_primes) - 1) << self.rings[0].ell
+                # The special primes are the ones the level chain drops, so
+                # take them from the full ring's mask rather than from a prime
+                # count: bits in a mask are indices into the shared RNS base,
+                # which only start at 0 for the first ring built over it.
+                special_mask = rings.mask & ~self.rings[0].mask
                 self.special_rings = [
                     rings.quotient_ring(mask=self.rings[i].mask | special_mask)
                     for i in range(len(self.rings))
