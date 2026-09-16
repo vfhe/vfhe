@@ -5,3 +5,7 @@
 // internal support with no Python symbols.
 
 const char *vfhe_engine_active(void);
+
+// From cpu_probe.c, which is in the library as well as in the picker's probe:
+// the last level of cache before memory, or 0 where this build cannot tell.
+uint64_t vfhe_cpu_last_level_cache_bytes(void);

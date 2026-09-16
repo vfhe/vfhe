@@ -448,6 +448,14 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_fold_blocks(result._struct, self._struct, block, element.value)
         return result
 
+    def chunk_length(self, live: int = 4) -> int:
+        """The front states the contract."""
+        return self._chunk_length(self.field.d * 8, live)
+
+    def chain_bytes(self, live: int = 4) -> int:
+        """The front states the contract; here an element is its planes."""
+        return len(self) * self.field.d * 8 * max(live, 1)
+
     @property
     def padding_unit(self) -> int:
         """The eltwise kernels' vector width; the front says what it governs."""

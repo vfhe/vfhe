@@ -199,6 +199,40 @@ def test_short_codeword_round_trips(field):
     assert code.decode(word)[0]
 
 
+def test_fold_is_the_same_windowed_or_not(field, monkeypatch):
+    """`fold` computes the same codeword however the vector is cut up.
+
+    It splits into windows only for codewords larger than the machine's
+    cache, which no test codeword is, so the windowed path is forced here by
+    reporting a tiny cache and a tiny window. Both the arithmetic and the
+    short final window have to come out identical.
+    """
+    import vfhe.arith.base as base
+
+    code = FieldFoldableRS(field, k0=4, c=2, d=6)
+    message = FieldVector(field, code.k_d)
+    message.sample_random(b"windowed-fold")
+    word = code.encode(message)
+    r = field.random_element(b"r")
+
+    plain: list[list] = [[] for _ in range(code.d + 1)]
+    cur = word
+    for level in range(code.d, 0, -1):
+        cur = code.fold(cur, r, level=level)
+        plain[level - 1] = cur.to_list()
+
+    # A cache of one byte and a window of a few elements, so that every
+    # level splits and every level's last window is a short one.
+    monkeypatch.setattr(base, "_CACHE_BYTES", 1)
+    monkeypatch.setattr(base, "CHUNK_BUDGET_BYTES", 1 << 11)
+    assert len(list(code._twist_vectors[code.d - 1].chunks(live=4))) > 1
+
+    cur = word
+    for level in range(code.d, 0, -1):
+        cur = code.fold(cur, r, level=level)
+        assert cur.to_list() == plain[level - 1], f"level {level} differs windowed"
+
+
 def test_leaf_digests_go_straight_into_a_tree(field):
     """The digests are packed, which is exactly what `Merkle.from_digests`
     reads -- the codeword reaches a root with no object per leaf."""
