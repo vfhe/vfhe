@@ -941,6 +941,40 @@ class FieldElement(metaclass=_ImplementationDispatch):
         return not self.__eq__(other)
 
 
+#: How many bytes one window of `FieldVector.chunks` covers, across every
+#: vector the sequence has in hand. Sized to a core's own L2 rather than the
+#: shared last level, so that a window stays resident while the sequence runs
+#: over it even when other cores are busy.
+CHUNK_BUDGET_BYTES = 2 << 20
+
+#: How far past the last level of cache a sequence must reach before
+#: `FieldVector.chunks` splits it into windows. Below this it hands back a
+#: single window, because a sequence whose vectors nearly fit is already
+#: reading them from cache and windowing it would only add work.
+CHUNK_CACHE_MARGIN = 4
+
+
+def cache_bytes() -> int:
+    """This machine's last level of cache before memory, in bytes.
+
+    0 where the platform does not report it, which callers should read as
+    "unknown" rather than "none": `FieldVector.chunks` takes it as a reason
+    not to split a sequence into windows at all.
+
+    Asked of the machine once and remembered; it cannot change under a
+    running process.
+    """
+    global _CACHE_BYTES
+    if _CACHE_BYTES is None:
+        # Deferred: the front is imported before an engine is picked.
+        from vfhe.engine import lib
+
+        _CACHE_BYTES = int(lib.vfhe_cpu_last_level_cache_bytes())
+    return _CACHE_BYTES
+
+
+_CACHE_BYTES: int | None = None
+
 #: Buffer formats `index_buffer` accepts: unsigned, and 8 bytes wide once the
 #: itemsize agrees. Signed ones are excluded on purpose -- a negative index
 #: means "from the end" in a sequence and would be a huge positive here.
@@ -1266,6 +1300,90 @@ class FieldVector(metaclass=_ImplementationDispatch):
         lo = [at + i for at in range(0, n, 2 * block) for i in range(block)]
         hi = [at + block + i for at in range(0, n, 2 * block) for i in range(block)]
         return lo, hi
+
+    def chunk_length(self, live: int = 4) -> int:
+        """How many elements one window of `chunks` covers.
+
+        `chunks` is the usual way to reach this; take it directly to size a
+        scratch vector before the loop starts.
+
+        :param live: How many vectors of this length the sequence has in hand
+            at once -- its operands, its result and any scratch.
+        :returns: A multiple of `padding_unit`, so `view` accepts it, and
+            never longer than this vector.
+        """
+        raise NotImplementedError
+
+    def _chunk_length(self, element_bytes: int, live: int) -> int:
+        """`chunk_length` once an implementation has said what one of its
+        elements costs. Only that width differs between implementations, so
+        the rest of the sizing lives here."""
+        unit = self.padding_unit
+        budget = CHUNK_BUDGET_BYTES // (element_bytes * max(live, 1))
+        length = max(unit, (budget // unit) * unit)
+        return max(min(length, len(self)), 1)
+
+    def chunks(self, live: int = 4):
+        """``(start, length)`` windows covering this vector, for running a
+        sequence of operations a piece at a time.
+
+        Use it when several operations run over the same long vectors one
+        after another. Written the direct way, each operation reads the whole
+        vector back from memory before the next one starts; driven through
+        these windows, each piece is loaded once and every operation in the
+        sequence runs on it while it is still in cache. `view` cuts the
+        operands to a window and every operation takes an ``out=``, so the
+        sequence is the same calls in the same order::
+
+            scratch = FieldVector(field, max(n for _, n in a.chunks()))
+            for start, length in a.chunks():
+                x, y = a.view(start, length), b.view(start, length)
+                t = scratch.view(0, length)
+                x.sub(y, out=t)
+                y.fma(t, t, out=result.view(start, length))
+
+        Windows are only worth taking when the vectors are large enough that
+        the sequence would otherwise stream them from memory repeatedly, so
+        **this yields a single window covering the whole vector until they
+        are**, and the loop above is then exactly the direct form. That means
+        it is always safe to write; there is no size below which it costs
+        something.
+
+        :param live: How many vectors of this length the sequence has in
+            hand at once -- its operands, its result and any scratch. It sets
+            how wide a window can be, so an underestimate makes them too wide
+            to help.
+        :returns: ``(start, length)`` pairs in order, together covering the
+            vector exactly. `start` and all but the final `length` are
+            multiples of `padding_unit`, so `view` accepts every one of them.
+        """
+        total = len(self)
+        length = total if self._fits_cache(live) else self.chunk_length(live)
+        for start in range(0, max(total, 1), max(length, 1)):
+            yield start, min(length, total - start)
+
+    def _fits_cache(self, live: int) -> bool:
+        """Whether a sequence holding `live` vectors of this shape stays near
+        enough to cache that splitting it into windows would not pay.
+
+        True when this machine does not report its cache size, so that an
+        unknown machine runs the sequence whole rather than on a guess.
+        """
+        cache = cache_bytes()
+        if cache == 0:
+            return True
+        return self.chain_bytes(live) <= cache * CHUNK_CACHE_MARGIN
+
+    def chain_bytes(self, live: int = 4) -> int:
+        """How many bytes a sequence holding `live` vectors of this length
+        touches in total.
+
+        What decides whether `chunks` splits into windows, and the figure to
+        compare against `cache_bytes` when reasoning about a sequence: one
+        vector can sit well inside the cache while the sequence around it
+        does not fit at all.
+        """
+        raise NotImplementedError
 
     @property
     def padding_unit(self) -> int:

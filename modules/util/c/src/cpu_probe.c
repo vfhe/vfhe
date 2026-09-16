@@ -3,7 +3,9 @@
 // CPU capability probes. Their own translation unit with no engine
 // dependencies, so the engine picker's extension can carry just this.
 
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "vfhe_cpu.h"
 
@@ -35,6 +37,65 @@ static int probe(const char *capability)
  * missing case must fall back to a slower engine, never to illegal
  * instructions. An empty name means "no requirement". */
 int vfhe_cpu_supports(const char *capability) { return probe(capability) > 0; }
+
+/* The last level of cache before memory, in bytes, or 0 if unknown.
+ *
+ * Asked of `sysconf` first, which answers on glibc; the sysfs walk below
+ * covers a C library without those names. L3 is reported where there is one
+ * and L2 otherwise, since what a caller wants is the boundary at which a
+ * working set starts going to memory, whatever that level is numbered. */
+static uint64_t cache_from_sysfs(void)
+{
+    uint64_t best = 0;
+    for (int index = 0; index < 10; index++)
+    {
+        char path[128];
+        int level = 0;
+        unsigned long size = 0;
+        char unit = 0;
+        FILE *f;
+
+        snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu0/cache/index%d/level", index);
+        f = fopen(path, "r");
+        if (f == NULL)
+            break;
+        if (fscanf(f, "%d", &level) != 1)
+            level = 0;
+        fclose(f);
+
+        snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu0/cache/index%d/size", index);
+        f = fopen(path, "r");
+        if (f == NULL)
+            continue;
+        if (fscanf(f, "%lu%c", &size, &unit) >= 1 && level >= 2)
+        {
+            uint64_t bytes = size;
+            if (unit == 'K' || unit == 'k')
+                bytes *= 1024;
+            else if (unit == 'M' || unit == 'm')
+                bytes *= 1024 * 1024;
+            if (bytes > best)
+                best = bytes;
+        }
+        fclose(f);
+    }
+    return best;
+}
+
+uint64_t vfhe_cpu_last_level_cache_bytes(void)
+{
+#if defined(_SC_LEVEL3_CACHE_SIZE)
+    long l3 = sysconf(_SC_LEVEL3_CACHE_SIZE);
+    if (l3 > 0)
+        return (uint64_t)l3;
+#endif
+#if defined(_SC_LEVEL2_CACHE_SIZE)
+    long l2 = sysconf(_SC_LEVEL2_CACHE_SIZE);
+    if (l2 > 0)
+        return (uint64_t)l2;
+#endif
+    return cache_from_sysfs();
+}
 
 /* Whether this build's probe can judge `capability` at all. Falling back is
  * right at runtime and wrong while developing: it makes a mistyped or
