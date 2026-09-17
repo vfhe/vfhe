@@ -225,10 +225,39 @@ class ExtensionFieldVector(FieldVector):
             raise ValueError(f"out holds {len(out)} elements, not {want}")
         return out
 
-    def _binary(self, other, vector_kernel, scalar_kernel, out=None):
-        """Apply the elementwise kernel, or the broadcast one for an element."""
+    def _is_subfield_table(self, other) -> bool:
+        """Whether `other` is a vector over this field's prime subfield: the
+        degree-1 field with the same prime, whose vectors hold one plane and
+        whose products with this field's vectors are plane-wise."""
+        return (
+            isinstance(other, ExtensionFieldVector)
+            and other.field is not self.field
+            and other.field.d == 1
+            and other.field.prime == self.field.prime
+        )
+
+    def _table(self, other, name: str, n: int | None = None) -> ExtensionFieldVector:
+        """A table operand: a vector over this field or over its prime
+        subfield, `n` elements long (this vector's length unless given)."""
+        if not isinstance(other, ExtensionFieldVector):
+            raise TypeError(f"{name} must be a FieldVector, not {type(other).__name__}")
+        if other.field is not self.field and not self._is_subfield_table(other):
+            raise ValueError(f"{name} belongs to a different field")
+        want = self._n if n is None else n
+        if len(other) != want:
+            raise ValueError(f"{name} holds {len(other)} elements, not {want}")
+        return other
+
+    def _binary(self, other, vector_kernel, scalar_kernel, out=None, plane_kernel=None):
+        """Apply the elementwise kernel, or the broadcast one for an element
+        -- or, for an operation that has one, the plane kernel for a vector
+        over the prime subfield."""
         result = self._destination(out)
         if isinstance(other, ExtensionFieldVector):
+            if plane_kernel is not None and self._is_subfield_table(other):
+                self._table(other, "other")
+                plane_kernel(result._struct, self._struct, other._struct)
+                return result
             if other.field is not self.field:
                 raise ValueError("vectors belong to different fields")
             if len(other) != self._n:
@@ -249,7 +278,9 @@ class ExtensionFieldVector(FieldVector):
 
     def mul(self, other, out=None) -> ExtensionFieldVector:
         """`self * other` into `out` when given."""
-        return self._binary(other, lib.field_vec_mul, lib.field_vec_scale, out)
+        return self._binary(
+            other, lib.field_vec_mul, lib.field_vec_scale, out, lib.field_vec_mul_plane
+        )
 
     def rsub(self, other, out=None) -> ExtensionFieldVector:
         """`other - self` for one element `other`, in one pass."""
@@ -280,11 +311,13 @@ class ExtensionFieldVector(FieldVector):
             raise ValueError(f"length mismatch: {self._n} and {len(b)}")
         result = self._destination(out)
         if isinstance(c, ExtensionFieldVector):
-            if c.field is not self.field:
-                raise ValueError("vectors belong to different fields")
-            if len(c) != self._n:
-                raise ValueError(f"length mismatch: {self._n} and {len(c)}")
-            lib.field_vec_fma(result._struct, self._struct, b._struct, c._struct)
+            self._table(c, "c")
+            if self._is_subfield_table(c):
+                lib.field_vec_fma_plane(
+                    result._struct, self._struct, b._struct, c._struct
+                )
+            else:
+                lib.field_vec_fma(result._struct, self._struct, b._struct, c._struct)
         else:
             element = self._coerce_element(c)
             lib.field_vec_fma_scalar(
@@ -326,7 +359,9 @@ class ExtensionFieldVector(FieldVector):
         A vector operand multiplies position by position; an element (or an
         int) multiplies every position, the same as `scale`.
         """
-        return self._binary(other, lib.field_vec_mul, lib.field_vec_scale)
+        return self._binary(
+            other, lib.field_vec_mul, lib.field_vec_scale, None, lib.field_vec_mul_plane
+        )
 
     def __rmul__(self, other) -> ExtensionFieldVector:
         """``other * self``; multiplication commutes, so this is `__mul__`."""
@@ -375,15 +410,11 @@ class ExtensionFieldVector(FieldVector):
         return even, odd
 
     def fold_twisted(self, twist2_inv, twist, r, out=None) -> ExtensionFieldVector:
-        """One level of a Reed-Solomon fold over the pairs this vector holds."""
+        """The pairwise fold of the front, as one kernel call; the tables are
+        over this field or its prime subfield."""
         half = len(self) // 2
-        for name, table in (("twist2_inv", twist2_inv), ("twist", twist)):
-            if not isinstance(table, ExtensionFieldVector):
-                raise TypeError(f"{name} must be a FieldVector")
-            if table.field is not self.field:
-                raise ValueError(f"{name} belongs to a different field")
-            if len(table) != half:
-                raise ValueError(f"{name} holds {len(table)} elements, not {half}")
+        self._table(twist2_inv, "twist2_inv", half)
+        self._table(twist, "twist", half)
         result = self._destination(out, half)
         lib.field_vec_fold_twisted(
             result._struct,
@@ -417,6 +448,40 @@ class ExtensionFieldVector(FieldVector):
             else:
                 multipliers += [ffi.NULL, a._coerce_element(c).value]
         lib.field_vec_fma_interleave(result._struct, a._struct, b._struct, *multipliers)
+        return result
+
+    @staticmethod
+    def lift_twisted(a, b, twist, out=None) -> ExtensionFieldVector:
+        """The front's `lift_twisted` as one kernel call: the product formed
+        once per pair, the table read cyclically in place, the pair
+        interleaved in cache. The table is over this field or its prime
+        subfield."""
+        if not isinstance(a, ExtensionFieldVector) or not isinstance(
+            b, ExtensionFieldVector
+        ):
+            raise TypeError("lift_twisted takes two ExtensionFieldVectors")
+        if b.field is not a.field:
+            raise ValueError("operands belong to different fields")
+        if len(b) != len(a):
+            raise ValueError(f"length mismatch: {len(a)} and {len(b)}")
+        if not isinstance(twist, ExtensionFieldVector):
+            raise TypeError("twist must be a FieldVector")
+        period = len(twist)
+        if period == 0 or len(a) % period:
+            raise ValueError(f"a table of {period} does not divide {len(a)} positions")
+        a._table(twist, "twist", period)
+        if period < len(a) and (period % a.padding_unit or period & (period - 1)):
+            # Too short or too ragged for the kernel to read cyclically: a
+            # tiled table, lifted to this field if it is a subfield one.
+            table = twist
+            if a._is_subfield_table(table):
+                table = ExtensionFieldVector(a.field, [int(e) for e in table])
+            table = ExtensionFieldVector.concat([table] * (len(a) // period))
+            return ExtensionFieldVector.fma_interleave(a, b, table, -table, out)
+        result = a._destination(out, 2 * len(a))
+        lib.field_vec_lift_twisted(
+            result._struct, a._struct, b._struct, twist._struct, period
+        )
         return result
 
     @staticmethod

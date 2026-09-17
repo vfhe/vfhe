@@ -272,12 +272,141 @@ void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldV
     free(scratch);
 }
 
-// The fold of a codeword held as adjacent `(P(x), P(-x))` pairs:
+// Product with a table of prime-field scalars, one per position: `t` holds a
+// single plane (d == 1) over the same modulus, and out[i] = a[i] * t[i] is
+// each of a's d planes scaled position-wise by it -- d eltwise passes, no
+// cross-plane terms and no reduction by w, against the 2d^2 + d - 1 passes of
+// the full product. `out` may alias `a`.
+void field_vec_mul_plane(FieldVector out, const FieldVector a, const FieldVector t)
+{
+    for (uint64_t j = 0; j < a->d; j++)
+        mod_eltwise_mul(out->coeffs[j], a->coeffs[j], t->coeffs[0], a->allocated_n, a->mod);
+}
+
+// out = a + b * t for the same kind of table. `out` may alias any operand:
+// the product goes through one scratch plane.
+void field_vec_fma_plane(FieldVector out, const FieldVector a, const FieldVector b,
+                         const FieldVector t)
+{
+    const uint64_t len = a->allocated_n;
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(len * sizeof(uint64_t));
+    for (uint64_t j = 0; j < a->d; j++)
+    {
+        mod_eltwise_mul(scratch, b->coeffs[j], t->coeffs[0], len, a->mod);
+        mod_eltwise_add(out->coeffs[j], a->coeffs[j], scratch, len, a->mod);
+    }
+    free(scratch);
+}
+
+// A table is either d planes (an element per position) or one (a prime-field
+// scalar per position); these pick the product for it.
+static void mul_by_table(FieldVector out, const FieldVector a, const FieldVector t)
+{
+    if (t->d == 1 && a->d > 1)
+        field_vec_mul_plane(out, a, t);
+    else
+        field_vec_mul(out, a, t);
+}
+
+static void fma_by_table(FieldVector out, const FieldVector a, const FieldVector b,
+                         const FieldVector t)
+{
+    if (t->d == 1 && a->d > 1)
+        field_vec_fma_plane(out, a, b, t);
+    else
+        field_vec_fma(out, a, b, t);
+}
+
+// From `a`, `b` and a table `t`,
+//
+//     out[2i]     = a[i] + b[i] * t[i mod period]
+//     out[2i + 1] = a[i] - b[i] * t[i mod period]
+//
+// The product is formed once per pair -- the two positions differ only by its
+// sign -- and the pair is interleaved while still cached, so `out` is written
+// once. A table shorter than `a` is read cyclically in place rather than tiled
+// out to a's length. `t` is d planes or one.
+//
+// `period` is the table's length. Below a->n it must be a power of two and a
+// whole number of eltwise vectors, so that the windows below never straddle a
+// repetition; at or above a->n the table is read like `a` itself.
+void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVector b,
+                            const FieldVector t, uint64_t period)
+{
+    const uint64_t d = a->d, n = a->n, padded = a->allocated_n;
+    if (padded == 0)
+        return;
+    const int periodic = period < n;
+
+    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (2 * d * sizeof(uint64_t));
+    window -= window % MOD_MIN_VECTOR_LEN;
+    if (window < MOD_MIN_VECTOR_LEN)
+        window = MOD_MIN_VECTOR_LEN;
+    if (window > padded)
+        window = padded;
+    if (periodic)
+    {
+        // A power of two no larger than the period, so that every window
+        // start is a multiple of the window and every window lies inside one
+        // repetition of the table.
+        uint64_t pow2 = MOD_MIN_VECTOR_LEN;
+        while (pow2 * 2 <= window)
+            pow2 *= 2;
+        window = pow2 < period ? pow2 : period;
+    }
+
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(2 * d * window * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)safe_malloc(5 * d * sizeof(uint64_t *));
+    struct _FieldVector prod = *a, odd = *a, av = *a, bv = *a, tv = *t;
+
+    prod.coeffs = planes;
+    odd.coeffs = planes + d;
+    av.coeffs = planes + 2 * d;
+    bv.coeffs = planes + 3 * d;
+    tv.coeffs = planes + 4 * d;
+    for (uint64_t j = 0; j < d; j++)
+    {
+        prod.coeffs[j] = scratch + j * window;
+        odd.coeffs[j] = scratch + (d + j) * window;
+    }
+
+    for (uint64_t start = 0; start < padded; start += window)
+    {
+        const uint64_t len = (padded - start < window) ? padded - start : window;
+        const uint64_t offset = periodic ? start % period : start;
+        for (uint64_t j = 0; j < d; j++)
+        {
+            av.coeffs[j] = a->coeffs[j] + start;
+            bv.coeffs[j] = b->coeffs[j] + start;
+        }
+        for (uint64_t j = 0; j < t->d; j++)
+            tv.coeffs[j] = t->coeffs[j] + offset;
+        prod.n = odd.n = av.n = bv.n = tv.n = len;
+        prod.allocated_n = odd.allocated_n = av.allocated_n = len;
+        bv.allocated_n = tv.allocated_n = len;
+
+        mul_by_table(&prod, &bv, &tv);
+        field_vec_sub(&odd, &av, &prod);
+        field_vec_add(&prod, &av, &prod);
+
+        if (start < n)
+        {
+            const uint64_t take = (n - start < len) ? n - start : len;
+            for (uint64_t j = 0; j < d; j++)
+                vec_interleave_u64(out->coeffs[j] + 2 * start, prod.coeffs[j], odd.coeffs[j], take);
+        }
+    }
+
+    free(planes);
+    free(scratch);
+}
+
+// `word` read as adjacent pairs, folded with the tables and one element r:
 //
 //     t[i]   = (word[2i] - word[2i + 1]) * twist2_inv[i]
 //     out[i] = word[2i + 1] + t[i] * twist[i] + t[i] * r
 //
-// Five passes over a half-codeword, run a window at a time so that the split's
+// Five passes over half of `word`, run a window at a time so that the split's
 // two halves and the running term stay cached instead of being streamed back
 // from memory between each one.
 void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector twist2_inv,
@@ -296,7 +425,8 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
 
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(2 * d * window * sizeof(uint64_t));
     uint64_t **planes = (uint64_t **)safe_malloc(6 * d * sizeof(uint64_t *));
-    struct _FieldVector lo = *out, hi = *out, pair = *word, t2i = *out, tw = *out, dst = *out;
+    struct _FieldVector lo = *out, hi = *out, pair = *word, t2i = *twist2_inv, tw = *twist,
+                        dst = *out;
 
     lo.coeffs = planes;
     hi.coeffs = planes + d;
@@ -313,7 +443,7 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
     for (uint64_t start = 0; start < padded; start += window)
     {
         const uint64_t len = (padded - start < window) ? padded - start : window;
-        // The result is padded to n and the codeword to 2n, and those round
+        // The result is padded to n and `word` to 2n, and those round
         // up differently, so the last window can ask for a few pairs past the
         // end of `word`. Those positions are padding of the result: the split
         // takes what is there and the rest is zeroed, which the arithmetic
@@ -323,11 +453,15 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
 
         for (uint64_t j = 0; j < d; j++)
         {
-            t2i.coeffs[j] = twist2_inv->coeffs[j] + start;
-            tw.coeffs[j] = twist->coeffs[j] + start;
             dst.coeffs[j] = out->coeffs[j] + start;
             pair.coeffs[j] = word->coeffs[j] + 2 * start;
         }
+        // The tables are d planes, or one each when they hold prime-field
+        // scalars; either way they are read at this window's offset.
+        for (uint64_t j = 0; j < twist2_inv->d; j++)
+            t2i.coeffs[j] = twist2_inv->coeffs[j] + start;
+        for (uint64_t j = 0; j < twist->d; j++)
+            tw.coeffs[j] = twist->coeffs[j] + start;
         lo.n = hi.n = t2i.n = tw.n = dst.n = len;
         lo.allocated_n = hi.allocated_n = t2i.allocated_n = len;
         tw.allocated_n = dst.allocated_n = len;
@@ -341,8 +475,8 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
         }
 
         field_vec_sub(&lo, &lo, &hi);
-        field_vec_mul(&lo, &lo, &t2i);
-        field_vec_fma(&dst, &hi, &lo, &tw);
+        mul_by_table(&lo, &lo, &t2i);
+        fma_by_table(&dst, &hi, &lo, &tw);
         field_vec_fma_scalar(&dst, &dst, &lo, r);
     }
 

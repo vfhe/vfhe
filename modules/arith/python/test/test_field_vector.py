@@ -532,8 +532,8 @@ class TestSamplingAndHashing:
             vector.hash_elements(group=0)
 
 
-def test_the_codeword_fold_is_expressible_in_vector_operations():
-    """A Reed-Solomon fold, the shape the first consumer needs.
+def test_a_twisted_pair_fold_is_expressible_in_vector_operations():
+    """A twisted pair fold, written over whole vectors.
 
     ``folded[i] = hi + coeff * twist + r * coeff`` with
     ``coeff = (lo - hi) * twist2_inv``, per position. Written once over
@@ -564,8 +564,8 @@ class TestAliasingContract:
     """The header promises arithmetic outputs may alias their inputs.
 
     Nothing in the Python API aliases -- every operation allocates its result
-    -- but the C entry points are the currency the piop and polycom kernels
-    will be written against, so the promise is exercised here at that level.
+    -- but the C entry points are the currency other modules' kernels are
+    written against, so the promise is exercised here at that level.
     """
 
     @staticmethod
@@ -699,6 +699,88 @@ class TestNativeMovementAndFold:
         lo.mul(c_even, out=lo)
         want = hi.fma(lo, c_odd)
         assert word.fold_twisted(c_even, c_odd, r) == want.fma(lo, r, out=want)
+
+    @pytest.mark.parametrize("n", [1, 8, 18, 26, 200, 9000])
+    def test_lift_twisted_is_fma_interleave_with_the_table_and_its_negation(self, n):
+        field = make_field()
+        a = FieldVector(field, self.values(field, n))
+        b = FieldVector(field, self.values(field, n))
+        twist = FieldVector(field, self.values(field, n))
+        lifted = FieldVector.lift_twisted(a, b, twist)
+        assert len(lifted) == 2 * n
+        assert lifted == FieldVector.fma_interleave(a, b, twist, -twist)
+        out = FieldVector(field, 2 * n)
+        assert FieldVector.lift_twisted(a, b, twist, out=out) is out and out == lifted
+        assert ExtensionFieldVector.lift_twisted(a, b, twist) == lifted
+
+    @pytest.mark.parametrize("period", [4, 8, 64, 512, 4096, 16384])
+    def test_lift_twisted_reads_a_short_table_cyclically(self, period):
+        """A table of `period` positions is read `n / period` times over --
+        including one shorter than the kernel's vector width, which the front
+        tiles itself, and ones longer than its window."""
+        field = make_field()
+        n = 16384
+        a, b = FieldVector(field, n), FieldVector(field, n)
+        twist = FieldVector(field, period)
+        for vector, seed in ((a, b"a"), (b, b"b"), (twist, b"t")):
+            vector.sample_random(seed)
+        tiled = FieldVector.concat([twist] * (n // period))
+        assert FieldVector.lift_twisted(a, b, twist) == FieldVector.fma_interleave(
+            a, b, tiled, -tiled
+        )
+        with pytest.raises(ValueError, match="does not divide"):
+            FieldVector.lift_twisted(a, b, FieldVector(field, 24))
+
+    @pytest.mark.parametrize("n", [8, 26, 9000])
+    def test_prime_subfield_tables_multiply_plane_wise(self, n):
+        """A table over `F_p` (the degree-1 field with the same prime) is
+        accepted by `mul`, `fma`, `lift_twisted` and `fold_twisted`, and gives
+        exactly what the same table lifted to the extension gives."""
+        field = make_field()
+        subfield = ExtensionField(PRIME, 1)
+        ints = [value[0] or 1 for value in self.values(field, n)]
+        table = FieldVector(subfield, ints)
+        lifted = FieldVector(field, ints)
+        a = FieldVector(field, self.values(field, n))
+        b = FieldVector(field, self.values(field, n))
+        assert a.mul(table) == a.mul(lifted) and a * table == a * lifted
+        assert a.fma(b, table) == a.fma(b, lifted)
+        out = FieldVector(field, n)
+        assert a.fma(b, table, out=out) is out and out == a.fma(b, lifted)
+        assert FieldVector.lift_twisted(a, b, table) == FieldVector.lift_twisted(
+            a, b, lifted
+        )
+        word = FieldVector(field, self.values(field, 2 * n))
+        r = FieldElement(field, self.values(field, 1)[0])
+        inverse = table.scale(2).inverse()
+        assert word.fold_twisted(inverse, table, r) == word.fold_twisted(
+            FieldVector(field, [int(e) for e in inverse]), lifted, r
+        )
+        # The lift folds back with the same tables.
+        assert (
+            FieldVector.lift_twisted(a, b, table).fold_twisted(
+                inverse, table, field.one
+            )
+            == a + b
+        )
+        other = FieldVector(ExtensionField(562949953421201, 1), [1] * n)
+        with pytest.raises(ValueError, match="different field"):
+            a.mul(other)
+        with pytest.raises(ValueError, match="different field"):
+            word.fold_twisted(other, other, r)
+
+    def test_a_short_prime_subfield_table_is_tiled_and_lifted(self):
+        field = make_field()
+        subfield = ExtensionField(PRIME, 1)
+        n, period = 64, 4
+        a, b = FieldVector(field, n), FieldVector(field, n)
+        a.sample_random(b"a")
+        b.sample_random(b"b")
+        table = FieldVector(subfield, [3, 5, 7, 11])
+        tiled = FieldVector(field, [3, 5, 7, 11] * (n // period))
+        assert FieldVector.lift_twisted(a, b, table) == FieldVector.fma_interleave(
+            a, b, tiled, -tiled
+        )
 
     def test_fold_twisted_checks_the_table_lengths(self):
         field = make_field()
@@ -1500,7 +1582,7 @@ class TestMovementDestinations:
 class TestDigestsAreAViewNotACopy:
     """`hash_elements` hands back the kernel's own buffer.
 
-    A view rather than a copy, because a codeword's digests are tens of
+    A view rather than a copy, because a long vector's digests are tens of
     megabytes and copying them costs more than hashing them. It has to behave
     like the bytes it views for everything a caller does with digests, and it
     has to be read-only -- a tree that will not copy it either is only safe if

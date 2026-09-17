@@ -18,13 +18,14 @@ from .code import (
     bit_reverse_permutation,
     foldable_relative_distance,
 )
-from .field_code import FieldFoldableRS
+from .field_code import TWIST_FIELDS, FieldFoldableRS
 from .queries import query_positions
 
 __all__ = [
     "DEFAULT_SEED",
     "DISTANCE_BOUNDS",
     "INSTANTIATIONS",
+    "TWIST_FIELDS",
     "Basefold",
     "BasefoldCommitment",
     "BasefoldEval",

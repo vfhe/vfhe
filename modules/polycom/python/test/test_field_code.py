@@ -289,10 +289,35 @@ def test_a_field_without_two_adicity_is_served():
 
 def test_the_two_base_encoders_agree(field):
     """The transform and the Vandermonde product are encoders of one code:
-    a base message encodes to the same codeword through either."""
+    the base messages of a message at any level encode to the same codewords
+    through either, in the same layout."""
     code = _code(field)
-    message = _random(field, code.k0, b"m")
-    assert code.encode(message) == code._base_encode_all(message, 0)
+    for level in range(code.d + 1):
+        message = _random(field, code.k0 << level, bytes([level]))
+        horner = code._base_encode_all(message, level)
+        if code._batched is not None:
+            assert code._batched.encode_all(message, level) == horner
+            assert code._batched.decode_all(horner, level, len(message)) == (
+                True,
+                message,
+            )
+        elif level == 0:
+            assert code.encode(message) == horner
+
+
+def test_a_field_whose_root_is_off_the_prime_subfield_transforms():
+    """2^61 - 1 has 2-adicity 1, but F_(p^2) has roots of unity of every
+    two-power order up to 2^61: the base transform runs in the extension
+    domain, so `roots` (the F_p roots) is empty while the encoder is still a
+    transform, and it agrees with the Vandermonde product."""
+    field = Field(*_MERSENNE[:1], 2, _MERSENNE[1])
+    code = _code(field)
+    assert code.roots == [] and code._batched is not None
+    assert code._batched.plan.domain == "extension"
+    message = _random(field, code.k_d, b"m")
+    assert code._batched.encode_all(message, code.d) == code._base_encode_all(
+        message, code.d
+    )
 
 
 def test_zcf24_recurrence_matches_the_paper():
@@ -356,6 +381,47 @@ def test_relative_distance_per_instantiation(field):
     assert 0 < general.relative_distance() < rs.relative_distance()
     assert general.relative_distance(64) > general.relative_distance(128)
     assert general.relative_distance(bound="zcf24") <= general.relative_distance()
+
+
+def test_prime_subfield_twists(field):
+    """`twist_field="prime"` draws the tables from `F_p`: the fold and the
+    encoder agree with the whole-field code's structure (the fold identity,
+    the round trip, the per-pair forms), every twist lies in the subfield,
+    and the distance bound runs on `log2 p` bits -- over a prime field the
+    option is the default code itself."""
+    code = _code(field, d=3, twist_field="prime")
+    whole = _code(field, d=3)
+    assert code.twist_field == "prime" and whole.twists_domain is field
+    if field.degree > 1:
+        assert code.twists_domain.d == 1 and code.twists_domain.prime == field.prime
+        for level in range(code.d):
+            assert all(int(t) for t in code.twists[level])  # in F_p, nonzero
+        assert code.relative_distance() == pytest.approx(
+            foldable_relative_distance(4, 4, 3, math.log2(field.prime), 128)
+        )
+        assert code.relative_distance() < whole.relative_distance()
+    else:
+        assert code.twists_domain is field
+        message = _random(field, code.k_d, b"m")
+        assert code.encode(message) == whole.encode(message)
+    message = _random(field, code.k_d, b"m")
+    word = code.encode(message)
+    assert code.decode(word) == (True, message)
+    r = field.random_element(b"r")
+    for level in range(code.d, 0, -1):
+        folded = code.fold(word, r, level=level)
+        message = _folded(field, message, r)
+        assert folded == code.encode(message)
+        for i in range(0, len(folded), 5):
+            assert code.fold_at(word, r, level, i) == folded[i]
+        positions = list(range(0, len(folded), 3))
+        pairs = [code.pair_at(word, i) for i in positions]
+        assert code.fold_pairs(
+            [lo for lo, _ in pairs], [hi for _, hi in pairs], r, level, positions
+        ) == [folded[i] for i in positions]
+        word = folded
+    with pytest.raises(ValueError, match="twist_field"):
+        _code(field, twist_field="subfield")
 
 
 # --- the Reed-Solomon option ---

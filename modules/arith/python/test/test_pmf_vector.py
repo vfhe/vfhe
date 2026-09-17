@@ -485,8 +485,8 @@ def test_padded_length_is_the_single_source_of_the_plane_size(field):
         assert FieldVector(field, n)._allocated_n == padded
 
 
-def test_the_codeword_fold_is_expressible_in_vector_operations(field):
-    """A Reed-Solomon fold, the shape a consumer needs.
+def test_a_twisted_pair_fold_is_expressible_in_vector_operations(field):
+    """A twisted pair fold, written over whole vectors.
 
     ``folded[i] = hi + coeff * twist + r * coeff`` with
     ``coeff = (lo - hi) * twist2_inv``, per position. Written once over
@@ -642,6 +642,20 @@ class TestBlocksViewsAndIndexedSampling:
         assert int(vector[8]) == 1
         with pytest.raises(ValueError):
             vector.view(1, 8)
+
+    def test_lift_twisted_takes_the_generic_body(self, field):
+        """No kernel here, so the front tiles the table and interleaves two
+        fused products; the result is the definition either way."""
+        n, period = 64, 16
+        a = FieldVector(field, random_values(field, n, 63))
+        b = FieldVector(field, random_values(field, n, 64))
+        twist = FieldVector(field, random_values(field, period, 65))
+        lifted = FieldVector.lift_twisted(a, b, twist)
+        p = field.prime
+        for i in range(n):
+            t = int(twist[i % period])
+            assert int(lifted[2 * i]) == (int(a[i]) + int(b[i]) * t) % p
+            assert int(lifted[2 * i + 1]) == (int(a[i]) - int(b[i]) * t) % p
 
     def test_a_view_of_a_view_starts_where_the_view_does(self, field):
         values = random_values(field, 64, 62)

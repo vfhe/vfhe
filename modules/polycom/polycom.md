@@ -111,17 +111,34 @@ The family is instantiated in one of two ways, chosen by the constructor's
   fresh derived seed until no entry is zero (`diag(T) ∈ (F^×)^n`, the
   paper's condition). The base code is a
   Reed-Solomon code on `n0` points, which is what the distance argument
-  needs (below) — and one code with **two encoders**: arith's negacyclic
-  NTT where the field has a root of unity of order `2·n0` (`2·n0 | p - 1`;
-  over a ring `n0 | N/split_degree`), a Vandermonde product on `n0` seeded
-  distinct points otherwise. Above the base there is no transform at all,
-  so **any codeword length is served on any field** — Basefold's
-  field-agnosticism. Over a field the encoder is `O(n log n)` in
-  whole-vector passes: the `2^l` base messages of a level-`l` message are
-  encoded together by Horner's scheme over the whole result, and every
-  level above is one `FieldVector.fma_interleave` over all of that level's
-  codewords at once (laid end to end, even half-messages' codewords first,
-  the tables tiled over them). Over a ring it is the recursion, on lists.
+  needs (below) — and one code with **two encoders**: a negacyclic NTT
+  where the field has a root of unity of order `2·n0` anywhere in it (over
+  an extension field arith's batched `ExtensionFieldNTT`, whose root is in
+  `F_p` when `2·n0 | p - 1` and in the extension otherwise; over a ring the
+  `rs_*` kernels when `n0 | N/split_degree`), a Vandermonde product on `n0`
+  seeded distinct points otherwise. Above the base there is no transform at
+  all, so **any codeword length is served on any field** — Basefold's
+  field-agnosticism. Over an extension field the encoder is `O(n log n)`
+  in whole-vector passes: the `2^l` base messages of a level-`l` message
+  are one batched transform (the zero-padded message *is* the batch in the
+  plan's interleaved layout, `plan.pack` / `plan.unpack` do the transposes),
+  and every level above is one `FieldVector.lift_twisted` over all of
+  that level's codewords at once (laid end to end, even half-messages'
+  codewords first; the level's table is read cyclically over them, the
+  product `b·T` formed once per pair, and the passes alternate between
+  two buffers). Over a ring it is the recursion, on lists.
+
+  **Where the twists live** is a second choice, `twist_field`: the whole
+  field (the default), or its prime subfield `F_p` (``"prime"``). With
+  prime-subfield twists every lift and fold multiplies plane-wise -- `d`
+  prime-field products per element, the transform's own arithmetic, in
+  place of a full extension product -- and the distance bound below runs
+  on `log2 p` bits instead of `log2 p^d`, which is more queries for the
+  same soundness (about 1.8x at a 48-bit `p` and `d = 4`). The tables are
+  vectors over `F_p` (`twists_domain`), which the field vector's `mul`,
+  `fma`, `fold_twisted` and `lift_twisted` take as tables; the message and
+  the codeword stay in `F_(p^d)`, and [ZCF24, Rmk. 1] is what carries the
+  `F_p` bound to the extension message space.
 - **`"rs"` — every level a Reed-Solomon code on roots of unity**, the FRI
   folding structure [BBHR18], with one transform per level from the same
   providers. With `psi` the `2n`-th root of unity `ntt_new_plan` picks,
@@ -171,9 +188,9 @@ have proven.
 
 `t_0 = k_0` is the base code's distance as an MDS code, which is why the
 base stays Reed-Solomon whichever encoder produces it. `|F|` is the field
-the twists are drawn from — the whole extension field over
-`FieldFoldableRS`, the smallest residue field over `FoldableRS` (the bound
-is per RNS-prime component). The value is 0 where the theorem gives
+the twists are drawn from — `twists_domain` over `FieldFoldableRS` (the
+whole extension field, or `F_p` with `twist_field="prime"`), the smallest
+residue field over `FoldableRS` (the bound is per RNS-prime component). The value is 0 where the theorem gives
 nothing (a rate-one code, or too few field bits for the depth).
 
 Three conventions to keep in mind:

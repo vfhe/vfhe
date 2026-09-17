@@ -18,3 +18,6 @@ __pycache__/
 /build/
 /coverage/
 /dist/
+
+# Third-party papers kept beside the code for reference; not distributable.
+/reference/

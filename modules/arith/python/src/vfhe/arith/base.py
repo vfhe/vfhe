@@ -1514,11 +1514,10 @@ class FieldVector(metaclass=_ImplementationDispatch):
         The result has twice the length of `a`. `c_even` and `c_odd` are each
         a vector of `a`'s length or a single element, independently.
 
-        This is what a level of a split-and-recombine encoder computes, and
-        doing it in one call rather than as two `fma`s and an `interleave`
+        Doing it in one call rather than as two `fma`s and an `interleave`
         keeps the two halves out of memory: they are produced and consumed a
-        window at a time, so at codeword sizes the result is written once
-        rather than the halves being written, read back and written again.
+        window at a time, so at large sizes the result is written once rather
+        than the halves being written, read back and written again.
 
         Reached on the front, so it dispatches to the operands' own
         implementation, for the reason `concat` gives.
@@ -1558,6 +1557,41 @@ class FieldVector(metaclass=_ImplementationDispatch):
                 half_even, half_odd, out=result.view(2 * start, 2 * length)
             )
         return result
+
+    @staticmethod
+    def lift_twisted(a, b, twist, out: FieldVector | None = None) -> FieldVector:
+        """Two vectors combined through a table, into adjacent pairs::
+
+            out[2i]     = a[i] + b[i] * twist[i mod len(twist)]
+            out[2i + 1] = a[i] - b[i] * twist[i mod len(twist)]
+
+        The inverse move to `fold_twisted`. The product is formed once per
+        pair, and a table shorter than `a` -- its length dividing `len(a)` --
+        is read cyclically rather than tiled to `a`'s length. `twist` is a
+        vector over `a`'s field or, where the implementation supports it,
+        over its prime subfield (see `fold_twisted`).
+
+        Dispatches to the operands' own implementation, for the reason
+        `concat` gives; the body here tiles the table and calls
+        `fma_interleave` with it and its negation.
+        """
+        if not isinstance(a, FieldVector) or not isinstance(b, FieldVector):
+            raise TypeError("lift_twisted takes two vectors")
+        own = type(a).lift_twisted
+        if own is not FieldVector.lift_twisted:
+            return own(a, b, twist, out)
+        if not isinstance(twist, FieldVector):
+            raise TypeError("twist must be a FieldVector")
+        if len(twist) == 0 or len(a) % len(twist):
+            raise ValueError(
+                f"a table of {len(twist)} does not divide {len(a)} positions"
+            )
+        table = (
+            twist
+            if len(twist) == len(a)
+            else type(a).concat([twist] * (len(a) // len(twist)))
+        )
+        return type(a).fma_interleave(a, b, table, -table, out)
 
     @staticmethod
     def interleave(even, odd, out: FieldVector | None = None) -> FieldVector:
@@ -1614,17 +1648,22 @@ class FieldVector(metaclass=_ImplementationDispatch):
         r,
         out: FieldVector | None = None,
     ) -> FieldVector:
-        """This vector read as adjacent ``(P(x), P(-x))`` pairs and folded with
-        the challenge `r`, one output element per pair::
+        """This vector read as adjacent pairs and folded with the element
+        `r`, one output element per pair::
 
             t = (self[2i] - self[2i + 1]) * twist2_inv[i]
             out[i] = self[2i + 1] + t * twist[i] + t * r
 
         The result is half this vector's length, and the two tables are that
-        length. It is the fold a Reed-Solomon code does between levels, as one
-        call: written out, it is five passes over half a codeword, each reading
-        back what the one before it wrote. Here the passes run on a window
-        still in cache, so the codeword is read once.
+        length. Written out, it is five passes over half the vector, each
+        reading back what the one before it wrote; here the passes run on a
+        window still in cache, so the vector is read once.
+
+        Over an extension field the tables may also be vectors over the
+        **prime subfield** -- the degree-1 field with the same prime -- and
+        the products are then one prime-field multiply per coefficient plane
+        rather than a full extension multiply. `mul`, `fma` and
+        `lift_twisted` take such a table the same way.
 
         :param twist2_inv: the per-position table dividing out the squared
             twist.
@@ -1650,7 +1689,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
 
         Position ``i`` of the result is ``self[2i] + r * (self[2i+1] -
         self[2i])``: the interpolation that binds the low variable of a
-        multilinear table to ``r``, or folds a codeword. ``r`` is one element
+        multilinear table to ``r``. ``r`` is one element
         (or an int). Requires an even length.
 
         ``block`` moves the pair partner ``block`` positions away instead of
@@ -1716,7 +1755,8 @@ class FieldVector(metaclass=_ImplementationDispatch):
         raise NotImplementedError
 
     def hash_elements(self, group: int = 1, stride: int = 1) -> memoryview:
-        """One digest per window of elements: the Merkle leaves of a codeword.
+        """One digest per window of elements, packed: the leaves a Merkle
+        tree over this vector takes.
 
         A window is a **contiguous** run: window ``k`` covers elements
         ``k * stride`` through ``k * stride + group - 1``, in index order, and
@@ -1729,13 +1769,13 @@ class FieldVector(metaclass=_ImplementationDispatch):
         ``digests[32 * k : 32 * (k + 1)]``. That is the layout the kernel
         writes and the layout a tree builder or a transcript reads, so neither
         end has to slice. A caller that wants an object per window can cut
-        them out, but at a codeword's window count that is the expensive form
+        them out, but at a long vector's window count that is the expensive form
         and should be its own decision rather than the default.
 
         The return is a **read-only memoryview of the kernel's own buffer**,
         not a copy of it: it compares, slices, joins and converts like
         `bytes`, and `ffi.from_buffer` hands it back to C without copying, so
-        a codeword's digests reach a Merkle tree without ever being
+        a long vector's digests reach a Merkle tree without ever being
         duplicated. It keeps the C allocation alive for as long as it lives.
         `bytes(digests)` is the copy, when a caller wants one -- and it is
         what a caller needs to hash the digests or key a dict by them, which

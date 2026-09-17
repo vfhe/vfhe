@@ -284,13 +284,11 @@ class TestPoints:
     @pytest.mark.parametrize(("prime", "w"), FIELDS)
     @pytest.mark.parametrize("n", [1, 2, 8, 32])
     def test_matches_the_definition(self, prime, w, n):
-        from vfhe.polycom import bit_reverse
-
         field = ExtensionField(prime, 4, w)
         root = int(field.ntt_plan(8, domain="base").root_of_unity)
         bits = n.bit_length() - 1
         got = [int(value) for value in field.ntt_points(root, n)]
-        assert got == [pow(root, 2 * bit_reverse(i, bits) + 1, prime) for i in range(n)]
+        assert got == [pow(root, 2 * brv(i, bits) + 1, prime) for i in range(n)]
 
     def test_the_points_are_the_transform_s_own(self):
         """Position j of a transform evaluates at point j: the table and the
@@ -356,6 +354,32 @@ class TestBatchLayout:
         vector = FieldVector(field, values(field, 8 * 3, seed=45))
         assert plan.pack(vector, 3) is vector
         assert plan.unpack(vector, 3) is vector
+
+    @pytest.mark.parametrize(
+        ("domain", "prime", "w", "n"),
+        [("base", FUSED_PRIME, FUSED_W, 8), ("extension", FUSED_PRIME, FUSED_W, 16)],
+    )
+    def test_a_caller_may_hold_the_batch_interleaved(self, domain, prime, w, n):
+        """`layout` says what the caller holds; the conversion follows from
+        that and the domain, so an interleaved batch is a no-op for the
+        extension domain and a transpose for the base one."""
+        field = ExtensionField(prime, 4, w)
+        blocks = 4
+        plan = field.ntt_plan(n, domain=domain)
+        source = values(field, n * blocks, seed=47)
+        interleaved = FieldVector(
+            field, source
+        )  # element i of block b at i * blocks + b
+        packed = plan.pack(interleaved, blocks, layout="interleaved")
+        by_blocks = [source[i * blocks + b] for b in range(blocks) for i in range(n)]
+        if plan.batch_layout == "interleaved":
+            assert packed is interleaved
+        else:
+            assert packed.to_list() == by_blocks
+        assert plan.unpack(packed, blocks, layout="interleaved").to_list() == source
+        assert plan.unpack(packed, blocks).to_list() == by_blocks
+        with pytest.raises(ValueError, match="layout"):
+            plan.pack(interleaved, blocks, layout="rows")
 
     def test_a_packed_batch_transforms_to_the_same_thing(self):
         """The round trip that makes the pair worth having: hold the batch by

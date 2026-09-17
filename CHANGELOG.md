@@ -41,6 +41,24 @@ versions may contain breaking changes.
 - Add `instantiation=` and `seed=` to `FoldableRS` / `FieldFoldableRS`, with
   `polycom.INSTANTIATIONS` and `polycom.DEFAULT_SEED`; and `twists_odd`, the
   odd-position twists `-T`, derived from `twists` on request.
+- Add `layout=` to `ExtensionFieldNTT.pack` / `unpack`: a caller says
+  whether it holds a batch by blocks (the default, as before) or interleaved,
+  and the conversion to and from the plan's own layout follows from that and
+  the domain.
+- Add `FieldVector.lift_twisted(a, b, twist, out=None)`: `a + b * t` and
+  `a - b * t` interleaved into one vector of twice the length, as one kernel
+  call that forms the product once per pair and reads a table shorter than `a`
+  cyclically rather than tiled. The inverse move to `fold_twisted`.
+- Add prime-subfield tables to the extension field's vectors: `mul`, `fma`,
+  `fold_twisted` and `lift_twisted` take a vector over the degree-1 field with
+  the same prime and multiply plane-wise (`field_vec_mul_plane` /
+  `field_vec_fma_plane`: `d` prime-field products per element in place of the
+  extension product).
+- Add `twist_field="field" | "prime"` to `FieldFoldableRS` (`polycom.TWIST_FIELDS`):
+  the general code's twists drawn from the whole field (the default) or from
+  its prime subfield, with `relative_distance` on the twists' field. Prime
+  twists make every lift and fold plane-wise, for more queries at the same
+  soundness.
 - Add `polycom.batch_inverse(values, p)`: modular inverses by Montgomery's
   trick, which is how `FoldableRS` now builds its fold tables (one
   exponentiation per level and prime rather than one per entry).
@@ -72,6 +90,40 @@ versions may contain breaking changes.
   the fold's `1 / (2 T)` is held privately.
 - `relative_distance` is a method, not a property: the general code's bound
   depends on the security parameter.
+- The general code over an extension field encodes the base messages of a
+  level-`l` message with one batched transform (`ExtensionField.ntt_plan(n0)`,
+  in the base domain or, on a field with too little 2-adicity, the extension
+  one) where it ran a Horner scheme of `k0` passes; at `k0 = 128` and a `2^20`
+  codeword over `F_(p^4)` the encode is 12x faster (1.69 s to 0.14 s, avx512ifma),
+  and a field whose only roots of unity lie outside `F_p` now has a transform
+  as its base encoder rather than a Vandermonde product.
+- The general code's lifts are `lift_twisted` calls alternating between two
+  buffers, in place of `fma_interleave` over a tiled and negated table into a
+  fresh destination per level: at a `2^22` codeword over `F_(p^4)` the lifts of
+  an 11-level encode go from 724 ms to 363 ms and the commit from 1.16 s to
+  0.88 s (avx512ifma); with `twist_field="prime"` the commit is 0.66 s.
+- `ExtensionFieldNTT.pack` / `unpack`'s transpose goes through a tile buffer
+  with an odd stride, so both its memory sides are contiguous runs; at `2^22`
+  elements over `F_(p^4)` it takes 107 ms to about 50.
+
+- `FieldVector.query` also accepts a buffer of unsigned 64-bit indices, handed
+  to the gather as it stands; the kernel now range-checks them itself.
+- `FieldVector.hash_elements` / `hash_fibers` return a read-only `memoryview`
+  of the kernel's buffer rather than a copy. It compares, slices and converts
+  like `bytes`; `bytes(digests)` is the copy, and is what hashing or keying by
+  them needs.
+- `Merkle.from_digests` accepts any bytes-like and keeps it rather than
+  copying, so a mutable buffer stays connected -- `commit()` re-reads it.
+
+- `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` now raise when
+  the mask names primes outside the pool they are given, instead of dropping
+  them silently. `RNSRing.union` builds the ring over two rings' primes.
+- `Multiprecision.compute_crt_consts` raises for moduli its single-digit
+  Barrett step cannot serve (primes wider than 52 bits) rather than returning
+  constants that reconstruct incorrectly.
+
+- Allocations of 8 MiB and up ask the kernel for huge pages.
+  [`USAGE.md`](docs/USAGE.md) covers the allocator settings that go with it.
 
 ### Fixed
 
@@ -100,27 +152,6 @@ versions may contain breaking changes.
   than a base-2^52 digit; they now come from the moduli themselves, and the
   reconstruction reduces each residue before accumulating, so the number of
   primes no longer bounds what can be reconstructed.
-
-### Changed
-
-- `FieldVector.query` also accepts a buffer of unsigned 64-bit indices, handed
-  to the gather as it stands; the kernel now range-checks them itself.
-- `FieldVector.hash_elements` / `hash_fibers` return a read-only `memoryview`
-  of the kernel's buffer rather than a copy. It compares, slices and converts
-  like `bytes`; `bytes(digests)` is the copy, and is what hashing or keying by
-  them needs.
-- `Merkle.from_digests` accepts any bytes-like and keeps it rather than
-  copying, so a mutable buffer stays connected -- `commit()` re-reads it.
-
-- `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` now raise when
-  the mask names primes outside the pool they are given, instead of dropping
-  them silently. `RNSRing.union` builds the ring over two rings' primes.
-- `Multiprecision.compute_crt_consts` raises for moduli its single-digit
-  Barrett step cannot serve (primes wider than 52 bits) rather than returning
-  constants that reconstruct incorrectly.
-
-- Allocations of 8 MiB and up ask the kernel for huge pages.
-  [`USAGE.md`](docs/USAGE.md) covers the allocator settings that go with it.
 
 ## [0.0.3] - 2026-09-10
 

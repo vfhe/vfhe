@@ -149,6 +149,14 @@ int field_ext_root_of_unity(uint64_t *out, uint64_t n, uint64_t d, uint64_t w, M
 
 static void field_ntt_transpose(uint64_t *out, const uint64_t *in, uint64_t rows, uint64_t cols)
 {
+    // Each tile goes through a local buffer with an odd row stride: both the
+    // reads from `in` and the writes to `out` are then whole contiguous runs,
+    // and the strided access happens only inside the buffer, where the odd
+    // stride keeps the tile's rows out of one another's cache sets. Without
+    // the buffer one side is strided by a row of the matrix -- a multiple of
+    // the page size at the sizes a large batch has -- and every element of
+    // a tile lands in the same set.
+    uint64_t tile[FIELD_NTT_TILE][FIELD_NTT_TILE + 1];
     for (uint64_t i0 = 0; i0 < rows; i0 += FIELD_NTT_TILE)
     {
         const uint64_t imax = i0 + FIELD_NTT_TILE < rows ? i0 + FIELD_NTT_TILE : rows;
@@ -157,7 +165,10 @@ static void field_ntt_transpose(uint64_t *out, const uint64_t *in, uint64_t rows
             const uint64_t jmax = j0 + FIELD_NTT_TILE < cols ? j0 + FIELD_NTT_TILE : cols;
             for (uint64_t i = i0; i < imax; i++)
                 for (uint64_t j = j0; j < jmax; j++)
-                    out[j * rows + i] = in[i * cols + j];
+                    tile[i - i0][j - j0] = in[i * cols + j];
+            for (uint64_t j = j0; j < jmax; j++)
+                for (uint64_t i = i0; i < imax; i++)
+                    out[j * rows + i] = tile[i - i0][j - j0];
         }
     }
 }

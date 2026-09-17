@@ -68,8 +68,7 @@ extern "C"
 
        `mod` is **borrowed**: whoever created the modulus owns it, and
        `ntt_free_plan` leaves it alone. That lets several plans over the same
-       prime at different lengths -- which is exactly what polycom's per-level
-       codes are -- share one set of Barrett constants.
+       prime at different lengths share one set of Barrett constants.
 
        `shoup_shift` is the base-2 logarithm of the Shoup radix the twiddle
        constants were precomputed at: 32, 52 or 64 on an engine with
@@ -91,8 +90,8 @@ extern "C"
         /* The same tables for the 32-bit-word transform, and NULL unless this
            plan supports it (`ntt_w32_applies`). A plan over a narrow prime
            carries both sets, because the transform's word width belongs to the
-           buffer and not to the modulus: polycom gathers a codeword into a
-           64-bit array and transforms it over this same plan. */
+           buffer and not to the modulus: a caller may hold 64-bit words over a
+           narrow prime and transform them over this same plan. */
         void **ws_fwd32;
         void **w_precon_fwd32;
         void **ws_inv32;
@@ -356,10 +355,30 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
                                   const FieldVector c_even, const uint64_t *s_even,
                                   const FieldVector c_odd, const uint64_t *s_odd);
 
-    // The fold of a codeword held as adjacent (P(x), P(-x)) pairs, with a
-    // twist table per position: the inverse move to field_vec_fma_interleave,
-    // and windowed for the same reason. `word` is 2n elements, everything else
-    // n; `r` is one element.
+    // A *table* below is a vector with one entry per position that is either
+    // d planes (an element of the extension per position) or a single plane
+    // (d == 1: a prime-field scalar per position, over the same modulus). The
+    // product with a one-plane table is d eltwise passes, no cross terms and no
+    // reduction by w, where the full product is 2d^2 + d - 1.
+    void field_vec_mul_plane(FieldVector out, const FieldVector a, const FieldVector t);
+    // out = a + b * t, for a one-plane table. Outputs may alias inputs.
+    void field_vec_fma_plane(FieldVector out, const FieldVector a, const FieldVector b,
+                             const FieldVector t);
+
+    // out[2i] = a[i] + b[i] * t[i mod period] and out[2i + 1] = a[i] - b[i] *
+    // t[i mod period], with `out` of length 2n: the product formed once per
+    // pair and the pair interleaved while still cached. `t` is a table (d
+    // planes or one) of `period` positions, read cyclically when `period <
+    // a->n`; then it must be a power of two and a whole number of eltwise
+    // vectors. Windowed like field_vec_fma_interleave, so `out` is written once.
+    void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVector b,
+                                const FieldVector t, uint64_t period);
+
+    // For `word` read as adjacent pairs: t = (word[2i] - word[2i + 1]) *
+    // twist2_inv[i], out[i] = word[2i + 1] + t * twist[i] + t * r -- the inverse
+    // of field_vec_lift_twisted at twist2_inv = 1 / (2 twist), r aside, and
+    // windowed for the same reason. `word` is 2n elements, everything else n;
+    // `r` is one element. The two tables are d planes or one each.
     void field_vec_fold_twisted(FieldVector out, const FieldVector word,
                                 const FieldVector twist2_inv, const FieldVector twist,
                                 const uint64_t *r);
