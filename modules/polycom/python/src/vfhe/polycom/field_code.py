@@ -9,10 +9,11 @@ number of vector operations rather than a loop over entries.
 
 Two instantiations of the foldable family [ZCF24, Def. 5] share the class;
 `code.FoldableRS` describes both and the fold they share. The default,
-``"general"``, draws the twist tables of every level from a seed and needs
-nothing of the field beyond a base code, so any field serves at any codeword
-length: level `l` is `FieldVector.fma_interleave` of the two half-messages'
-level-(l-1) codewords with the level's tables, bottoming out in a
+``"general"``, draws the twist table `T` of every level from a seed (with
+`T' = -T`, as [ZCF24]'s random foldable code does) and needs nothing of the
+field beyond a base code, so any field serves at any codeword length: level
+`l` is `FieldVector.fma_interleave` of the two half-messages' level-(l-1)
+codewords with `T` and `-T`, bottoming out in a
 Reed-Solomon code on `n0` points. The base encoder is arith's negacyclic NTT
 where the field has a `2 n0`-th root of unity -- `_ExtensionTransforms` runs
 the `rs_field_*` kernels (`polycom/c/src/rscode_field.c`) over the field's
@@ -286,16 +287,14 @@ class FieldFoldableRS:
         self.n0 = c * k0
         self.k_d = k0 << d
         self.n_d = self.n0 << d
-        # The four tables of every fold level, as vectors over the codeword
-        # positions they act on: `_twist_vectors[l]` / `_twist_odd_vectors[l]`
-        # are `T` and `T'` of the fold from level l+1 to level l (what the
-        # encoder multiplies by), `_fold_scale_vectors[l]` / `_fold_shift_vectors[l]`
-        # the `1 / (T - T')` and `-T'` the fold reads. Theta(n) entries in
-        # all, so nothing here is built an entry at a time.
+        # The two tables of every fold level, as vectors over the codeword
+        # positions they act on: `_twist_vectors[l]` is `T` of the fold from
+        # level l+1 to level l (the encoder multiplies by `T` and `-T`, and
+        # the fold's `-T'` is `T` again), `_fold_scale_vectors[l]` the
+        # `1 / (2 T)` the fold reads. Theta(n) entries in all, so nothing here
+        # is built an entry at a time.
         self._twist_vectors: list[FieldVector] = []
-        self._twist_odd_vectors: list[FieldVector] = []
         self._fold_scale_vectors: list[FieldVector] = []
-        self._fold_shift_vectors: list[FieldVector] = []
         #: The roots of the transforms in use: one per level for the ``"rs"``
         #: instantiation, the base transform's alone for the general code
         #: (empty when its base is a Vandermonde product).
@@ -324,13 +323,10 @@ class FieldFoldableRS:
         for level in range(self.d):
             n = self.n0 << level  # positions of the folded (level) codeword
             # x_i = psi_{l+1}^(2 brv(i) + 1) from the transform's own running
-            # product; T' = -x, so 1 / (T - T') = (2x)^-1 by one batch
-            # inversion (Montgomery's trick) and -T' = x.
+            # product, and (2x)^-1 by one batch inversion (Montgomery's trick).
             x = self._transforms.points(self.roots[level + 1], n)
             self._twist_vectors.append(x)
-            self._twist_odd_vectors.append(-x)
             self._fold_scale_vectors.append(x.scale(2).inverse())
-            self._fold_shift_vectors.append(x)
 
     def _level_transforms(self):
         """The per-level transforms of the ``"rs"`` instantiation."""
@@ -350,12 +346,9 @@ class FieldFoldableRS:
         else:
             self.base_points = self._sample_points()
         for level in range(self.d):
-            n = self.n0 << level
-            even, odd, scale = self._sample_twists(level, n)
-            self._twist_vectors.append(even)
-            self._twist_odd_vectors.append(odd)
+            twist, scale = self._sample_twists(level, self.n0 << level)
+            self._twist_vectors.append(twist)
             self._fold_scale_vectors.append(scale)
-            self._fold_shift_vectors.append(-odd)
 
     def _sampled(self, n: int, tag: bytes, attempt: int) -> FieldVector:
         """`n` uniform elements, a pure function of the code's seed, `tag`
@@ -364,21 +357,19 @@ class FieldFoldableRS:
         vector.sample_random(derive_seed(self.seed, tag, attempt))
         return vector
 
-    def _sample_twists(
-        self, level: int, n: int
-    ) -> tuple[FieldVector, FieldVector, FieldVector]:
-        """`(T, T', 1 / (T - T'))` for one level, resampled under a new seed
-        until every `T[j] != T'[j]` -- the condition the fold divides by."""
+    def _sample_twists(self, level: int, n: int) -> tuple[FieldVector, FieldVector]:
+        """`(T, 1 / (2 T))` for one level: `T` uniform, resampled under a new
+        seed until no entry is zero -- the condition `T != -T` the fold
+        divides by -- and the inverses in one batch (Montgomery's trick)."""
         tag = b"twists" + level.to_bytes(4, "little")
         for attempt in range(_MAX_SAMPLING_ATTEMPTS):
-            even = self._sampled(n, tag + b"even", attempt)
-            odd = self._sampled(n, tag + b"odd", attempt)
+            twist = self._sampled(n, tag, attempt)
             try:
-                scale = (even - odd).inverse()
+                scale = twist.scale(2).inverse()
             except ValueError:
                 continue
-            return even, odd, scale
-        raise RuntimeError(f"no distinct twist tables for level {level} found")
+            return twist, scale
+        raise RuntimeError(f"no nonzero twist table for level {level} found")
 
     def _sample_points(self) -> FieldVector:
         """`n0` distinct evaluation points for the base code, resampled under
@@ -392,7 +383,9 @@ class FieldFoldableRS:
                 return points
         raise RuntimeError(f"no {self.n0} distinct base points found")
 
-    def relative_distance(self, security_bits: int = 128) -> float:
+    def relative_distance(
+        self, security_bits: int = 128, bound: str = "cccfgs26"
+    ) -> float:
         """A lower bound on the relative minimum distance at every level: the
         `delta` a soundness bound needs, which is a property of the code
         rather than of the protocol, which is why `Basefold.soundness_error`
@@ -401,17 +394,18 @@ class FieldFoldableRS:
         For the ``"rs"`` instantiation every level is a Reed-Solomon code on
         distinct points, so level `l` has distance exactly
         `1 - k_l/n_l + 1/n_l`; the rate is `1/c` throughout, so the longest
-        codeword's value is the bound and `security_bits` plays no part.
+        codeword's value is the bound and the other arguments play no part.
 
-        For the general code it is [ZCF24, Thm. 2]'s recurrence
-        (`code.foldable_relative_distance`), which holds with probability at
-        least `1 - d * 2^-security_bits` over the twists; the field size in it
-        is this field's order, twists being drawn from the whole field.
+        For the general code it is `code.foldable_relative_distance` --
+        [CCCFGS26]'s bound unless `bound` names [ZCF24]'s -- which holds
+        with probability at least `1 - d * 2^-security_bits` over the twists;
+        the field size in it is this field's order, twists being drawn from
+        the whole field.
         """
         if self.instantiation == "rs":
             return 1 - 1 / self.c + 1 / self.n_d
         return foldable_relative_distance(
-            self.k0, self.c, self.d, math.log2(self.field.order), security_bits
+            self.k0, self.c, self.d, math.log2(self.field.order), security_bits, bound
         )
 
     def _as_elements(self, which: int) -> list[list[FieldElement]]:
@@ -422,8 +416,9 @@ class FieldFoldableRS:
         """
         cached = self._twist_elements[which]
         if cached is None:
-            vectors = (self._twist_vectors, self._twist_odd_vectors)[which]
-            cached = [row.to_list() for row in vectors]
+            cached = [
+                (row if which == 0 else -row).to_list() for row in self._twist_vectors
+            ]
             self._twist_elements[which] = cached
         return cached
 
@@ -436,8 +431,8 @@ class FieldFoldableRS:
 
     @property
     def twists_odd(self) -> list[list[FieldElement]]:
-        """``T'_l[i]``, the odd-position twist, per level; `-x_i` for the
-        ``"rs"`` instantiation."""
+        """``T'_l[i] = -T_l[i]``, the odd-position twist, per level; `-x_i` for
+        the ``"rs"`` instantiation. Derived, not stored."""
         return self._as_elements(1)
 
     def _element(self, value: int):
@@ -477,7 +472,7 @@ class FieldFoldableRS:
 
     def _encode_general(self, message: FieldVector, level: int) -> FieldVector:
         """The recursion `encode_l(m) = fma_interleave(encode_{l-1}(m_even),
-        encode_{l-1}(m_odd), T_l, T'_l)` unrolled into whole-vector passes.
+        encode_{l-1}(m_odd), T_l, -T_l)` unrolled into whole-vector passes.
 
         The 2^level base messages are encoded together, and every level
         above is one `fma_interleave` over all of that level's codewords at
@@ -490,13 +485,8 @@ class FieldFoldableRS:
         word = self._base_encode_all(message, level)
         for depth in range(level - 1, -1, -1):
             even, odd = _halves(word)
-            copies = 1 << depth
-            word = FieldVector.fma_interleave(
-                even,
-                odd,
-                _tile(self._twist_vectors[level - depth - 1], copies),
-                _tile(self._twist_odd_vectors[level - depth - 1], copies),
-            )
+            twist = _tile(self._twist_vectors[level - depth - 1], 1 << depth)
+            word = FieldVector.fma_interleave(even, odd, twist, -twist)
         return word
 
     def _base_encode_all(self, message: FieldVector, level: int) -> FieldVector:
@@ -535,8 +525,8 @@ class FieldFoldableRS:
         self, word: FieldVector, level: int
     ) -> tuple[bool, FieldVector]:
         """`_encode_general` inverted: per level, the pair `(lo, hi)` gives
-        `b = (lo - hi) / (T - T')` and `a = lo - b T`, the codewords of the
-        odd and even half-messages, until only base codewords are left."""
+        `b = (lo - hi) / (2 T)` and `a = lo - b T`, the codewords of the odd
+        and even half-messages, until only base codewords are left."""
         if level == 0 and self._transforms is not None:
             return self._transforms.decode(word, 0, self.k0)
         for depth in range(level):
@@ -590,7 +580,7 @@ class FieldFoldableRS:
         pair per queried position, never a whole codeword.
         """
         coeff = (lo - hi) * self._fold_scale_vectors[level - 1][i]
-        return hi + coeff * self._fold_shift_vectors[level - 1][i] + coeff * r
+        return hi + coeff * self._twist_vectors[level - 1][i] + coeff * r
 
     def fold_pairs(self, los, his, r, level: int, indices) -> list:
         """`fold_pair` at many positions at once.
@@ -606,7 +596,7 @@ class FieldFoldableRS:
         read with one gather rather than an index at a time.
         """
         positions = list(indices)
-        shift = self._fold_shift_vectors[level - 1].query(positions)
+        shift = self._twist_vectors[level - 1].query(positions)
         coeff = FieldVector(self.field, list(los))
         highs = FieldVector(self.field, list(his))
         coeff.sub(highs, out=coeff)
@@ -666,5 +656,5 @@ class FieldFoldableRS:
         level-(level-1) codeword of the r-folded message, as one call
         (`FieldVector.fold_twisted` with this level's two tables)."""
         return word.fold_twisted(
-            self._fold_scale_vectors[level - 1], self._fold_shift_vectors[level - 1], r
+            self._fold_scale_vectors[level - 1], self._twist_vectors[level - 1], r
         )
