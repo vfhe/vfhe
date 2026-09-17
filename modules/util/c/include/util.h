@@ -22,6 +22,8 @@ extern "C"
     // Allocation that aborts rather than returning NULL
     void *safe_malloc(size_t size);
     void *safe_realloc(void *ptr, size_t size);
+    // 64-byte aligned, as the SIMD kernels require; a large buffer also asks
+    // for huge pages. Release with plain `free`.
     void *safe_aligned_malloc(size_t size);
 
     // Which engine this binary is (CPU capability lives in vfhe_cpu.h, which

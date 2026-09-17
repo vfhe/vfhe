@@ -72,6 +72,9 @@ versions may contain breaking changes.
   Barrett step cannot serve (primes wider than 52 bits) rather than returning
   constants that reconstruct incorrectly.
 
+- Allocations of 8 MiB and up ask the kernel for huge pages.
+  [`USAGE.md`](docs/USAGE.md) covers the allocator settings that go with it.
+
 ## [0.0.3] - 2026-09-10
 
 ### Added
