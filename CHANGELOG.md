@@ -26,6 +26,17 @@ versions may contain breaking changes.
   `a + b * c_odd` written straight into one vector of twice the length.
 - Add `FieldVector.fold_twisted(twist2_inv, twist, r)`: a vector of
   `(P(x), P(-x))` pairs folded to half its length in one call.
+- Add `FoldableRS.relative_distance(security_bits)` /
+  `FieldFoldableRS.relative_distance(security_bits)`: a lower bound on the
+  code's relative minimum distance, which is the `delta`
+  `Basefold.soundness_error` takes -- the exact Reed-Solomon value for the
+  `"rs"` instantiation, [ZCF24, Thm. 2]'s bound for the general code.
+- Add `polycom.foldable_relative_distance(k0, c, d, field_bits,
+  security_bits)`, that bound as a pure function, validated against the
+  paper's Table 1.
+- Add `instantiation=` and `seed=` to `FoldableRS` / `FieldFoldableRS`, with
+  `polycom.INSTANTIATIONS` and `polycom.DEFAULT_SEED`; and `twists_odd`, the
+  second twist table, next to `twists`.
 
 - Add `Polynomial.rescale_to_power_of_two(k)`: `round(2^k * c / q)` for every
   coefficient, on centered representatives, as `N` machine words. It is the
@@ -34,7 +45,32 @@ versions may contain breaking changes.
   `round_division` and `scaled_lift` between them cannot express. Exact, with
   no floating point anywhere in the rounding.
 
+### Changed
+
+- **Breaking:** `FoldableRS` and `FieldFoldableRS` now build the general
+  foldable code of [ZCF24, Def. 5] by default -- seeded twist tables at every
+  level above a Reed-Solomon base code -- rather than a Reed-Solomon code on
+  roots of unity at every level. The same constructor call gives a different
+  code, with different codewords and commitments, and its distance is the
+  paper's recursive bound rather than the exact Reed-Solomon one, so security
+  parameters derived from the old `relative_distance` do not carry over. The
+  previous code is `instantiation="rs"`. What the change buys: no 2-adicity
+  condition on the codeword length (`FieldFoldableRS` needed
+  `2 n_d | p - 1`, `FoldableRS` needed `n_d | N/split_degree`); only the base
+  length `n0` wants a transform, and does without one where the field has none.
+- `FoldableRS.twists` / `FieldFoldableRS.twists` are the general code's
+  even-position table `T`, and the field code's are lists of elements rather
+  than integers (a twist of the general code need not lie in the prime
+  subfield). `twists2_inv` is gone: the fold's tables are `1 / (T - T')` and
+  `-T'`, held privately.
+- `relative_distance` is a method, not a property: the general code's bound
+  depends on the security parameter.
+
 ### Fixed
+
+- `FieldVector.view` of a view started at the parent's buffers rather than at
+  the view: the nested view's planes skipped the outer offset, so it read and
+  wrote the wrong elements. Both vector implementations.
 
 - Fix `Multiprecision.from_polynomial` leaking its result. `free_mp_polynomial`
   was never exposed, so no caller could release one; the returned handle now

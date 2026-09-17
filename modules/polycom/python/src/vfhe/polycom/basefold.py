@@ -20,9 +20,9 @@ in `prover.witnesses`.
 The commitment is a **Merkle root** over the level-d codeword
 (`vfhe.crypto.Merkle`, BLAKE3): the RO-model instantiation of [ZCF24] §4's
 ideal oracle, via the BCS compiler [BCS16]. It commits to the codeword's
-`±x` *pairs*, one leaf each — our fold reads adjacent entries, so a single
-path authenticates both operands of a fold check ([ZCF24, Remark 9]'s
-packed leaves), halving both the paths and the tree height. Note the
+adjacent *pairs*, one leaf each — the fold reads a pair, so a single path
+authenticates both operands of a fold check ([ZCF24, Remark 9]'s packed
+leaves), halving both the paths and the tree height. Note the
 consequence for the security statement: binding is *computational*
 (collision resistance) layered on the code-distance argument, where the
 oracle-model version is information-theoretic — see `soundness_error`.
@@ -203,7 +203,7 @@ class Basefold:
 
     def merkle_commit(self, word: Word) -> Merkle:
         """The Merkle tree commitment to a codeword — the vector-commitment
-        step of the scheme, one leaf per `±x` pair (digested by the code,
+        step of the scheme, one leaf per adjacent pair (digested by the code,
         `leaf_digests`); its `root` is what travels (as the polynomial
         commitment or as a round message).
 
@@ -291,9 +291,10 @@ class BasefoldEval(Protocol):
     ) -> float | None:
         """The information-theoretic part,
         2d / (gamma^3 |A|) + (1 - delta + gamma * d)^rep [ZCF24], per
-        RNS-prime component (|A| = the residue field size); the caller must
-        pick gamma, delta satisfying the theorem's distance conditions for
-        the code (polycom.md). None if |A| is unknown.
+        RNS-prime component (|A| = the residue field size). `delta` is the
+        code's relative distance -- `self.code.relative_distance()` reports
+        it -- and `gamma` is the caller's, subject to the theorem's
+        conditions (polycom.md). None if |A| is unknown.
 
         With Merkle commitments this is no longer the whole story: binding
         is computational, so the argument's error also carries the hash's

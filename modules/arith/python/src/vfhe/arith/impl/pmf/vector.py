@@ -430,11 +430,14 @@ class PseudoMersenneVector(FieldVector):
         result.field = self.field
         result._n = length
         result._allocated_n = lib.pmf_vec_padded_length(length)
-        # The planes are the parent's, offset; `_planes` holds it alive rather
-        # than owning buffers of its own.
+        # The planes are the parent's, offset from where the parent itself
+        # reads them -- a view of a view starts where that view does, not at
+        # the buffers' beginning. `_planes` holds the buffers alive rather
+        # than owning any.
         result._planes = self._planes
         result._plane_ptrs = ffi.new(
-            "uint64_t*[]", [plane + start for plane in self._planes]
+            "uint64_t*[]",
+            [self._plane_ptrs[i] + start for i in range(len(self._planes))],
         )
         result._struct = ffi.new("PMFVector")
         result._struct.limbs = result._plane_ptrs

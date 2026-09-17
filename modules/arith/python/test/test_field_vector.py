@@ -920,6 +920,15 @@ class TestView:
         # ...and arithmetic on a view is arithmetic on those elements.
         assert (window * window).to_list() == [e * e for e in vector.to_list()[8:16]]
 
+    def test_a_view_of_a_view_starts_where_the_view_does(self):
+        field = make_field()
+        values = random_elements(field, 64, seed=39)
+        vector = FieldVector(field, values)
+        nested = vector.view(32, 32).view(8, 8)
+        assert nested.to_list() == values[40:48]
+        nested[0] = field.one
+        assert vector[40] == field.one
+
     def test_a_view_keeps_the_parent_alive(self):
         field = make_field()
         values = random_elements(field, 16, seed=38)

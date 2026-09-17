@@ -643,6 +643,14 @@ class TestBlocksViewsAndIndexedSampling:
         with pytest.raises(ValueError):
             vector.view(1, 8)
 
+    def test_a_view_of_a_view_starts_where_the_view_does(self, field):
+        values = random_values(field, 64, 62)
+        vector = FieldVector(field, values)
+        nested = vector.view(32, 32).view(8, 8)
+        assert [int(e) for e in nested] == values[40:48]
+        nested[0] = field.one
+        assert int(vector[40]) == 1
+
     def test_a_sampling_window_is_the_slice_of_the_whole_fill(self, field):
         whole = FieldVector(field, 32)
         whole.sample_random(b"pmf-window")
