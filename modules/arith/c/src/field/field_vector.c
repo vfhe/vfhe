@@ -197,6 +197,159 @@ void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVecto
     field_vec_fma_generic(out, a, b, (const void *)s, 0);
 }
 
+// Scratch for the two halves `field_vec_fma_interleave` produces, sized to
+// stay in a core's own cache between being written and being read back.
+#define FMA_INTERLEAVE_SCRATCH_BYTES (256u * 1024u)
+
+void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldVector b,
+                              const FieldVector c_even, const uint64_t *s_even,
+                              const FieldVector c_odd, const uint64_t *s_odd)
+{
+    const uint64_t d = a->d, n = a->n, padded = a->allocated_n;
+    if (padded == 0)
+        return;
+
+    // One window's two halves, plus the operand views that read it.
+    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (2 * d * sizeof(uint64_t));
+    window -= window % MOD_MIN_VECTOR_LEN;
+    if (window < MOD_MIN_VECTOR_LEN)
+        window = MOD_MIN_VECTOR_LEN;
+    if (window > padded)
+        window = padded;
+
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(2 * d * window * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)safe_malloc(6 * d * sizeof(uint64_t *));
+    struct _FieldVector even = *a, odd = *a, av = *a, bv = *a, cev = *a, cov = *a;
+
+    even.coeffs = planes;
+    odd.coeffs = planes + d;
+    av.coeffs = planes + 2 * d;
+    bv.coeffs = planes + 3 * d;
+    cev.coeffs = planes + 4 * d;
+    cov.coeffs = planes + 5 * d;
+    for (uint64_t j = 0; j < d; j++)
+    {
+        even.coeffs[j] = scratch + j * window;
+        odd.coeffs[j] = scratch + (d + j) * window;
+    }
+
+    for (uint64_t start = 0; start < padded; start += window)
+    {
+        const uint64_t len = (padded - start < window) ? padded - start : window;
+        for (uint64_t j = 0; j < d; j++)
+        {
+            av.coeffs[j] = a->coeffs[j] + start;
+            bv.coeffs[j] = b->coeffs[j] + start;
+            if (c_even != NULL)
+                cev.coeffs[j] = c_even->coeffs[j] + start;
+            if (c_odd != NULL)
+                cov.coeffs[j] = c_odd->coeffs[j] + start;
+        }
+        even.n = odd.n = av.n = bv.n = cev.n = cov.n = len;
+        even.allocated_n = odd.allocated_n = av.allocated_n = len;
+        bv.allocated_n = cev.allocated_n = cov.allocated_n = len;
+
+        if (c_even != NULL)
+            field_vec_fma(&even, &av, &bv, &cev);
+        else
+            field_vec_fma_scalar(&even, &av, &bv, s_even);
+        if (c_odd != NULL)
+            field_vec_fma(&odd, &av, &bv, &cov);
+        else
+            field_vec_fma_scalar(&odd, &av, &bv, s_odd);
+
+        // Only the elements the vector really holds are interleaved: `out` is
+        // padded for 2n, which is not the same as two n-element paddings.
+        if (start < n)
+        {
+            const uint64_t take = (n - start < len) ? n - start : len;
+            for (uint64_t j = 0; j < d; j++)
+                vec_interleave_u64(out->coeffs[j] + 2 * start, even.coeffs[j], odd.coeffs[j], take);
+        }
+    }
+
+    free(planes);
+    free(scratch);
+}
+
+// The fold of a codeword held as adjacent `(P(x), P(-x))` pairs:
+//
+//     t[i]   = (word[2i] - word[2i + 1]) * twist2_inv[i]
+//     out[i] = word[2i + 1] + t[i] * twist[i] + t[i] * r
+//
+// Five passes over a half-codeword, run a window at a time so that the split's
+// two halves and the running term stay cached instead of being streamed back
+// from memory between each one.
+void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector twist2_inv,
+                            const FieldVector twist, const uint64_t *r)
+{
+    const uint64_t d = word->d, padded = out->allocated_n;
+    if (padded == 0)
+        return;
+
+    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (2 * d * sizeof(uint64_t));
+    window -= window % MOD_MIN_VECTOR_LEN;
+    if (window < MOD_MIN_VECTOR_LEN)
+        window = MOD_MIN_VECTOR_LEN;
+    if (window > padded)
+        window = padded;
+
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(2 * d * window * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)safe_malloc(6 * d * sizeof(uint64_t *));
+    struct _FieldVector lo = *out, hi = *out, pair = *word, t2i = *out, tw = *out, dst = *out;
+
+    lo.coeffs = planes;
+    hi.coeffs = planes + d;
+    pair.coeffs = planes + 2 * d;
+    t2i.coeffs = planes + 3 * d;
+    tw.coeffs = planes + 4 * d;
+    dst.coeffs = planes + 5 * d;
+    for (uint64_t j = 0; j < d; j++)
+    {
+        lo.coeffs[j] = scratch + j * window;
+        hi.coeffs[j] = scratch + (d + j) * window;
+    }
+
+    for (uint64_t start = 0; start < padded; start += window)
+    {
+        const uint64_t len = (padded - start < window) ? padded - start : window;
+        // The result is padded to n and the codeword to 2n, and those round
+        // up differently, so the last window can ask for a few pairs past the
+        // end of `word`. Those positions are padding of the result: the split
+        // takes what is there and the rest is zeroed, which the arithmetic
+        // carries through to the reduced zeros the padding has to hold.
+        const uint64_t have = word->allocated_n / 2 - start;
+        const uint64_t take = have < len ? have : len;
+
+        for (uint64_t j = 0; j < d; j++)
+        {
+            t2i.coeffs[j] = twist2_inv->coeffs[j] + start;
+            tw.coeffs[j] = twist->coeffs[j] + start;
+            dst.coeffs[j] = out->coeffs[j] + start;
+            pair.coeffs[j] = word->coeffs[j] + 2 * start;
+        }
+        lo.n = hi.n = t2i.n = tw.n = dst.n = len;
+        lo.allocated_n = hi.allocated_n = t2i.allocated_n = len;
+        tw.allocated_n = dst.allocated_n = len;
+        pair.n = pair.allocated_n = 2 * take;
+
+        field_vec_split_even_odd(&lo, &hi, &pair);
+        for (uint64_t j = 0; take < len && j < d; j++)
+        {
+            memset(lo.coeffs[j] + take, 0, (len - take) * sizeof(uint64_t));
+            memset(hi.coeffs[j] + take, 0, (len - take) * sizeof(uint64_t));
+        }
+
+        field_vec_sub(&lo, &lo, &hi);
+        field_vec_mul(&lo, &lo, &t2i);
+        field_vec_fma(&dst, &hi, &lo, &tw);
+        field_vec_fma_scalar(&dst, &dst, &lo, r);
+    }
+
+    free(planes);
+    free(scratch);
+}
+
 void field_vec_sum(uint64_t *out, const FieldVector a)
 {
     for (uint64_t j = 0; j < a->d; j++)
@@ -266,14 +419,7 @@ void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVect
 void field_vec_interleave(FieldVector out, const FieldVector even, const FieldVector odd)
 {
     for (uint64_t j = 0; j < out->d; j++)
-    {
-        uint64_t *plane = out->coeffs[j];
-        for (uint64_t i = 0; i < even->n; i++)
-        {
-            plane[2 * i] = even->coeffs[j][i];
-            plane[2 * i + 1] = odd->coeffs[j][i];
-        }
-    }
+        vec_interleave_u64(out->coeffs[j], even->coeffs[j], odd->coeffs[j], even->n);
 }
 
 void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count)

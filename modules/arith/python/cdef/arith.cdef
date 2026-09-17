@@ -206,6 +206,8 @@ void field_vec_set_range(FieldVector out, uint64_t start, const uint64_t *values
 void field_vec_get_range(uint64_t *out, const FieldVector a, uint64_t start, uint64_t count);
 void field_vec_copy(FieldVector out, const FieldVector a);
 void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVector a);
+void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldVector b, const FieldVector c_even, const uint64_t *s_even, const FieldVector c_odd, const uint64_t *s_odd);
+void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector twist2_inv, const FieldVector twist, const uint64_t *r);
 void field_vec_interleave(FieldVector out, const FieldVector even, const FieldVector odd);
 void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count);
 void field_vec_clear_padding(FieldVector a);

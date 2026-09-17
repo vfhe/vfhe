@@ -22,6 +22,10 @@ versions may contain breaking changes.
   be multiples of -- stated by `view` before, but not obtainable.
 - Add `MerklePath.from_bytes(packed)`, and `FoldableRS.fold_pairs` /
   `leaf_digests_of` for a set of positions rather than one.
+- Add `FieldVector.fma_interleave(a, b, c_even, c_odd)`: `a + b * c_even` and
+  `a + b * c_odd` written straight into one vector of twice the length.
+- Add `FieldVector.fold_twisted(twist2_inv, twist, r)`: a vector of
+  `(P(x), P(-x))` pairs folded to half its length in one call.
 
 - Add `Polynomial.rescale_to_power_of_two(k)`: `round(2^k * c / q)` for every
   coefficient, on centered representatives, as `N` machine words. It is the

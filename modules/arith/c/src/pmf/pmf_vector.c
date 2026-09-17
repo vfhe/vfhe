@@ -312,14 +312,7 @@ void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a)
 void pmf_vec_interleave(PMFVector out, const PMFVector even, const PMFVector odd)
 {
     for (uint64_t k = 0; k < out->params->limbs; k++)
-    {
-        uint64_t *plane = out->limbs[k];
-        for (uint64_t i = 0; i < even->n; i++)
-        {
-            plane[2 * i] = even->limbs[k][i];
-            plane[2 * i + 1] = odd->limbs[k][i];
-        }
-    }
+        vec_interleave_u64(out->limbs[k], even->limbs[k], odd->limbs[k], even->n);
 }
 
 void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count)
