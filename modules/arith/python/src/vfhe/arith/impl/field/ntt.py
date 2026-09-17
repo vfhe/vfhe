@@ -141,38 +141,56 @@ class ExtensionFieldNTT:
         return vector._plane_ptrs
 
     def pack(
-        self, vector: ExtensionFieldVector, blocks: int = 1, out=None
+        self,
+        vector: ExtensionFieldVector,
+        blocks: int = 1,
+        out=None,
+        layout: str = "blocks",
     ) -> ExtensionFieldVector:
         """`vector`, laid out the way this plan's `forward` needs it.
 
-        A caller that holds each transform's elements together has its blocks
-        contiguous, and the extension domain needs them interleaved. `pack`
-        converts, `unpack` converts back, and neither the caller nor its data
-        structure has to know which domain is in play.
+        ``layout`` names how the caller holds the batch: ``'blocks'`` (the
+        default) when each transform's elements are together, ``'interleaved'``
+        when element ``i`` of block ``b`` sits at ``i * blocks + b``. `pack`
+        converts from that to `batch_layout`, `unpack`
+        converts back, and neither the caller nor its data structure has to
+        know which domain is in play.
 
-        The base domain already takes the contiguous layout, so there is
-        nothing to do: the input is returned as it is unless `out` is given,
-        in which case it is copied there. A conversion is a tiled transpose,
-        one pass.
+        Where the two layouts coincide there is nothing to do: the input is
+        returned as it is unless `out` is given, in which case it is copied
+        there. A conversion is a tiled transpose, one pass.
         """
-        return self._reshape(vector, blocks, out, to_plan=True)
+        return self._reshape(vector, blocks, out, layout, self.batch_layout)
 
     def unpack(
-        self, vector: ExtensionFieldVector, blocks: int = 1, out=None
+        self,
+        vector: ExtensionFieldVector,
+        blocks: int = 1,
+        out=None,
+        layout: str = "blocks",
     ) -> ExtensionFieldVector:
-        """The inverse of `pack`: a transformed batch back to blocks."""
-        return self._reshape(vector, blocks, out, to_plan=False)
+        """The inverse of `pack`: a transformed batch back to ``layout``."""
+        return self._reshape(vector, blocks, out, self.batch_layout, layout)
 
-    def _reshape(self, vector, blocks, out, to_plan: bool):
+    def _reshape(self, vector, blocks, out, source: str, target: str):
+        for name in (source, target):
+            if name not in ("blocks", "interleaved"):
+                raise ValueError(
+                    f"layout must be 'blocks' or 'interleaved', got {name!r}"
+                )
         self._checked(vector, blocks)
-        if self.domain == "base":
+        if source == target:
             if out is None:
                 return vector
             return vector.copy() if out is vector else self._copy_into(vector, out)
         result = vector._destination(out, len(vector))
         if result is vector:
             raise ValueError("a layout conversion cannot write into its input")
-        kernel = lib.field_ntt_to_interleaved if to_plan else lib.field_ntt_to_blocks
+        kernel = (
+            lib.field_ntt_to_interleaved
+            if target == "interleaved"
+            else lib.field_ntt_to_blocks
+        )
         kernel(result._struct, vector._struct, blocks)
         return result
 

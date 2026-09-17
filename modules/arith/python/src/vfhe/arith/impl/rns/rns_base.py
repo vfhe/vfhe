@@ -89,7 +89,7 @@ def _reset() -> None:
 
     Native conversion parameters are freed rather than dropped; the bases
     themselves are process-lifetime by contract (every Ring on a
-    (N, split_degree) holds one, and polycom's plans borrow their moduli), so
+    (N, split_degree) holds one, and transform plans borrow their moduli), so
     only this registry's references to them go.
     """
     current = registry()

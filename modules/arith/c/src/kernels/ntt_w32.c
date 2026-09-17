@@ -25,8 +25,8 @@
  *
  * A plan over a narrow prime carries these tables *in addition to* its 64-bit
  * ones, because the transform's word width is a property of the buffer and not
- * of the modulus: polycom gathers a codeword into a 64-bit array and
- * transforms that over the same plan.
+ * of the modulus: a caller may hold 64-bit words over a narrow prime and
+ * transform those over the same plan.
  */
 
 /* A narrow row whose plan has no 32-bit-word tables -- a transform shorter
