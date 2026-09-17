@@ -37,7 +37,8 @@ static void a_large_buffer_is_writable_end_to_end(void)
     TEST_ASSERT_NOT_NULL(buf);
 
     memset(buf, 0xA5, LARGE);
-    for (size_t i = 0; i < LARGE; i += 4093) // an odd stride, so the reads land at varying page offsets
+    // An odd stride, so the reads land at varying page offsets.
+    for (size_t i = 0; i < LARGE; i += 4093)
         TEST_ASSERT_EQUAL_UINT8(0xA5, buf[i]);
     TEST_ASSERT_EQUAL_UINT8(0xA5, buf[0]);
     TEST_ASSERT_EQUAL_UINT8(0xA5, buf[LARGE - 1]);

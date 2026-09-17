@@ -45,9 +45,7 @@ ct_prod = ct_a * ct_b  # relinearizes and rescales via scheme.rlk
 
 # 5. Decrypt and decode.
 sum_result = scheme.decode(scheme.decrypt(ct_sum, key))
-prod_result = scheme.decode(
-    scheme.decrypt(ct_prod, key), scaling_factor=ct_prod.delta
-)
+prod_result = scheme.decode(scheme.decrypt(ct_prod, key), scaling_factor=ct_prod.delta)
 
 print(f"a + b -> {sum_result[0]:.4f}  (plaintext {a[0] + b[0]})")
 print(f"a * b -> {prod_result[0]:.4f}  (plaintext {a[0] * b[0]})")
@@ -69,20 +67,6 @@ a * b -> 1.0000-0.5000j  (plaintext (1-0.5j))
 The trailing digits differ per run, because CKKS carries encryption noise.
 A result wrong in the first decimals means the parameters are too small for
 the computation, not that the install is broken.
-
-## Large working sets
-
-At large parameters vfhe allocates buffers of tens of megabytes and frees them
-again constantly. On glibc, telling the allocator to keep them rather than
-return them to the operating system is worth a lot:
-
-```bash
-MALLOC_MMAP_THRESHOLD_=2147483648 MALLOC_TRIM_THRESHOLD_=2147483648 python your_script.py
-```
-
-It costs resident memory, so it is your choice rather than a default: set it
-when the same sizes are allocated again and again, leave it alone where the
-process has to give memory back.
 
 ## Next steps
 

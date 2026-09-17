@@ -199,38 +199,29 @@ def test_short_codeword_round_trips(field):
     assert code.decode(word)[0]
 
 
-def test_fold_is_the_same_windowed_or_not(field, monkeypatch):
-    """`fold` computes the same codeword however the vector is cut up.
+def test_fold_agrees_with_the_per_pair_form(field):
+    """`fold` gives, at every position, what `fold_pair` gives for that
+    position's pair alone.
 
-    It splits into windows only for codewords larger than the machine's
-    cache, which no test codeword is, so the windowed path is forced here by
-    reporting a tiny cache and a tiny window. Both the arithmetic and the
-    short final window have to come out identical.
+    The whole-codeword fold and the one a verifier runs on a single
+    authenticated pair are different code paths -- one a kernel over the
+    vector, the other element arithmetic -- and a prover and a verifier
+    disagreeing about a fold is the failure this catches.
     """
-    import vfhe.arith.base as base
-
     code = FieldFoldableRS(field, k0=4, c=2, d=6)
     message = FieldVector(field, code.k_d)
-    message.sample_random(b"windowed-fold")
+    message.sample_random(b"fold-agreement")
     word = code.encode(message)
     r = field.random_element(b"r")
 
-    plain: list[list] = [[] for _ in range(code.d + 1)]
-    cur = word
     for level in range(code.d, 0, -1):
-        cur = code.fold(cur, r, level=level)
-        plain[level - 1] = cur.to_list()
-
-    # A cache of one byte and a window of a few elements, so that every
-    # level splits and every level's last window is a short one.
-    monkeypatch.setattr(base, "_CACHE_BYTES", 1)
-    monkeypatch.setattr(base, "CHUNK_BUDGET_BYTES", 1 << 11)
-    assert len(list(code._twist_vectors[code.d - 1].chunks(live=4))) > 1
-
-    cur = word
-    for level in range(code.d, 0, -1):
-        cur = code.fold(cur, r, level=level)
-        assert cur.to_list() == plain[level - 1], f"level {level} differs windowed"
+        folded = code.fold(word, r, level=level)
+        for i in range(len(folded)):
+            lo, hi = code.pair_at(word, i)
+            assert folded[i] == code.fold_pair(lo, hi, r, level, i), (
+                f"level {level}, {i}"
+            )
+        word = folded
 
 
 def test_leaf_digests_go_straight_into_a_tree(field):

@@ -374,6 +374,51 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_split_blocks(even._struct, odd._struct, self._struct, block)
         return even, odd
 
+    def fold_twisted(self, twist2_inv, twist, r, out=None) -> ExtensionFieldVector:
+        """One level of a Reed-Solomon fold over the pairs this vector holds."""
+        half = len(self) // 2
+        for name, table in (("twist2_inv", twist2_inv), ("twist", twist)):
+            if not isinstance(table, ExtensionFieldVector):
+                raise TypeError(f"{name} must be a FieldVector")
+            if table.field is not self.field:
+                raise ValueError(f"{name} belongs to a different field")
+            if len(table) != half:
+                raise ValueError(f"{name} holds {len(table)} elements, not {half}")
+        result = self._destination(out, half)
+        lib.field_vec_fold_twisted(
+            result._struct,
+            self._struct,
+            twist2_inv._struct,
+            twist._struct,
+            self._coerce_element(r).value,
+        )
+        return result
+
+    @staticmethod
+    def fma_interleave(a, b, c_even, c_odd, out=None) -> ExtensionFieldVector:
+        """`a + b * c_even` and `a + b * c_odd`, interleaved into one vector."""
+        if not isinstance(a, ExtensionFieldVector) or not isinstance(
+            b, ExtensionFieldVector
+        ):
+            raise TypeError("fma_interleave takes two ExtensionFieldVectors")
+        if b.field is not a.field:
+            raise ValueError("operands belong to different fields")
+        if len(b) != len(a):
+            raise ValueError(f"length mismatch: {len(a)} and {len(b)}")
+        result = a._destination(out, 2 * len(a))
+        multipliers = []
+        for name, c in (("c_even", c_even), ("c_odd", c_odd)):
+            if isinstance(c, ExtensionFieldVector):
+                if c.field is not a.field:
+                    raise ValueError(f"{name} belongs to a different field")
+                if len(c) != len(a):
+                    raise ValueError(f"{name} holds {len(c)} elements, not {len(a)}")
+                multipliers += [c._struct, ffi.NULL]
+            else:
+                multipliers += [ffi.NULL, a._coerce_element(c).value]
+        lib.field_vec_fma_interleave(result._struct, a._struct, b._struct, *multipliers)
+        return result
+
     @staticmethod
     def interleave(even, odd, out=None) -> ExtensionFieldVector:
         """Even positions from `even`, odd from `odd`: the inverse of `split_even_odd`."""

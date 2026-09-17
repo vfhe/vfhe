@@ -346,6 +346,23 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
                        const FieldVector c);
     void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVector b,
                               const uint64_t *s);
+
+    // out[2i] = a[i] + b[i] * c_even[i], out[2i + 1] = a[i] + b[i] * c_odd[i],
+    // with `out` of length 2n. Each multiplier is a vector or a single element:
+    // pass the vector and leave the scalar NULL, or the other way round. The
+    // halves are produced a window at a time and interleaved while they are
+    // still cached, so the result is written once rather than three times.
+    void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldVector b,
+                                  const FieldVector c_even, const uint64_t *s_even,
+                                  const FieldVector c_odd, const uint64_t *s_odd);
+
+    // The fold of a codeword held as adjacent (P(x), P(-x)) pairs, with a
+    // twist table per position: the inverse move to field_vec_fma_interleave,
+    // and windowed for the same reason. `word` is 2n elements, everything else
+    // n; `r` is one element.
+    void field_vec_fold_twisted(FieldVector out, const FieldVector word,
+                                const FieldVector twist2_inv, const FieldVector twist,
+                                const uint64_t *r);
     // Sum of the first n elements, into d coefficients.
     void field_vec_sum(uint64_t *out, const FieldVector a);
     // Elementwise inverse by Montgomery's trick: one inversion and three

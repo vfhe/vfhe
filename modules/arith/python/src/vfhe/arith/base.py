@@ -1397,6 +1397,21 @@ class FieldVector(metaclass=_ImplementationDispatch):
         """
         raise NotImplementedError
 
+    def _like(self, n: int | None = None) -> FieldVector:
+        """A vector of this kind and field, `n` elements, contents undefined.
+
+        For a result a kernel is about to write whole. The implementations
+        provide it; the operations declared here build their destinations
+        through it.
+        """
+        raise NotImplementedError
+
+    def _destination(
+        self, out: FieldVector | None, n: int | None = None
+    ) -> FieldVector:
+        """Where a result goes: `out` once checked, or a fresh `_like(n)`."""
+        raise NotImplementedError
+
     def _checked_view(
         self, start: int, length: int | None, unit: int
     ) -> tuple[int, int]:
@@ -1484,6 +1499,67 @@ class FieldVector(metaclass=_ImplementationDispatch):
         return out
 
     @staticmethod
+    def fma_interleave(
+        a: FieldVector,
+        b: FieldVector,
+        c_even,
+        c_odd,
+        out: FieldVector | None = None,
+    ) -> FieldVector:
+        """Two `fma`s sharing operands, written straight into one vector::
+
+            out[2i]     = a[i] + b[i] * c_even[i]
+            out[2i + 1] = a[i] + b[i] * c_odd[i]
+
+        The result has twice the length of `a`. `c_even` and `c_odd` are each
+        a vector of `a`'s length or a single element, independently.
+
+        This is what a level of a split-and-recombine encoder computes, and
+        doing it in one call rather than as two `fma`s and an `interleave`
+        keeps the two halves out of memory: they are produced and consumed a
+        window at a time, so at codeword sizes the result is written once
+        rather than the halves being written, read back and written again.
+
+        Reached on the front, so it dispatches to the operands' own
+        implementation, for the reason `concat` gives.
+
+        :param a: the addend, and the length the operands share.
+        :param b: the multiplicand both products share.
+        :param c_even: multiplier for the even output positions.
+        :param c_odd: multiplier for the odd output positions.
+        :param out: where to write, of length ``2 * len(a)``; a new vector
+            when omitted.
+        :returns: `out`, or the vector allocated for the result.
+        """
+        if not isinstance(a, FieldVector) or not isinstance(b, FieldVector):
+            raise TypeError("fma_interleave takes two vectors")
+        own = type(a).fma_interleave
+        if own is not FieldVector.fma_interleave:
+            return own(a, b, c_even, c_odd, out)
+        if len(b) != len(a):
+            raise ValueError(f"length mismatch: {len(a)} and {len(b)}")
+        result = a._destination(out, 2 * len(a))
+
+        def cut(c, start: int, length: int):
+            return c.view(start, length) if isinstance(c, FieldVector) else c
+
+        # Live at once: a, b, the two scratch halves, the result's two
+        # halves, and whichever of the multipliers is a vector.
+        live = 6 + sum(isinstance(c, FieldVector) for c in (c_even, c_odd))
+        windows = list(a.chunks(live=live))
+        span = max(length for _, length in windows)
+        even, odd = a._like(span), a._like(span)
+        for start, length in windows:
+            operand, factor = a.view(start, length), b.view(start, length)
+            half_even, half_odd = even.view(0, length), odd.view(0, length)
+            operand.fma(factor, cut(c_even, start, length), out=half_even)
+            operand.fma(factor, cut(c_odd, start, length), out=half_odd)
+            type(a).interleave(
+                half_even, half_odd, out=result.view(2 * start, 2 * length)
+            )
+        return result
+
+    @staticmethod
     def interleave(even, odd, out: FieldVector | None = None) -> FieldVector:
         """The vector with `even` at the even positions and `odd` at the odd
         ones: the inverse of `split_even_odd`. Both must have the same length.
@@ -1530,6 +1606,44 @@ class FieldVector(metaclass=_ImplementationDispatch):
         plain sequence rather than silently read as unsigned.
         """
         return type(self)(self.field, [self[i] for i in indices])
+
+    def fold_twisted(
+        self,
+        twist2_inv: FieldVector,
+        twist: FieldVector,
+        r,
+        out: FieldVector | None = None,
+    ) -> FieldVector:
+        """This vector read as adjacent ``(P(x), P(-x))`` pairs and folded with
+        the challenge `r`, one output element per pair::
+
+            t = (self[2i] - self[2i + 1]) * twist2_inv[i]
+            out[i] = self[2i + 1] + t * twist[i] + t * r
+
+        The result is half this vector's length, and the two tables are that
+        length. It is the fold a Reed-Solomon code does between levels, as one
+        call: written out, it is five passes over half a codeword, each reading
+        back what the one before it wrote. Here the passes run on a window
+        still in cache, so the codeword is read once.
+
+        :param twist2_inv: the per-position table dividing out the squared
+            twist.
+        :param twist: the per-position twist of this level.
+        :param r: the folding challenge, one element.
+        :param out: where to write, of half this length; a new vector when
+            omitted.
+        :returns: `out`, or the vector allocated for the result.
+        """
+        half = len(self) // 2
+        for name, table in (("twist2_inv", twist2_inv), ("twist", twist)):
+            if len(table) != half:
+                raise ValueError(f"{name} holds {len(table)} elements, not {half}")
+        result = self._destination(out, half)
+        lo, hi = self.split_even_odd()
+        lo.sub(hi, out=lo)
+        lo.mul(twist2_inv, out=lo)
+        hi.fma(lo, twist, out=result)
+        return result.fma(lo, r, out=result)
 
     def fold(self, r, block: int = 1) -> FieldVector:
         """``even + r * (odd - even)`` over adjacent pairs, half the length.

@@ -373,47 +373,8 @@ class FieldFoldableRS:
         return self.fold_pair(*self.pair_at(word, i), r, level, i)
 
     def fold(self, word: FieldVector, r, level: int) -> FieldVector:
-        """The full fold of a level-`level` codeword with challenge r (the
-        level-(level-1) codeword of the r-folded message), as whole-vector
-        operations over the even (`P(x_i)`) and odd (`P(-x_i)`) halves."""
-        # Written with destinations rather than operators, and over windows
-        # rather than whole halves. Each operator would allocate a
-        # half-codeword and read back what the one before it just wrote; with
-        # destinations that is four passes and two vectors, and over windows
-        # those four passes run on a piece still in cache.
-        #
-        # `chunks` yields a single window until the codeword is large enough
-        # for that to matter, so at ordinary sizes this is the plain form.
-        # The result is allocated whole either way: it is what is returned.
-        twist = self._twist_vectors[level - 1]
-        twist2_inv = self._twist2_inv_vectors[level - 1]
-
-        # Four half-codewords are in hand at once: the split's two, the
-        # result, and a twist table. A twist table is already the result's
-        # length, so asking it avoids allocating anything before the answer
-        # is known.
-        windows = list(twist.chunks(live=4))
-        if len(windows) <= 1:
-            # `split_even_odd` returns two fresh halves nothing else holds,
-            # so they serve as the scratch and one of them as the result.
-            lo, hi = word.split_even_odd()
-            lo.sub(hi, out=lo)
-            lo.mul(twist2_inv, out=lo)
-            folded = hi.fma(lo, twist, out=hi)
-            return folded.fma(lo, r, out=folded)
-
-        # One window's worth of scratch, reused by every window.
-        folded = FieldVector(self.field, len(word) // 2)
-        span = max(length for _, length in windows)
-        lo_all = FieldVector(self.field, span)
-        hi_all = FieldVector(self.field, span)
-        for start, length in windows:
-            lo = lo_all.view(0, length)
-            hi = hi_all.view(0, length)
-            word.view(2 * start, 2 * length).split_even_odd(out=(lo, hi))
-            lo.sub(hi, out=lo)
-            lo.mul(twist2_inv.view(start, length), out=lo)
-            window = folded.view(start, length)
-            hi.fma(lo, twist.view(start, length), out=window)
-            window.fma(lo, r, out=window)
-        return folded
+        """The full fold of a level-`level` codeword with challenge r: the
+        level-(level-1) codeword of the r-folded message."""
+        return word.fold_twisted(
+            self._twist2_inv_vectors[level - 1], self._twist_vectors[level - 1], r
+        )

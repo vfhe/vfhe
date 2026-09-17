@@ -10,6 +10,10 @@
 // every engine: the vectorized kernels below need n >= 8 (element-wise) or
 // n >= 16 (NTT) to do any work at all, so the dispatchers in mod.c / base.c hand
 // shorter lengths to these, and the portable engine is built entirely on them.
+// out[2i] = even[i], out[2i + 1] = odd[i]. No modulus: the values pass through
+// unchanged, so the caller's reduction state is whatever it already was.
+void vec_interleave_u64(uint64_t *out, const uint64_t *even, const uint64_t *odd, uint64_t n);
+
 void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
                                Modulus mod);

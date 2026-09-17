@@ -632,6 +632,83 @@ class TestNativeMovementAndFold:
         assert FieldVector.interleave(even, odd) == vector
         assert ExtensionFieldVector.interleave(even, odd) == vector
 
+    @pytest.mark.parametrize("n", [1, 8, 18, 26, 200])
+    @pytest.mark.parametrize("scalars", [(False, False), (True, False), (True, True)])
+    def test_fma_interleave_matches_two_fmas_and_an_interleave(self, n, scalars):
+        field = make_field()
+        a = FieldVector(field, self.values(field, n))
+        b = FieldVector(field, self.values(field, n))
+
+        def multiplier(as_scalar):
+            if as_scalar:
+                return FieldElement(field, self.values(field, 1)[0])
+            return FieldVector(field, self.values(field, n))
+
+        c_even, c_odd = multiplier(scalars[0]), multiplier(scalars[1])
+        fused = FieldVector.fma_interleave(a, b, c_even, c_odd)
+        assert len(fused) == 2 * n
+        assert fused == FieldVector.interleave(a.fma(b, c_even), a.fma(b, c_odd))
+
+    def test_fma_interleave_takes_a_destination_and_checks_it(self):
+        field = make_field()
+        a = FieldVector(field, self.values(field, 8))
+        b = FieldVector(field, self.values(field, 8))
+        out = FieldVector(field, 16)
+        assert FieldVector.fma_interleave(a, b, b, b, out=out) is out
+        with pytest.raises(ValueError, match="not 16"):
+            FieldVector.fma_interleave(a, b, b, b, out=FieldVector(field, 8))
+        with pytest.raises(ValueError, match="length mismatch"):
+            FieldVector.fma_interleave(a, FieldVector(field, 5), b, b)
+
+    @pytest.mark.parametrize("n", [1, 8, 18, 26, 200])
+    def test_fold_twisted_matches_the_pairwise_formula(self, n):
+        field = make_field()
+        word = FieldVector(field, self.values(field, 2 * n))
+        twist2_inv = FieldVector(field, self.values(field, n))
+        twist = FieldVector(field, self.values(field, n))
+        r = FieldElement(field, self.values(field, 1)[0])
+
+        folded = word.fold_twisted(twist2_inv, twist, r)
+
+        assert len(folded) == n
+        for i in range(n):
+            coeff = (word[2 * i] - word[2 * i + 1]) * twist2_inv[i]
+            assert folded[i] == word[2 * i + 1] + coeff * twist[i] + coeff * r
+
+    # More elements than the kernel holds in one window, so the loop that
+    # walks them runs several times and the last one is short.
+    @pytest.mark.parametrize("n", [9000, 20001])
+    def test_the_fused_pair_crosses_the_kernels_window(self, n):
+        field = make_field()
+        a = FieldVector(field, n)
+        b = FieldVector(field, n)
+        c_even = FieldVector(field, n)
+        c_odd = FieldVector(field, n)
+        for vector, seed in ((a, b"a"), (b, b"b"), (c_even, b"e"), (c_odd, b"o")):
+            vector.sample_random(seed)
+
+        assert FieldVector.fma_interleave(
+            a, b, c_even, c_odd
+        ) == FieldVector.interleave(a.fma(b, c_even), a.fma(b, c_odd))
+
+        word = FieldVector(field, 2 * n)
+        word.sample_random(b"w")
+        r = field.random_element(b"r")
+        lo, hi = word.split_even_odd()
+        lo.sub(hi, out=lo)
+        lo.mul(c_even, out=lo)
+        want = hi.fma(lo, c_odd)
+        assert word.fold_twisted(c_even, c_odd, r) == want.fma(lo, r, out=want)
+
+    def test_fold_twisted_checks_the_table_lengths(self):
+        field = make_field()
+        word = FieldVector(field, self.values(field, 16))
+        good = FieldVector(field, self.values(field, 8))
+        with pytest.raises(ValueError, match="not 8"):
+            word.fold_twisted(FieldVector(field, 4), good, 1)
+        with pytest.raises(ValueError, match="not 8"):
+            word.fold_twisted(good, FieldVector(field, 9), 1)
+
     def test_interleave_rejects_mismatches(self):
         field = make_field()
         with pytest.raises(ValueError, match="length mismatch"):

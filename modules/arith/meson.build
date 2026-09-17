@@ -8,6 +8,7 @@ module = {
         'c/src/mle.c',
         'c/src/number_theory.c',
         # shared modular-arithmetic and transform kernels
+        'c/src/kernels/interleave.c',
         'c/src/kernels/mod.c',
         'c/src/kernels/mod32.c',
         'c/src/kernels/mod50.c',
