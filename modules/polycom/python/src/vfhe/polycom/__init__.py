@@ -8,11 +8,20 @@ from .basefold import (
     BasefoldOpening,
     pair_digest,
 )
-from .code import FoldableRS, bit_reverse, bit_reverse_permutation
+from .code import (
+    DEFAULT_SEED,
+    INSTANTIATIONS,
+    FoldableRS,
+    bit_reverse,
+    bit_reverse_permutation,
+    foldable_relative_distance,
+)
 from .field_code import FieldFoldableRS
 from .queries import query_positions
 
 __all__ = [
+    "DEFAULT_SEED",
+    "INSTANTIATIONS",
     "Basefold",
     "BasefoldCommitment",
     "BasefoldEval",
@@ -21,6 +30,7 @@ __all__ = [
     "FoldableRS",
     "bit_reverse",
     "bit_reverse_permutation",
+    "foldable_relative_distance",
     "pair_digest",
     "query_positions",
 ]
