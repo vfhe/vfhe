@@ -10,8 +10,10 @@ from .basefold import (
 )
 from .code import (
     DEFAULT_SEED,
+    DISTANCE_BOUNDS,
     INSTANTIATIONS,
     FoldableRS,
+    batch_inverse,
     bit_reverse,
     bit_reverse_permutation,
     foldable_relative_distance,
@@ -21,6 +23,7 @@ from .queries import query_positions
 
 __all__ = [
     "DEFAULT_SEED",
+    "DISTANCE_BOUNDS",
     "INSTANTIATIONS",
     "Basefold",
     "BasefoldCommitment",
@@ -28,6 +31,7 @@ __all__ = [
     "BasefoldOpening",
     "FieldFoldableRS",
     "FoldableRS",
+    "batch_inverse",
     "bit_reverse",
     "bit_reverse_permutation",
     "foldable_relative_distance",

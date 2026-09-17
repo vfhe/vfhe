@@ -145,7 +145,7 @@ def test_the_default_is_the_general_code():
         _code(ring, instantiation="fri")
 
 
-def test_twist_tables_are_distinct_and_seeded():
+def test_twist_tables_are_nonzero_negated_and_seeded():
     ring = _ring()
     code = _code(ring)
     for level in range(code.d):
@@ -154,7 +154,8 @@ def test_twist_tables_are_distinct_and_seeded():
             code.twists[level], code.twists_odd[level], strict=True
         ):
             assert len(row) == len(ring.primes)
-            assert all(t != u for t, u in zip(row, row_odd, strict=True))
+            for t, u, p in zip(row, row_odd, ring.primes, strict=True):
+                assert t != 0 and u == (p - t) % p  # T' = -T, as in the paper
     message = [ring.random_element() for _ in range(code.k_d)]
     same = _code(ring, seed=code.seed)
     assert same.twists == code.twists and same.twists_odd == code.twists_odd
@@ -190,6 +191,7 @@ def test_relative_distance_per_instantiation():
     assert general.relative_distance() == pytest.approx(expected)
     assert 0 < general.relative_distance() < rs.relative_distance()
     assert general.relative_distance(64) > general.relative_distance(128)
+    assert general.relative_distance(bound="zcf24") <= general.relative_distance()
 
 
 # --- the Reed-Solomon option ---

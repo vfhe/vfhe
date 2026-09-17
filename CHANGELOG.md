@@ -32,11 +32,18 @@ versions may contain breaking changes.
   `Basefold.soundness_error` takes -- the exact Reed-Solomon value for the
   `"rs"` instantiation, [ZCF24, Thm. 2]'s bound for the general code.
 - Add `polycom.foldable_relative_distance(k0, c, d, field_bits,
-  security_bits)`, that bound as a pure function, validated against the
-  paper's Table 1.
+  security_bits, bound)`, the general code's distance bound as a pure
+  function. `bound="cccfgs26"` (the default) is the tightening of [ZCF24,
+  Thm. 2] proven in [CCCFGS26] (*Batch, Pack, and Prove*, ASIACRYPT 2026, to
+  appear) for this code; `"zcf24"` is the original, validated against that
+  paper's Table 1. `polycom.DISTANCE_BOUNDS` lists them, and
+  `relative_distance` on both codes takes `bound` too.
 - Add `instantiation=` and `seed=` to `FoldableRS` / `FieldFoldableRS`, with
   `polycom.INSTANTIATIONS` and `polycom.DEFAULT_SEED`; and `twists_odd`, the
-  second twist table, next to `twists`.
+  odd-position twists `-T`, derived from `twists` on request.
+- Add `polycom.batch_inverse(values, p)`: modular inverses by Montgomery's
+  trick, which is how `FoldableRS` now builds its fold tables (one
+  exponentiation per level and prime rather than one per entry).
 
 - Add `Polynomial.rescale_to_power_of_two(k)`: `round(2^k * c / q)` for every
   coefficient, on centered representatives, as `N` machine words. It is the
@@ -59,10 +66,10 @@ versions may contain breaking changes.
   `2 n_d | p - 1`, `FoldableRS` needed `n_d | N/split_degree`); only the base
   length `n0` wants a transform, and does without one where the field has none.
 - `FoldableRS.twists` / `FieldFoldableRS.twists` are the general code's
-  even-position table `T`, and the field code's are lists of elements rather
-  than integers (a twist of the general code need not lie in the prime
-  subfield). `twists2_inv` is gone: the fold's tables are `1 / (T - T')` and
-  `-T'`, held privately.
+  twist table `T` (the odd position uses `-T`, as in the paper), and the
+  field code's are lists of elements rather than integers (a twist of the
+  general code need not lie in the prime subfield). `twists2_inv` is gone:
+  the fold's `1 / (2 T)` is held privately.
 - `relative_distance` is a method, not a property: the general code's bound
   depends on the security parameter.
 

@@ -9,20 +9,22 @@ integer per RNS prime, applied through `Polynomial * list`.
 
 The family is [ZCF24, Def. 5]'s foldable code, in vfhe's indexing: the
 message splits into its even and odd entries (`m_even`, `m_odd`), the two
-are encoded one level down, and two tables `T_l`, `T'_l` over the
-half-length positions recombine them into adjacent pairs::
+are encoded one level down, and a table `T_l` of nonzero twists over the
+half-length positions recombines them into adjacent pairs::
 
     encode_l(m)[2j]     = encode_{l-1}(m_even)[j] + encode_{l-1}(m_odd)[j] * T_l[j]
-    encode_l(m)[2j + 1] = encode_{l-1}(m_even)[j] + encode_{l-1}(m_odd)[j] * T'_l[j]
+    encode_l(m)[2j + 1] = encode_{l-1}(m_even)[j] - encode_{l-1}(m_odd)[j] * T_l[j]
 
-With `T_l[j] != T'_l[j]` a codeword folds, pair by pair and with only the
-tables known, into a codeword of `m_even + r * m_odd` for any challenge `r`::
+(the paper's `T'_l = -T_l`; the family allows any `T'_l[j] != T_l[j]`, and
+the negation is what makes one table serve both positions and the fold's
+divisor `2 T_l[j]`). A codeword then folds, pair by pair and with only the
+table known, into a codeword of `m_even + r * m_odd` for any challenge `r`::
 
-    b[j]    = (word[2j] - word[2j + 1]) / (T_l[j] - T'_l[j])
-    fold[j] = word[2j + 1] + b[j] * (-T'_l[j]) + b[j] * r
+    b[j]    = (word[2j] - word[2j + 1]) / (2 T_l[j])
+    fold[j] = word[2j + 1] + b[j] * T_l[j] + b[j] * r
 
-which is why the fold stores `1 / (T - T')` and `-T'` rather than the
-tables themselves. The message is a monomial-basis coefficient vector
+so the fold reads `T` and `1 / (2 T)`, the latter inverted in one batch per
+level by Montgomery's trick. The message is a monomial-basis coefficient vector
 (LSB-first multilinear index order — `MLE.to_coefficients`), so folding the
 codeword with r is exactly binding the first (LSB) variable of the MLE to r,
 the same fold the sumcheck prover applies to the evaluation table.
@@ -99,37 +101,82 @@ def derive_seed(seed: bytes, tag: bytes, attempt: int = 0) -> bytes:
     )
 
 
+#: The lower bounds `foldable_relative_distance` can report on the general
+#: code's distance, tightest first.
+DISTANCE_BOUNDS = ("cccfgs26", "zcf24")
+
+
 def foldable_relative_distance(
-    k0: int, c: int, d: int, field_bits: float, security_bits: int = 128
+    k0: int,
+    c: int,
+    d: int,
+    field_bits: float,
+    security_bits: int = 128,
+    bound: str = "cccfgs26",
 ) -> float:
-    """[ZCF24, Thm. 2]'s lower bound on the relative minimum distance of the
-    general foldable code with base dimension `k0`, inverse rate `c`, depth
-    `d` and random twists over a field of `2^field_bits` elements, in the
-    recurrence form of [ZCF24, App. C]::
+    """A lower bound on the relative minimum distance of the general foldable
+    code with base dimension `k0`, inverse rate `c`, depth `d` and twists
+    uniform in `F^x` for a field of `2^field_bits` elements, holding with
+    probability at least `1 - d * 2^-security_bits` over the twists.
 
-        Z_0 = 1 / c
-        Z_i = Z_{i-1} + ((2 log2(n_{i-1}) + lambda) / n_i + 1.001 Z_{i-1} + 0.6)
-                        / (field_bits - 1.001)
-        distance >= 1 - Z_d
+    Both bounds have the shape of [ZCF24, Thm. 2]: with `t_0 = k0` and
+    `n_i = c k0 2^i`, level `i` may add `l_i` zeros to a codeword's worst
+    case, `t_i = 2 t_{i-1} + l_i`, and `distance >= 1 - t_d / n_d`. They
+    differ in `l_i`::
 
-    which holds with probability at least `1 - d * 2^-security_bits` over the
-    twists. `Z_0 = 1/c` is the base code's distance up to the `1/n_0` that
-    an MDS code adds, so the base must be MDS (a Reed-Solomon code on
-    distinct points) for the bound to apply. The value is clamped at 0: a 0
-    means the theorem gives nothing at these parameters, not that the code
-    has no distance.
+        "cccfgs26": l_i = (lambda + 2 t_{i-1} (1 + log2(|F| / (|F| - 1)))
+                           + 0.585 n_i) / (log2(|F| - 1) - 1)
+        "zcf24":    l_i = (2 log2(n_{i-1}) + lambda + 2.002 t_{i-1} + 0.6 n_i)
+                           / (log2|F| - 1.001)
+
+    The default is [CCCFGS26]'s (its appendix on BaseFold, the theorem on the
+    codes' minimum distance), a tightening of [ZCF24, Thm. 2] for this very
+    code -- `T' = -T`, `diag(T)` uniform in `F^x`, an MDS base: it drops the
+    `2 (i-1) log2(n0)` term and sharpens `0.6` to `0.585`, and it is stated
+    for every field with more than three elements where the [ZCF24] form
+    assumes `|F| >= 2^10`. It is never smaller, and the difference shows
+    where the field is small relative to the depth (about two percentage
+    points at `log2|F| = 61`, `d = 20`). The [ZCF24] bound stays reachable
+    by name, as the one the literature quotes.
+
+    `t_0 = k0` is the base code's distance as an MDS code, so the base must
+    be a Reed-Solomon code on distinct points for either bound to apply. The
+    value is clamped at 0: a 0 means the theorem gives nothing at these
+    parameters, not that the code has no distance.
     """
-    if field_bits <= 1.001:
-        raise ValueError(
-            f"the field must have more than 2 elements, got 2^{field_bits}"
-        )
-    z = 1 / c
-    for level in range(1, d + 1):
-        n_below = c * k0 << (level - 1)
-        z += (
-            (2 * math.log2(n_below) + security_bits) / (2 * n_below) + 1.001 * z + 0.6
-        ) / (field_bits - 1.001)
-    return max(0.0, 1 - z)
+    if bound not in DISTANCE_BOUNDS:
+        raise ValueError(f"bound must be one of {DISTANCE_BOUNDS}, got {bound!r}")
+    if bound == "cccfgs26":
+        # log2(|F| - 1) and log2(|F| / (|F| - 1)) from log2|F|, without
+        # forming |F|: the correction is log2(1 - 2^-field_bits), which is 0
+        # to double precision once the field has more than about 50 bits.
+        correction = math.log1p(-(2.0**-field_bits)) / math.log(2)
+        denominator = field_bits + correction - 1
+        if denominator <= 0:
+            raise ValueError(
+                f"the field must have more than 3 elements, got 2^{field_bits}"
+            )
+        growth = 2 * (1 - correction)
+    else:
+        if field_bits <= 1.001:
+            raise ValueError(
+                f"the field must have more than 2 elements, got 2^{field_bits}"
+            )
+        denominator = field_bits - 1.001
+        growth = 2.002
+    t = float(k0)
+    n = c * k0
+    for _level in range(1, d + 1):
+        n_below, n = n, 2 * n
+        if bound == "cccfgs26":
+            t = 2 * t + (security_bits + growth * t + 0.585 * n) / denominator
+        else:
+            t = (
+                2 * t
+                + (2 * math.log2(n_below) + security_bits + growth * t + 0.6 * n)
+                / denominator
+            )
+    return max(0.0, 1 - t / n)
 
 
 def vandermonde_inverse(
@@ -171,6 +218,27 @@ def vandermonde_inverse(
         for i in range(k):
             inverse[i][j] = mul(quotient[i], scale)
     return inverse
+
+
+def batch_inverse(values: list[int], p: int) -> list[int]:
+    """The inverses modulo the prime `p` of every entry of `values`, by
+    Montgomery's trick: one exponentiation and three multiplications per
+    entry in place of an exponentiation each. Raises ValueError on a zero."""
+    prefix = []
+    running = 1
+    for value in values:
+        running = running * value % p
+        prefix.append(running)
+    if running == 0:
+        raise ValueError("a zero has no inverse")
+    running = pow(running, p - 2, p)
+    inverses = [0] * len(values)
+    for i in range(len(values) - 1, 0, -1):
+        inverses[i] = running * prefix[i - 1] % p
+        running = running * values[i] % p
+    if values:
+        inverses[0] = running
+    return inverses
 
 
 def bit_reverse(i: int, bits: int) -> int:
@@ -275,14 +343,12 @@ class FoldableRS:
         self.n0 = c * k0
         self.k_d = k0 << d
         self.n_d = self.n0 << d
-        # The four tables of every fold level, `[level][position][prime]`:
-        # `twists` / `twists_odd` are `T` and `T'` of the fold from level l+1
-        # to level l (what the encoder multiplies by), `_fold_scale` /
-        # `_fold_shift` the `1 / (T - T')` and `-T'` the fold reads.
+        # The two tables of every fold level, `[level][position][prime]`:
+        # `twists` is `T` of the fold from level l+1 to level l (the encoder
+        # multiplies by `T` and `-T`, the fold by `T`), `_fold_scale` the
+        # `1 / (2 T)` the fold reads.
         self.twists: list[Table] = []
-        self.twists_odd: list[Table] = []
         self._fold_scale: list[Table] = []
-        self._fold_shift: list[Table] = []
         #: The roots of the transforms in use, `[level][prime]`: one row per
         #: level for the ``"rs"`` instantiation, the base transform's alone
         #: for the general code (empty when its base is a Vandermonde product).
@@ -334,24 +400,11 @@ class FoldableRS:
         for level in range(self.d + 1):
             self._new_plans(self.n0 << level)
         self.base_points = self._transform_points(self.roots[0], self.n0)
-        primes = self.ring.primes
         for level in range(self.d):
             n = self.n0 << level  # positions of the folded (level) codeword
-            even = self._transform_points(self.roots[level + 1], n)
-            self.twists.append(even)
-            self.twists_odd.append(
-                [
-                    [(p - t) % p for t, p in zip(row, primes, strict=True)]
-                    for row in even
-                ]
-            )
-            self._fold_scale.append(
-                [
-                    [pow(2 * t, p - 2, p) for t, p in zip(row, primes, strict=True)]
-                    for row in even
-                ]
-            )
-            self._fold_shift.append(even)
+            twist = self._transform_points(self.roots[level + 1], n)
+            self.twists.append(twist)
+            self._fold_scale.append(self._inverse_table(twist, 2))
 
     def _init_general(self) -> None:
         """A base code, encoded by a transform when the primes allow one of
@@ -361,23 +414,30 @@ class FoldableRS:
             self.base_points = self._transform_points(self.roots[0], self.n0)
         else:
             self.base_points = self._sample_points()
-        primes = self.ring.primes
         for level in range(self.d):
-            even, odd = self._sample_twists(level, self.n0 << level)
-            self.twists.append(even)
-            self.twists_odd.append(odd)
-            self._fold_scale.append(
-                [
-                    [
-                        pow((t - u) % p, p - 2, p)
-                        for t, u, p in zip(row, row_odd, primes, strict=True)
-                    ]
-                    for row, row_odd in zip(even, odd, strict=True)
-                ]
-            )
-            self._fold_shift.append(
-                [[(p - u) % p for u, p in zip(row, primes, strict=True)] for row in odd]
-            )
+            twist = self._sample_twists(level, self.n0 << level)
+            self.twists.append(twist)
+            self._fold_scale.append(self._inverse_table(twist, 2))
+
+    def _inverse_table(self, table: Table, factor: int) -> Table:
+        """`1 / (factor * table[j][k])` for every position and prime: one
+        batch inversion per prime (Montgomery's trick, `batch_inverse`) rather
+        than an exponentiation per entry."""
+        columns = [
+            batch_inverse([factor * row[k] % p for row in table], p)
+            for k, p in enumerate(self.ring.primes)
+        ]
+        return [list(row) for row in zip(*columns, strict=True)]
+
+    @property
+    def twists_odd(self) -> list[Table]:
+        """``T'_l[j] = -T_l[j]`` per level, position and prime -- the
+        odd-position twist. Derived from `twists`, not stored."""
+        primes = self.ring.primes
+        return [
+            [[(p - t) % p for t, p in zip(row, primes, strict=True)] for row in table]
+            for table in self.twists
+        ]
 
     def _sampled(self, n: int, tag: bytes, attempt: int) -> Table:
         """`n` positions of uniform per-prime scalars, a pure function of the
@@ -390,21 +450,16 @@ class FoldableRS:
         ]
         return [list(column) for column in zip(*rows, strict=True)]
 
-    def _sample_twists(self, level: int, n: int) -> tuple[Table, Table]:
-        """`(T, T')` for one level, resampled under a new seed until
-        `T[j] != T'[j]` for every position and prime -- the condition the
-        fold divides by."""
+    def _sample_twists(self, level: int, n: int) -> Table:
+        """`T` for one level: uniform per prime, resampled under a new seed
+        until no entry is zero -- the condition `T != -T` the fold divides
+        by."""
         tag = b"twists" + level.to_bytes(4, "little")
         for attempt in range(_MAX_SAMPLING_ATTEMPTS):
-            even = self._sampled(n, tag + b"even", attempt)
-            odd = self._sampled(n, tag + b"odd", attempt)
-            if all(
-                t != u
-                for row, row_odd in zip(even, odd, strict=True)
-                for t, u in zip(row, row_odd, strict=True)
-            ):
-                return even, odd
-        raise RuntimeError(f"no distinct twist tables for level {level} found")
+            twist = self._sampled(n, tag, attempt)
+            if all(t for row in twist for t in row):
+                return twist
+        raise RuntimeError(f"no nonzero twist table for level {level} found")
 
     def _sample_points(self) -> Table:
         """`n0` evaluation points for the base code, distinct modulo every
@@ -415,7 +470,9 @@ class FoldableRS:
                 return points
         raise RuntimeError(f"no {self.n0} distinct base points found")
 
-    def relative_distance(self, security_bits: int = 128) -> float:
+    def relative_distance(
+        self, security_bits: int = 128, bound: str = "cccfgs26"
+    ) -> float:
         """A lower bound on the relative minimum distance at every level, per
         RNS-prime component: the `delta` a soundness bound needs, which is a
         property of the code rather than of the protocol, which is why
@@ -424,16 +481,22 @@ class FoldableRS:
         For the ``"rs"`` instantiation every level is a Reed-Solomon code on
         distinct points, so level `l` has distance exactly
         `1 - k_l/n_l + 1/n_l`; the rate is `1/c` throughout, so the longest
-        codeword's value is the bound and `security_bits` plays no part.
+        codeword's value is the bound and the other arguments play no part.
 
-        For the general code it is [ZCF24, Thm. 2]'s recurrence
-        (`foldable_relative_distance`) at the smallest prime, which holds
-        with probability at least `1 - d * 2^-security_bits` over the twists.
+        For the general code it is `foldable_relative_distance` at the
+        smallest prime -- [CCCFGS26]'s bound unless `bound` names [ZCF24]'s
+        -- which holds with probability at least `1 - d * 2^-security_bits`
+        over the twists.
         """
         if self.instantiation == "rs":
             return 1 - 1 / self.c + 1 / self.n_d
         return foldable_relative_distance(
-            self.k0, self.c, self.d, math.log2(min(self.ring.primes)), security_bits
+            self.k0,
+            self.c,
+            self.d,
+            math.log2(min(self.ring.primes)),
+            security_bits,
+            bound,
         )
 
     def __del__(self) -> None:
@@ -498,11 +561,10 @@ class FoldableRS:
         even = self._encode_general(message[0::2], level - 1)
         odd = self._encode_general(message[1::2], level - 1)
         word = []
-        for a, b, t, u in zip(
-            even, odd, self.twists[level - 1], self.twists_odd[level - 1], strict=True
-        ):
-            word.append(a + b * t)
-            word.append(a + b * u)
+        for a, b, t in zip(even, odd, self.twists[level - 1], strict=True):
+            twisted = b * t
+            word.append(a + twisted)
+            word.append(a - twisted)
         return word
 
     def _base_encode(self, message: list) -> list:
@@ -531,7 +593,7 @@ class FoldableRS:
         return self._decode_general(word, level)
 
     def _decode_general(self, word: list, level: int) -> tuple[bool, list]:
-        """`_encode_general` inverted: per pair, `b = (lo - hi) / (T - T')`
+        """`_encode_general` inverted: per pair, `b = (lo - hi) / (2 T)`
         and `a = lo - b T` are the codewords of the odd and even
         half-messages, decoded one level down and interleaved back."""
         if level == 0:
@@ -596,7 +658,7 @@ class FoldableRS:
         pair per queried position, never a whole codeword.
         """
         coeff = (lo - hi) * self._fold_scale[level - 1][i]
-        return hi + coeff * self._fold_shift[level - 1][i] + r * coeff
+        return hi + coeff * self.twists[level - 1][i] + r * coeff
 
     def fold_pairs(self, los, his, r, level: int, indices) -> list:
         """`fold_pair` at many positions at once; see `FieldFoldableRS`, which

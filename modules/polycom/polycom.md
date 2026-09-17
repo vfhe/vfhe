@@ -72,37 +72,44 @@ Basefold commits with a family of **foldable linear codes** [ZCF24,
 Def. 5]: from a base `[n0, k0]` code `C_0` and, per level, two diagonal
 twist vectors `T_l`, `T'_l` with `T_l[j] != T'_l[j]`, the level-`l` code
 `C_l` (dimension `k0·2^l`, length `n0·2^l`) encodes `m` from the codewords
-of its two halves. In vfhe's indexing — the message split into its even
-and odd entries `m_e`, `m_o`, and the two twisted copies *adjacent* rather
-than half a codeword apart as in the paper (see the conventions below):
+of its two halves. As in the paper's random foldable code, **`T'_l = -T_l`**
+with `T_l` nonzero: one table serves both positions, the fold's divisor is
+`2·T_l[j]`, and the general `T'` buys nothing the distance argument uses.
+In vfhe's indexing — the message split into its even and odd entries `m_e`,
+`m_o`, and the two twisted copies *adjacent* rather than half a codeword
+apart as in the paper (see the conventions below):
 
 ```text
-Enc_l(m)[2j]   = Enc_{l-1}(m_e)[j] + T_l[j]  · Enc_{l-1}(m_o)[j]
-Enc_l(m)[2j+1] = Enc_{l-1}(m_e)[j] + T'_l[j] · Enc_{l-1}(m_o)[j]
+Enc_l(m)[2j]   = Enc_{l-1}(m_e)[j] + T_l[j] · Enc_{l-1}(m_o)[j]
+Enc_l(m)[2j+1] = Enc_{l-1}(m_e)[j] - T_l[j] · Enc_{l-1}(m_o)[j]
 ```
 
-so a codeword of `m` folds, pair by pair and with only the tables known,
+so a codeword of `m` folds, pair by pair and with only the table known,
 into a codeword of `m_e + r·m_o` for any challenge `r`:
 
 ```text
-b[j]   = (pi[2j] - pi[2j+1]) / (T_l[j] - T'_l[j])
-pi'[j] = pi[2j+1] + b[j]·(-T'_l[j]) + b[j]·r
+b[j]   = (pi[2j] - pi[2j+1]) / (2·T_l[j])
+pi'[j] = pi[2j+1] + b[j]·T_l[j] + b[j]·r
 ```
 
-Both codes hold the fold's two tables, `1/(T - T')` and `-T'`, next to
-`T` and `T'` (`twists`, `twists_odd`); `fold_pair` is the two lines above
-and `fold` the whole-codeword form (`FieldVector.fold_twisted` over a
-field, a loop over a ring).
+Both codes hold `T` (`twists`; `twists_odd` is `-T`, derived on request)
+and the fold's `1/(2T)`, the latter inverted in **one batch per level by
+Montgomery's trick** (`FieldVector.inverse`, a C kernel on the extension
+family; `code.batch_inverse` per prime over a ring) rather than an
+exponentiation per entry; `fold_pair` is the two lines above and `fold` the
+whole-codeword form (`FieldVector.fold_twisted` over a field, a loop over a
+ring).
 
 The family is instantiated in one of two ways, chosen by the constructor's
 `instantiation=`:
 
-- **`"general"`, the default — [ZCF24]'s construction.** `T_l` and `T'_l`
-  are drawn, per level, from the code's `seed` (a public parameter,
+- **`"general"`, the default — [ZCF24]'s random foldable code.** `T_l` is
+  drawn, per level, from the code's `seed` (a public parameter,
   `DEFAULT_SEED` unless named; two parties building the code from the same
   arguments hold the same code), through the library's seeded samplers
   (`FieldVector.sample_random`, `crypto.seeded`), and resampled under a
-  fresh derived seed until every `T_l[j] != T'_l[j]`. The base code is a
+  fresh derived seed until no entry is zero (`diag(T) ∈ (F^×)^n`, the
+  paper's condition). The base code is a
   Reed-Solomon code on `n0` points, which is what the distance argument
   needs (below) — and one code with **two encoders**: arith's negacyclic
   NTT where the field has a root of unity of order `2·n0` (`2·n0 | p - 1`;
@@ -120,8 +127,9 @@ The family is instantiated in one of two ways, chosen by the constructor's
   providers. With `psi` the `2n`-th root of unity `ntt_new_plan` picks,
   position `p` of a length-`n` codeword holds `P(psi^(2·brv(p)+1))` (the
   transform is CT_NR, natural in, bit-reversed out), so the adjacent pairs
-  are `(P(x_i), P(-x_i))` for `x_i = psi^(2·brv(i)+1)` and the tables are
-  `T = x`, `T' = -x` — the general fold at `T' = -T`. The levels share a
+  are `(P(x_i), P(-x_i))` for `x_i = psi^(2·brv(i)+1)` and the table is
+  `T = x`: the same fold, on a structured rather than a random `T`. The
+  levels share a
   root tower, `psi_{n/2} = psi_n^2`: `ntt_new_plan` finds its root as
   `g^((q-1)/2n)` for the smallest quadratic non-residue `g`, a condition
   independent of `n`, so the squared fold points are exactly the
@@ -133,19 +141,35 @@ The family is instantiated in one of two ways, chosen by the constructor's
   codes, so this is a legitimate member of the family — what differs is the
   distance argument, not the fold.
 
-**Distance** (`relative_distance(security_bits)`, the `delta` of
+**Distance** (`relative_distance(security_bits, bound)`, the `delta` of
 `BasefoldEval.soundness_error`): for the option, the exact Reed-Solomon
-value at the longest level. For the general code, [ZCF24, Thm. 2] in the
-recurrence form of its Appendix C (`foldable_relative_distance`, checked
-against the paper's Table 1):
+value at the longest level. For the general code, a probabilistic lower
+bound over the choice of twists (`foldable_relative_distance`), of the
+shape [ZCF24, Thm. 2] gives it — `t_0 = k_0`, `t_i = 2·t_{i-1} + l_i`,
+`distance >= 1 - t_d/n_d` with probability at least `1 - d·2^-lambda` —
+where `l_i` bounds the zeros level `i` may add. **The default is
+[CCCFGS26]'s tightening** of that theorem (its appendix on BaseFold),
+proven for exactly this code (`T' = -T`, `diag(T)` uniform in `F^×`, an MDS
+base):
 
 ```text
-Z_0 = 1/c
-Z_i = Z_{i-1} + ((2·log2(n_{i-1}) + lambda)/n_i + 1.001·Z_{i-1} + 0.6) / (log2|F| - 1.001)
-distance >= 1 - Z_d,   with probability >= 1 - d·2^-lambda over the twists
+l_i = (lambda + 2·t_{i-1}·(1 + log2(|F|/(|F|-1))) + 0.585·n_i) / (log2(|F|-1) - 1)
 ```
 
-`Z_0 = 1/c` is the base code's distance as an MDS code, which is why the
+against [ZCF24]'s `l_i = (2(i-1)·log2 n_0 + lambda + 2.002·t_{i-1} + 0.6·n_i) /
+(log2|F| - 1.001)`, reachable as `bound="zcf24"` and checked against that
+paper's Table 1. The tightening drops the `2(i-1)·log2 n_0` term and
+sharpens `0.6` to `0.585` (`log2(9/4)/2`), and it is stated for any field
+with more than three elements where [ZCF24]'s form assumes `|F| >= 2^10`;
+it is never smaller, and the gain is where the field is small relative to
+the depth (about two percentage points of distance, and eight fewer
+queries at 128 bits, for `log2|F| = 61` and `d = 20`; nothing measurable
+over a 180-bit residue field). It is the default because it is the better
+bound for the code the library actually builds, and because the library's
+own soundness parameters should not quote a looser number than its authors
+have proven.
+
+`t_0 = k_0` is the base code's distance as an MDS code, which is why the
 base stays Reed-Solomon whichever encoder produces it. `|F|` is the field
 the twists are drawn from — the whole extension field over
 `FieldFoldableRS`, the smallest residue field over `FoldableRS` (the bound
@@ -170,7 +194,7 @@ Three conventions to keep in mind:
   codeword over `Z_p`: the kernels read `coeffs[i][j]` directly (hence
   every entry must be in the same — RNS/NTT — representation, which the
   kernel paths normalize first), roots and twists are per-prime integers
-  applied through `Polynomial * list`, and the fold's `1/(T - T')` are
+  applied through `Polynomial * list`, and the fold's `1/(2T)` are
   per-prime modular inverses — no ring inversions.
 - **The Merkle leaf is the adjacent pair** `(2i, 2i+1)`, the unit the fold
   reads (§3). Only the `"rs"` option makes it a `(P(x), P(-x))` pair; in
@@ -350,3 +374,8 @@ evaluation point.
   Fiore, Antonio Guimarães, Eduardo Soria-Vazquez. *Verifiable Computation
   for Approximate Homomorphic Encryption Schemes*. CRYPTO 2025. ePrint
   2025/286. <https://eprint.iacr.org/2025/286>
+- **[CCCFGS26]** Ignacio Cascudo, Anamaria Costache, Daniele Cozzo, Dario
+  Fiore, Antonio Guimarães, Eduardo Soria-Vazquez. *Batch, Pack, and Prove:
+  More Efficient Verifiable Computation for CKKS*. ASIACRYPT 2026, to
+  appear. (The appendix on BaseFold has the minimum-distance bound
+  `foldable_relative_distance` reports by default.)

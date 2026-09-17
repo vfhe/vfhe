@@ -253,12 +253,12 @@ def test_encode_is_the_recursion_in_the_tables(field):
         assert word[2 * j + 1] == even[j] + odd[j] * twists_odd[j]
 
 
-def test_twist_tables_are_distinct_and_seeded(field):
+def test_twist_tables_are_nonzero_negated_and_seeded(field):
     code = _code(field)
     for level in range(code.d):
         assert len(code.twists[level]) == code.n0 << level
         for t, u in zip(code.twists[level], code.twists_odd[level], strict=True):
-            assert t != u
+            assert t != field.zero and u == -t  # T' = -T, as in the paper
     message = _random(field, code.k_d, b"m")
     same = _code(field, seed=code.seed)
     assert same.twists == code.twists and same.twists_odd == code.twists_odd
@@ -295,7 +295,7 @@ def test_the_two_base_encoders_agree(field):
     assert code.encode(message) == code._base_encode_all(message, 0)
 
 
-def test_relative_distance_recurrence_matches_the_paper():
+def test_zcf24_recurrence_matches_the_paper():
     """[ZCF24, Table 1], every row, at the security parameter each row was
     computed with (the first at 100 bits, the others at 128)."""
     rows = [
@@ -306,12 +306,42 @@ def test_relative_distance_recurrence_matches_the_paper():
     ]
     for k0, k_d, c, field_bits, security_bits, expected in rows:
         d = (k_d // k0).bit_length() - 1
-        assert foldable_relative_distance(k0, c, d, field_bits, security_bits) == (
-            pytest.approx(expected, abs=1e-3)
+        assert foldable_relative_distance(
+            k0, c, d, field_bits, security_bits, bound="zcf24"
+        ) == pytest.approx(expected, abs=1e-3)
+    with pytest.raises(ValueError, match="field"):
+        foldable_relative_distance(4, 4, 2, 1, bound="zcf24")
+
+
+def test_cccfgs26_bound_is_the_default_and_never_below_zcf24():
+    """[CCCFGS26]'s tightening of the same recurrence: it drops the
+    `2 (i-1) log2(n0)` term and sharpens `0.6` to `0.585`, so it is at least
+    [ZCF24]'s bound everywhere and strictly above it on small fields; on a
+    field of at least 2^11 elements it is within 5e-4 of the paper's
+    simplified form with `2.002` and `1.001` (the exact form is the tighter
+    of the two, by less than that)."""
+    cases = [(2**5, 16, 15, 31), (1, 16, 20, 61), (4, 4, 5, 98), (2**8, 4, 8, 180)]
+    for k0, c, d, field_bits in cases:
+        tight = foldable_relative_distance(k0, c, d, field_bits)
+        assert tight == foldable_relative_distance(
+            k0, c, d, field_bits, bound="cccfgs26"
         )
+        assert tight >= foldable_relative_distance(k0, c, d, field_bits, bound="zcf24")
+        # The simplified statement, valid from 2^11 elements on.
+        t, n = k0, c * k0
+        for _ in range(d):
+            n *= 2
+            t = 2 * t + (128 + 2.002 * t + 0.585 * n) / (field_bits - 1.001)
+        assert tight == pytest.approx(1 - t / n, abs=5e-4)
+        assert tight >= 1 - t / n - 1e-12
+    assert foldable_relative_distance(1, 16, 20, 61) > (
+        foldable_relative_distance(1, 16, 20, 61, bound="zcf24") + 0.01
+    )
     assert foldable_relative_distance(1, 1, 1, 61) == 0.0  # rate one: nothing
     with pytest.raises(ValueError, match="field"):
-        foldable_relative_distance(4, 4, 2, 1)
+        foldable_relative_distance(4, 4, 2, 1.5)
+    with pytest.raises(ValueError, match="bound"):
+        foldable_relative_distance(4, 4, 2, 61, bound="tight")
 
 
 def test_relative_distance_per_instantiation(field):
@@ -325,6 +355,7 @@ def test_relative_distance_per_instantiation(field):
     assert general.relative_distance() == pytest.approx(expected)
     assert 0 < general.relative_distance() < rs.relative_distance()
     assert general.relative_distance(64) > general.relative_distance(128)
+    assert general.relative_distance(bound="zcf24") <= general.relative_distance()
 
 
 # --- the Reed-Solomon option ---
