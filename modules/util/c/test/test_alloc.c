@@ -4,6 +4,7 @@
 // require, on both sides of the huge-page threshold.
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unity.h>
 #include <util.h>
