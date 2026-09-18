@@ -50,21 +50,43 @@ jobs:
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: c
+      # continue-on-error: run_fuzzers exits 2 on BUG_FOUND even in batch mode.
+      # A crash reproduces every night until it is fixed, so failing here would
+      # cost us the prune and the coverage report for as long as the bug is open.
       - name: Run fuzzers
+        id: batch
+        continue-on-error: true
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           fuzz-seconds: ${{ env.FUZZ_SECONDS }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           mode: batch
           output-sarif: true
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: crash-artifacts-${{ matrix.engine }}
+          path: out/artifacts/
+          if-no-files-found: ignore
+          retention-days: 90
+      # run_fuzzers refuses to start on a non-empty out/artifacts, so clear it
+      # after each run. CFL's docker owns the files as root (passwordless).
+      - name: Clear crash artifacts after the batch run
+        if: always()
+        run: sudo rm -rf out/artifacts
       - name: Prune corpus
+        id: prune
+        continue-on-error: true
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           fuzz-seconds: ${{ env.PRUNE_SECONDS }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           mode: prune
           output-sarif: true
-      # Coverage does not fuzz: it replays the pruned corpus through a rebuild.
+      - name: Clear crash artifacts before coverage replay
+        if: always()
+        run: sudo rm -rf out/artifacts
       - name: Build fuzzers for coverage
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
@@ -76,6 +98,14 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           mode: coverage
           sanitizer: coverage
+      - name: Fail if a fuzzing run found crashes
+        if: steps.batch.outcome == 'failure' || steps.prune.outcome == 'failure'
+        env:
+          BATCH: ${{ steps.batch.outcome }}
+          PRUNE: ${{ steps.prune.outcome }}
+        run: |
+          printf 'batch: %s\nprune: %s\n' "$BATCH" "$PRUNE"
+          exit 1
 
   # ----------------------------------------------------------------- alert ---
 
