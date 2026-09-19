@@ -11,13 +11,18 @@ headers change types under them).
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import importlib
+import importlib.machinery
 import json
 import logging
 import os
+import shlex
 import shutil
+import subprocess
 import sys
+import sysconfig
 import tempfile
 from pathlib import Path
 
@@ -82,15 +87,78 @@ def _library_paths(root: Path, engine: str) -> tuple[Path, Path]:
     )
 
 
-def _inputs_hash() -> str:
-    """One hash over every registered input, naming the module."""
+# What setuptools reads from the environment when it builds the module, less
+# the compiler itself, which `_compiler_identity` covers. Two builds that
+# disagree on any of them are two different modules.
+_TOOLCHAIN_ENV = ("CFLAGS", "CPPFLAGS", "LDFLAGS")
+
+
+@functools.cache
+def _compiler_version(command: str) -> str:
+    """What `command` answers to ``--version``, first line.
+
+    Keyed on the command and cached, because a compiler does not change under
+    a running interpreter while the reuse path is meant to cost nothing -- and
+    because keying it means a caller that switches ``CC`` between two builds
+    gets two answers rather than the first one twice.
+    """
+    try:
+        completed = subprocess.run(  # noqa: S603 - the configured compiler
+            [*shlex.split(command), "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("'%s' would not say which version it is", command)
+        return "version unknown"
+    first, _, _ = completed.stdout.partition("\n")
+    return first.strip() or "version unknown"
+
+
+def _compiler_identity() -> str:
+    """The compiler that will build the module, named and versioned.
+
+    The version is here for the reason the flags are: two releases of one
+    compiler take the same flags and emit different code, so a module built by
+    one cannot be handed out in answer to a request that would build with the
+    other.
+    """
+    command = os.environ.get("CC") or sysconfig.get_config_var("CC") or ""
+    if not command:
+        return ""
+    return f"{command} {_compiler_version(command)}"
+
+
+def _feed(hasher, *parts: str) -> None:
+    """Hash `parts` so that no regrouping of them hashes alike."""
+    for part in parts:
+        hasher.update(part.encode("utf-8"))
+        hasher.update(b"\0")
+
+
+def _inputs_hash(extra_compile_args: list[str], extra_link_args: list[str]) -> str:
+    """One hash over everything that decides what the module holds, naming it.
+
+    The registered sources and declarations, the flags this build adds, and the
+    toolchain that will carry them out. The flags are in because they decide
+    meaning and not only speed -- a `-D` is as much a part of the source as the
+    file it applies to -- and the toolchain because the same flags do not mean
+    the same thing to every compiler. Two builds that differ in any of it are
+    therefore two modules, each with a name of its own, and neither can be
+    handed out in answer to the other.
+    """
     hasher = hashlib.sha256()
     for f in sorted(_user_code.c_files) + sorted(_user_code.cdef_files):
-        hasher.update(f.encode("utf-8"))
+        _feed(hasher, f)
         if os.path.exists(f):
             hasher.update(Path(f).read_bytes())
-    for s in _user_code.cdef_strings:
-        hasher.update(s.encode("utf-8"))
+            hasher.update(b"\0")
+    _feed(hasher, *_user_code.cdef_strings)
+    _feed(hasher, *extra_compile_args, *extra_link_args)
+    _feed(hasher, *(f"{name}={os.environ.get(name, '')}" for name in _TOOLCHAIN_ENV))
+    _feed(hasher, _compiler_identity())
     return hasher.hexdigest()
 
 
@@ -160,6 +228,31 @@ def _compile_module(ffi: FFI, output_dir: str) -> str:
     return dest
 
 
+def _cached_module(module_name: str, output_dir: str, archive: Path) -> str | None:
+    """An earlier build of the registered inputs in ``output_dir``, or None.
+
+    The name answers most of the question on its own: it carries the inputs'
+    hash and the engine, so a file bearing it was built from these sources
+    against this ABI. What remains is the archive, and the module links the
+    archive rather than the sources behind it -- an edited source that has not
+    been rebuilt changes nothing about what the module contains -- so the
+    archive's own mtime is the whole of the freshness test.
+
+    Only a suffix this interpreter imports counts, because one cache directory
+    serves every interpreter that shares the name.
+    """
+    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
+        module_path = os.path.join(output_dir, module_name + suffix)
+        if os.path.exists(module_path):
+            break
+    else:
+        return None
+    if os.path.getmtime(module_path) < os.path.getmtime(archive):
+        logger.info("'%s' is older than %s; rebuilding.", module_name, archive.name)
+        return None
+    return module_path
+
+
 def _load_and_swap(module_name: str, output_dir: str) -> None:
     """Import the new module and hand the process over to it."""
     global _last_output_dir
@@ -174,14 +267,34 @@ def _load_and_swap(module_name: str, output_dir: str) -> None:
 
     module = importlib.import_module(module_name)
     _reload.update_cffi_references(module.ffi, module.lib)
-    for reinitializer in _reload.REINITIALIZATION_REGISTRY:
-        reinitializer(module.ffi, module.lib)
     logger.info("Reloaded: the process now runs the custom module.")
 
 
-def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
+def compile(
+    output_dir=None, extra_compile_args=None, extra_link_args=None, reuse=False
+):
     """Compiles the registered user code against the library and updates the
-    loaded handles; returns the path of the compiled module."""
+    loaded handles; returns the path of the compiled module.
+
+    ``reuse=True`` hands over an earlier build of the same inputs from
+    ``output_dir`` instead, when one is there and still newer than the archive
+    it links, and compiles only otherwise. What counts as the same inputs is
+    the module's name: the registered sources and declarations, the flags given
+    here, the compiler and its version, and the active engine. So building the same sources
+    twice under different flags gives two modules rather than one, and either
+    can be reused without the other standing in for it. A cached module that
+    will not load is rebuilt.
+
+    Reuse is the library's to offer because that name is: no caller can derive
+    it without copying private code, and one that guesses it wrong either
+    rebuilds every time or loads a module built for other flags or another
+    ABI.
+
+    Objects that hold the library take their handle when they are constructed,
+    so call this before constructing any of them.
+    """
+    extra_compile_args = extra_compile_args or []
+    extra_link_args = extra_link_args or []
     root = find_vfhe_root()
     engine = _active_engine()
     archive, engine_json = _library_paths(root, engine)
@@ -190,24 +303,41 @@ def compile(output_dir=None, extra_compile_args=None, extra_link_args=None):
     # (`mp_vector_t` is one `__m512i` on a tuned engine and one `uint64_t` on
     # the portable one) and its kernels need the ISA. Two engines' builds of
     # one set of sources are therefore different modules, and naming them alike
-    # lets an output directory hold only whichever was compiled last -- which
-    # `compile` itself never notices, since it always rebuilds, but a caller
-    # that loads the cached module by name would get one its process cannot
-    # run.
-    module_name = f"_vfhe_custom_{engine}_{_inputs_hash()[:16]}"
+    # would let one output directory hold only whichever was compiled last, and
+    # `reuse` hand back one this process cannot run.
+    module_name = (
+        f"_vfhe_custom_{engine}_"
+        f"{_inputs_hash(extra_compile_args, extra_link_args)[:16]}"
+    )
 
     if output_dir is None:
         cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
         output_dir = os.path.join(cache, "vfhe")
     os.makedirs(output_dir, exist_ok=True)
 
+    if reuse:
+        module_path = _cached_module(module_name, output_dir, archive)
+        if module_path is not None:
+            try:
+                _load_and_swap(module_name, output_dir)
+            # Broad on purpose: a cached module is an optimization, and every
+            # way one can be unusable -- truncated, built against a library
+            # since replaced in place, a symbol the cdef no longer matches --
+            # is answered by building it again.
+            except Exception:
+                logger.warning(
+                    "'%s' did not load; rebuilding.", module_name, exc_info=True
+                )
+            else:
+                return module_path
+
     ffi = _assemble_ffi(
         root,
         archive,
         engine_json,
         module_name,
-        extra_compile_args or [],
-        extra_link_args or [],
+        extra_compile_args,
+        extra_link_args,
     )
     logger.info("Compiling custom library '%s'...", module_name)
     dest = _compile_module(ffi, output_dir)

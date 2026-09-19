@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
+import importlib.machinery
 import os
 import subprocess
 import sys
@@ -30,8 +31,6 @@ def restore_native_lib():
     orig_ffi, orig_lib = engine.ffi, engine.lib
     yield
     dynamic_extensions.update_cffi_references(orig_ffi, orig_lib)
-    for reinitializer in dynamic_extensions.REINITIALIZATION_REGISTRY:
-        reinitializer(orig_ffi, orig_lib)
 
 
 @pytest.mark.usefixtures("restore_native_lib")
@@ -137,9 +136,16 @@ def test_the_swap_does_not_need_the_engine_already_imported():
     script = textwrap.dedent(
         """
         import sys
-        from vfhe.dynamic_extensions import update_cffi_references
+        from vfhe.dynamic_extensions import (
+            REINITIALIZATION_REGISTRY,
+            update_cffi_references,
+        )
 
         assert "vfhe.engine" not in sys.modules, "the engine must start unimported"
+
+        # Markers stand in for a library, so nothing may try to build state on
+        # them: this is a test of where the handles land.
+        REINITIALIZATION_REGISTRY.clear()
 
         marker_ffi, marker_lib = object(), object()
         update_cffi_references(marker_ffi, marker_lib)
@@ -151,14 +157,154 @@ def test_the_swap_does_not_need_the_engine_already_imported():
         print("ok")
         """
     )
+    # The chield picks it's own engine
+    child_env = os.environ.copy()
+    child_env.pop("VFHE_ENGINE", None)
     result = subprocess.run(  # noqa: S603 - this interpreter, a fixed script
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
         check=False,
+        env=child_env,
     )
     assert result.returncode == 0, result.stderr
     assert "ok" in result.stdout
+
+
+@pytest.mark.usefixtures("restore_native_lib")
+def test_reuse_hands_over_the_cached_build_without_compiling():
+    """`reuse=True` is the whole point of naming a module after its inputs: a
+    second call with the same sources must not pay the compile again."""
+    with tempfile.TemporaryDirectory() as user_dir:
+        source = os.path.join(user_dir, "reused.c")
+        with open(source, "w") as f:
+            f.write("#include <util.h>\nuint64_t reused(void) { return 7; }\n")
+        dynamic_extensions.clear_extensions()
+        dynamic_extensions.add_c_file(source)
+        dynamic_extensions.add_c_definitions("uint64_t reused(void);")
+
+        first = dynamic_extensions.compile(output_dir=user_dir)
+
+        # Compiling at all now is a failure, so take the compile away.
+        def refuse(*_args, **_kwargs):
+            raise AssertionError("reuse=True compiled instead of loading the cache")
+
+        original = _build_module._compile_module
+        _build_module._compile_module = refuse
+        try:
+            second = dynamic_extensions.compile(output_dir=user_dir, reuse=True)
+        finally:
+            _build_module._compile_module = original
+
+        assert second == first
+        assert engine.lib.reused() == 7
+        dynamic_extensions.clear_extensions()
+
+
+def test_a_module_older_than_the_archive_is_not_reused():
+    """The module links the archive, so a newer archive is a stale module --
+    whatever the sources it was built from say. Asked of the cache directly:
+    a process can load one build of a given module name, so driving this
+    through a second `compile` would be a test of reloading instead.
+    """
+    root = dynamic_extensions.find_vfhe_root()
+    archive, _ = _build_module._library_paths(root, _build_module._active_engine())
+    name = "_vfhe_custom_test_0123456789abcdef"
+
+    with tempfile.TemporaryDirectory() as output_dir:
+        module_path = os.path.join(
+            output_dir, name + importlib.machinery.EXTENSION_SUFFIXES[0]
+        )
+        with open(module_path, "wb") as f:
+            f.write(b"")
+
+        fresh = os.path.getmtime(archive) + 60
+        os.utime(module_path, (fresh, fresh))
+        assert _build_module._cached_module(name, output_dir, archive) == module_path
+
+        stale = os.path.getmtime(archive) - 60
+        os.utime(module_path, (stale, stale))
+        assert _build_module._cached_module(name, output_dir, archive) is None
+
+    with tempfile.TemporaryDirectory() as empty:
+        assert _build_module._cached_module(name, empty, archive) is None
+
+
+@pytest.mark.usefixtures("restore_native_lib")
+def test_the_module_name_carries_the_flags_it_was_built_with():
+    """One set of sources under two sets of flags is two modules.
+
+    A `-D` decides what the sources mean, so a build that carries one cannot
+    answer for a build that carries the other -- which is what reuse would
+    make it do if the name covered the sources alone.
+    """
+    with tempfile.TemporaryDirectory() as user_dir:
+        source = os.path.join(user_dir, "flagged.c")
+        with open(source, "w") as f:
+            f.write("#include <util.h>\nuint64_t flagged(void) { return VALUE; }\n")
+        dynamic_extensions.clear_extensions()
+        dynamic_extensions.add_c_file(source)
+        dynamic_extensions.add_c_definitions("uint64_t flagged(void);")
+
+        one = dynamic_extensions.compile(
+            output_dir=user_dir, extra_compile_args=["-DVALUE=1"], reuse=True
+        )
+        assert engine.lib.flagged() == 1
+
+        two = dynamic_extensions.compile(
+            output_dir=user_dir, extra_compile_args=["-DVALUE=2"], reuse=True
+        )
+        assert two != one
+        assert engine.lib.flagged() == 2
+
+        # And each is still its own to reuse.
+        assert (
+            dynamic_extensions.compile(
+                output_dir=user_dir, extra_compile_args=["-DVALUE=1"], reuse=True
+            )
+            == one
+        )
+        dynamic_extensions.clear_extensions()
+
+
+def test_the_module_name_carries_the_compiler_version(monkeypatch):
+    """Two releases of one compiler take the same flags and emit different
+    code, so a module one built must not answer for a request the other would
+    build. Driven through the probe, since one machine has one version of a
+    given compiler.
+    """
+    monkeypatch.setenv("CC", "cc")
+
+    monkeypatch.setattr(_build_module, "_compiler_version", lambda _command: "13.2.0")
+    thirteen = _build_module._inputs_hash([], [])
+    monkeypatch.setattr(_build_module, "_compiler_version", lambda _command: "14.1.0")
+    fourteen = _build_module._inputs_hash([], [])
+
+    assert thirteen != fourteen
+
+
+def test_a_compiler_that_will_not_say_its_version_does_not_raise():
+    """The probe runs on the reuse path, where the answer is an optimization:
+    a compiler that cannot be asked leaves the name less specific rather than
+    failing the build."""
+    assert _build_module._compiler_version("definitely-not-a-compiler") == (
+        "version unknown"
+    )
+
+
+def test_the_swap_reinitializes_what_held_the_old_library():
+    """`update_cffi_references` runs the registry itself: the handles and the
+    state bound to them move together, so no caller has to know the order."""
+    seen = []
+    handler = dynamic_extensions.register_reinitializer(
+        lambda new_ffi, new_lib: seen.append((new_ffi, new_lib))
+    )
+    try:
+        orig_ffi, orig_lib = engine.ffi, engine.lib
+        dynamic_extensions.update_cffi_references(orig_ffi, orig_lib)
+        assert seen == [(orig_ffi, orig_lib)]
+    finally:
+        dynamic_extensions.REINITIALIZATION_REGISTRY.remove(handler)
 
 
 @pytest.mark.usefixtures("restore_native_lib")
@@ -178,7 +324,7 @@ def test_the_module_name_carries_the_engine():
         dynamic_extensions.add_c_file(source)
         dynamic_extensions.add_c_definitions("uint64_t named(void);")
 
-        digest = _build_module._inputs_hash()[:16]
+        digest = _build_module._inputs_hash([], [])[:16]
         active = _build_module._active_engine()
         dest = dynamic_extensions.compile(output_dir=user_dir)
 

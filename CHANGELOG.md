@@ -69,9 +69,29 @@ versions may contain breaking changes.
   element leaves for a scheme that works at a power of two -- which
   `round_division` and `scaled_lift` between them cannot express. Exact, with
   no floating point anywhere in the rounding.
+- Add `dynamic_extensions.compile(reuse=True)`: hand the process over to an
+  earlier build of the same inputs in `output_dir`, when one is there and
+  still newer than the `libvfhe_<engine>.a` it links, and compile only
+  otherwise. The same inputs means the same registered sources and
+  declarations, the same `extra_compile_args` / `extra_link_args`, the same
+  compiler at the same version, and the same engine -- all of which the
+  module's name now carries,
+  so one set of sources built under two sets of flags gives two modules and
+  neither answers for the other. Reuse is the library's to offer because that
+  name is: a caller naming the module for itself either rebuilds every time or
+  loads a module built for other flags or another ABI.
 
 ### Changed
 
+- `dynamic_extensions` names a compiled module after the flags it was built
+  with and the compiler that built it, version included, as well as its
+  sources and the active engine. Existing caches are invalidated, which is the
+  intended effect.
+- `dynamic_extensions.update_cffi_references` now runs the
+  `REINITIALIZATION_REGISTRY` itself. Installing the new handles and rebuilding
+  the state bound to the old ones are one operation -- a reinitializer reaches
+  the library through `vfhe.engine`, so it must run after the handles move --
+  and callers no longer iterate the registry after calling it.
 - **Breaking:** `FoldableRS` and `FieldFoldableRS` now build the general
   foldable code of [ZCF24, Def. 5] by default -- seeded twist tables at every
   level above a Reed-Solomon base code -- rather than a Reed-Solomon code on

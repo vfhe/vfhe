@@ -168,6 +168,14 @@ Sources are **listed**, never globbed, so a forgotten file becomes a loud
 link error rather than a silent omission. Both C and hand-written assembly
 (`.S`) compile.
 
+The compiled module is named after everything that decides what it holds --
+the registered sources and declarations, the flags the build adds, the
+compiler and its version, and the active engine -- which is what lets `compile(reuse=True)`
+skip the build and hand the process over to an earlier one. One set of sources
+built under two sets of flags is two modules, each reusable on its own. It reuses that module only while it is newer
+than the archive it links, since that archive -- not the sources behind it --
+is what the module contains.
+
 ## Testing
 
 The matrix has two orthogonal axes.

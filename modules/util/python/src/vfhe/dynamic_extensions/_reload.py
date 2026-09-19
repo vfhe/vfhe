@@ -25,7 +25,16 @@ def register_reinitializer(func):
 
 
 def update_cffi_references(new_ffi, new_lib):
-    """Update all global ffi and lib references in imported vfhe modules."""
+    """Hand the process over to `new_lib`: install the handles on every
+    imported vfhe module, then rebuild the state that was bound to the old
+    ones.
+
+    Both halves are one operation. A reinitializer reaches the library the way
+    any other caller does -- through `vfhe.engine` -- so it rebuilds against
+    whatever is installed when it runs, and running the registry here is what
+    guarantees that is `new_lib`. Callers therefore never iterate
+    REINITIALIZATION_REGISTRY themselves.
+    """
     # Imported here rather than read out of `sys.modules`: making
     # `vfhe.engine` serve the new handles is this function's whole job, so it
     # has to exist for the swap to mean anything -- and a caller that kept its
@@ -54,6 +63,9 @@ def update_cffi_references(new_ffi, new_lib):
                 mod.lib = new_lib
             if hasattr(mod, "ffi") and mod.ffi is old_ffi:
                 mod.ffi = new_ffi
+
+    for reinitializer in REINITIALIZATION_REGISTRY:
+        reinitializer(new_ffi, new_lib)
 
 
 @register_reinitializer
