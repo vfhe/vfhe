@@ -4,7 +4,8 @@
 
 Register C sources and cffi declarations (``add_c_file``, ``add_c_code``,
 ...), then ``compile()`` builds them into a module linked against the
-shipped ``libvfhe.a`` and hot-swaps the process onto it. The parts:
+shipped ``libvfhe.a`` and hot-swaps the process onto it -- or, with
+``reuse=True``, hands over an earlier build of the same inputs. The parts:
 ``_user_code`` (the registered inputs), ``_build_module`` (find the
 library, compile, link, load), ``_reload`` (swap every vfhe module's
 ffi/lib handles). User C includes each module's header by name; there is no
