@@ -800,12 +800,15 @@ void polynomial_RNSc_add_noise(RNSc_Polynomial out, RNSc_Polynomial in, double s
     free(noise_arr);
 }
 
-RNS_BaseConversionParams init_base_conversion_params(RNS_Base base, uint64_t in_mask,
-                                                     uint64_t out_mask)
+static RNS_BaseConversionParams init_conversion_params(RNS_Base base, uint64_t in_mask,
+                                                       uint64_t out_mask, int exact)
 {
     RNS_BaseConversionParams params = (RNS_BaseConversionParams)safe_malloc(sizeof(*params));
     params->in_mask = in_mask;
     params->out_mask = out_mask;
+    params->exact = exact;
+    params->inv_q = NULL;
+    params->uM_mod_p = NULL;
 
     params->D = (uint32_t *)safe_malloc(sizeof(uint32_t) * base->l);
     params->P = (uint32_t *)safe_malloc(sizeof(uint32_t) * base->l);
@@ -832,6 +835,7 @@ RNS_BaseConversionParams init_base_conversion_params(RNS_Base base, uint64_t in_
     {
         params->Dhat = NULL;
         params->D_mod_p = NULL;
+        params->exact = 0;
         return params;
     }
 
@@ -876,7 +880,53 @@ RNS_BaseConversionParams init_base_conversion_params(RNS_Base base, uint64_t in_
         }
     }
 
+    if (exact)
+    {
+        /* `polynomial_base_conversion_RNSc` recovers u by summing r_j/q_j
+           over the input primes. Storing reciprocals makes that a multiply per
+           residue instead of a divide; the extra rounding is far inside the
+           margin the caller has to leave anyway. */
+        params->inv_q = (double *)safe_malloc(sizeof(double) * params->w);
+        for (size_t j = 0; j < params->w; j++)
+        {
+            params->inv_q[j] = 1.0 / (double)base->mods[params->D[j]]->q;
+        }
+        /* u stays below w, so the multiples of M that removing it can need
+           fit in a table of w+1 entries per output prime. That keeps the
+           removal to a lookup and a subtraction per coefficient, with no
+           u * (M mod p_i) product to overflow 64 bits. */
+        params->uM_mod_p = (uint64_t **)safe_malloc(sizeof(uint64_t *) * params->v);
+        for (size_t i = 0; i < params->v; i++)
+        {
+            Modulus mod_i = base->mods[params->P[i]];
+            uint64_t m_mod_p = 1;
+            for (size_t j = 0; j < params->w; j++)
+            {
+                m_mod_p = mul_modq(m_mod_p, modq(base->mods[params->D[j]]->q, mod_i), mod_i);
+            }
+            params->uM_mod_p[i] = (uint64_t *)safe_malloc(sizeof(uint64_t) * (params->w + 1));
+            uint64_t acc = 0;
+            for (size_t u = 0; u <= params->w; u++)
+            {
+                params->uM_mod_p[i][u] = acc;
+                acc = add_modq(acc, m_mod_p, mod_i->q);
+            }
+        }
+    }
+
     return params;
+}
+
+RNS_BaseConversionParams init_base_conversion_params(RNS_Base base, uint64_t in_mask,
+                                                     uint64_t out_mask)
+{
+    return init_conversion_params(base, in_mask, out_mask, 0);
+}
+
+RNS_BaseConversionParams init_base_conversion_params_exact(RNS_Base base, uint64_t in_mask,
+                                                           uint64_t out_mask)
+{
+    return init_conversion_params(base, in_mask, out_mask, 1);
 }
 
 void free_base_conversion_params(RNS_BaseConversionParams params)
@@ -891,6 +941,15 @@ void free_base_conversion_params(RNS_BaseConversionParams params)
         }
         free(params->D_mod_p);
     }
+    if (params->uM_mod_p != NULL)
+    {
+        for (size_t i = 0; i < params->v; i++)
+        {
+            free(params->uM_mod_p[i]);
+        }
+        free(params->uM_mod_p);
+    }
+    free(params->inv_q);
     if (params->Dhat != NULL)
     {
         free(params->Dhat);
@@ -962,6 +1021,20 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
     uint32_t *v_tmp_32 = (uint32_t *)safe_aligned_malloc(out->base->N * sizeof(uint32_t));
     uint32_t *v_tmp2_32 = (uint32_t *)safe_aligned_malloc(out->base->N * sizeof(uint32_t));
     const uint64_t N = out->base->N;
+    /* The loop below writes x + u*M, not x (see arith.h). Recovering u costs
+       no extra pass: the scaled residues r_j it already computes satisfy
+
+           sum_j (r_j / q_j) = u + x/M,
+
+       so the integer part of that sum is u -- provided x/M cannot reach 0 or
+       1, which is the caller's guarantee. */
+    double *overflow = NULL;
+    if (local_params->exact)
+    {
+        overflow = (double *)safe_aligned_malloc(N * sizeof(double));
+        for (uint64_t c = 0; c < N; c++)
+            overflow[c] = 0.0;
+    }
 
     for (size_t j = 0; j < w; j++)
     {
@@ -973,6 +1046,18 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
             mod_eltwise_scale_w32(v_tmp_32, in->rows32[idx_j], Dhat[j], N, mod_j);
         else
             mod_eltwise_scale(v_tmp, in->rows64[idx_j], Dhat[j], N, mod_j);
+
+        /* This prime's term r_j/q_j in that sum. */
+        if (overflow != NULL)
+        {
+            const double inv_q_j = local_params->inv_q[j];
+            if (j_narrow)
+                for (uint64_t c = 0; c < N; c++)
+                    overflow[c] += (double)v_tmp_32[c] * inv_q_j;
+            else
+                for (uint64_t c = 0; c < N; c++)
+                    overflow[c] += (double)v_tmp[c] * inv_q_j;
+        }
 
         for (size_t i = 0; i < v; i++)
         {
@@ -997,6 +1082,39 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
                 mod_eltwise_fma(out->rows64[idx_i], v_tmp2, D_mod_p[i][j], N, mod_i);
             }
         }
+    }
+
+    /* Subtract u*M from every row the conversion wrote, leaving x. */
+    if (overflow != NULL)
+    {
+        for (size_t i = 0; i < v; i++)
+        {
+            const uint64_t idx_i = P[i];
+            Modulus mod_i = out->base->mods[idx_i];
+            const uint64_t q_i = mod_i->q;
+            const uint64_t *uM = local_params->uM_mod_p[i];
+            if (rns_row_is_narrow(out->base, idx_i))
+            {
+                uint32_t *row = out->rows32[idx_i];
+                for (uint64_t c = 0; c < N; c++)
+                {
+                    const size_t u = (size_t)overflow[c];
+                    assert(u <= w);
+                    row[c] = (uint32_t)sub_modq(row[c], uM[u], q_i);
+                }
+            }
+            else
+            {
+                uint64_t *row = out->rows64[idx_i];
+                for (uint64_t c = 0; c < N; c++)
+                {
+                    const size_t u = (size_t)overflow[c];
+                    assert(u <= w);
+                    row[c] = sub_modq(row[c], uM[u], q_i);
+                }
+            }
+        }
+        free(overflow);
     }
 
     free(v_tmp);

@@ -485,3 +485,83 @@ def test_ring_follows_a_replaced_registry(monkeypatch):
     # and it is a working ring, not just a bookkeeping entry
     a = ring.random_element()
     assert (a - a) == 0
+
+
+def _cross_base_rings(n, plaintext_bits, other_bits, aux_bits):
+    """A source and a destination ring sharing only their first prime.
+
+    Neither contains the other, so converting between them is what
+    `base_extend` cannot express -- the shape a scaled ciphertext product
+    lands in, divided by the very primes the destination keeps.
+    """
+    from vfhe.arith.impl.rns.polynomial import RNSRing
+
+    dst = Ring(n, prime_size=[plaintext_bits, *other_bits], split_degree=1)
+    aux = []
+    for bits in aux_bits:
+        aux.append(RNSRing.gen_prime(2 * n, bits, exclude_list=dst.primes + aux))
+    src = Ring(n, primes=aux, prime_size=aux_bits, split_degree=1).union(
+        dst.quotient_ring(ell=1)
+    )
+    return src, dst
+
+
+def test_convert_base_exact_removes_the_overflow():
+    """`exact=True` writes the value; the default writes it plus a multiple of M.
+
+    Both are congruent to the value modulo ``M``. Where the destination is a
+    superset that is enough, since reducing back recovers it; here the two
+    rings share one prime, so the term lands in the answer at full size.
+    """
+    src, dst = _cross_base_rings(N, 17, [30, 30], [30, 30, 30])
+    M, q, half = src.q_l, dst.q_l, src.q_l // 2
+    assert not dst.is_quotient_ring(src)  # a genuine cross-base move
+
+    # An eighth of the modulus either side of zero, then shifted to the middle
+    # of [0, M): the preparation the exact conversion asks of a caller.
+    values = [rng.randrange(-(M // 8), M // 8) for _ in range(N)]
+    source = Polynomial(src).from_bigint_array([(v + half) % M for v in values])
+    source.to_coeff()
+    expected = [(v + half) % q for v in values]
+
+    assert source.copy().convert_base(dst, exact=True).get_polynomial() == expected
+
+    fast = source.copy().convert_base(dst).get_polynomial()
+    assert fast != expected
+    # and what it is off by is one of the first `ell` multiples of M
+    reachable = {u * M % q for u in range(src.ell)}
+    assert {(f - e) % q for f, e in zip(fast, expected, strict=True)} <= reachable
+
+
+def test_convert_base_default_matches_base_extend():
+    """The default path is untouched: same result as `base_extend`."""
+    ring = Ring(N, prime_size=[30, 30], split_degree=1)
+    wider = Ring(N, prime_size=[30, 30, 30], split_degree=1)
+    a = ring.random_element()
+    a.to_coeff()
+    assert (
+        a.copy().convert_base(wider).get_polynomial()
+        == a.copy().base_extend(wider).get_polynomial()
+    )
+
+
+def test_convert_base_exact_where_base_extend_also_applies():
+    """Extending into a superset, only `exact=True` gives the integer itself.
+
+    `base_extend` lands a multiple of the source modulus away, which is why
+    reducing back into the source ring recovers the value either way.
+    """
+    ring = Ring(N, prime_size=[30, 30], split_degree=1)
+    wider = Ring(N, prime_size=[30, 30, 30], split_degree=1)
+    a = ring.random_element()
+    a.to_coeff()
+    value = a.get_polynomial()
+
+    assert a.copy().convert_base(wider, exact=True).get_polynomial() == value
+
+    extended = a.copy().base_extend(wider)
+    lifted = extended.get_polynomial()
+    # congruent modulo the source modulus, but not the value itself
+    assert all((v - x) % ring.q_l == 0 for v, x in zip(lifted, value, strict=True))
+    assert lifted != value
+    assert extended.copy().mod_reduce(ring).get_polynomial() == value

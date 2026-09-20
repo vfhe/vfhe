@@ -14,6 +14,21 @@ versions may contain breaking changes.
 
 ### Added
 
+- Correct `Polynomial.base_extend`'s documented contract: it returns a value
+  congruent to this element modulo the ring's modulus, not the element
+  itself. Behaviour is unchanged; the docstring claimed exactness the fast
+  base conversion behind it never provided.
+- Add `Polynomial.convert_base(ring, out, exact)`: a value re-expressed over
+  another base, which need not contain this one -- the general move
+  `base_extend` is the special case of. The default is the fast conversion
+  already behind `base_extend`, which writes `x + u * M`; `exact=True` removes
+  that overflow, for about a tenth again of the cost, for a value the caller
+  keeps clear of the ends of its range. Existing conversions are unchanged.
+- Add `fhe.BFV_Scheme`: BFV over `vfhe.mlwe`, with the plaintext modulus taken
+  from the ciphertext ring's lowest primes so that `Delta = q/t` is exact.
+  Batched encoding into `N` slots (two rows of `N/2`), encrypt/decrypt,
+  plaintext and ciphertext multiplication with relinearization, slot rotation
+  and conjugation, and modulus switching.
 - Add `FieldVector.sample_random_at(seed, indices)`: the seeded elements at
   scattered positions of the sequence `sample_random` fills from, in one call.
 - Add `Field.digest_elements(elements)`: the digest of a few elements without

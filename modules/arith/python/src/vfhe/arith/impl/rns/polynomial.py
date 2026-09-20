@@ -568,11 +568,20 @@ class RNSPolynomial(Polynomial):
             raise ValueError("Not a quotient ring")
         return self.lift_to(out=out_)
 
+    def convert_base(
+        self,
+        ring: RNSRing | None = None,
+        out: RNSPolynomial | None = None,
+        exact: bool = False,
+    ) -> RNSPolynomial:
+        return self.lift_to(ring=ring, out=out, exact=exact)
+
     def lift_to(
         self,
         ring: RNSRing | None = None,
         out: RNSPolynomial | None = None,
         params=None,
+        exact: bool = False,
     ) -> RNSPolynomial:
         self.to_coeff()
         if out is None and ring is not None:
@@ -581,7 +590,11 @@ class RNSPolynomial(Polynomial):
             out_: RNSPolynomial = out
         if params is None:
             params = registry().get_conversion_params(
-                self.ring.N, self.ring.split_degree, self.rns_mask, out_.rns_mask
+                self.ring.N,
+                self.ring.split_degree,
+                self.rns_mask,
+                out_.rns_mask,
+                exact=exact,
             )
         self.ring.lib.polynomial_base_conversion_RNSc(out_.obj, self.obj, params)
         out_.repr = repr.coeff

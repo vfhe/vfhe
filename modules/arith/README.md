@@ -13,7 +13,8 @@ other module builds on.
 - `python/src/vfhe/arith/`, the Python API over the cffi boundary:
   - `Ring` / `Polynomial` (`polynomial.py`): construct rings, sample, add /
     multiply, convert between coefficient and NTT domains, apply automorphisms,
-    lift / rescale across quotient rings.
+    lift / rescale across quotient rings, and re-express a value over a base
+    that is not one of them (`convert_base`, exactly on request).
   - `ComplexRing` / `ComplexPolynomial` (`complex.py`): CKKS encode/decode FFT.
   - `Multiprecision` (`multiprecision.py`): big-integer/RNS bridge.
   - `number_theory.py` / `residue_selection.py`: pure-Python primality, CRT,

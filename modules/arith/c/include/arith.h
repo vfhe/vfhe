@@ -825,10 +825,35 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
         uint32_t *P;
         uint64_t *Dhat;
         uint64_t **D_mod_p;
+        /* Fast (non-exact) conversions provide `[x]_M -> [x + u * M]_{M'}`*/
+        int exact;
+        double *inv_q;
+        uint64_t **uM_mod_p;
     } *RNS_BaseConversionParams;
 
+    /* Parameters for `polynomial_base_conversion_RNSc`, which rewrites a
+       polynomial's residues from the primes `in_mask` selects to the ones
+       `out_mask` selects; both index `base`.
+
+       Not exact: it writes `x + u * M`, with M the product of the input primes
+       and u below their number. The result is right modulo M and only modulo
+       M, which is all a caller who reduces back, or whose algebra absorbs
+       multiples of M, needs. Where neither holds, use the exact variant below.
+
+       Depends only on the two masks, so cache it; free with
+       `free_base_conversion_params`. */
     RNS_BaseConversionParams init_base_conversion_params(RNS_Base base, uint64_t in_mask,
                                                          uint64_t out_mask);
+    /* The same conversion with `u * M` removed, so that it writes `x`.
+
+       u is recovered in floating point, which holds only while `x`, as its
+       representative in `[0, M)`, stays clear of both ends: it needs about
+       `2^-46 * M`, and a quarter of M is ample. A value that may lie anywhere
+       in `[0, M)` cannot use this. A signed value much smaller than M
+       qualifies by adding M/2 before the conversion and subtracting it
+       after, which centers it too. */
+    RNS_BaseConversionParams init_base_conversion_params_exact(RNS_Base base, uint64_t in_mask,
+                                                               uint64_t out_mask);
     void free_base_conversion_params(RNS_BaseConversionParams params);
 
     void rns_compute_scaling_factors(uint64_t *delta_out, RNS_Base base, uint64_t in_mask,

@@ -471,7 +471,46 @@ class Polynomial(metaclass=_ImplementationDispatch):
     def base_extend(
         self, ring: Ring | None = None, out: Polynomial | None = None
     ) -> Polynomial:
-        """This value, exactly, as an element of a *larger* ring.
+        """This value in a *larger* ring, up to a multiple of this modulus.
+
+        The result is congruent to this element modulo ``M``, this ring's
+        modulus, but is not generally equal to it: the fast conversion behind
+        it writes ``x + u * M`` for some ``u`` below this ring's number of
+        primes. Reducing back into this ring recovers ``x``, and algebra that
+        absorbs multiples of ``M`` never sees the difference. Where the integer
+        itself is wanted, use `convert_base` with ``exact=True``.
+
+        Pass the destination ``ring`` to allocate the result, or ``out`` to
+        write into an element that already exists.
+        """
+        raise NotImplementedError
+
+    def convert_base(
+        self,
+        ring: Ring | None = None,
+        out: Polynomial | None = None,
+        exact: bool = False,
+    ) -> Polynomial:
+        """The same value, written over a different set of primes.
+
+        `base_extend` only adds primes. This also drops them, so neither ring
+        need contain the other. Nothing is scaled on the way -- `round_division`
+        is the operation that divides as it drops primes.
+
+        **The default conversion is not exact:** it writes ``x + u * M``, where
+        ``M`` is this ring's modulus and ``u`` is some integer below its number
+        of primes. The result is right modulo ``M`` and only modulo ``M``,
+        which is all `base_extend`'s callers need -- they reduce back, or their
+        algebra absorbs multiples of ``M``. Where neither holds, the term lands
+        in the answer at the full size of ``M``.
+
+        ``exact=True`` removes it, for roughly a tenth again of the cost.
+        ``u`` is recovered in floating point, so ``x``, as its representative
+        in ``[0, M)``, must stay clear of both ends: it needs about
+        ``2^-46 * M``, and a quarter of ``M`` is ample. A value that may lie
+        anywhere in ``[0, M)`` cannot use it; a signed value much smaller than
+        ``M`` qualifies by adding ``M/2`` before and subtracting it after,
+        which centers it too.
 
         Pass the destination ``ring`` to allocate the result, or ``out`` to
         write into an element that already exists.

@@ -24,7 +24,8 @@ class RNS_Base_Registry:
         self.prime_to_index = {}  # (N, split_degree) -> {prime: index}
         self.lib = lib
 
-        # Cache for base conversion parameters: (N, split_degree, in_mask, out_mask) -> params_pointer
+        # Cache for base conversion parameters:
+        # (N, split_degree, in_mask, out_mask, exact, primes) -> params_pointer
         self.conversion_params_cache = {}
 
     def register_ring_primes(self, primes, N, split_degree):
@@ -52,13 +53,24 @@ class RNS_Base_Registry:
 
         return [self.prime_to_index[key][p] for p in primes]
 
-    def get_conversion_params(self, N, split_degree, in_mask, out_mask):
+    def get_conversion_params(
+        self, N, split_degree, in_mask, out_mask, exact: bool = False
+    ):
+        """Native parameters for a conversion between the two masks.
+
+        ``exact`` selects the variant that removes the conversion's ``u * M``
+        term; see `RNSPolynomial.convert_base`.
+        """
         primes_tuple = tuple(self.primes[(N, split_degree)])
-        key = (N, split_degree, in_mask, out_mask, primes_tuple)
+        key = (N, split_degree, in_mask, out_mask, exact, primes_tuple)
         if key not in self.conversion_params_cache:
             base = self.bases[(N, split_degree)]
-            params = self.lib.init_base_conversion_params(base, in_mask, out_mask)
-            self.conversion_params_cache[key] = params
+            init = (
+                self.lib.init_base_conversion_params_exact
+                if exact
+                else self.lib.init_base_conversion_params
+            )
+            self.conversion_params_cache[key] = init(base, in_mask, out_mask)
         return self.conversion_params_cache[key]
 
     def cleanup(self):

@@ -48,6 +48,7 @@ void *new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t
 void rns_base_extend_with_primes(void *base, uint64_t *new_primes, uint64_t count);
 uint64_t **rns_base_get_rou_matrix(void *base);
 void *init_base_conversion_params(void *base, uint64_t in_mask, uint64_t out_mask);
+void *init_base_conversion_params_exact(void *base, uint64_t in_mask, uint64_t out_mask);
 void free_base_conversion_params(void *params);
 
 // --- polynomial lifecycle / io ---
