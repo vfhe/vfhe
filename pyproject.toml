@@ -55,7 +55,7 @@ requires = [
     "meson-python>=0.18",
     "setuptools-scm>=10.2.1",
     "cffi>=2.1.0",
-    "grpcio-tools>=1.81,<1.84",
+    "grpcio-tools>=1.81,<1.85",
 ]
 build-backend = "mesonpy"
 
@@ -63,7 +63,7 @@ build-backend = "mesonpy"
 compile = [
     "setuptools>=80",
     "cffi>=2.1.0",
-    "grpcio-tools>=1.81,<1.84",
+    "grpcio-tools>=1.81,<1.85",
     "protobuf>=7.35.1,<8",
     "meson>=1.4",
     "meson-python>=0.18",
@@ -80,9 +80,9 @@ test = [
 ]
 lint = [
     { include-group = "test" },
-    "ruff==0.16.6",
-    "clang-format==23.1.0",
-    "zizmor==1.30.0",
+    "ruff==0.16.7",
+    "clang-format==23.1.1",
+    "zizmor==1.30.1",
     "pre-commit>=4.3",
     "pyright>=1.1.400",
 ]
