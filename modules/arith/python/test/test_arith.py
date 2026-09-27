@@ -533,6 +533,24 @@ def test_convert_base_exact_removes_the_overflow():
     assert {(f - e) % q for f, e in zip(fast, expected, strict=True)} <= reachable
 
 
+@pytest.mark.parametrize("n_source", [6, 10, 18])
+def test_convert_base_exact_over_every_lookup_width(n_source):
+    """Exact for a source base of any width.
+
+    The overflow table is one entry per input prime plus one, and the kernel
+    picks it out of registers while it fits in one vector, then two, and falls
+    back to a gather beyond that. These three widths cross both boundaries.
+    """
+    src, dst = _cross_base_rings(N, 17, [30, 30], [30] * n_source)
+    M, q, half = src.q_l, dst.q_l, src.q_l // 2
+    values = [rng.randrange(-(M // 8), M // 8) for _ in range(N)]
+    source = Polynomial(src).from_bigint_array([(v + half) % M for v in values])
+    source.to_coeff()
+    assert source.convert_base(dst, exact=True).get_polynomial() == [
+        (v + half) % q for v in values
+    ]
+
+
 def test_convert_base_default_matches_base_extend():
     """The default path is untouched: same result as `base_extend`."""
     ring = Ring(N, prime_size=[30, 30], split_degree=1)

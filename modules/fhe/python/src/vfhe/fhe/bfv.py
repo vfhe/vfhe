@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from operator import itemgetter
 
 from vfhe.arith import (
     Polynomial,
@@ -114,6 +115,13 @@ class BFV_Scheme(MLWE_Scheme):
         self._delta: dict[int, object] = {}
         self._mul_rings_cache: dict[int, tuple[RNSRing, RNSRing]] = {}
         self._slot_perm = self._build_slot_permutation()
+        inverse = [0] * self.N
+        for slot, place in enumerate(self._slot_perm):
+            inverse[place] = slot
+        #: Reorder a row into slot order, and slot values into row order.
+        #: `itemgetter` applies a whole permutation in one call.
+        self._to_slot_order = itemgetter(*self._slot_perm)
+        self._to_transform_order = itemgetter(*inverse)
 
     # --- encoding ---
 
@@ -130,6 +138,10 @@ class BFV_Scheme(MLWE_Scheme):
         Indexing them by the hypercube ``(-1)^i * 5^j`` instead is what makes
         ``X -> X^5`` rotate each row of ``N/2`` slots and ``X -> X^(2N-1)``
         swap the two rows.
+
+        Which root labels the points only shifts which slot is called slot 0,
+        since every unit modulo 2N is itself some ``+-5^m``; the rotation and
+        swap the layout is built for are unaffected.
         """
         N = self.N
         p = self.plaintext_ring.primes[0]
@@ -139,38 +151,18 @@ class BFV_Scheme(MLWE_Scheme):
         x.to_NTT()
         points = x.get_coeff_matrix(repr=repr.ntt)[0]
 
-        zeta = self._primitive_root(p, 2 * N)
-        position = {}
+        zeta = lib.generate_Nth_root_of_unity(p, 2 * N)
+        at_exponent = {}
         power = 1
         for exponent in range(2 * N):
-            position[power] = exponent
+            at_exponent[power] = exponent
             power = power * zeta % p
-        at_exponent = {position[v]: k for k, v in enumerate(points)}
+        position = {at_exponent[v]: k for k, v in enumerate(points)}
 
         half = N // 2
-        return [at_exponent[pow(5, j, 2 * N)] for j in range(half)] + [
-            at_exponent[-pow(5, j, 2 * N) % (2 * N)] for j in range(half)
+        return [position[pow(5, j, 2 * N)] for j in range(half)] + [
+            position[-pow(5, j, 2 * N) % (2 * N)] for j in range(half)
         ]
-
-    @staticmethod
-    def _primitive_root(p: int, order: int) -> int:
-        """An element of order exactly ``order`` modulo the prime ``p``."""
-        if (p - 1) % order:
-            raise ValueError(f"{p} admits no root of unity of order {order}")
-        factors = set()
-        rest = p - 1
-        divisor = 2
-        while divisor * divisor <= rest:
-            while rest % divisor == 0:
-                factors.add(divisor)
-                rest //= divisor
-            divisor += 1
-        if rest > 1:
-            factors.add(rest)
-        for candidate in range(2, p):
-            if all(pow(candidate, (p - 1) // f, p) != 1 for f in factors):
-                return pow(candidate, (p - 1) // order, p)
-        raise ValueError(f"no generator found modulo {p}")
 
     def encode(self, values: list[int]) -> RNSPolynomial:
         """Encodes one integer per slot into a plaintext polynomial.
@@ -181,13 +173,11 @@ class BFV_Scheme(MLWE_Scheme):
         """
         if len(values) != self.n_slots:
             raise ValueError(f"Expected {self.n_slots} values, got {len(values)}")
-        matrix = []
-        for p in self.plaintext_ring.primes:
-            row = [0] * self.N
-            for slot, value in enumerate(values):
-                row[self._slot_perm[slot]] = value % p
-            matrix.append(row)
-        poly = Polynomial(self.plaintext_ring).from_coeff_matrix(matrix, repr=repr.ntt)
+        ordered = self._to_transform_order(values)
+        poly = Polynomial(self.plaintext_ring).from_coeff_matrix(
+            [[v % p for v in ordered] for p in self.plaintext_ring.primes],
+            repr=repr.ntt,
+        )
         poly.to_coeff()
         return poly
 
@@ -199,19 +189,19 @@ class BFV_Scheme(MLWE_Scheme):
         """
         rows = poly.get_coeff_matrix(repr=repr.ntt)
         primes = poly.ring.primes
+        if len(primes) == 1:
+            values = list(self._to_slot_order(rows[0]))
+        else:
+            by_slot = [self._to_slot_order(row) for row in rows]
+            values = [
+                crt([row[i] for row in by_slot], list(primes))
+                for i in range(self.n_slots)
+            ]
+        if not signed:
+            return values
         modulus = poly.ring.q_l
-        values = []
-        for slot in range(self.n_slots):
-            k = self._slot_perm[slot]
-            value = (
-                rows[0][k]
-                if len(primes) == 1
-                else crt([row[k] for row in rows], list(primes))
-            )
-            if signed and value > modulus // 2:
-                value -= modulus
-            values.append(value)
-        return values
+        half = modulus // 2
+        return [v - modulus if v > half else v for v in values]
 
     # --- encryption ---
 
@@ -245,9 +235,7 @@ class BFV_Scheme(MLWE_Scheme):
 
     # --- slots ---
 
-    def rotate(
-        self, ciphertext: MLWE, k: int, ksk: MLWE_Set | list[MLWE_Set]
-    ) -> MLWE:
+    def rotate(self, ciphertext: MLWE, k: int, ksk: MLWE_Set | list[MLWE_Set]) -> MLWE:
         """Rotates each of the two rows of ``N/2`` slots by ``k`` positions."""
         return self.automorphism(ciphertext, self._rotation_gen(k), ksk)
 

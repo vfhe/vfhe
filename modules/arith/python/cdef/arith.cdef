@@ -232,6 +232,7 @@ void field_vec_hash_elements(uint8_t *out, const FieldVector a, uint64_t group, 
 NTT_Plan ntt_new_plan(uint64_t n, void *mod);
 void ntt_free_plan(void *plan);
 uint64_t inverse_mod_eea(uint64_t a, uint64_t p);
+uint64_t generate_Nth_root_of_unity(uint64_t q, uint64_t n);
 
 // --- pseudo-Mersenne prime field (p = 2^n - c) ---
 // The parameter block stays opaque -- accessors, not a cdef'd struct -- so the

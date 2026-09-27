@@ -290,6 +290,16 @@ void mod_eltwise_sub_scalar_w32(uint32_t *out, uint32_t *in, uint64_t scalar, ui
 void mod_eltwise_reduce_w32(uint32_t *out, uint32_t *in, uint64_t n, Modulus mod);
 void mod_eltwise_reduce_signed_w32(uint32_t *out, int64_t *in, uint64_t n, Modulus mod);
 
+/* The exact base conversion's two extra passes (kernels/mod_basecvt.c).
+   `accumulate` adds `in[i] * inv_q` to a running double sum, and `sub_indexed`
+   subtracts `table[(size_t)index[i]]` from a row. */
+void mod_basecvt_accumulate(double *acc, const uint64_t *in, double inv_q, uint64_t n);
+void mod_basecvt_accumulate_w32(double *acc, const uint32_t *in, double inv_q, uint64_t n);
+void mod_basecvt_sub_indexed(uint64_t *out, const double *index, const uint64_t *table,
+                             uint32_t len, uint64_t n, Modulus mod);
+void mod_basecvt_sub_indexed_w32(uint32_t *out, const double *index, const uint64_t *table,
+                                 uint32_t len, uint64_t n, Modulus mod);
+
 // The three width-changing kernels; see the note above their definitions.
 void mod_narrow_w32(uint32_t *out, const uint64_t *in, uint64_t n);
 void mod_widen_w32(uint64_t *out, const uint32_t *in, uint64_t n);

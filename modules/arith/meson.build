@@ -10,6 +10,7 @@ module = {
         # shared modular-arithmetic and transform kernels
         'c/src/kernels/interleave.c',
         'c/src/kernels/mod.c',
+        'c/src/kernels/mod_basecvt.c',
         'c/src/kernels/mod32.c',
         'c/src/kernels/mod50.c',
         'c/src/kernels/mod64.c',

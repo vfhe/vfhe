@@ -14,6 +14,11 @@ versions may contain breaking changes.
 
 ### Added
 
+- Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix` on an
+  unsplit ring: a row is now read with `ffi.unpack` and written with one
+  packed `ffi.memmove` instead of element by element. `BFV_Scheme.encode` /
+  `decode` at N=4096 go from 1.9 / 2.1 ms to 0.27 / 0.29 ms; CKKS `decode`
+  reads its coefficients through the same path.
 - Correct `Polynomial.base_extend`'s documented contract: it returns a value
   congruent to this element modulo the ring's modulus, not the element
   itself. Behaviour is unchanged; the docstring claimed exactness the fast

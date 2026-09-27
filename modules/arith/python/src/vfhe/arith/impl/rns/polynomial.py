@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import array
 import contextlib
 import itertools
 import math
@@ -24,6 +25,15 @@ if TYPE_CHECKING:
 
 def next_power_of_2(x):
     return 1 << math.ceil(math.log2(x))
+
+
+#: `array.array` type code per row width, resolved by size because the named C
+#: widths are platform-dependent. Packing a row through one of these and
+#: copying it in beats writing a cdata pointer element by element.
+_ROW_CODE = {
+    width: next(c for c in "ILQ" if array.array(c).itemsize == width)
+    for width in (4, 8)
+}
 
 
 def _row(p, idx: int):
@@ -713,32 +723,45 @@ class RNSPolynomial(Polynomial):
         return iter(self.get_coeff_matrix(repr=repr.coeff))
 
     def get_coeff_matrix(self, repr=repr.coeff):
+        """One list of ``N`` coefficients per prime, in `RNSRing.primes` order."""
         # `view` must stay referenced: `p` points into the buffer it owns, and a
         # temporary would be freed before the rows below are read.
         view = self._viewed_as(repr)
         p = ffi.cast("RNS_Polynomial", view.obj)
-        values = []
-        for idx in self.ring.prime_indices:
-            row = _row(p, idx)
-            values.append([row[k] for k in range(self.ring.N)])
+        N = self.ring.N
+        values = [ffi.unpack(_row(p, idx), N) for idx in self.ring.prime_indices]
+        if self.ring.split_degree == 1:
+            return values
         modMask = self.ring.split_degree - 1
-        poly_size = self.ring.N // self.ring.split_degree
-        c = values
-        out = []
-        for i in range(self.ring.ell):
-            out_i = [0] * self.ring.N
-            for j in range(self.ring.N):
-                out_i[j] = c[i][(j & modMask) * poly_size + j // self.ring.split_degree]
-            out += [out_i]
-        return out
+        poly_size = N // self.ring.split_degree
+        return [
+            [
+                row[(j & modMask) * poly_size + j // self.ring.split_degree]
+                for j in range(N)
+            ]
+            for row in values
+        ]
 
     def from_coeff_matrix(self, matrix, repr=repr.coeff):
+        """Overwrite with one list of ``N`` coefficients per prime; returns ``self``."""
         p = ffi.cast("RNS_Polynomial", self.obj)
+        N = self.ring.N
         modMask = self.ring.split_degree - 1
-        poly_size = self.ring.N // self.ring.split_degree
+        poly_size = N // self.ring.split_degree
         for k, idx in enumerate(self.ring.prime_indices):
             row = _row(p, idx)
-            for j in range(self.ring.N):
+            if self.ring.split_degree == 1:
+                # A split ring interleaves, so only the plain layout can be
+                # copied straight in; the loop below is the general case.
+                width = 4 if (p.base.narrow_mask >> idx) & 1 else 8
+                code = _ROW_CODE[width]
+                try:
+                    packed = array.array(code, matrix[k])
+                except TypeError:
+                    packed = array.array(code, [int(v) for v in matrix[k]])
+                ffi.memmove(row, packed, N * width)
+                continue
+            for j in range(N):
                 row[(j & modMask) * poly_size + j // self.ring.split_degree] = int(
                     matrix[k][j]
                 )

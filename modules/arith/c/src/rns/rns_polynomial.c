@@ -1050,13 +1050,10 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
         /* This prime's term r_j/q_j in that sum. */
         if (overflow != NULL)
         {
-            const double inv_q_j = local_params->inv_q[j];
             if (j_narrow)
-                for (uint64_t c = 0; c < N; c++)
-                    overflow[c] += (double)v_tmp_32[c] * inv_q_j;
+                mod_basecvt_accumulate_w32(overflow, v_tmp_32, local_params->inv_q[j], N);
             else
-                for (uint64_t c = 0; c < N; c++)
-                    overflow[c] += (double)v_tmp[c] * inv_q_j;
+                mod_basecvt_accumulate(overflow, v_tmp, local_params->inv_q[j], N);
         }
 
         for (size_t i = 0; i < v; i++)
@@ -1087,32 +1084,19 @@ void polynomial_base_conversion_RNSc(RNSc_Polynomial out, RNSc_Polynomial in,
     /* Subtract u*M from every row the conversion wrote, leaving x. */
     if (overflow != NULL)
     {
+#ifndef NDEBUG
+        for (uint64_t c = 0; c < N; c++)
+            assert((size_t)overflow[c] <= w);
+#endif
         for (size_t i = 0; i < v; i++)
         {
             const uint64_t idx_i = P[i];
             Modulus mod_i = out->base->mods[idx_i];
-            const uint64_t q_i = mod_i->q;
             const uint64_t *uM = local_params->uM_mod_p[i];
             if (rns_row_is_narrow(out->base, idx_i))
-            {
-                uint32_t *row = out->rows32[idx_i];
-                for (uint64_t c = 0; c < N; c++)
-                {
-                    const size_t u = (size_t)overflow[c];
-                    assert(u <= w);
-                    row[c] = (uint32_t)sub_modq(row[c], uM[u], q_i);
-                }
-            }
+                mod_basecvt_sub_indexed_w32(out->rows32[idx_i], overflow, uM, w + 1, N, mod_i);
             else
-            {
-                uint64_t *row = out->rows64[idx_i];
-                for (uint64_t c = 0; c < N; c++)
-                {
-                    const size_t u = (size_t)overflow[c];
-                    assert(u <= w);
-                    row[c] = sub_modq(row[c], uM[u], q_i);
-                }
-            }
+                mod_basecvt_sub_indexed(out->rows64[idx_i], overflow, uM, w + 1, N, mod_i);
         }
         free(overflow);
     }
