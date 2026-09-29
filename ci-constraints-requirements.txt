@@ -16,7 +16,7 @@ colorlog==6.12.0
 coverage==7.16.1
 distlib==0.4.3
 docutils==0.23
-filelock==3.32.6
+filelock==4.0.1
 gcovr==8.6
 grpcio-tools==1.84.0
 grpcio==1.84.0
