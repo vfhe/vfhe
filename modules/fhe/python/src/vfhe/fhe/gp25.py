@@ -206,8 +206,7 @@ class GP25:
 
         result = []
         special_ring = self.scheme.special_rings[lvl]
-        normal_ring = self.scheme.rings[lvl]
-        special_q = special_ring.modulus_ratio(normal_ring)
+        scalars = self.scheme.gadget_scalars(lvl)
 
         key_out_special = MLWE_Key(
             key_out.key, key_out.sigma_err, self.scheme, ring=special_ring
@@ -218,12 +217,7 @@ class GP25:
             si_poly = Polynomial(special_ring).from_array(
                 [s[i]] + [0] * (self.ring.N - 1)
             )
-            for j in range(special_ring.ell):
-                scaling_factor = (
-                    [0] * j
-                    + [special_q % special_ring.primes[j]]
-                    + [0] * (special_ring.ell - 1 - j)
-                )
+            for scaling_factor in scalars:
                 out = MLWE(self.scheme, lvl=lvl, ring=special_ring)
                 self.scheme.sample(si_poly * scaling_factor, key_out_special, out=out)
                 res_i.append(out)

@@ -39,8 +39,18 @@ void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uin
 #endif
 }
 
-LWE_Key lwe_alloc_key(uint64_t n, uint64_t l, RNS_Base base)
+// The modulus of limb `i` of an object over `mask`: the prime at the mask's
+// i-th set bit.
+static Modulus lwe_limb_mod(RNS_Base base, uint64_t mask, uint64_t i)
 {
+    const int idx = rns_mask_get_active_index(mask, i);
+    assert(idx >= 0);
+    return base->mods[idx];
+}
+
+LWE_Key lwe_alloc_key(uint64_t n, uint64_t mask, RNS_Base base)
+{
+    const uint64_t l = rns_mask_to_l(mask);
     LWE_Key key = (LWE_Key)safe_malloc(sizeof(*key));
     key->s = (uint64_t **)safe_malloc(sizeof(uint64_t *) * l);
     for (size_t i = 0; i < l; i++)
@@ -49,12 +59,14 @@ LWE_Key lwe_alloc_key(uint64_t n, uint64_t l, RNS_Base base)
     }
     key->n = n;
     key->l = l;
+    key->mask = mask;
     key->base = base;
     return key;
 }
 
-LWE lwe_alloc_sample(uint64_t n, uint64_t l, RNS_Base base)
+LWE lwe_alloc_sample(uint64_t n, uint64_t mask, RNS_Base base)
 {
+    const uint64_t l = rns_mask_to_l(mask);
     LWE c = (LWE)safe_malloc(sizeof(*c));
     c->a = (uint64_t **)safe_malloc(sizeof(uint64_t *) * l);
     for (size_t i = 0; i < l; i++)
@@ -64,6 +76,7 @@ LWE lwe_alloc_sample(uint64_t n, uint64_t l, RNS_Base base)
     c->b = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * l);
     c->n = n;
     c->l = l;
+    c->mask = mask;
     c->base = base;
     return c;
 }
@@ -89,33 +102,33 @@ void free_lwe_key(LWE_Key key)
     free(key);
 }
 
-LWE_Key lwe_new_key(uint64_t n, uint64_t l, RNS_Base base, double sec_sigma, double err_sigma)
+LWE_Key lwe_new_key(uint64_t n, uint64_t mask, RNS_Base base, double sec_sigma, double err_sigma)
 {
-    LWE_Key key = lwe_alloc_key(n, l, base);
+    LWE_Key key = lwe_alloc_key(n, mask, base);
     for (size_t i = 0; i < n; i++)
     {
         int64_t s_val = (int64_t)double2int(generate_normal_random(sec_sigma));
-        for (size_t j = 0; j < l; j++)
+        for (size_t j = 0; j < key->l; j++)
         {
-            uint64_t q = base->mods[j]->q;
-            key->s[j][i] = s_val < 0 ? negate_modq(-s_val, q) : modq(s_val, base->mods[j]);
+            const Modulus mod = lwe_limb_mod(base, mask, j);
+            key->s[j][i] = s_val < 0 ? negate_modq(-s_val, mod->q) : modq(s_val, mod);
         }
     }
     key->sigma = err_sigma;
     return key;
 }
 
-LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t l, RNS_Base base, uint64_t h,
+LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t mask, RNS_Base base, uint64_t h,
                                    double err_sigma)
 {
-    LWE_Key key = lwe_alloc_key(n, l, base);
+    LWE_Key key = lwe_alloc_key(n, mask, base);
     uint64_t *tmp = (uint64_t *)safe_malloc(sizeof(uint64_t) * n);
     gen_sparse_ternary_array_modq(tmp, n, h, 3);
-    for (size_t i = 0; i < n; i++)
+    for (size_t j = 0; j < key->l; j++)
     {
-        for (size_t j = 0; j < l; j++)
+        const uint64_t q = lwe_limb_mod(base, mask, j)->q;
+        for (size_t i = 0; i < n; i++)
         {
-            uint64_t q = base->mods[j]->q;
             if (tmp[i] == 1)
                 key->s[j][i] = 1;
             else if (tmp[i] == 2)
@@ -131,20 +144,21 @@ LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t l, RNS_Base base, uint64
 
 void lwe_sample(LWE c, uint64_t *m, LWE_Key key)
 {
+    assert(c->mask == key->mask && c->n == key->n);
     uint64_t *as = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * key->n);
     int64_t e_val = (int64_t)double2int(generate_normal_random(key->sigma));
     for (size_t i = 0; i < key->l; i++)
     {
+        const Modulus mod = lwe_limb_mod(key->base, key->mask, i);
+        const uint64_t q = mod->q;
         generate_random_bytes(key->n * sizeof(uint64_t), (uint8_t *)c->a[i]);
-        array_reduce_mod_N(c->a[i], c->a[i], key->n,
-                           key->base->mods[i]->q); // Fallback, could use modq
+        array_reduce_mod_N(c->a[i], c->a[i], key->n, q); // Fallback, could use modq
         for (size_t j = 0; j < key->n; j++)
-            c->a[i][j] = modq(c->a[i][j], key->base->mods[i]);
+            c->a[i][j] = modq(c->a[i][j], mod);
 
-        uint64_t q = key->base->mods[i]->q;
         uint64_t e = e_val < 0 ? negate_modq((uint64_t)(-e_val), q) : (uint64_t)e_val;
 
-        mod_eltwise_mul(as, c->a[i], key->s[i], key->n, key->base->mods[i]);
+        mod_eltwise_mul(as, c->a[i], key->s[i], key->n, mod);
         uint64_t b = e;
         for (size_t j = 0; j < key->n; j++)
         {
@@ -159,15 +173,15 @@ void lwe_sample(LWE c, uint64_t *m, LWE_Key key)
 
 LWE lwe_new_sample(uint64_t *m, LWE_Key key)
 {
-    LWE c = lwe_alloc_sample(key->n, key->l, key->base);
+    LWE c = lwe_alloc_sample(key->n, key->mask, key->base);
     lwe_sample(c, m, key);
     return c;
 }
 
-LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t l, RNS_Base base)
+LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t mask, RNS_Base base)
 {
-    LWE c = lwe_alloc_sample(n, l, base);
-    for (size_t i = 0; i < l; i++)
+    LWE c = lwe_alloc_sample(n, mask, base);
+    for (size_t i = 0; i < c->l; i++)
     {
         memset(c->a[i], 0, sizeof(uint64_t) * n);
         c->b[i] = m ? m[i] : 0;
@@ -177,11 +191,13 @@ LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t l, RNS_Base base)
 
 void lwe_phase(uint64_t *out, LWE c, LWE_Key key)
 {
+    assert(c->mask == key->mask && c->n == key->n);
     uint64_t *as = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * key->n);
     for (size_t i = 0; i < key->l; i++)
     {
-        uint64_t q = key->base->mods[i]->q;
-        mod_eltwise_mul(as, c->a[i], key->s[i], key->n, key->base->mods[i]);
+        const Modulus mod = lwe_limb_mod(key->base, key->mask, i);
+        const uint64_t q = mod->q;
+        mod_eltwise_mul(as, c->a[i], key->s[i], key->n, mod);
         uint64_t sum = 0;
         for (size_t j = 0; j < key->n; j++)
         {
@@ -195,11 +211,12 @@ void lwe_phase(uint64_t *out, LWE c, LWE_Key key)
 void lwe_subto(LWE out, LWE in)
 {
     assert(out->n == in->n);
-    assert(out->l == in->l);
+    assert(out->mask == in->mask);
     for (size_t i = 0; i < out->l; i++)
     {
-        mod_eltwise_sub(out->a[i], out->a[i], in->a[i], out->n, out->base->mods[i]);
-        out->b[i] = sub_modq(out->b[i], in->b[i], out->base->mods[i]->q);
+        const Modulus mod = lwe_limb_mod(out->base, out->mask, i);
+        mod_eltwise_sub(out->a[i], out->a[i], in->a[i], out->n, mod);
+        out->b[i] = sub_modq(out->b[i], in->b[i], mod->q);
     }
 }
 

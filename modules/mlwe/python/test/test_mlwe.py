@@ -312,6 +312,31 @@ def test_lwe_alloc_and_phase():
     assert len(sample.get_b()) == ring.ell
 
 
+def test_lwe_limbs_follow_the_ring_over_a_populated_base():
+    # A ring built after another one holds primes the base registered first,
+    # so its prime indices do not ascend and do not start at 0. Every limb has
+    # to be reduced by its own prime, and a key rebuilt from its coefficients
+    # has to decrypt what the generated one encrypted.
+    Ring(N, prime_size=[45, 45], split_degree=1)
+    ring = Ring(N, prime_size=[21, 45, 45], split_degree=1)
+    assert ring.prime_indices != sorted(ring.prime_indices)
+
+    key = LWE_Key(ring, sec_sigma=3.2, err_sigma=3.2)
+    rebuilt = LWE_Key(ring, key=key.get_s())
+    m = [p // 4 for p in ring.primes]
+    sample = LWE(ring=ring, m=m, key=key)
+
+    for limb, p in zip(sample.get_a(), ring.primes, strict=True):
+        assert max(limb) < p
+    for b, p in zip(sample.get_b(), ring.primes, strict=True):
+        assert b < p
+    phases = sample.phase(rebuilt)
+    assert isinstance(phases, list)
+    for phase, m_j, p in zip(phases, m, ring.primes, strict=True):
+        err = (phase - m_j) % p
+        assert min(err, p - err) < 64
+
+
 # --- radix gadget ----------------------------------------------------------
 #
 # The key-switch keys the radix gadget needs -- one per prime and per
@@ -488,3 +513,66 @@ def test_special_primes_of_a_ring_that_is_not_the_first_of_its_base():
     assert scheme.special_primes == 1
     assert scheme.special_rings[0].mask == Rq.mask
     assert scheme.special_rings[0].ell == scheme.rings[0].ell + 1
+
+
+def _scheme_over_a_populated_base():
+    """A GHS scheme whose ring is not the first built over its base.
+
+    Its working primes' base indices do not ascend -- the first is new, the
+    others were registered by an earlier ring -- and its special prime's index
+    is below theirs. The gadget has to be laid out in the order the key switch
+    walks the ciphertext's primes, which is neither ``ring.primes`` order nor
+    base-index order over the whole key ring.
+    """
+    Ring(N, prime_size=[43, 43, 53], split_degree=1)
+    Rq = Ring(N, prime_size=[37, 43, 43, 53], split_degree=1)
+    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=1)
+    work = scheme.rings[0].prime_indices
+    special = set(scheme.special_rings[0].prime_indices) - set(work)
+    assert work != sorted(work)
+    assert min(special) < max(work)
+    return Rq, Rq.quotient_ring(ell=1), scheme
+
+
+@pytest.mark.parametrize("radix_log_base", [None, RADIX_LOG_BASE])
+def test_keyswitch_over_a_populated_base(radix_log_base):
+    _Rq, Rp, scheme = _scheme_over_a_populated_base()
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    ksk = scheme.gen_ksk(key2, key, radix_log_base=radix_log_base)
+
+    m0 = Rp.random_element()
+    c0 = enc(scheme, Rp, m0, key)
+    for c in (c0, c0.round_division(lvl=1)):
+        out = scheme.keyswitch(c, ksk)
+        assert scheme.phase(out, key2).round_division(Rp) == m0
+
+
+@pytest.mark.parametrize("radix_log_base", [None, RADIX_LOG_BASE])
+def test_multiplication_over_a_populated_base(radix_log_base):
+    Rq, Rp, scheme = _scheme_over_a_populated_base()
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    s_0 = key.poly[0]
+    scheme.rlk = scheme.gen_rlk(key, [-(s_0 * s_0)], radix_log_base=radix_log_base)
+
+    m1 = Polynomial(Rp).from_array(_ternary(N))
+    m2 = Polynomial(Rp).from_array(_ternary(N))
+    c1 = enc(scheme, Rp, m1, key)
+    c2 = enc(scheme, Rp, m2, key)
+
+    m_out = scheme.phase(c1 * c2, key).round_division(Rp)
+    assert _mul_error(Rq, Rp, scheme, m_out, m1, m2) < 1000
+
+
+@pytest.mark.parametrize("radix_log_base", [None, RADIX_LOG_BASE])
+def test_mgsw_external_product_over_a_populated_base(radix_log_base):
+    _Rq, Rp, scheme = _scheme_over_a_populated_base()
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    mgsw_scheme = MGSW_Scheme(scheme, radix_log_base=radix_log_base)
+
+    m1 = Rp.random_element()
+    ct1 = enc(scheme, Rp, m1, key)
+
+    ct_id = mgsw_scheme.encrypt(Polynomial(Rp).from_array([1] + [0] * (N - 1)), key)
+    res = ct_id.external_product(ct1)
+    assert scheme.phase(res, key).round_division(Rp) == m1

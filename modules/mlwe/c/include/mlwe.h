@@ -9,12 +9,18 @@ extern "C"
 {
 #endif
     void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uint64_t q);
-    /* LWE */
+    /* LWE
+     *
+     * An LWE key or sample lives over the primes of `base` that `mask`
+     * selects, one limb per prime: limb i is the residue modulo the prime at
+     * the i-th set bit of `mask`, in ascending base index, and `l` is the
+     * number of set bits. A key and the samples it touches share one mask.
+     */
 
     typedef struct _LWE_Key
     {
         uint64_t **s;
-        uint64_t n, l;
+        uint64_t n, l, mask;
         RNS_Base base;
         double sigma;
     } *LWE_Key;
@@ -23,7 +29,7 @@ extern "C"
     {
         uint64_t **a;
         uint64_t *b;
-        uint64_t n, l;
+        uint64_t n, l, mask;
         RNS_Base base;
     } *LWE;
 
@@ -135,7 +141,6 @@ extern "C"
     void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                     uint64_t lvl);
     void mlwe_scale_RNSc_mlwe(RNSc_MLWE c, uint64_t scale);
-    void mlwe_RNSc_mod_switch(RNSc_MLWE c, uint64_t q);
     void mlwe_addto_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in);
     RNS_MLWE *mlwe_alloc_RNS_sample_array(uint64_t size, uint64_t N, uint64_t r, uint64_t mask,
                                           RNS_Base base);
@@ -173,6 +178,7 @@ extern "C"
     void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                             uint64_t size, uint64_t lvl);
     void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl);
+    // The samples in `in` live over exactly the primes of `out`'s ring.
     void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key ksk,
                                      uint64_t lvl);
     void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
@@ -217,15 +223,16 @@ extern "C"
                        uint64_t special_primes, uint64_t N, uint64_t num_threads);
 
     // lwe
-    LWE_Key lwe_alloc_key(uint64_t n, uint64_t l, RNS_Base base);
-    LWE lwe_alloc_sample(uint64_t n, uint64_t l, RNS_Base base);
+    LWE_Key lwe_alloc_key(uint64_t n, uint64_t mask, RNS_Base base);
+    LWE lwe_alloc_sample(uint64_t n, uint64_t mask, RNS_Base base);
     void free_lwe_sample(LWE c);
-    LWE_Key lwe_new_key(uint64_t n, uint64_t l, RNS_Base base, double sec_sigma, double err_sigma);
-    LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t l, RNS_Base base, uint64_t h,
+    LWE_Key lwe_new_key(uint64_t n, uint64_t mask, RNS_Base base, double sec_sigma,
+                        double err_sigma);
+    LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t mask, RNS_Base base, uint64_t h,
                                        double err_sigma);
     void lwe_sample(LWE c, uint64_t *m, LWE_Key key);
     LWE lwe_new_sample(uint64_t *m, LWE_Key key);
-    LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t l, RNS_Base base);
+    LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t mask, RNS_Base base);
     void lwe_phase(uint64_t *out, LWE c, LWE_Key key);
     void lwe_subto(LWE out, LWE in);
     LWE_KS_Key lwe_new_KS_key(LWE_Key out_key, LWE_Key in_key, uint64_t t, uint64_t base_bit);

@@ -12,6 +12,7 @@ typedef struct _LWE_Key {
   uint64_t **s;
   uint64_t n;
   uint64_t l;
+  uint64_t mask;
   RNS_Base base;
   double sigma;
 } *LWE_Key;
@@ -21,6 +22,7 @@ typedef struct _LWE {
   uint64_t *b;
   uint64_t n;
   uint64_t l;
+  uint64_t mask;
   RNS_Base base;
 } *LWE;
 
@@ -43,14 +45,14 @@ typedef struct _RNS_MLWE_Key {
 } *RNS_MLWE_Key;
 
 // --- lwe ---
-void *lwe_alloc_key(uint64_t n, uint64_t l, void *base);
-void *lwe_alloc_sample(uint64_t n, uint64_t l, void *base);
+void *lwe_alloc_key(uint64_t n, uint64_t mask, void *base);
+void *lwe_alloc_sample(uint64_t n, uint64_t mask, void *base);
 void free_lwe_sample(void *c);
-void *lwe_new_key(uint64_t n, uint64_t l, void *base, double sec_sigma, double err_sigma);
-void *lwe_new_sparse_ternary_key(uint64_t n, uint64_t l, void *base, uint64_t h, double err_sigma);
+void *lwe_new_key(uint64_t n, uint64_t mask, void *base, double sec_sigma, double err_sigma);
+void *lwe_new_sparse_ternary_key(uint64_t n, uint64_t mask, void *base, uint64_t h, double err_sigma);
 void lwe_sample(void *c, uint64_t *m, void *key);
 void *lwe_new_sample(uint64_t *m, void *key);
-void *lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t l, void *base);
+void *lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t mask, void *base);
 void lwe_phase(uint64_t *out, void *c, void *key);
 void lwe_subto(void *out, void *in);
 

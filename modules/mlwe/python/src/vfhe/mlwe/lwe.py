@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from vfhe.arith.number_theory import crt
 from vfhe.engine import ffi, lib
@@ -17,6 +17,18 @@ class LibLWE:
 
 
 lib_lwe = LibLWE()
+
+_T = TypeVar("_T")
+
+
+def _native_limbs(ring: RNSRing) -> list[int]:
+    """The position in ``ring.primes`` of each native limb, in native order.
+
+    Natively a limb is the residue modulo the prime at the i-th set bit of the
+    ring's mask, in ascending base index. This API presents limbs in
+    ``ring.primes`` order instead, as the rest of the RNS surface does.
+    """
+    return sorted(range(ring.ell), key=lambda i: ring.prime_indices[i])
 
 
 class LWE_Key:
@@ -33,20 +45,21 @@ class LWE_Key:
         self.n = n if n is not None else ring.N
         self.l = ring.ell
         self.q = ring.primes[0]  # Kept for backward compat
+        self._limbs = _native_limbs(ring)
 
         if key is not None:
-            self.obj = lib_lwe.lib.lwe_alloc_key(self.n, self.l, ring.base)
+            self.obj = lib_lwe.lib.lwe_alloc_key(self.n, ring.mask, ring.base)
             self.set_s(key)
         elif sparse_h is not None and err_sigma is not None:
             self.obj = lib_lwe.lib.lwe_new_sparse_ternary_key(
-                self.n, self.l, ring.base, sparse_h, err_sigma
+                self.n, ring.mask, ring.base, sparse_h, err_sigma
             )
         elif sec_sigma is not None and err_sigma is not None:
             self.obj = lib_lwe.lib.lwe_new_key(
-                self.n, self.l, ring.base, sec_sigma, err_sigma
+                self.n, ring.mask, ring.base, sec_sigma, err_sigma
             )
         else:
-            self.obj = lib_lwe.lib.lwe_alloc_key(self.n, self.l, ring.base)
+            self.obj = lib_lwe.lib.lwe_alloc_key(self.n, ring.mask, ring.base)
 
     def set_s(self, key: list[int]):
         # Note: key might be flattened RNS polynomials. For LWE extraction,
@@ -54,8 +67,8 @@ class LWE_Key:
         if not (len(key) == self.n):
             raise ValueError("len(key) == self.n")
         s = ffi.cast("LWE_Key", self.obj).s  # uint64_t ** s
-        for j in range(self.l):
-            q_j = self.ring.primes[j]
+        for j, pos in enumerate(self._limbs):
+            q_j = self.ring.primes[pos]
             for i in range(self.n):
                 val = key[i]
                 val = (val % q_j + q_j) % q_j if val < 0 else val % q_j
@@ -63,7 +76,7 @@ class LWE_Key:
 
     def get_s(self) -> list[int]:
         s = ffi.cast("LWE_Key", self.obj).s
-        q_0 = self.ring.primes[0]
+        q_0 = self.ring.primes[self._limbs[0]]
         res = []
         for i in range(self.n):
             val = s[0][i]
@@ -89,20 +102,32 @@ class LWE:
         self.n = n if n is not None else ring.N
         self.l = ring.ell
         # self.q = ring.primes[0] # kept for backwards compat
+        self._limbs = _native_limbs(ring)
 
         if obj is not None:
+            if ffi.cast("LWE", obj).mask != ring.mask:
+                raise ValueError("the sample does not live over the ring's primes")
             self.obj = obj
         elif key is not None and m is not None:
             self.n = key.n
-            m_arr = ffi.new("uint64_t[]", [x & 0xFFFFFFFFFFFFFFFF for x in m])
+            m_arr = ffi.new("uint64_t[]", self._to_native(m))
             self.obj = lib_lwe.lib.lwe_new_sample(m_arr, key.obj)
         elif is_trivial and m is not None:
-            m_arr = ffi.new("uint64_t[]", [x & 0xFFFFFFFFFFFFFFFF for x in m])
+            m_arr = ffi.new("uint64_t[]", self._to_native(m))
             self.obj = lib_lwe.lib.lwe_new_trivial_sample(
-                m_arr, self.n, self.l, ring.base
+                m_arr, self.n, ring.mask, ring.base
             )
         else:
-            self.obj = lib_lwe.lib.lwe_alloc_sample(self.n, self.l, ring.base)
+            self.obj = lib_lwe.lib.lwe_alloc_sample(self.n, ring.mask, ring.base)
+
+    def _to_native(self, limbs: list[int]) -> list[int]:
+        return [limbs[pos] & 0xFFFFFFFFFFFFFFFF for pos in self._limbs]
+
+    def _from_native(self, limbs: list[_T]) -> list[_T]:
+        res = list(limbs)
+        for j, pos in enumerate(self._limbs):
+            res[pos] = limbs[j]
+        return res
 
     def __del__(self):
         if hasattr(self, "obj") and self.obj is not None:
@@ -111,10 +136,11 @@ class LWE:
     def phase(self, key: LWE_Key, recompose: bool = False) -> list[int] | int:
         out_arr = ffi.new("uint64_t[]", self.l)
         lib_lwe.lib.lwe_phase(out_arr, self.obj, key.obj)
+        out = self._from_native([int(x) for x in out_arr])
         if recompose:
-            return crt(list(out_arr), self.ring.primes)
+            return crt(out, self.ring.primes)
         else:
-            return list(out_arr)
+            return out
 
     def subto(self, other: LWE):
         lib_lwe.lib.lwe_subto(self.obj, other.obj)
@@ -122,8 +148,10 @@ class LWE:
     def get_a(self) -> list[list[int]]:
         # Returns a list (length l) of list (length n)
         a = ffi.cast("LWE", self.obj).a
-        return [[int(a[j][i]) for i in range(self.n)] for j in range(self.l)]
+        return self._from_native(
+            [[int(a[j][i]) for i in range(self.n)] for j in range(self.l)]
+        )
 
     def get_b(self) -> list[int]:
         b = ffi.cast("LWE", self.obj).b
-        return [int(b[j]) for j in range(self.l)]
+        return self._from_native([int(b[j]) for j in range(self.l)])

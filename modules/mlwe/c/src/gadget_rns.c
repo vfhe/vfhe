@@ -17,10 +17,11 @@
 //     x = sum_j sum_k d_{j,k} * (2^(log_base*k) * e_j)   mod Q,
 //
 // with e_j the CRT idempotent of prime j and every digit below 2^log_base.
-// The key array must hold one key per (prime, digit) pair, prime-major, and
-// its keys must carry that gadget (`gadget_radix_digits` says how many digits
-// a prime takes). What it buys is the bound on the products accumulated
-// below: 2^log_base rather than the prime itself.
+// The key array must hold one key per (prime, digit) pair, prime-major with
+// the input's primes in ascending base index, and its keys must carry that
+// gadget (`gadget_radix_digits` says how many digits a prime takes). What it
+// buys is the bound on the products accumulated below: 2^log_base rather than
+// the prime itself.
 //
 // Note what the digits are *not*: the base-2^log_base digits of the value x
 // represents mod Q. Each residue is decomposed on its own, and it is the

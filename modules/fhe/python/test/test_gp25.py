@@ -88,6 +88,67 @@ def test_packing_ksk():
         assert diff <= 5
 
 
+def _scheme_over_a_populated_base(N, module_rank):
+    """A GHS scheme whose ring is not the first built over its base.
+
+    Its working primes' base indices do not ascend and its special prime's
+    index is below theirs, so neither the gadget nor the LWE limbs line up
+    with ``ring.primes`` order.
+    """
+    Ring(N, prime_size=[50, 50, 55], split_degree=1)
+    Rq = Ring(N, prime_size=[47, 50, 50, 55], split_degree=1)
+    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=module_rank)
+    work = scheme.rings[0].prime_indices
+    special = set(scheme.special_rings[0].prime_indices) - set(work)
+    assert work != sorted(work)
+    assert min(special) < max(work)
+    return scheme
+
+
+def test_lwe_extraction_over_a_populated_base():
+    N = 256
+    scheme = _scheme_over_a_populated_base(N, module_rank=1)
+    Rq = scheme.rings[0]
+    Rp = Rq.quotient_ring(ell=1)
+    key = scheme.key_gen_sparse(64, 3.2, ternary=True)
+    gp25 = GP25(scheme)
+    lwe_key = gp25.extract_lwe_key(key)
+
+    msg_coeffs = [((i + 1) * 123) % Rp.primes[0] for i in range(N)]
+    msg = Polynomial(Rp).from_array(msg_coeffs)
+    delta = Rq.modulus_ratio(Rp, return_pointer=True)
+    rlwe_sample = scheme.sample(msg.scaled_lift(Rq, delta=delta), key)
+
+    for idx in [0, 1, N // 2, N - 1]:
+        lwe_sample = gp25.rlwe_extract_lwe(rlwe_sample, idx)
+        phase = lwe_sample.phase(lwe_key, recompose=True)
+        res = mod_switch(phase, Rq.q_l, Rp.primes[0])
+        diff = (res - msg_coeffs[idx]) % Rp.primes[0]
+        assert min(diff, Rp.primes[0] - diff) < 1000
+
+
+def test_packing_ksk_over_a_populated_base():
+    N = 256
+    out_scheme = _scheme_over_a_populated_base(N, module_rank=4)
+    Rq = out_scheme.rings[0]
+    lwe_key = LWE_Key(ring=Rq, sec_sigma=3.2, err_sigma=3.2, n=N)
+    output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
+    gp25 = GP25(out_scheme)
+    packing_key = gp25.gen_packing_ksk(output_key, lwe_key, 0)
+
+    extracted = []
+    for i in range(N):
+        m_i = mod_switch((i * 137), 2000, Rq.q_l)
+        extracted.append(LWE(ring=Rq, m=[m_i % q for q in Rq.primes], key=lwe_key))
+
+    out_repacked = gp25.packing_keyswitch(extracted, packing_key, 0)
+    out_coeffs = out_scheme.phase(out_repacked, output_key).get_polynomial()
+    for i in range(N):
+        m_i = mod_switch(out_coeffs[i], Rq.q_l, 2000)
+        diff = (m_i - (i * 137) % 2000) % 2000
+        assert min(diff, 2000 - diff) <= 5
+
+
 @pytest.mark.complete
 @pytest.mark.parametrize("threads", [1, 4])
 def test_sab(deterministic_prng, threads):

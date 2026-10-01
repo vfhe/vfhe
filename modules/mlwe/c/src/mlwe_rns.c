@@ -26,9 +26,10 @@
 LWE mlwe_extract_LWE(RNSc_MLWE in, uint64_t idx)
 {
     const uint64_t N = arith_rns_polynomial(&in->a[0])->base->N;
-    const uint64_t l = rns_mask_to_l(arith_rns_polynomial(&in->a[0])->rns_mask);
+    const uint64_t mask = arith_rns_polynomial(&in->a[0])->rns_mask;
+    const uint64_t l = rns_mask_to_l(mask);
     const uint64_t r = in->r;
-    LWE res = lwe_alloc_sample(r * N, l, arith_rns_polynomial(&in->a[0])->base);
+    LWE res = lwe_alloc_sample(r * N, mask, arith_rns_polynomial(&in->a[0])->base);
 
     for (size_t j = 0; j < l; j++)
     {
@@ -78,6 +79,7 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
 
     const uint64_t target_mask = arith_rns_polynomial(&out->b)->rns_mask;
     const uint64_t extended_mask = key->mask;
+    assert(in[0]->mask == target_mask);
     const uint64_t divide_mask = extended_mask & ~target_mask;
 
     for (size_t i = 0; i < out->r; i++)

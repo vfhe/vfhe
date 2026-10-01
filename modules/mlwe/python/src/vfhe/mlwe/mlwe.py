@@ -186,6 +186,11 @@ class MLWE_Scheme:
         primes carries a gadget element; ``ring`` and ``primes`` override that,
         for a key that lives in a fixed ring while the ciphertexts it consumes
         descend (MGSW).
+
+        The elements are ordered as the key switch consumes them: by the base
+        index of their prime, ascending, over the primes of level ``lvl``'s
+        ring, then the primes it does not carry (the special ones). That is
+        not ``ring.primes`` order unless the ring's prime indices ascend.
         """
         ring = ring if ring is not None else self.special_rings[lvl]
         primes = primes if primes is not None else ring.ell
@@ -199,8 +204,14 @@ class MLWE_Scheme:
                     f"smallest prime ({smallest.bit_length()} bits)"
                 )
         scale = ring.modulus_ratio(self.rings[lvl])
+        source = self.rings[lvl].mask
+        indices = ring.prime_indices
+        order = sorted(
+            range(primes),
+            key=lambda i: (not (source >> indices[i]) & 1, indices[i]),
+        )
         scalars = []
-        for i in range(primes):
+        for i in order:
             prime = ring.primes[i]
             digits = (
                 lib_rlwe.lib.gadget_radix_digits(prime, radix_log_base)
