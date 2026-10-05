@@ -14,6 +14,29 @@ versions may contain breaking changes.
 
 ### Added
 
+- Generate keys on several threads. Every key generator samples through
+  `MLWE_Scheme.sample_scaled` (`mlwe_RNS_sample_scaled_batch`, on
+  `vfhe_parallel_for`): `gen_ksk`, `gen_rlk`, `gen_ksk_automorphism(_set)`,
+  `gen_ksk_trace`, `MGSW_Scheme.encrypt`, `CGGI16.generate_bootstrap_key`,
+  GP25's `generate_sparse_ternary_key` and `gen_packing_ksk`, and the CKKS and
+  BFV rotation and conjugation keys, each of which takes `n_threads` (0, the
+  default: the library limit, `vfhe.engine.set_num_threads`). A sample's mask
+  is expanded from a seed, kept as `MLWE.seed` as `sample` keeps it, and its
+  noise from a secret seed of its own (`prng_normal_seeded`); every seed is
+  drawn in order on the calling thread, so the keys do not depend on the
+  thread count, and under `entropy.deterministic` any count gives the same
+  keys. A bootstrapping key is one batch, its constants folded into the gadget
+  scalars, and `gen_ksk_automorphism_set` draws a level's keys in one batch.
+  At N = 2048 over five 42-bit primes, a CGGI bootstrapping key for n = 918
+  takes 1.05 s on one thread and 0.23 s on eight at rank 1, and 4.3 s and
+  0.87 s at rank 4, where it took 2.9 s and 11.2 s before (i7-11850H,
+  avx512ifma).
+- Add `MGSW_Scheme.encrypt_constants(values, key)`: MGSW encryptions of
+  constant polynomials as one batch, which is what a bootstrapping key is.
+- Add `prng_normal_seeded` (C): `generate_normal_random`'s rounded draw as a
+  function of a seed, for parallel kernels that must not depend on their
+  thread count.
+- Add `MLWE(..., obj=)`: adopt a native sample.
 - Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix` on an
   unsplit ring: a row is now read with `ffi.unpack` and written with one
   packed `ffi.memmove` instead of element by element. `BFV_Scheme.encode` /
@@ -152,6 +175,11 @@ versions may contain breaking changes.
 
 ### Changed
 
+- Key generation leaves its keys in the NTT domain: `MGSW_Scheme.encrypt` and
+  the key-switch key generators return samples in NTT form, which every
+  consumer converted them to anyway, without the round trip through the
+  coefficient domain each sample used to make. The values are unchanged in
+  distribution; a pinned stream gives other keys than before.
 - Rename the phase `b - <a, s>` to the linear decryption, the scheme-neutral
   term: `MLWE_Scheme.phase` and `LWE.phase` become `linear_decrypt`, and the
   native `mlwe_RNS_phase` / `lwe_phase` become `mlwe_RNS_linear_decrypt` /

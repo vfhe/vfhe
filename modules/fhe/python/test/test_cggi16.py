@@ -17,10 +17,12 @@ from vfhe.mlwe import LWE, LWE_Key, MLWE_Scheme
 
 @pytest.mark.complete
 @pytest.mark.parametrize("balanced", [False, True])
-def test_functional_bootstrap(deterministic_prng, balanced):
+@pytest.mark.parametrize("keygen_threads", [1, 4])
+def test_functional_bootstrap(deterministic_prng, balanced, keygen_threads):
     # Bootstrapping is probabilistic; pin the C PRNG + Python RNG so this
     # exact-equality check is reproducible rather than flaky (seed chosen to
-    # decrypt cleanly).
+    # decrypt cleanly). The bootstrapping key does not depend on the threads
+    # it is drawn on, so the seed holds for every count.
     deterministic_prng(0xB007C0DE)
     random.seed(0xB007C0DE)
     out_N = 256
@@ -38,7 +40,11 @@ def test_functional_bootstrap(deterministic_prng, balanced):
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=False)
 
     cggi16 = CGGI16(out_scheme)
-    bk_key = cggi16.generate_bootstrap_key(input_lwe_key, output_key)
+    engine.set_num_threads(keygen_threads)
+    try:
+        bk_key = cggi16.generate_bootstrap_key(input_lwe_key, output_key)
+    finally:
+        engine.set_num_threads()
 
     lut_size = 1 << (msg_prec - 1)
     lut = [random.randint(0, (1 << (msg_prec - 1)) - 1) for _ in range(lut_size)]  # noqa: S311 - test data, not a key

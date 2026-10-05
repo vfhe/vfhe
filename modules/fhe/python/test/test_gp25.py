@@ -13,6 +13,7 @@ import math
 import random
 
 import pytest
+from vfhe import engine
 from vfhe.arith import Polynomial, Ring
 from vfhe.fhe import GP25, mod_switch
 from vfhe.mlwe import LWE, MLWE, LWE_Key, MLWE_Scheme
@@ -66,14 +67,19 @@ def test_lwe_extraction():
 
 
 @pytest.mark.parametrize("balanced", [False, True])
-def test_packing_ksk(balanced):
+@pytest.mark.parametrize("keygen_threads", [1, 4])
+def test_packing_ksk(balanced, keygen_threads):
     in_N = out_N = 256
     Rq = Ring(out_N, prime_size=[50, 50, 50], split_degree=1)
     out_scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=4, balanced=balanced)
     lwe_key = LWE_Key(ring=Rq, sec_sigma=3.2, err_sigma=3.2, n=in_N)
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
     gp25 = GP25(out_scheme)
-    packing_key = gp25.gen_packing_ksk(output_key, lwe_key, 0)
+    engine.set_num_threads(keygen_threads)
+    try:
+        packing_key = gp25.gen_packing_ksk(output_key, lwe_key, 0)
+    finally:
+        engine.set_num_threads()
 
     extracted = []
     for i in range(in_N):
@@ -174,9 +180,14 @@ def test_sab(deterministic_prng, threads, balanced):
     # threads > 1 runs gp25's parallel monomial multiply, where one
     # key-switch key is shared by every worker: anything the key switch
     # wrote through that key would race, and the bootstrap would decrypt
-    # to garbage.
+    # to garbage. The keys are drawn on that many threads too, which gives
+    # the same keys as one, so the seed holds for both.
     gp25 = GP25(out_scheme, threads=threads)
-    sab_key = gp25.generate_sparse_ternary_key(input_key, output_key, 17, r_prec)
+    engine.set_num_threads(threads)
+    try:
+        sab_key = gp25.generate_sparse_ternary_key(input_key, output_key, 17, r_prec)
+    finally:
+        engine.set_num_threads()
     sab_key.b_prec = msg_prec
 
     lut = [

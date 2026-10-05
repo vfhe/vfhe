@@ -16,11 +16,21 @@ from typing import cast
 
 import pytest
 import vfhe.engine as engine
-from vfhe.arith import Polynomial, Ring
+from vfhe.arith import Polynomial, Ring, repr
 from vfhe.arith.number_theory import crt
 from vfhe.crypto import entropy
 from vfhe.engine import ffi
-from vfhe.mlwe import CMUX, LWE, MGSW, LWE_Key, MGSW_Scheme, MLWE_Scheme, MLWE_Set
+from vfhe.mlwe import (
+    CMUX,
+    LWE,
+    MGSW,
+    MLWE,
+    LWE_Key,
+    MGSW_Scheme,
+    MLWE_Scheme,
+    MLWE_Set,
+)
+from vfhe.mlwe.io import seed_still_holds
 
 N = 256
 
@@ -1000,3 +1010,154 @@ def test_mgsw_external_product_over_a_populated_base(radix_log_base):
     ct_id = mgsw_scheme.encrypt(Polynomial(Rp).from_array([1] + [0] * (N - 1)), key)
     res = ct_id.external_product(ct1)
     assert scheme.linear_decrypt(res, key).round_division(Rp) == m1
+
+
+# --- Key generation on several threads ---------------------------------------
+#
+# Every key is sampled through MLWE_Scheme.sample_scaled, which draws each
+# sample from seeds of its own: the thread count changes who draws a sample,
+# never what it holds.
+
+
+def _digests(samples):
+    """Every component of every sample by digest, so that two keys compare
+    equal exactly when they hold the same samples."""
+    return [
+        [c.get_a_poly(j).get_hash() for j in range(c.r)] + [c.get_b_poly().get_hash()]
+        for c in samples
+    ]
+
+
+def _ksk_digests(ksk):
+    return _digests([c for component in ksk.mlwe if component for c in component])
+
+
+def _every_key(scheme, n_threads):
+    """One key of every kind, pinned, drawn on up to ``n_threads`` threads."""
+    mgsw_scheme = MGSW_Scheme(scheme)
+    one = Polynomial(scheme.rings[0]).from_array([1])
+    with entropy.deterministic(0x7EAD5):
+        key = scheme.key_gen_sparse(scheme.N * scheme.r // 8, 3.2)
+        key2 = scheme.key_gen_sparse(scheme.N * scheme.r // 8, 3.2)
+        ksk = scheme.gen_ksk(key2, key, lvl=0, n_threads=n_threads)
+        rlk = scheme.gen_rlk(key, key, lvl=0, n_threads=n_threads)
+        auts = scheme.gen_ksk_automorphism_set(
+            key, key, [3, 5, 9], lvl=0, n_threads=n_threads
+        )
+        mgsw = mgsw_scheme.encrypt(one, key, n_threads=n_threads)
+        constants = mgsw_scheme.encrypt_constants([1, -1, 0], key, n_threads=n_threads)
+    return [
+        _ksk_digests(ksk),
+        _ksk_digests(rlk),
+        *[_ksk_digests(aut) for aut in auts],
+        _digests(mgsw.obj),
+        *[_digests(c.obj) for c in constants],
+    ]
+
+
+@pytest.mark.parametrize("r, N_r", [(1, 256), (4, 64)])
+@pytest.mark.usefixtures("threads")
+def test_keygen_does_not_depend_on_the_thread_count(r, N_r):
+    """Pinned, every key generator gives the same key on 1, 3 and 8 threads."""
+    _Rq, _Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    keys = [_every_key(scheme, n_threads) for n_threads in (1, 3, 0)]
+    assert keys[0] == keys[1] == keys[2]
+
+
+@pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])
+@pytest.mark.usefixtures("threads")
+def test_keys_drawn_on_several_threads_switch_keys(r, N_r):
+    """Keys drawn on 8 threads key-switch, automorph and relinearize."""
+    Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    key = _rank_key(scheme, N_r, r)
+    key2 = _rank_key(scheme, N_r, r)
+    m0 = Rp.random_element()
+    c0 = enc(scheme, Rp, m0, key)
+
+    ksk = scheme.gen_ksk(key2, key)
+    assert (
+        scheme.linear_decrypt(scheme.keyswitch(c0, ksk), key2).round_division(Rp) == m0
+    )
+
+    gens = [3, 5]
+    for g, aut in zip(
+        gens, scheme.gen_ksk_automorphism_set(key, key, gens), strict=True
+    ):
+        c_out = scheme.automorphism(c0, g, aut)
+        assert scheme.linear_decrypt(c_out, key).round_division(Rp) == m0.automorphism(
+            g
+        )
+
+    scheme.rlk = scheme.gen_rlk(key, key)
+    m1 = Polynomial(Rp).from_array(_ternary(N_r))
+    m2 = Polynomial(Rp).from_array(_ternary(N_r))
+    c1, c2 = enc(scheme, Rp, m1, key), enc(scheme, Rp, m2, key)
+    m_out = scheme.linear_decrypt(c1 * c2, key).round_division(Rp)
+    assert _mul_error(Rq, Rp, scheme, m_out, m1, m2) < 1000
+
+
+@pytest.mark.usefixtures("threads")
+def test_mgsw_constants_scale_by_their_values(bv):
+    """`encrypt_constants([v])` encrypts the constant polynomial v: its external
+    product multiplies a ciphertext's message by v."""
+    _Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    m1 = Rp.random_element()
+    ct1 = enc(scheme, Rp, m1, key)
+    values = [1, 0, -1, 2]
+    constants = MGSW_Scheme(scheme).encrypt_constants(values, key)
+    for v, mgsw in zip(values, constants, strict=True):
+        res = mgsw.external_product(ct1)
+        expected = m1 * Polynomial(Rp).from_array([v])
+        assert scheme.linear_decrypt(res, key).round_division(Rp) == expected
+
+
+@pytest.mark.usefixtures("threads")
+def test_key_samples_keep_the_seeds_of_their_masks(ghs):
+    """Key samples carry their mask seeds, as `sample`'s do, so a key is
+    written as seeds and bodies."""
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ksk = scheme.gen_ksk(key, key, lvl=0)
+    samples = [c for component in ksk.mlwe for c in component]
+    seeds = [seed_still_holds(c) for c in samples]
+    assert all(seed is not None for seed in seeds)
+    assert len(set(seeds)) == len(seeds)
+
+
+def test_sample_scaled_rejects_what_it_cannot_encrypt(bv):
+    Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    one = Polynomial(Rq).from_array([1])
+    with pytest.raises(ValueError, match="key's ring"):
+        scheme.sample_scaled([Polynomial(Rp).from_array([1])], [[1, 1, 1]], key)
+    with pytest.raises(ValueError, match="values per scalar"):
+        scheme.sample_scaled([one], [[1, 1]], key)
+    rank_two = MLWE_Scheme(Rq, special_primes=0, module_rank=2)
+    with pytest.raises(ValueError, match="rank"):
+        scheme.sample_scaled([one], [[1, 1, 1]], rank_two.key_gen_sparse(N // 8, 3.2))
+    assert scheme.sample_scaled([one], [], key) == []
+
+
+def test_sample_scaled_leaves_the_messages_alone(bv):
+    """A message in coefficient form is encrypted as it is, not converted in
+    place under a caller that may share it."""
+    Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    m = Polynomial(Rq).from_array([1])
+    m.to_coeff()
+    delta = Rq.modulus_ratio(Rp)
+    (c,) = scheme.sample_scaled([m], [[delta % p for p in Rq.primes]], key)
+    assert m.repr == repr.coeff
+    assert scheme.linear_decrypt(c, key).round_division(Rp) == Polynomial(
+        Rp
+    ).from_array([1])
+
+
+def test_an_adopted_sample_must_match_its_ring_and_rank(bv):
+    Rq, Rp, scheme = bv
+    sample = MLWE(scheme)
+    with pytest.raises(ValueError, match="does not live over"):
+        MLWE(scheme, ring=Rp, obj=sample.obj)
+    with pytest.raises(ValueError, match="does not live over"):
+        MLWE(scheme, ring=Rq, rank=2, obj=sample.obj)
