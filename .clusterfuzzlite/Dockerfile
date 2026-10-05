@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
-FROM gcr.io/oss-fuzz-base/base-builder:v1@sha256:5d8ad2d0945830c9cae00441202025e0609eb2d846e351a3217cb5355c1f2109
+FROM gcr.io/oss-fuzz-base/base-builder:v1@sha256:5add54bcdde77ae3427025db959a44f379ca64b6332bcddcc2766924582e47d9
 COPY . $SRC/vfhe
 WORKDIR $SRC/vfhe
 
