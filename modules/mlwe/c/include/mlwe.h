@@ -203,10 +203,17 @@ extern "C"
     void mlwe_tensor_product(ArithElement *out, RNS_MLWE in1, RNS_MLWE in2);
     void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk);
     // out[i] = in1[i] * in2[i] for i < n, as mlwe_multiply with `ksk` (NULL:
-    // extended products). Inputs must be in the mul domain and may repeat. Up
+    // extended products). Inputs not in the mul domain are converted in place,
+    // so each must appear only once; inputs in the mul domain may repeat. Up
     // to `n_threads` threads (0: the library limit).
     void mlwe_multiply_batch(RNS_MLWE *out, RNS_MLWE *in1, RNS_MLWE *in2, RNS_MLWE_KS_Key ksk,
                              uint64_t n, uint64_t n_threads);
+    // mlwe_multiply_batch with `ksk`, then mlwe_round_division of each product
+    // to `to`, a quotient of the inputs' ring. The outputs are canonical. Same
+    // input rules.
+    void mlwe_multiply_round_division_batch(RNSc_MLWE *out, RNS_MLWE *in1, RNS_MLWE *in2,
+                                            RNS_MLWE_KS_Key ksk, ArithRing to, uint64_t n,
+                                            uint64_t n_threads);
 
     RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l,
                                              RNS_Base base, double sigma);
@@ -242,11 +249,22 @@ extern "C"
     int mlwe_automorphisms_RNSc_GHS_hoisted(RNSc_MLWE *out, MLWE_Hoisted h, const uint64_t *gens,
                                             RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
                                             uint64_t n_threads);
-    // out[i] = Aut_gens[i](in[i]) for i < n, on up to `n_threads` threads (0:
-    // the library limit). gens[i] == 1 copies, and then ksks[i] may be NULL.
+    // out[i] = Aut_gens[i](in[i]) for i < n, canonical, on up to `n_threads`
+    // threads (0: the library limit). Inputs may be in either domain and are
+    // not modified. gens[i] == 1 copies, and ksks[i] may then be NULL.
     void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
                                           RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
                                           uint64_t n_threads);
+    // out = sum_i Aut_gens[i](in[i]) for i < n, canonical, on up to
+    // `n_threads` threads. The key-switch products of all terms are
+    // accumulated in the keys' ring and divided down once: one inverse
+    // transform, one round division and one rounding error for the whole sum.
+    // The keys must share a ring and pass-through components, as automorphism
+    // keys for one level do; otherwise returns -1 and leaves `out` untouched.
+    // gens[i] == 1 adds in[i] as is, and ksks[i] may then be NULL. Inputs are
+    // over out's ring and rank, in either domain, and are not modified.
+    int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *gens,
+                                       RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
     void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                             uint64_t size, uint64_t lvl);
     void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl);

@@ -157,6 +157,23 @@ versions may contain breaking changes.
   `gen_conjugation_key`.
 - Add `CKKS_Scheme.product(cts)`: the product of ciphertexts as a balanced
   tree, `ceil(log2(n))` levels deep.
+- Add `MLWE_Scheme.automorphism_sum(cts, gens, ksks)`: `sum_i
+  Aut_gens[i](cts[i])` with a single division by the special primes for all
+  the key switches (one inverse transform, one round division, one rounding
+  error). Bit-identical for any thread count. `CKKS_LinearTransform.apply`
+  uses it for its giant steps.
+- Add `mlwe.PlaintextMatrix`: the coefficients of `linear_combinations`,
+  prepared once for reuse. `CKKS_LinearTransform` keeps one, so `apply` does
+  no per-diagonal work in Python.
+- `MLWE_Scheme.multiply_batch` / `CKKS_Scheme.multiply_batch` take `lvl=` to
+  also round-divide (CKKS: rescale) each product to that level in the same
+  native call, skipping a transform pair. `CKKS_Scheme.product` uses it on
+  nested chains. A 64-factor product at N=2^14 over 7 primes goes from 241
+  to 196 ms on 8 threads (avx512ifma; 2.8 to 2.3 s portable).
+- `MLWE_Scheme.automorphism_batch` accepts inputs in either domain and no
+  longer converts them in place. With the items above, full-packing
+  SlotToCoeff on 8 threads goes from 82 to 69 ms at N=2^13 and from 304 to
+  272 ms at N=2^14 (avx512ifma; 679 to 548 ms portable at 2^13).
 - `CKKS_Scheme.encode` takes any number of values dividing `N/2` and packs
   fewer than `N/2` sparsely (repeated across the slots, so the plaintext is a
   polynomial in `X^(N/2n)`); `decode(..., slots=n)` reads them back.

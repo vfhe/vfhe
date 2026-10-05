@@ -11,8 +11,9 @@ of two dividing ``N/2``; ``n = N/2`` is the whole slot vector). Then
     A z = sum_j rot( sum_i rot(z, i) * rot(diag_(j*b+i), -j*b), j*b )
 
 so the plaintexts are rotated in the clear, the ``b`` baby rotations of ``z``
-share one decomposition (`MLWE_Scheme.automorphisms`), and the map costs
-``b + n/b`` rotations and one plaintext product per diagonal.
+share one decomposition (`MLWE_Scheme.automorphisms`), the giant rotations share
+one division by the special primes (`MLWE_Scheme.automorphism_sum`), and the
+map costs ``b + n/b`` rotations and one plaintext product per diagonal.
 
 [HS18] S. Halevi, V. Shoup. *Faster Homomorphic Linear Transformations in
 HElib.* CRYPTO 2018.
@@ -24,6 +25,8 @@ import cmath
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
+
+from vfhe.mlwe import PlaintextMatrix
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -90,8 +93,16 @@ class CKKS_LinearTransform:
             cut = n - j * b  # rotated[t] = diag[t - j*b]
             rotated = [*diag[cut:], *diag[:cut]]
             pt = scheme.encode(rotated * (slots // n), ring=ring, scale=self.scale)
-            pt.to_NTT()
             self.plaintexts.setdefault(j, {})[i] = pt
+        self._prepare()
+
+    def _prepare(self) -> None:
+        """Builds the matrix :meth:`apply` multiplies by from :attr:`plaintexts`."""
+        self._babies = sorted({i for row in self.plaintexts.values() for i in row})
+        self._giants = sorted(self.plaintexts)
+        self._matrix = PlaintextMatrix(
+            [[self.plaintexts[j].get(i) for i in self._babies] for j in self._giants]
+        )
 
     @property
     def rotations(self) -> list[int]:
@@ -127,7 +138,7 @@ class CKKS_LinearTransform:
         two_n = 2 * scheme.N
         b = self.baby_steps
 
-        babies = sorted({i for row in self.plaintexts.values() for i in row})
+        babies = self._babies
         rotated = dict(
             zip(
                 [i for i in babies if i],
@@ -141,23 +152,16 @@ class CKKS_LinearTransform:
             )
         )
         rotated[0] = ciphertext
-        giants = sorted(self.plaintexts)
+        giants = self._giants
         inner = scheme.linear_combinations(
-            [rotated[i] for i in babies],
-            [[self.plaintexts[j].get(i) for i in babies] for j in giants],
-            self.scale,
-            n_threads,
+            [rotated[i] for i in babies], self._matrix, self.scale, n_threads
         )
-        terms = scheme.automorphism_batch(
+        return scheme.automorphism_sum(
             inner,
             [pow(5, j * b, two_n) for j in giants],
             [ksks[j * b] if j else None for j in giants],
             n_threads,
         )
-        out = terms[0]
-        for term in terms[1:]:
-            out += term
-        return out
 
     @classmethod
     def slot_to_coeff(

@@ -86,6 +86,8 @@ void mlwe_RNS_mul_by_poly(void *out, void *in, ArithElement *poly);
 void mlwe_RNS_linear_combination(void *out, void *in, ArithElement *coeff, uint64_t n);
 void mlwe_multiply_batch(void *out, void *in1, void *in2, void *ksk, uint64_t n,
                          uint64_t n_threads);
+void mlwe_multiply_round_division_batch(void *out, void *in1, void *in2, void *ksk, void *to,
+                                        uint64_t n, uint64_t n_threads);
 void mlwe_round_division_batch(void *io, void *to, uint64_t n, uint64_t n_threads);
 void mlwe_RNSc_to_RNS_batch(void *io, uint64_t n, uint64_t n_threads);
 void mlwe_RNS_linear_combinations(void *out, void *in, ArithElement *coeff, uint64_t n_out,
@@ -116,6 +118,8 @@ int mlwe_automorphisms_RNSc_GHS_hoisted(void *out, void *h, const uint64_t *gens
                                         uint64_t n, uint64_t lvl, uint64_t n_threads);
 void mlwe_automorphism_RNSc_GHS_batch(void *out, void *in, const uint64_t *gens, void *ksks,
                                       uint64_t n, uint64_t lvl, uint64_t n_threads);
+int mlwe_automorphism_sum_RNSc_GHS(void *out, void *in, const uint64_t *gens, void *ksks,
+                                   uint64_t n, uint64_t n_threads);
 void mlwe_partial_trace(void *out, void *in, uint64_t *gens, void *ksks, uint64_t size, uint64_t lvl);
 void mlwe_trace(void *out, void *in, void *ksks, uint64_t lvl);
 uint64_t mlwe_extended_rank(uint64_t r);

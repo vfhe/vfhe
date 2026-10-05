@@ -496,11 +496,22 @@ int mlwe_automorphisms_RNSc_GHS_hoisted(RNSc_MLWE *out, MLWE_Hoisted h, const ui
 static void automorphism_job(void *ctx, uint64_t i)
 {
     AutomorphismJobs *jobs = (AutomorphismJobs *)ctx;
+    RNSc_MLWE out = jobs->out[i];
+    RNSc_MLWE in = jobs->in[i];
+    // A mul-domain input is converted into `out`, which then serves as the
+    // input: the automorphism reads its input before writing.
+    if (mlwe_domain(in) == ARITH_DOMAIN_MUL)
+    {
+        mlwe_RNS_to_RNSc(out, in);
+        in = out;
+    }
     if (jobs->gens[i] == 1)
-        mlwe_copy_RNSc_sample(jobs->out[i], jobs->in[i]);
+    {
+        if (in != out)
+            mlwe_copy_RNSc_sample(out, in);
+    }
     else
-        mlwe_automorphism_RNSc_GHS(jobs->out[i], jobs->in[i], jobs->gens[i], jobs->ksks[i],
-                                   jobs->lvl);
+        mlwe_automorphism_RNSc_GHS(out, in, jobs->gens[i], jobs->ksks[i], jobs->lvl);
 }
 
 void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
@@ -509,6 +520,130 @@ void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint6
 {
     AutomorphismJobs jobs = {out, NULL, in, gens, ksks, lvl};
     vfhe_parallel_for(n, n_threads, automorphism_job, &jobs);
+}
+
+// Each worker sums a contiguous range of terms: key-switch products in the
+// keys' ring (`acc`, mul domain) and pass-through parts in the output ring
+// (`kept`, canonical). The ranges are added afterwards and `acc` is divided
+// down once.
+typedef struct
+{
+    RNS_MLWE *in;
+    const uint64_t *gens;
+    RNS_MLWE_KS_Key *ksks;
+    uint64_t n, n_ranges;
+    RNS_MLWE *acc;
+    RNSc_MLWE *kept;
+    ArithRing ring;
+} AutomorphismSum;
+
+static void automorphism_sum_job(void *ctx, uint64_t k)
+{
+    AutomorphismSum *sum = (AutomorphismSum *)ctx;
+    RNS_MLWE acc = sum->acc[k];
+    RNSc_MLWE kept = sum->kept[k];
+    const uint64_t r = kept->r;
+    RNSc_MLWE canonical = NULL;
+    RNSc_MLWE permuted = mlwe_alloc_sample(sum->ring, r);
+    mlwe_RNS_trivial_sample_of_zero(acc);
+    for (size_t j = 0; j < r; j++)
+        arith_zero_in(sum->ring, &kept->a[j], ARITH_DOMAIN_CANONICAL);
+    arith_zero_in(sum->ring, &kept->b, ARITH_DOMAIN_CANONICAL);
+
+    for (uint64_t i = k * sum->n / sum->n_ranges; i < (k + 1) * sum->n / sum->n_ranges; i++)
+    {
+        RNSc_MLWE in = sum->in[i];
+        if (mlwe_domain(in) == ARITH_DOMAIN_MUL)
+        {
+            if (canonical == NULL)
+                canonical = mlwe_alloc_sample(sum->ring, r);
+            mlwe_RNS_to_RNSc(canonical, in);
+            in = canonical;
+        }
+        if (sum->gens[i] == 1)
+        {
+            mlwe_addto_RNSc_sample(kept, in);
+            continue;
+        }
+        for (size_t j = 0; j < r; j++)
+            arith_permute(sum->ring, &permuted->a[j], &in->a[j], sum->gens[i]);
+        arith_permute(sum->ring, &permuted->b, &in->b, sum->gens[i]);
+
+        RNS_MLWE_KS_Key ksk = sum->ksks[i];
+        size_t keep_idx = 0;
+        for (size_t j = 0; j < r; j++)
+        {
+            if (ksk->s[j] != NULL)
+                gadget_mul_subto_polynomial(acc, ksk->s[j], &permuted->a[j], ksk->log_base,
+                                            ksk->balanced);
+            else
+            {
+                arith_add(sum->ring, &kept->a[keep_idx], &kept->a[keep_idx], &permuted->a[j]);
+                keep_idx++;
+            }
+        }
+        arith_add(sum->ring, &kept->b, &kept->b, &permuted->b);
+    }
+    free_mlwe_RNS_sample(permuted);
+    if (canonical != NULL)
+        free_mlwe_RNS_sample(canonical);
+}
+
+int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *gens,
+                                   RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads)
+{
+    // All key products share one accumulator, so the keys must agree on its
+    // ring and on which components pass through.
+    RNS_MLWE_KS_Key first = NULL;
+    for (uint64_t i = 0; i < n; i++)
+    {
+        if (gens[i] == 1)
+            continue;
+        RNS_MLWE_KS_Key ksk = ksks[i];
+        if (ksk == NULL || ksk->count != out->r)
+            return -1;
+        if (first == NULL)
+            first = ksk;
+        else if (ksk->ring != first->ring)
+            return -1;
+        for (size_t j = 0; j < out->r; j++)
+        {
+            if ((ksk->s[j] == NULL) != (first->s[j] == NULL))
+                return -1;
+        }
+    }
+
+    const uint64_t n_ranges = n == 0 ? 1 : vfhe_threads_for(n_threads, n);
+    AutomorphismSum sum = {in, gens, ksks, n, n_ranges, NULL, NULL, out->ring};
+    sum.acc = (RNS_MLWE *)safe_malloc(n_ranges * sizeof(RNS_MLWE));
+    sum.kept = (RNSc_MLWE *)safe_malloc(n_ranges * sizeof(RNSc_MLWE));
+    for (uint64_t k = 0; k < n_ranges; k++)
+    {
+        // With no keyed term, `acc` is zero over out's ring.
+        sum.acc[k] = mlwe_alloc_sample(first != NULL ? first->ring : out->ring, out->r);
+        sum.kept[k] = mlwe_alloc_sample(out->ring, out->r);
+    }
+    vfhe_parallel_for(n_ranges, n_threads, automorphism_sum_job, &sum);
+
+    RNS_MLWE acc = sum.acc[0];
+    RNSc_MLWE kept = sum.kept[0];
+    for (uint64_t k = 1; k < n_ranges; k++)
+    {
+        mlwe_add_RNS_sample(acc, acc, sum.acc[k]);
+        mlwe_addto_RNSc_sample(kept, sum.kept[k]);
+    }
+    mlwe_RNS_to_RNSc(acc, acc);
+    mlwe_round_division(acc, out->ring);
+    mlwe_add_RNSc_sample(out, acc, kept);
+
+    for (uint64_t k = 0; k < n_ranges; k++)
+    {
+        free_mlwe_RNS_sample(sum.acc[k]);
+        free_mlwe_RNS_sample(sum.kept[k]);
+    }
+    free(sum.acc);
+    free(sum.kept);
+    return 0;
 }
 
 void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
@@ -787,6 +922,33 @@ void mlwe_tensor_product(ArithElement *out, RNS_MLWE in1, RNS_MLWE in2)
     arith_mul(in1->ring, &out[R], &in1->b, &in2->b);
 }
 
+// The product relinearized to rank r, in the canonical domain. Reuses the GHS
+// hybrid key switch: the rlk holds a key for each of the R-r quadratic
+// components (O[0..R-r-1]) and NULL for the r linear ones (O[R-r..R-1]),
+// which already decrypt under the target key and pass through.
+static void multiply_relinearized(RNSc_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk)
+{
+    const uint64_t r = in1->r;
+    const uint64_t R = mlwe_extended_rank(r);
+    assert(out->r == r);
+    RNS_MLWE ext = mlwe_alloc_sample(in1->ring, R);
+    ArithElement *tensor = (ArithElement *)malloc((R + 1) * sizeof(ArithElement));
+    for (size_t j = 0; j < R; j++)
+    {
+        tensor[j] = ext->a[j];
+    }
+    tensor[R] = ext->b;
+    mlwe_tensor_product(tensor, in1, in2);
+    free(tensor);
+
+    RNSc_MLWE ext_c = mlwe_alloc_sample(in1->ring, R);
+    mlwe_RNS_to_RNSc(ext_c, ext);
+    mlwe_RNSc_GHS_hybrid_keyswitch(out, ext_c, ksk, 0);
+
+    free_mlwe_RNS_sample(ext);
+    free_mlwe_RNS_sample(ext_c);
+}
+
 void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk)
 {
     const uint64_t r = in1->r;
@@ -810,29 +972,9 @@ void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk
         return;
     }
 
-    // Relinearize down to rank r by reusing the GHS hybrid key-switch. The rlk
-    // carries a real key-switch key for each of the R-r quadratic components
-    // (O[0..R-r-1]) and NULL for each of the r linear components (O[R-r..R-1]),
-    // which keep the target key and are copied through by the key-switch.
-    assert(out->r == r);
-    RNS_MLWE ext = mlwe_alloc_sample(in1->ring, R);
-    ArithElement *tensor = (ArithElement *)malloc((R + 1) * sizeof(ArithElement));
-    for (size_t j = 0; j < R; j++)
-    {
-        tensor[j] = ext->a[j];
-    }
-    tensor[R] = ext->b;
-    mlwe_tensor_product(tensor, in1, in2);
-    free(tensor);
-
-    RNSc_MLWE ext_c = mlwe_alloc_sample(in1->ring, R);
-    mlwe_RNS_to_RNSc(ext_c, ext);
-    mlwe_RNSc_GHS_hybrid_keyswitch(out, ext_c, ksk, 0);
+    multiply_relinearized(out, in1, in2, ksk);
     // Restore the NTT representation callers expect from a product.
     mlwe_RNSc_to_RNS(out, out);
-
-    free_mlwe_RNS_sample(ext);
-    free_mlwe_RNS_sample(ext_c);
 }
 
 typedef struct
@@ -844,9 +986,18 @@ typedef struct
     ArithRing to;
 } SampleJobs;
 
+static void operands_to_mul_domain(SampleJobs *jobs, uint64_t i)
+{
+    if (mlwe_domain(jobs->in1[i]) != ARITH_DOMAIN_MUL)
+        mlwe_RNSc_to_RNS(jobs->in1[i], jobs->in1[i]);
+    if (mlwe_domain(jobs->in2[i]) != ARITH_DOMAIN_MUL)
+        mlwe_RNSc_to_RNS(jobs->in2[i], jobs->in2[i]);
+}
+
 static void multiply_job(void *ctx, uint64_t i)
 {
     SampleJobs *jobs = (SampleJobs *)ctx;
+    operands_to_mul_domain(jobs, i);
     mlwe_multiply(jobs->out[i], jobs->in1[i], jobs->in2[i], jobs->ksk);
 }
 
@@ -855,6 +1006,22 @@ void mlwe_multiply_batch(RNS_MLWE *out, RNS_MLWE *in1, RNS_MLWE *in2, RNS_MLWE_K
 {
     SampleJobs jobs = {out, in1, in2, ksk, NULL};
     vfhe_parallel_for(n, n_threads, multiply_job, &jobs);
+}
+
+static void multiply_round_division_job(void *ctx, uint64_t i)
+{
+    SampleJobs *jobs = (SampleJobs *)ctx;
+    operands_to_mul_domain(jobs, i);
+    multiply_relinearized(jobs->out[i], jobs->in1[i], jobs->in2[i], jobs->ksk);
+    mlwe_round_division(jobs->out[i], jobs->to);
+}
+
+void mlwe_multiply_round_division_batch(RNSc_MLWE *out, RNS_MLWE *in1, RNS_MLWE *in2,
+                                        RNS_MLWE_KS_Key ksk, ArithRing to, uint64_t n,
+                                        uint64_t n_threads)
+{
+    SampleJobs jobs = {out, in1, in2, ksk, to};
+    vfhe_parallel_for(n, n_threads, multiply_round_division_job, &jobs);
 }
 
 static void round_division_job(void *ctx, uint64_t i)

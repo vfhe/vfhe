@@ -131,8 +131,8 @@ class LinearTransformCodec(Codec):
         out.baby_steps, out.scale = meta["baby_steps"], meta["scale"]
         out.plaintexts = {}
         for (j, i), pt in zip(meta["layout"], children, strict=True):
-            pt.to_NTT()
             out.plaintexts.setdefault(j, {})[i] = pt
+        out._prepare()  # noqa: SLF001 - the codec belongs to the class
         return out
 
 

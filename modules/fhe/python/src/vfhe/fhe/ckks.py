@@ -18,6 +18,8 @@ from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from vfhe.mlwe import PlaintextMatrix
+
 
 class CKKS_Scheme(MLWE_Scheme):
     def __init__(
@@ -224,7 +226,7 @@ class CKKS_Scheme(MLWE_Scheme):
     def linear_combinations(
         self,
         cts: Sequence[CKKS_Ciphertext],
-        rows: Sequence[Sequence[RNSPolynomial | None]],
+        rows: Sequence[Sequence[RNSPolynomial | None]] | PlaintextMatrix,
         scale: float | None = None,
         n_threads: int = 0,
     ) -> list[CKKS_Ciphertext]:
@@ -319,13 +321,22 @@ class CKKS_Scheme(MLWE_Scheme):
         rhs: Sequence[MLWE],
         ksk: MLWE_Set | list[MLWE_Set] | None = None,
         n_threads: int = 0,
+        *,
+        lvl: int | None = None,
     ) -> list[CKKS_Ciphertext]:
-        """``lhs[i] * rhs[i]`` for every ``i``, relinearized with ``ksk`` but not
-        rescaled, on up to ``n_threads`` threads (0: the library limit).
+        """``lhs[i] * rhs[i]`` for every ``i``, relinearized with ``ksk``, on up to
+        ``n_threads`` threads (0: the library limit).
+
+        Not rescaled, unless ``lvl`` is given: each product is then rescaled to
+        that level, whose ring must be a quotient of the operands'.
         """
-        outs = super().multiply_batch(lhs, rhs, ksk, n_threads)
+        dropped = 1
+        if lvl is not None and lhs:
+            kept = self.rings[lvl].primes
+            dropped = math.prod(p for p in lhs[0].ring.primes if p not in kept)
+        outs = super().multiply_batch(lhs, rhs, ksk, n_threads, lvl=lvl)
         for out, a, b in zip(outs, lhs, rhs, strict=True):
-            out.delta = a.delta * cast("CKKS_Ciphertext", b).delta
+            out.delta = a.delta * cast("CKKS_Ciphertext", b).delta / dropped
         return outs
 
     def product(
@@ -363,10 +374,13 @@ class CKKS_Scheme(MLWE_Scheme):
             return layer[0].copy()
         while len(layer) > 1:
             carry = layer[-1] if len(layer) % 2 else None
-            products = self.multiply_batch(
-                layer[0::2][: len(layer) // 2], layer[1::2], self.rlk, n_threads
-            )
-            layer = self.rescale_batch(products, n_threads)
+            lhs, rhs = layer[0::2][: len(layer) // 2], layer[1::2]
+            next_lvl = layer[0].lvl + 1
+            if self.rings[next_lvl].is_quotient_ring(layer[0].ring):
+                layer = self.multiply_batch(lhs, rhs, self.rlk, n_threads, lvl=next_lvl)
+            else:
+                products = self.multiply_batch(lhs, rhs, self.rlk, n_threads)
+                layer = self.rescale_batch(products, n_threads)
             if carry is not None:
                 layer.append(carry.copy().mod_reduce(lvl=layer[0].lvl))
         return layer[0]

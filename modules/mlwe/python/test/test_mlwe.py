@@ -29,6 +29,7 @@ from vfhe.mlwe import (
     MGSW_Scheme,
     MLWE_Scheme,
     MLWE_Set,
+    PlaintextMatrix,
 )
 from vfhe.mlwe.io import seed_still_holds
 
@@ -899,11 +900,115 @@ def test_automorphism_batch(ghs, n_threads):
     cts = [enc(scheme, Rp, m, key) for m in ms]
     gens = [5, 1, 25, 2 * N - 1]
     ksks = [None if g == 1 else scheme.gen_ksk_automorphism(key, key, g) for g in gens]
+    # NTT-domain inputs are accepted and not modified.
+    cts[0].to_NTT()
+    cts[1].to_NTT()
     outs = scheme.automorphism_batch(cts, gens, ksks, n_threads)
+    assert [c.repr for c in cts] == [repr.ntt, repr.ntt, repr.coeff, repr.coeff]
     for m, g, out in zip(ms, gens, outs, strict=True):
+        assert out.repr == repr.coeff
         assert scheme.linear_decrypt(out, key).round_division(Rp) == m.automorphism(g)
     with pytest.raises(ValueError, match="no key"):
         scheme.automorphism_batch(cts[:1], [5], [None])
+
+
+def _same_sample(c1, c2):
+    a, b = c1.copy(), c2.copy()
+    a.to_coeff()
+    b.to_coeff()
+    return (
+        a.r == b.r
+        and all(a.get_a_poly(i) == b.get_a_poly(i) for i in range(a.r))
+        and a.get_b_poly() == b.get_b_poly()
+    )
+
+
+def _check_automorphism_sum(scheme, Rp, key, gens, radix, n_threads):
+    ms = [Rp.random_element() for _ in gens]
+    cts = [enc(scheme, Rp, m, key) for m in ms]
+    for c in cts[::2]:
+        c.to_NTT()
+    domains = [c.repr for c in cts]
+    ksks = [
+        None
+        if g == 1
+        else scheme.gen_ksk_automorphism(key, key, g, radix_log_base=radix)
+        for g in gens
+    ]
+    out = scheme.automorphism_sum(cts, gens, ksks, n_threads)
+    assert [c.repr for c in cts] == domains
+    assert out.repr == repr.coeff and out.lvl == cts[0].lvl and out.ring == cts[0].ring
+    expected = sum(
+        (m.automorphism(g) for m, g in zip(ms, gens, strict=True)),
+        start=Polynomial(Rp).from_array([0] * Rp.N),
+    )
+    assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+    return cts, ksks, out
+
+
+@pytest.mark.parametrize("radix", [None, RADIX_LOG_BASE])
+@pytest.mark.usefixtures("threads")
+def test_automorphism_sum(ghs, radix):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    gens = [5, 1, 25, 2 * N - 1, 125, 1, 3]
+    cts, ksks, out = _check_automorphism_sum(scheme, Rp, key, gens, radix, 1)
+    # The key products are summed exactly before the single division, so the
+    # result does not depend on how the terms are split between threads.
+    for n_threads in (2, 3, 0):
+        assert _same_sample(scheme.automorphism_sum(cts, gens, ksks, n_threads), out)
+
+
+def test_automorphism_sum_mixes_digit_choices(ghs):
+    # Each term uses its own key's digit choice, so keys with and without
+    # centered digits can share one sum.
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    gens = [5, 25, 125, 2 * N - 1]
+    ms = [Rp.random_element() for _ in gens]
+    cts = [enc(scheme, Rp, m, key) for m in ms]
+    ksks = []
+    for i, g in enumerate(gens):
+        scheme.balanced = i % 2 == 0
+        ksks.append(scheme.gen_ksk_automorphism(key, key, g))
+    out = scheme.automorphism_sum(cts, gens, ksks)
+    expected = sum(
+        (m.automorphism(g) for m, g in zip(ms, gens, strict=True)),
+        start=Polynomial(Rp).from_array([0] * Rp.N),
+    )
+    assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+@pytest.mark.usefixtures("threads")
+def test_automorphism_sum_module_rank(r, N_r):
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    key = _rank_key(scheme, N_r, r)
+    _check_automorphism_sum(scheme, Rp, key, [5, 1, 25], None, 0)
+
+
+def test_automorphism_sum_without_a_key_switch_is_the_plain_sum(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    out = scheme.automorphism_sum(cts, [1, 1, 1], [None, None, None])
+    assert _same_sample(out, cts[0] + cts[1] + cts[2])
+
+
+def test_automorphism_sum_refusals(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(2)]
+    ksk5 = scheme.gen_ksk_automorphism(key, key, 5)
+    ksk25 = scheme.gen_ksk_automorphism(key, key, 25)
+    with pytest.raises(ValueError, match="no key"):
+        scheme.automorphism_sum(cts, [5, 25], [ksk5, None])
+    # A key for another level is over another ring.
+    with pytest.raises(ValueError, match="ring"):
+        scheme.automorphism_sum(cts, [5, 25], [ksk5[0], ksk25[1]])
+    lower = cts[1].copy().round_division(lvl=1)
+    with pytest.raises(ValueError, match="share"):
+        scheme.automorphism_sum([cts[0], lower], [5, 25], [ksk5, ksk25])
 
 
 @pytest.mark.parametrize("n_threads", [1, 0])
@@ -925,6 +1030,58 @@ def test_linear_combinations(bv, n_threads):
             start=Polynomial(ring).from_array([0] * N),
         )
         assert scheme.linear_decrypt(out, key) == expected
+
+
+@pytest.mark.parametrize("n_threads", [1, 0])
+@pytest.mark.usefixtures("threads")
+def test_linear_combinations_with_a_prepared_matrix(bv, n_threads):
+    _Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ring = scheme.rings[0]
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    small = [Polynomial(ring).from_array(_ternary(N)) for _ in range(4)]
+    rows = [[small[0], None, small[1]], [None, small[2], small[3]]]
+    matrix = PlaintextMatrix(rows)
+    assert all(p.repr == repr.ntt for p in small)
+    expected = scheme.linear_combinations(cts, rows, n_threads)
+    for _ in range(2):
+        outs = scheme.linear_combinations(cts, matrix, n_threads)
+        for out, exp in zip(outs, expected, strict=True):
+            assert _same_sample(out, exp)
+    with pytest.raises(ValueError, match="one coefficient per ciphertext"):
+        scheme.linear_combinations(cts[:2], matrix)
+    with pytest.raises(ValueError, match="one length"):
+        PlaintextMatrix([[small[0]], [small[1], small[2]]])
+    other = Polynomial(scheme.rings[1]).from_array(_ternary(N))
+    with pytest.raises(ValueError, match="one ring"):
+        PlaintextMatrix([[small[0], other]])
+
+
+@pytest.mark.parametrize("scheme_fixture", ["bv", "ghs"])
+@pytest.mark.parametrize("n_threads", [1, 0])
+@pytest.mark.usefixtures("threads")
+def test_multiply_batch_divided_to_a_level(scheme_fixture, n_threads, request):
+    # The fused call matches the two batch calls bit for bit: it only skips a
+    # forward and inverse transform that cancel.
+    _Rq, Rp, scheme = request.getfixturevalue(scheme_fixture)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    s_0 = key.poly[0]
+    rlk = scheme.gen_rlk(key, [-(s_0 * s_0)])
+    cts = [
+        enc(scheme, Rp, Polynomial(Rp).from_array(_ternary(N)), key) for _ in range(4)
+    ]
+    cts[1].to_NTT()
+    # cts[0] appears twice, cts[2] and cts[3] once, in either domain.
+    lhs, rhs = [cts[0], cts[0], cts[2]], [cts[1], cts[0], cts[3]]
+    fused = scheme.multiply_batch(lhs, rhs, rlk, n_threads, lvl=1)
+    assert all(c.repr == repr.ntt for c in cts)
+    separate = scheme.round_division_batch(scheme.multiply_batch(lhs, rhs, rlk), 1)
+    for f, s_ in zip(fused, separate, strict=True):
+        assert f.lvl == 1 and f.ring == scheme.rings[1] and f.repr == repr.coeff
+        assert ffi.cast("MLWE", f.obj).ring == scheme.rings[1].arith_ring
+        assert _same_sample(f, s_)
+    with pytest.raises(ValueError, match="key"):
+        scheme.multiply_batch(lhs, rhs, None, lvl=1)
 
 
 def test_gen_ksk_rejects_a_radix_larger_than_the_primes(bv):

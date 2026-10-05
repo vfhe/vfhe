@@ -526,17 +526,25 @@ def test_product_refusals():
         scheme.product([ct, ct])
 
 
-def test_multiply_batch_with_a_shared_operand():
+@pytest.mark.parametrize("fused", [False, True])
+def test_multiply_batch_with_a_shared_operand(fused):
     scheme, key = _product_scheme(1)
     x, y = (_unit_values(N // 2) for _ in range(2))
     cx, cy = (scheme.encrypt(scheme.encode(v), key) for v in (x, y))
-    outs = scheme.rescale_batch(scheme.multiply_batch([cx, cx], [cx, cy], scheme.rlk))
+    if fused:
+        outs = scheme.multiply_batch([cx, cx], [cx, cy], scheme.rlk, lvl=1)
+    else:
+        outs = scheme.rescale_batch(
+            scheme.multiply_batch([cx, cx], [cx, cy], scheme.rlk)
+        )
+    dropped = scheme.rings[0].primes[-1]
     for out, expected in zip(
         outs,
         ([a * a for a in x], [a * b for a, b in zip(x, y, strict=True)]),
         strict=True,
     ):
         assert out.lvl == 1
+        assert out.delta == cx.delta * cx.delta / dropped
         dec = scheme.decode(scheme.decrypt(out, key), scaling_factor=out.delta)
         assert all(abs(e - d) < 1e-3 for e, d in zip(expected, dec, strict=True))
 

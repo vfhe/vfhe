@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import collections
 import functools
 import math
 import operator
@@ -537,8 +538,9 @@ class MLWE_Scheme:
         """``automorphism(cts[i], gens[i], ksks[i])`` for every ``i``, on up to
         ``n_threads`` threads (0: the library limit).
 
-        The ciphertexts must share a level. A generator of 1 copies the ciphertext,
-        and its key may be ``None``.
+        The ciphertexts must share a level; they may be in either domain and are
+        not modified. The results are in the coefficient domain. A generator of 1
+        copies the ciphertext, and its key may be ``None``.
         """
         if not len(cts) == len(gens) == len(ksks):
             raise ValueError("expected one generator and one key per ciphertext")
@@ -557,8 +559,6 @@ class MLWE_Scheme:
                 if k is None
                 else (k if isinstance(k, MLWE_Set) else k[lvl]).obj
             )
-        for c in cts:
-            c.to_coeff()
         outs = [c.new_like(lvl=lvl, ring=self.rings[lvl]) for c in cts]
         lib_rlwe.lib.mlwe_automorphism_RNSc_GHS_batch(
             ffi.new("void *[]", [out.obj for out in outs]),
@@ -572,6 +572,55 @@ class MLWE_Scheme:
         for out in outs:
             out.repr = repr.coeff
         return outs
+
+    def automorphism_sum(
+        self,
+        cts: Sequence[CtT],
+        gens: Sequence[int],
+        ksks: Sequence[MLWE_Set | list[MLWE_Set] | None],
+        n_threads: int = 0,
+    ) -> CtT:
+        """``sum_i automorphism(cts[i], gens[i], ksks[i])``, on up to ``n_threads``
+        threads (0: the library limit).
+
+        Cheaper than summing :meth:`automorphism_batch`: the key switches share
+        one division by the special primes, so the sum also carries a single
+        rounding error. The keys must share a ring and pass-through components,
+        as automorphism keys for one level do. The ciphertexts must share a ring,
+        level and rank; they may be in either domain and are not modified. The
+        result is in the coefficient domain. A generator of 1 adds its
+        ciphertext as is, and its key may be ``None``.
+        """
+        if not len(cts) == len(gens) == len(ksks):
+            raise ValueError("expected one generator and one key per ciphertext")
+        if not cts:
+            raise ValueError("expected at least one term")
+        ring, lvl = cts[0].ring, cts[0].lvl
+        if any(c.ring != ring or c.lvl != lvl or c.r != cts[0].r for c in cts):
+            raise ValueError("the ciphertexts must share one ring, level and rank")
+        self._check_generators(gens)
+        keys = []
+        for gen, k in zip(gens, ksks, strict=True):
+            if k is None and gen != 1:
+                raise ValueError(f"no key for generator {gen}")
+            keys.append(
+                ffi.NULL
+                if k is None
+                else (k if isinstance(k, MLWE_Set) else k[lvl]).obj
+            )
+        out = cts[0].new_like()
+        status = lib_rlwe.lib.mlwe_automorphism_sum_RNSc_GHS(
+            out.obj,
+            ffi.new("void *[]", [c.obj for c in cts]),
+            ffi.new("uint64_t[]", list(gens)),
+            ffi.new("void *[]", keys),
+            len(cts),
+            n_threads,
+        )
+        if status != 0:
+            raise ValueError("the keys do not share one ring and component layout")
+        out.repr = repr.coeff
+        return out
 
     def _check_generators(self, gens: Sequence[int]) -> None:
         for gen in gens:
@@ -592,36 +641,29 @@ class MLWE_Scheme:
     def linear_combinations(
         self,
         cts: Sequence[CtT],
-        rows: Sequence[Sequence[RNSPolynomial | None]],
+        rows: Sequence[Sequence[RNSPolynomial | None]] | PlaintextMatrix,
         n_threads: int = 0,
     ) -> list[CtT]:
         """One :meth:`linear_combination` of ``cts`` per row of coefficients (a
         plaintext matrix times a vector of ciphertexts), on up to ``n_threads``
-        threads (0: the library limit). ``None`` skips a term.
+        threads (0: the library limit). ``None`` skips a term. A matrix applied
+        to many vectors can be prepared once as a :class:`PlaintextMatrix`.
         """
-        if not cts or not rows or any(len(row) != len(cts) for row in rows):
+        matrix = rows if isinstance(rows, PlaintextMatrix) else PlaintextMatrix(rows)
+        if not cts or matrix.n_columns != len(cts):
             raise ValueError("expected one coefficient per ciphertext in every row")
         ring = cts[0].ring
-        coefficients = [p for row in rows for p in row if p is not None]
-        if any(c.ring != ring or c.r != cts[0].r for c in cts) or any(
-            p.ring != ring for p in coefficients
+        if any(c.ring != ring or c.r != cts[0].r for c in cts) or (
+            matrix.ring is not None and matrix.ring != ring
         ):
             raise ValueError("every operand must be over one ring and rank")
         self._to_ntt_batch(cts, n_threads)
-        for p in coefficients:
-            p.to_NTT()
-        outs = [cts[0].new_like() for _ in rows]
-        elements = ffi.new("ArithElement[]", len(rows) * len(cts))
-        for j, row in enumerate(rows):
-            for i, p in enumerate(row):
-                if p is not None:
-                    elements[j * len(cts) + i].handle = p.obj
-                    elements[j * len(cts) + i].domain = domain_of(p.repr)
+        outs = [cts[0].new_like() for _ in range(matrix.n_rows)]
         lib_rlwe.lib.mlwe_RNS_linear_combinations(
             ffi.new("void *[]", [out.obj for out in outs]),
             ffi.new("void *[]", [c.obj for c in cts]),
-            elements,
-            len(rows),
+            matrix.elements,
+            matrix.n_rows,
             len(cts),
             n_threads,
         )
@@ -897,37 +939,65 @@ class MLWE_Scheme:
         rhs: Sequence[MLWE],
         ksk: MLWE_Set | list[MLWE_Set] | None = None,
         n_threads: int = 0,
+        *,
+        lvl: int | None = None,
     ) -> list[CtT]:
         """``multiply(lhs[i], rhs[i], ksk)`` for every ``i``, on up to ``n_threads``
         threads (0: the library limit). All ciphertexts must share one ring and
         level.
+
+        With ``lvl`` (and ``ksk``), each product is also round-divided to that
+        level (:meth:`MLWE.round_division`), whose ring must be a quotient of the
+        operands'; the results are then in the coefficient domain.
         """
         if len(lhs) != len(rhs):
             raise ValueError("expected as many right operands as left ones")
         if not lhs:
             return []
-        ring, lvl = lhs[0].ring, lhs[0].lvl
-        if any(c.ring != ring or c.lvl != lvl for c in (*lhs, *rhs)):
+        ring, in_lvl = lhs[0].ring, lhs[0].lvl
+        if any(c.ring != ring or c.lvl != in_lvl for c in (*lhs, *rhs)):
             raise ValueError("the ciphertexts must share one ring and level")
-        self._to_ntt_batch([*lhs, *rhs], n_threads)
+        if lvl is not None and (
+            ksk is None or not self.rings[lvl].is_quotient_ring(ring)
+        ):
+            raise ValueError(
+                "dividing the products needs a key and a level whose ring is a "
+                "quotient of the operands'"
+            )
+        operands = [*lhs, *rhs]
+        # Workers convert their operands to the NTT domain in place, which is
+        # only safe for an operand used once; the others are converted here.
+        uses = collections.Counter(id(c) for c in operands)
+        self._to_ntt_batch([c for c in operands if uses[id(c)] > 1], n_threads)
         if ksk is None:
             key = ffi.NULL
-            outs = [a.new_like(lvl=lvl, rank=self.extended_rank) for a in lhs]
+            outs = [a.new_like(lvl=in_lvl, rank=self.extended_rank) for a in lhs]
             for out in outs:
                 out.is_extended = True
         else:
-            key = (ksk if isinstance(ksk, MLWE_Set) else ksk[lvl]).obj
-            outs = [a.new_like(lvl=lvl, ring=self.rings[lvl]) for a in lhs]
-        lib_rlwe.lib.mlwe_multiply_batch(
+            key = (ksk if isinstance(ksk, MLWE_Set) else ksk[in_lvl]).obj
+            outs = [a.new_like(lvl=in_lvl, ring=self.rings[in_lvl]) for a in lhs]
+        args = (
             ffi.new("void *[]", [out.obj for out in outs]),
             ffi.new("void *[]", [a.obj for a in lhs]),
             ffi.new("void *[]", [b.obj for b in rhs]),
             key,
-            len(lhs),
-            n_threads,
         )
+        if lvl is None:
+            lib_rlwe.lib.mlwe_multiply_batch(*args, len(lhs), n_threads)
+        else:
+            lib_rlwe.lib.mlwe_multiply_round_division_batch(
+                *args, self.rings[lvl].arith_ring, len(lhs), n_threads
+            )
+        for c in operands:
+            c.repr = repr.ntt
         for out in outs:
-            out.repr = repr.ntt
+            if lvl is None:
+                out.repr = repr.ntt
+            else:
+                out.repr = repr.coeff
+                out.lvl = lvl
+                out.ring = self.rings[lvl]
         return outs
 
     def round_division_batch(
@@ -981,6 +1051,36 @@ class MLWE_Scheme:
         )
         out.repr = repr.coeff
         return out
+
+
+class PlaintextMatrix:
+    """Plaintext coefficients for :meth:`MLWE_Scheme.linear_combinations`,
+    checked and laid out once, for a matrix applied to many vectors of
+    ciphertexts. ``None`` skips a term.
+
+    The polynomials are moved to the NTT domain and must stay there while the
+    matrix is in use.
+    """
+
+    def __init__(self, rows: Sequence[Sequence[RNSPolynomial | None]]) -> None:
+        self.n_rows = len(rows)
+        self.n_columns = len(rows[0]) if rows else 0
+        if not rows or any(len(row) != self.n_columns for row in rows):
+            raise ValueError("expected rows of one length")
+        self.rows = [list(row) for row in rows]
+        coefficients = [p for row in self.rows for p in row if p is not None]
+        self.ring = coefficients[0].ring if coefficients else None
+        if any(p.ring != self.ring for p in coefficients):
+            raise ValueError("every coefficient must be over one ring")
+        for p in coefficients:
+            p.to_NTT()
+        self.elements = ffi.new("ArithElement[]", self.n_rows * self.n_columns)
+        ntt = domain_of(repr.ntt)
+        for j, row in enumerate(self.rows):
+            for i, p in enumerate(row):
+                if p is not None:
+                    self.elements[j * self.n_columns + i].handle = p.obj
+                    self.elements[j * self.n_columns + i].domain = ntt
 
 
 class MLWE_Key:
