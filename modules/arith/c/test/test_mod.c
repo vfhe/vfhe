@@ -249,6 +249,18 @@ void test_mod_eltwise_sweep_scalar_path(void)
             check_ops(bits[i], lengths[j]);
 }
 
+/* Lengths that are not a whole number of vector groups: the vector bodies take
+   the groups and the scalar body the rest. An LWE of dimension n is one such
+   array, and n is whatever the parameters say. */
+void test_mod_eltwise_sweep_with_a_tail(void)
+{
+    const uint64_t bits[] = {10, 29, 30, 49, 50, 61};
+    const uint64_t lengths[] = {9, 15, 778, 1023};
+    for (unsigned i = 0; i < sizeof(bits) / sizeof(*bits); i++)
+        for (unsigned j = 0; j < sizeof(lengths) / sizeof(*lengths); j++)
+            check_ops(bits[i], lengths[j]);
+}
+
 /* ---- the family the element-wise dispatchers pick ---- */
 
 #if VFHE_HAVE_AVX512IFMA
@@ -354,14 +366,14 @@ void test_mod_new_refuses_a_modulus_no_family_can_hold(void)
 void test_mod_eltwise_w32_matches_the_wide_kernels(void)
 {
     const uint64_t bits[] = {10, 20, 29};
-    /* Powers of two, short ones included. Two reasons for that shape: a row
-       operation can be handed `N / split_degree`, which is a power of two and
-       may be under a lane group -- below 16 the 32-bit-word bodies would
-       compute nothing at all, so they route to scalar, and unguarded that is
-       ARITH-7 again. And a power of two is all any caller passes, which is
-       what makes it sound that none of these kernels has a tail: their real
-       precondition is a whole number of lane groups, not merely one. */
-    const uint64_t lengths[] = {1, 2, 4, 8, 16, 32, 64, 1024};
+    /* Powers of two, short ones included, and multiples of 8 that are not
+       multiples of 16. A row operation can be handed `N / split_degree`,
+       which may be under a lane group, and the monomial shifts work on
+       sub-rows whose length is any multiple of 8: both leave a part of the
+       array the 16-lane bodies do not cover, which the scalar body has to
+       finish. (The wide kernels the results are compared against take 8
+       lanes, so every length here is whole for them.) */
+    const uint64_t lengths[] = {1, 2, 4, 8, 16, 24, 32, 40, 64, 1016, 1024};
 
     for (unsigned b = 0; b < sizeof(bits) / sizeof(*bits); b++)
     {
@@ -590,6 +602,7 @@ int main(void)
     RUN_TEST(test_modq_one_and_two_words);
     RUN_TEST(test_mod_eltwise_sweep);
     RUN_TEST(test_mod_eltwise_sweep_scalar_path);
+    RUN_TEST(test_mod_eltwise_sweep_with_a_tail);
     RUN_TEST(test_mod_new_refuses_a_modulus_no_family_can_hold);
 #if VFHE_HAVE_AVX512IFMA
     RUN_TEST(test_mod_eltwise_families_agree_where_they_overlap);

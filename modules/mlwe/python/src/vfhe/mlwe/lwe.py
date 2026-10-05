@@ -41,7 +41,15 @@ class LWE_Key:
         key: list[int] | None = None,
         n: int | None = None,
     ):
+        """An LWE secret key over ``ring``, of dimension ``n`` (``ring.N``).
+
+        Generated (``sec_sigma`` or ``sparse_h``, with ``err_sigma``), or given
+        as its coefficients in ``key``. ``err_sigma`` is the standard deviation
+        of the noise the key encrypts with; a key given without one is
+        ``err_sigma=None``, decrypts, and refuses to encrypt.
+        """
         self.ring = ring
+        self.err_sigma: float | None = None
         self.n = n if n is not None else ring.N
         self.l = ring.ell
         self.q = ring.primes[0]  # Kept for backward compat
@@ -50,14 +58,19 @@ class LWE_Key:
         if key is not None:
             self.obj = lib_lwe.lib.lwe_alloc_key(self.n, ring.mask, ring.base)
             self.set_s(key)
+            if err_sigma is not None:
+                ffi.cast("LWE_Key", self.obj).sigma = err_sigma
+                self.err_sigma = err_sigma
         elif sparse_h is not None and err_sigma is not None:
             self.obj = lib_lwe.lib.lwe_new_sparse_ternary_key(
                 self.n, ring.mask, ring.base, sparse_h, err_sigma
             )
+            self.err_sigma = err_sigma
         elif sec_sigma is not None and err_sigma is not None:
             self.obj = lib_lwe.lib.lwe_new_key(
                 self.n, ring.mask, ring.base, sec_sigma, err_sigma
             )
+            self.err_sigma = err_sigma
         else:
             self.obj = lib_lwe.lib.lwe_alloc_key(self.n, ring.mask, ring.base)
 
@@ -109,6 +122,11 @@ class LWE:
                 raise ValueError("the sample does not live over the ring's primes")
             self.obj = obj
         elif key is not None and m is not None:
+            if key.err_sigma is None:
+                raise ValueError(
+                    "the key has no noise parameter: build it with err_sigma to "
+                    "encrypt under it"
+                )
             self.n = key.n
             m_arr = ffi.new("uint64_t[]", self._to_native(m))
             self.obj = lib_lwe.lib.lwe_new_sample(m_arr, key.obj)

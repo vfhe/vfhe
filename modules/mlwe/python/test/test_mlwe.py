@@ -9,11 +9,13 @@ round_division back to the plaintext ring, so equality is exact.
 """
 
 import math
+import random
 from typing import cast
 
 import pytest
 import vfhe.engine as engine
 from vfhe.arith import Polynomial, Ring
+from vfhe.arith.number_theory import crt
 from vfhe.crypto import entropy
 from vfhe.engine import ffi
 from vfhe.mlwe import LWE, LWE_Key, MGSW_Scheme, MLWE_Scheme, MLWE_Set
@@ -312,6 +314,61 @@ def test_lwe_alloc_and_linear_decrypt():
     # a-vector is length n over each RNS limb; b matches
     assert len(sample.get_a()[0]) == ring.N
     assert len(sample.get_b()) == ring.ell
+
+
+@pytest.mark.parametrize("n", [776, 778, 783])
+def test_lwe_dimension_need_not_fill_a_vector(n):
+    """The inner product <a, s> covers every coefficient, at any dimension.
+
+    The element-wise kernels work on whole vector groups and leave the rest
+    to a scalar body; a dimension that is not a multiple of the group is
+    where a missing tail shows, as a phase off by the last few terms.
+    """
+    ring = Ring(N, prime_size=[30, 45], split_degree=1)
+    rng = random.Random(n)  # noqa: S311 - test data, not a key
+    s = [rng.randint(0, 1) for _ in range(n)]
+    # noiseless, so the phase is m exactly
+    key = LWE_Key(ring, key=s, n=n, err_sigma=0.0)
+    q = ring.q_l
+    m = q // 3
+    sample = LWE(ring=ring, m=[m % p for p in ring.primes], key=key)
+    assert sample.linear_decrypt(key, recompose=True) == m
+    b = crt(sample.get_b(), ring.primes)
+    a = sample.get_a()
+    phase = b - sum(crt([limb[i] for limb in a], ring.primes) * s[i] for i in range(n))
+    assert phase % q == m
+
+
+def test_lwe_key_encrypts_with_its_noise_parameter_only():
+    """A key given as coefficients takes err_sigma, or refuses to encrypt.
+
+    One extracted from an MLWE key takes the MLWE key's.
+    """
+    ring = Ring(N, prime_size=[30, 45], split_degree=1)
+    s = [i % 2 for i in range(N)]
+    m = [p // 4 for p in ring.primes]
+
+    bare = LWE_Key(ring, key=s)
+    assert bare.err_sigma is None
+    assert ffi.cast("LWE_Key", bare.obj).sigma < 0
+    with pytest.raises(ValueError, match="noise parameter"):
+        LWE(ring=ring, m=m, key=bare)
+
+    noisy = LWE_Key(ring, key=s, err_sigma=3.2)
+    assert noisy.err_sigma == 3.2
+    assert ffi.cast("LWE_Key", noisy.obj).sigma == 3.2
+    sample = LWE(ring=ring, m=m, key=noisy)
+    # the bare key decrypts what the noisy one encrypted
+    decryptions = sample.linear_decrypt(bare)
+    assert isinstance(decryptions, list)
+    for d, m_j, p in zip(decryptions, m, ring.primes, strict=True):
+        err = (d - m_j) % p
+        assert min(err, p - err) < 64
+
+    scheme = MLWE_Scheme(ring, special_primes=0, module_rank=2)
+    extracted = scheme.key_gen_sparse(16, 2.5, ternary=False).extract_lwe_key()
+    assert extracted.err_sigma == 2.5
+    assert ffi.cast("LWE_Key", extracted.obj).sigma == 2.5
 
 
 def test_lwe_limbs_follow_the_ring_over_a_populated_base():

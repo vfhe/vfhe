@@ -223,7 +223,9 @@ ArithStatus arith_rns_from_int_array(ArithRing ring, ArithElement *out, const ui
                                      uint64_t count)
 {
     IntPolynomial tmp = polynomial_new_int_polynomial(ring->N);
-    memcpy(tmp->coeffs, values, count * sizeof(uint64_t));
+    const uint64_t loaded = count < ring->N ? count : ring->N;
+    memcpy(tmp->coeffs, values, loaded * sizeof(uint64_t));
+    memset(tmp->coeffs + loaded, 0, (ring->N - loaded) * sizeof(uint64_t));
     // polynomial_to_RNS reduces per prime and then runs the forward
     // transform, so the element lands in the mul domain.
     polynomial_to_RNS(arith_rns_polynomial(out), tmp);

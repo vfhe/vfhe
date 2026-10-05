@@ -404,6 +404,26 @@ void test_from_int_array_reduces_per_prime(void)
     arith_free(ring, &e);
 }
 
+/* A short array is a prefix of the coefficients: the rest are zero, whatever
+ * the allocator left in the buffer. */
+void test_from_int_array_zero_extends_a_short_array(void)
+{
+    ArithElement e;
+    arith_new(ring, &e);
+    const uint64_t values[3] = {5, 0, 7};
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_from_int_array(ring, &e, values, 3));
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_to_canonical(ring, &e));
+    RNS_Polynomial got = arith_rns_polynomial(&e);
+    for (uint64_t i = 0; i < TEST_L; i++)
+    {
+        for (uint64_t j = 0; j < TEST_N; j++)
+        {
+            TEST_ASSERT_EQUAL_UINT64(j < 3 ? values[j] : 0, coeff(got, i, j));
+        }
+    }
+    arith_free(ring, &e);
+}
+
 /* The tower slots take the destination ring, and the implementation derives
  * which primes leave. */
 void test_round_division_to_a_smaller_ring(void)
@@ -493,6 +513,7 @@ int main(void)
     RUN_TEST(test_quotient_ring_ops_refuse_the_mul_domain);
     RUN_TEST(test_sampling_lands_in_the_canonical_domain);
     RUN_TEST(test_from_int_array_reduces_per_prime);
+    RUN_TEST(test_from_int_array_zero_extends_a_short_array);
     RUN_TEST(test_round_division_to_a_smaller_ring);
     RUN_TEST(test_the_shared_ring_is_shared);
     RUN_TEST(test_an_unknown_tag_dispatches_through_the_table);

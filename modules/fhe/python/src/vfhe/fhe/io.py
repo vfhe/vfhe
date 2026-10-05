@@ -85,7 +85,14 @@ class CGGI16KeyCodec(Codec):
     types = (CGGI16_Key,)
 
     def encode(self, obj: CGGI16_Key, _ctx: WriteContext, /) -> Encoded:
-        return Encoded({"b_prec": obj.b_prec}, children=[obj.bk])
+        meta = {
+            "b_prec": obj.b_prec,
+            "n": obj.n,
+            "unfolding": obj.unfolding,
+            "variant": obj.variant,
+            "combination": obj.combination,
+        }
+        return Encoded(meta, children=[obj.bk])
 
     def decode(
         self, meta: dict, _payload: Payload, children: list, _ctx: ReadContext, /
@@ -93,6 +100,11 @@ class CGGI16KeyCodec(Codec):
         out = CGGI16_Key()
         (out.bk,) = children
         out.b_prec = meta["b_prec"]
+        # A key written before unfolding existed has one key per coefficient.
+        out.n = meta.get("n", len(out.bk))
+        out.unfolding = meta.get("unfolding", 1)
+        out.variant = meta.get("variant", "bmmp18")
+        out.combination = meta.get("combination", "evaluation")
         return out
 
 

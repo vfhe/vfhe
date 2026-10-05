@@ -60,6 +60,7 @@ LWE_Key lwe_alloc_key(uint64_t n, uint64_t mask, RNS_Base base)
     key->l = l;
     key->mask = mask;
     key->base = base;
+    key->sigma = LWE_NO_SIGMA;
     return key;
 }
 
@@ -144,6 +145,7 @@ LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t mask, RNS_Base base, uin
 void lwe_sample(LWE c, uint64_t *m, LWE_Key key)
 {
     assert(c->mask == key->mask && c->n == key->n);
+    assert(key->sigma >= 0);
     uint64_t *as = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * key->n);
     int64_t e_val = (int64_t)double2int(generate_normal_random(key->sigma));
     for (size_t i = 0; i < key->l; i++)

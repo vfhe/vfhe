@@ -22,10 +22,11 @@
  * Two things every entry point here guarantees, because callers are per-row
  * loops that cannot reasonably check either:
  *
- *  - **Every length works.** The vector bodies consume 16 lanes at a time and
- *    would compute nothing at all for a shorter array, so each entry point
- *    routes `n < W32_MIN_VECTOR_LEN` to the scalar body. A row is `N` words but
- *    callers also pass `N / split_degree`, which can be under 16.
+ *  - **Every length works.** The vector bodies consume whole lane groups (16
+ *    lanes, 8 for the width-changing ones) and stop there, so each entry point
+ *    hands the rest of the array to the scalar body. A row is `N` words, but
+ *    callers also pass `N / split_degree`, which can be under 16, and
+ *    sub-row lengths that are a multiple of 8 but not of 16.
  *  - **Every engine has them.** Narrow storage is derived from the prime, so it
  *    is the same on every engine -- the engine is a build parameter and must
  *    not change how a ring is laid out. Without AVX-512 the scalar bodies are
@@ -33,8 +34,6 @@
  *    `mod_scalar.c` for the 64-bit families. */
 
 #define W32_LANES 16
-// Below this the vector bodies cannot run: one lane group is 16 coefficients.
-#define W32_MIN_VECTOR_LEN 16
 
 /* --- scalar bodies: the whole implementation without AVX-512, and the tail
    for a short array with it. Written against `modq` / `mul_modq`, so they
@@ -464,125 +463,135 @@ static void w32_reduce_vec(uint32_t *out, const uint32_t *in, uint64_t n, Modulu
 
 #endif // VFHE_HAVE_AVX512IFMA
 
-/* --- entry points: length guard first, then whatever this engine has --- */
+/* --- entry points: the vector body on the longest prefix of whole lane groups, the scalar body
+   on what is left (all of it below one group, and everything without AVX-512). --- */
 
 #if VFHE_HAVE_AVX512IFMA
-#define W32_RUN(vec_call, scalar_call)                                                             \
+#define W32_HEAD(n, lanes) ((n) - (n) % (lanes))
+#define W32_VEC(head, call)                                                                        \
     do                                                                                             \
     {                                                                                              \
-        if (n < W32_MIN_VECTOR_LEN)                                                                \
-            scalar_call;                                                                           \
-        else                                                                                       \
-            vec_call;                                                                              \
+        if (head)                                                                                  \
+            call;                                                                                  \
     } while (0)
 #else
-#define W32_RUN(vec_call, scalar_call)                                                             \
-    do                                                                                             \
-    {                                                                                              \
-        scalar_call;                                                                               \
-    } while (0)
+#define W32_HEAD(n, lanes) ((void)(lanes), (uint64_t)0)
+#define W32_VEC(head, call) ((void)(head))
 #endif
 
 void mod_eltwise_mul_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod)
 {
-    W32_RUN(w32_mul_vec(out, in1, in2, n, mod), w32_mul_scalar(out, in1, in2, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_mul_vec(out, in1, in2, h, mod));
+    w32_mul_scalar(out + h, in1 + h, in2 + h, n - h, mod);
 }
 
 void mod_eltwise_mul_addto_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod)
 {
-    W32_RUN(w32_mul_addto_vec(out, in1, in2, n, mod), w32_mul_addto_scalar(out, in1, in2, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_mul_addto_vec(out, in1, in2, h, mod));
+    w32_mul_addto_scalar(out + h, in1 + h, in2 + h, n - h, mod);
 }
 
 void mod_eltwise_mul_subto_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod)
 {
-    W32_RUN(w32_mul_subto_vec(out, in1, in2, n, mod), w32_mul_subto_scalar(out, in1, in2, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_mul_subto_vec(out, in1, in2, h, mod));
+    w32_mul_subto_scalar(out + h, in1 + h, in2 + h, n - h, mod);
 }
 
 void mod_eltwise_scale_w32(uint32_t *out, uint32_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
-    W32_RUN(w32_scale_vec(out, in, scale, n, mod), w32_scale_scalar(out, in, scale, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_scale_vec(out, in, scale, h, mod));
+    w32_scale_scalar(out + h, in + h, scale, n - h, mod);
 }
 
 void mod_eltwise_fma_w32(uint32_t *out, uint32_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
-    W32_RUN(w32_fma_vec(out, in, scale, n, mod), w32_fma_scalar(out, in, scale, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_fma_vec(out, in, scale, h, mod));
+    w32_fma_scalar(out + h, in + h, scale, n - h, mod);
 }
 
 void mod_eltwise_add_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod)
 {
-    W32_RUN(w32_add_vec(out, in1, in2, n, mod), w32_add_scalar_body(out, in1, in2, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_add_vec(out, in1, in2, h, mod));
+    w32_add_scalar_body(out + h, in1 + h, in2 + h, n - h, mod);
 }
 
 void mod_eltwise_sub_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod)
 {
-    W32_RUN(w32_sub_vec(out, in1, in2, n, mod), w32_sub_scalar_body(out, in1, in2, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_sub_vec(out, in1, in2, h, mod));
+    w32_sub_scalar_body(out + h, in1 + h, in2 + h, n - h, mod);
 }
 
 void mod_eltwise_negate_w32(uint32_t *out, uint32_t *in, uint64_t n, Modulus mod)
 {
-    W32_RUN(w32_negate_vec(out, in, n, mod), w32_negate_scalar(out, in, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_negate_vec(out, in, h, mod));
+    w32_negate_scalar(out + h, in + h, n - h, mod);
 }
 
 void mod_eltwise_add_scalar_w32(uint32_t *out, uint32_t *in, uint64_t scalar, uint64_t n,
                                 Modulus mod)
 {
-    W32_RUN(w32_add_scalar_vec(out, in, scalar, n, mod),
-            w32_add_scalarv_scalar(out, in, scalar, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_add_scalar_vec(out, in, scalar, h, mod));
+    w32_add_scalarv_scalar(out + h, in + h, scalar, n - h, mod);
 }
 
 void mod_eltwise_sub_scalar_w32(uint32_t *out, uint32_t *in, uint64_t scalar, uint64_t n,
                                 Modulus mod)
 {
-    W32_RUN(w32_sub_scalar_vec(out, in, scalar, n, mod),
-            w32_sub_scalarv_scalar(out, in, scalar, n, mod));
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h, w32_sub_scalar_vec(out, in, scalar, h, mod));
+    w32_sub_scalarv_scalar(out + h, in + h, scalar, n - h, mod);
 }
 
-/* The width-changing entry points. These take `n / 8` lanes rather than
-   `n / 16`, since one side is 64-bit, so their guard is MOD_MIN_VECTOR_LEN. */
-#if VFHE_HAVE_AVX512IFMA
-#define W32_RUN8(vec_call, scalar_call)                                                            \
-    do                                                                                             \
-    {                                                                                              \
-        if (n < MOD_MIN_VECTOR_LEN)                                                                \
-            scalar_call;                                                                           \
-        else                                                                                       \
-            vec_call;                                                                              \
-    } while (0)
-#else
-#define W32_RUN8(vec_call, scalar_call)                                                            \
-    do                                                                                             \
-    {                                                                                              \
-        scalar_call;                                                                               \
-    } while (0)
-#endif
+/* The width-changing entry points. Their vector bodies take 8 lanes at a time rather than 16,
+   since one side is 64-bit. */
 
 void mod_narrow_w32(uint32_t *out, const uint64_t *in, uint64_t n)
 {
-    W32_RUN8(w32_narrow_vec(out, in, n), w32_narrow_scalar(out, in, n));
+    const uint64_t h = W32_HEAD(n, 8);
+    W32_VEC(h, w32_narrow_vec(out, in, h));
+    w32_narrow_scalar(out + h, in + h, n - h);
 }
 
 void mod_widen_w32(uint64_t *out, const uint32_t *in, uint64_t n)
 {
-    W32_RUN8(w32_widen_vec(out, in, n), w32_widen_scalar(out, in, n));
+    const uint64_t h = W32_HEAD(n, 8);
+    W32_VEC(h, w32_widen_vec(out, in, h));
+    w32_widen_scalar(out + h, in + h, n - h);
 }
 
 void mod_eltwise_reduce_signed_w32(uint32_t *out, int64_t *in, uint64_t n, Modulus mod)
 {
-    W32_RUN8(w32_reduce_signed_vec(out, in, n, mod), w32_reduce_signed_scalar(out, in, n, mod));
+    const uint64_t h = W32_HEAD(n, 8);
+    W32_VEC(h, w32_reduce_signed_vec(out, in, h, mod));
+    w32_reduce_signed_scalar(out + h, in + h, n - h, mod);
 }
 
 void mod_eltwise_reduce_w32(uint32_t *out, uint32_t *in, uint64_t n, Modulus mod)
 {
-    W32_RUN8(w32_reduce_vec(out, in, n, mod), w32_reduce_scalar(out, in, n, mod));
+    const uint64_t h = W32_HEAD(n, 8);
+    W32_VEC(h, w32_reduce_vec(out, in, h, mod));
+    w32_reduce_scalar(out + h, in + h, n - h, mod);
 }
 
 void mod_eltwise_reduce_narrow_from_wide(uint32_t *out, uint64_t *in, uint64_t n, Modulus mod)
 {
-    W32_RUN8(w32_reduce_from_wide_vec(out, in, n, mod),
-             w32_reduce_from_wide_scalar(out, in, n, mod));
+    const uint64_t h = W32_HEAD(n, 8);
+    W32_VEC(h, w32_reduce_from_wide_vec(out, in, h, mod));
+    w32_reduce_from_wide_scalar(out + h, in + h, n - h, mod);
 }
 
 void mod_eltwise_reduce_wide_from_narrow(uint64_t *out, uint32_t *in, uint64_t n, Modulus mod)
 {
-    W32_RUN8(w32_reduce_to_wide_vec(out, in, n, mod), w32_reduce_to_wide_scalar(out, in, n, mod));
+    const uint64_t h = W32_HEAD(n, 8);
+    W32_VEC(h, w32_reduce_to_wide_vec(out, in, h, mod));
+    w32_reduce_to_wide_scalar(out + h, in + h, n - h, mod);
 }

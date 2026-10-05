@@ -149,11 +149,12 @@ extern "C"
                                              uint64_t seed_len, uint64_t stream);
         // Load `count` integers into an element -- the implementation-neutral
         // way in, since an integer array means the same thing to every
-        // representation. The resulting domain is whichever one the
-        // implementation loads into (RNS fuses the forward transform, so it
-        // lands in the mul domain); it is recorded in the element, and a
-        // caller wanting a particular domain converts, which costs nothing
-        // when it is already there.
+        // representation. For a polynomial ring they are the first `count`
+        // coefficients, `count` <= N, and the rest are zero. The resulting
+        // domain is whichever one the implementation loads into (RNS fuses
+        // the forward transform, so it lands in the mul domain); it is
+        // recorded in the element, and a caller wanting a particular domain
+        // converts, which costs nothing when it is already there.
         ArithStatus (*from_int_array)(ArithRing ring, ArithElement *out, const uint64_t *values,
                                       uint64_t count);
 

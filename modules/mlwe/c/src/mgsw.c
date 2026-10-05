@@ -3,11 +3,10 @@
 #include "mlwe.h"
 #include "util.h"
 
-void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
-                           uint64_t special_primes, uint64_t log_base)
+void mgsw_external_product_canonical(RNSc_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
+                                     uint64_t log_base)
 {
     const uint64_t r = in->r;
-    (void)special_primes;
 
     // The products accumulate in the ring the MGSW key lives in, which is
     // wider than `out`'s: `out` is only allocated for its own ring. The
@@ -24,9 +23,16 @@ void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t 
 
     mlwe_RNS_to_RNSc(acc, acc);
     mlwe_round_division(acc, out->ring);
-    mlwe_RNSc_to_RNS(acc, acc);
     mlwe_copy_RNS_sample(out, acc);
     free_mlwe_RNS_sample(acc);
+}
+
+void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
+                           uint64_t special_primes, uint64_t log_base)
+{
+    (void)special_primes;
+    mgsw_external_product_canonical(out, mgsw, in, ell, log_base);
+    mlwe_RNSc_to_RNS(out, out);
 }
 
 void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,

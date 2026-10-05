@@ -464,7 +464,7 @@ class LWEKeyCodec(Codec):
         meta = {
             "ring": ctx.ref(obj.ring),
             "n": obj.n,
-            "sigma": ffi.cast("LWE_Key", obj.obj).sigma,
+            "sigma": obj.err_sigma,
             "width": width,
         }
         return Encoded(meta, len(data), lambda sink: sink.write(data))
@@ -473,9 +473,9 @@ class LWEKeyCodec(Codec):
         self, meta: dict, payload: Payload, _children: list, ctx: ReadContext, /
     ):
         s = _unpack_signed(meta["width"], payload.read(meta["width"] * meta["n"]))
-        out = LWE_Key(ctx.deref(meta["ring"]), key=s, n=meta["n"])
-        ffi.cast("LWE_Key", out.obj).sigma = meta["sigma"]
-        return out
+        return LWE_Key(
+            ctx.deref(meta["ring"]), key=s, n=meta["n"], err_sigma=meta["sigma"]
+        )
 
 
 register(SchemeCodec())

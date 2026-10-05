@@ -145,6 +145,41 @@ void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly
     }
 }
 
+uint64_t gadget_digit_count(RNS_MLWE *ksk, const ArithElement *poly, uint64_t log_base)
+{
+    const uint64_t mask = arith_rns_polynomial(poly)->rns_mask;
+    RNS_Base base = arith_rns_polynomial(&ksk[0]->b)->base;
+    uint64_t n = 0;
+    for (size_t j = 0; j < base->l; j++)
+        if (mask & (1ULL << j))
+            n += gadget_digits_of(base, j, log_base);
+    return n;
+}
+
+void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement *poly, uint64_t i,
+                            uint64_t log_base)
+{
+    RNS_Polynomial source = arith_rns_polynomial(poly);
+    RNS_Base base = arith_rns_polynomial(&ksk[0]->b)->base;
+    RNSc_Polynomial digit = (RNSc_Polynomial)arith_rns_polynomial(out);
+    const int mul_domain = base->split_degree == 1;
+    for (size_t j = 0; j < base->l; j++)
+    {
+        if (!(source->rns_mask & (1ULL << j)))
+            continue;
+        const uint64_t digits = gadget_digits_of(base, j, log_base);
+        if (i < digits)
+        {
+            gadget_digit(digit, (RNSc_Polynomial)source, j, log_base, i);
+            if (mul_domain)
+                polynomial_RNSc_to_RNS((RNS_Polynomial)digit, digit);
+            out->domain = mul_domain ? ARITH_DOMAIN_MUL : ARITH_DOMAIN_CANONICAL;
+            return;
+        }
+        i -= digits;
+    }
+}
+
 void gadget_digits_free(GadgetDigits *digits)
 {
     for (uint64_t i = 0; i < digits->n; i++)

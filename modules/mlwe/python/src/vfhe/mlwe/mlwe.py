@@ -908,7 +908,9 @@ class MLWE_Key:
 
         lwe_coeffs = functools.reduce(operator.iadd, self.key, [])
         n = len(lwe_coeffs)
-        return LWE_Key(ring=self.scheme.rings[0], key=lwe_coeffs, n=n)
+        return LWE_Key(
+            ring=self.scheme.rings[0], key=lwe_coeffs, n=n, err_sigma=self.sigma_err
+        )
 
 
 class MLWE_Set:

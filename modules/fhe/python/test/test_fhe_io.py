@@ -13,6 +13,7 @@ from vfhe.fhe import (
     CGGI16,
     GP25,
     BFV_Scheme,
+    CGGI16_Key,
     CKKS_Ciphertext,
     CKKS_LinearTransform,
     CKKS_Scheme,
@@ -150,10 +151,29 @@ def test_cggi16_bootstrap_key():
     data = s.dumps(bk)
     got = s.loads(data, schemes=[out_scheme, cggi16.mgsw_scheme])
     assert got.b_prec == 5 and len(got.bk) == len(bk.bk)
+    assert (got.n, got.unfolding, got.variant, got.combination) == (
+        256,
+        1,
+        "bmmp18",
+        "evaluation",
+    )
     assert all(g.scheme is cggi16.mgsw_scheme for g in got.bk)
     for g, o in zip(got.bk, bk.bk, strict=True):
         assert all(_same(a, b) for a, b in zip(g.obj, o.obj, strict=True))
     assert len(data) < 0.55 * len(Serializer("compact", seeded=False).dumps(bk))
+
+
+def test_cggi16_unfolded_bootstrap_key_layout():
+    bk = CGGI16_Key()
+    bk.n, bk.unfolding, bk.variant, bk.combination = 7, 3, "zyl17", "coefficient"
+    got = Serializer().loads(Serializer().dumps(bk))
+    assert (got.n, got.unfolding, got.variant, got.combination, got.bk) == (
+        7,
+        3,
+        "zyl17",
+        "coefficient",
+        [],
+    )
 
 
 def test_gp25_sab_key():

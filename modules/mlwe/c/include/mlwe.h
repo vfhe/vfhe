@@ -15,7 +15,14 @@ extern "C"
      * selects, one limb per prime: limb i is the residue modulo the prime at
      * the i-th set bit of `mask`, in ascending base index, and `l` is the
      * number of set bits. A key and the samples it touches share one mask.
+     *
+     * A key's `sigma` is the standard deviation of the noise it encrypts with.
+     * A key without one (LWE_NO_SIGMA, what lwe_alloc_key leaves) decrypts but
+     * must not encrypt: lwe_sample and everything built on it require
+     * `sigma >= 0`.
      */
+
+#define LWE_NO_SIGMA (-1.0)
 
     typedef struct _LWE_Key
     {
@@ -271,6 +278,13 @@ extern "C"
     void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly,
                           uint64_t log_base);
     void gadget_digits_free(GadgetDigits *digits);
+    // The digits of the same decomposition one at a time, for a caller that
+    // computes them in parallel: how many there are, and digit `i` (in key
+    // order) written into `out`, an element of the key ring, in the domain
+    // gadget_decompose leaves them in. Reads `ksk` and `poly` only.
+    uint64_t gadget_digit_count(RNS_MLWE *ksk, const ArithElement *poly, uint64_t log_base);
+    void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement *poly,
+                                uint64_t i, uint64_t log_base);
     // out -= sum_i Aut_gen(digit_i) * ksk[i]: the gadget product of
     // Aut_gen(poly), because permuted digits are a valid decomposition of the
     // permuted element (equal to decomposing Aut_gen(poly) up to the choice of
@@ -284,6 +298,11 @@ extern "C"
     // against, as in `gadget_mul_addto_polynomial`.
     void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
                                uint64_t special_primes, uint64_t log_base);
+    // The same product left in the canonical domain, for a caller that would
+    // move it there next: it skips the forward transform that
+    // mgsw_external_product ends with.
+    void mgsw_external_product_canonical(RNSc_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
+                                         uint64_t log_base);
     void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
                    uint64_t special_primes, uint64_t log_base);
     void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE_KS_Key ksk,

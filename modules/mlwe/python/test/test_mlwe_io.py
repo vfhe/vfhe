@@ -212,9 +212,14 @@ def test_lwe_and_its_key():
     got_sample, got_key = s.loads(s.dumps_secret([sample, key]), rings=[ring])
     assert got_sample.get_a() == sample.get_a() and got_sample.get_b() == sample.get_b()
     assert got_key.get_s() == key.get_s()
+    assert got_key.err_sigma == 3.2
     assert got_sample.linear_decrypt(got_key) == sample.linear_decrypt(key)
     with pytest.raises(TypeError, match="dump_secret"):
         s.dumps(key)
+    # a key without a noise parameter stays without one
+    bare = LWE_Key(ring, key=key.get_s())
+    (got_bare,) = s.loads(s.dumps_secret([bare]), rings=[ring])
+    assert got_bare.err_sigma is None
 
 
 def test_rebuilt_scheme_works_without_the_original(ghs):
