@@ -324,6 +324,37 @@ void test_scale_by_a_per_prime_scalar(void)
     arith_free(ring, &out);
 }
 
+/* A ring whose primes do not start the base: its scalar is indexed by base
+ * row, so it reaches past the ring's prime count. */
+void test_scale_by_a_scalar_of_a_ring_that_skips_base_rows(void)
+{
+    const uint64_t mask = 0xA; /* rows 1 and 3 */
+    ArithRing skipping = arith_rns_ring_new(TEST_N, mask, base);
+    ArithElement a, out;
+    arith_new(skipping, &a);
+    arith_new(skipping, &out);
+    RNS_Polynomial p = arith_rns_polynomial(&a);
+    for (uint64_t i = 1; i < TEST_L; i += 2)
+        for (uint64_t j = 0; j < TEST_N; j++)
+            set_coeff(p, i, j, (j * 1442695040888963407ULL + i) % PRIMES[i]);
+    a.domain = ARITH_DOMAIN_MUL;
+
+    const uint64_t residues[TEST_L] = {0, 5, 0, 11};
+    ArithScalar scalar;
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_scalar_new(skipping, residues, &scalar));
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_scale_by(skipping, &out, &a, scalar));
+    for (uint64_t i = 1; i < TEST_L; i += 2)
+        for (uint64_t j = 0; j < TEST_N; j++)
+            TEST_ASSERT_EQUAL_UINT64(
+                (uint64_t)((unsigned __int128)coeff(p, i, j) * residues[i] % PRIMES[i]),
+                coeff(arith_rns_polynomial(&out), i, j));
+
+    arith_scalar_free(skipping, &scalar);
+    arith_free(skipping, &a);
+    arith_free(skipping, &out);
+    arith_ring_free(skipping);
+}
+
 void test_permute_and_monomial_match_the_kernels(void)
 {
     ArithElement a, out;
@@ -509,6 +540,7 @@ int main(void)
     RUN_TEST(test_multiplication_refuses_the_canonical_domain);
     RUN_TEST(test_mul_subto_and_scale_addto_match_the_kernels);
     RUN_TEST(test_scale_by_a_per_prime_scalar);
+    RUN_TEST(test_scale_by_a_scalar_of_a_ring_that_skips_base_rows);
     RUN_TEST(test_permute_and_monomial_match_the_kernels);
     RUN_TEST(test_quotient_ring_ops_refuse_the_mul_domain);
     RUN_TEST(test_sampling_lands_in_the_canonical_domain);

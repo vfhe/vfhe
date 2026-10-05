@@ -265,6 +265,10 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix `arith_scalar_new` on an RNS ring whose primes do not start the base
+  copying one value per prime when the scaling kernels index the scalar by
+  base row: they read past the copy, and `arith_scale_by` and
+  `MLWE.multiply_scalar` scaled the ring's higher rows by whatever lay there.
 - Make the entropy-backed generators (`generate_random_bytes`,
   `generate_normal_random`, `generate_uniform_below`, `entropy`) safe to call
   from several threads at once. The 1 KiB pool and its index were one

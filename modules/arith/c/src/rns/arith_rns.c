@@ -265,7 +265,10 @@ ArithStatus arith_rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const
 ArithStatus arith_rns_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out)
 {
     RNSParams *params = params_of(ring);
-    const uint64_t rows = rns_mask_to_l(params->rns_mask);
+    // Indexed by base row, as the scaling kernels read it: up to the ring's
+    // highest prime, past its prime count when its primes do not start the
+    // base.
+    const uint64_t rows = 64 - (uint64_t)__builtin_clzll(params->rns_mask);
     uint64_t *values = (uint64_t *)safe_malloc(rows * sizeof(uint64_t));
     memcpy(values, per_component, rows * sizeof(uint64_t));
     out->handle = values;
