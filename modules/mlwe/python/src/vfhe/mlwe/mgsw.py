@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from vfhe.arith import RNSPolynomial, repr
+from vfhe.arith import Polynomial, RNSPolynomial, repr
 from vfhe.engine import ffi, lib
 
 from .mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
@@ -44,33 +44,62 @@ class MGSW_Scheme:
             lvl, self.radix_log_base, ring=self.ring, primes=self.ell - lvl
         )
 
-    def encrypt(self, msg: RNSPolynomial, key: MLWE_Key, lvl: int = 0):
-        result = []
+    def encrypt(
+        self, msg: RNSPolynomial, key: MLWE_Key, lvl: int = 0, n_threads: int = 0
+    ):
+        """An MGSW encryption of ``msg``: for each component ``s_j`` of the key
+        one encryption of ``-s_j * msg`` per gadget element, then the same for
+        ``msg`` itself. Drawn on up to ``n_threads`` threads (0: the library
+        limit); see :meth:`MLWE_Scheme.sample_scaled`.
+        """
         # Base extend msg to self.ring if needed
         if msg.ring != self.ring:
             msg = msg.base_extend(self.ring)
 
         key_special = MLWE_Key(key.key, key.sigma_err, self.mlwe_scheme, ring=self.ring)
-        scalars = self.gadget_scalars(lvl)
-
-        # MGSW ciphertext is a matrix of MLWE ciphertexts: for each component
-        # of the secret key s_j (j=0..r-1), one encryption of s_j * msg per
-        # gadget element, then the same for msg itself.
+        msgs = []
         for j in range(self.mlwe_scheme.r):
             sm = -key.poly[j] * msg
             if sm.ring != self.ring:
                 sm = sm.base_extend(self.ring)
-            for scaling_factor in scalars:
-                out = MLWE(self.mlwe_scheme, ring=self.ring)
-                self.mlwe_scheme.sample(sm * scaling_factor, key_special, out=out)
-                result.append(out)
+            msgs.append(sm)
+        msgs.append(msg)
+        samples = self.mlwe_scheme.sample_scaled(
+            msgs, self.gadget_scalars(lvl), key_special, n_threads=n_threads
+        )
+        return MGSW(self, obj=samples)
 
-        for scaling_factor in scalars:
-            out = MLWE(self.mlwe_scheme, ring=self.ring)
-            self.mlwe_scheme.sample(msg * scaling_factor, key_special, out=out)
-            result.append(out)
+    def encrypt_constants(
+        self, values: list[int], key: MLWE_Key, lvl: int = 0, n_threads: int = 0
+    ) -> list[MGSW]:
+        """MGSW encryptions of the constant polynomials ``values``, as one batch.
 
-        return MGSW(self, obj=result)
+        What a bootstrapping key is made of. A constant folds into the gadget
+        scalars -- ``s_j * c`` times ``g`` is ``s_j`` times ``c * g`` -- so the
+        messages are the same for every value and only the scalars differ, and
+        the whole key is one draw on up to ``n_threads`` threads (0: the
+        library limit).
+        """
+        key_special = MLWE_Key(key.key, key.sigma_err, self.mlwe_scheme, ring=self.ring)
+        one = Polynomial(self.ring).from_array([1])
+        msgs = [-s_j for s_j in key_special.poly] + [one]
+        gadget = self.gadget_scalars(lvl)
+        scalars = [[c * g_p for g_p in g] for c in values for g in gadget]
+        samples = self.mlwe_scheme.sample_scaled(
+            msgs, scalars, key_special, n_threads=n_threads
+        )
+        width = len(gadget)
+        return [
+            MGSW(
+                self,
+                obj=[
+                    samples[j * len(scalars) + v * width + k]
+                    for j in range(len(msgs))
+                    for k in range(width)
+                ],
+            )
+            for v in range(len(values))
+        ]
 
 
 class MGSW:

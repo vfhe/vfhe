@@ -89,6 +89,16 @@ extern "C"
     // tail bound must clamp or resample.
     double generate_normal_random(double sigma);
 
+    // Writes `count` draws of generate_normal_random(sigma), each rounded to
+    // the nearest integer, to out[0..count): the same Box-Muller draw on 16
+    // bytes a draw, the bytes being the BLAKE3 XOF of `seed` in derive-key
+    // mode. A function of `seed` alone, so a parallel kernel that gives each
+    // unit of work a seed of its own draws the same noise on any number of
+    // threads. The seed is as secret as the noise it gives, and BLAKE3 runs in
+    // time independent of it on every engine. `seed` may be any length.
+    void prng_normal_seeded(int64_t *out, uint64_t count, double sigma, const uint8_t *seed,
+                            uint64_t seed_len);
+
     // Writes `count` values uniform in [0, bound) to out[0..count).
     //
     // Seeded rather than entropy-backed: the result is a pure function of

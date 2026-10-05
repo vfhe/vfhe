@@ -179,12 +179,15 @@ class CKKS_Scheme(MLWE_Scheme):
         gen = pow(5, k_mod, 2 * N)
         return self.automorphism(ciphertext, gen, ksk)
 
-    def gen_rotation_key(self, key: MLWE_Key, k: int) -> MLWE_Set | list[MLWE_Set]:
-        """Generates the rotation key (automorphism key-switching key) for rotation by k slots."""
+    def gen_rotation_key(
+        self, key: MLWE_Key, k: int, n_threads: int = 0
+    ) -> MLWE_Set | list[MLWE_Set]:
+        """Generates the rotation key (automorphism key-switching key) for rotation
+        by k slots, on up to ``n_threads`` threads (0: the library limit)."""
         N = self.ring.N
         k_mod = k % (N // 2)
         gen = pow(5, k_mod, 2 * N)
-        return self.gen_ksk_automorphism(key, key, gen)
+        return self.gen_ksk_automorphism(key, key, gen, n_threads=n_threads)
 
     def multiply_plain(
         self,
@@ -242,9 +245,12 @@ class CKKS_Scheme(MLWE_Scheme):
         """Conjugates every slot."""
         return self.automorphism(ciphertext, 2 * self.N - 1, ksk)
 
-    def gen_conjugation_key(self, key: MLWE_Key) -> MLWE_Set | list[MLWE_Set]:
-        """Generates the key-switching key :meth:`conjugate` needs."""
-        return self.gen_ksk_automorphism(key, key, 2 * self.N - 1)
+    def gen_conjugation_key(
+        self, key: MLWE_Key, n_threads: int = 0
+    ) -> MLWE_Set | list[MLWE_Set]:
+        """Generates the key-switching key :meth:`conjugate` needs, on up to
+        ``n_threads`` threads (0: the library limit)."""
+        return self.gen_ksk_automorphism(key, key, 2 * self.N - 1, n_threads=n_threads)
 
     def rescale(self, ciphertext: CKKS_Ciphertext) -> CKKS_Ciphertext:
         """Rescale down one level: move the next ring in the chain of rings.

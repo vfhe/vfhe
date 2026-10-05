@@ -143,6 +143,74 @@ void mlwe_RNSc_sample_seeded(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement
     arith_add(out->ring, &out->b, &out->b, m);
 }
 
+// --- Batched encryption ----------------------------------------------------
+//
+// Key generation is many independent encryptions -- a few messages, each times
+// every gadget element -- so it runs them in parallel. Every sample is a
+// function of two seeds, its mask's and its noise's, all drawn on the calling
+// thread in order, so the samples do not depend on the number of threads.
+
+#define SAMPLE_SEED_BYTES 32
+
+typedef struct
+{
+    RNS_MLWE *out;
+    ArithRing ring;
+    RNS_MLWE_Key key;
+    const ArithElement *msgs;
+    const ArithScalar *scales;
+    uint64_t n_scales;
+    const uint8_t *mask_seeds, *noise_seeds;
+} ScaledSamples;
+
+static void sample_scaled_job(void *ctx, uint64_t i)
+{
+    const ScaledSamples *job = (const ScaledSamples *)ctx;
+    const ArithRing ring = job->ring;
+    const RNS_MLWE_Key key = job->key;
+    RNS_MLWE out = job->out[i] = mlwe_alloc_sample(ring, key->r);
+
+    int64_t *noise = (int64_t *)safe_malloc(ring->N * sizeof(int64_t));
+    prng_normal_seeded(noise, ring->N, key->sigma, &job->noise_seeds[i * SAMPLE_SEED_BYTES],
+                       SAMPLE_SEED_BYTES);
+    arith_from_int_array(ring, &out->b, (const uint64_t *)noise, ring->N);
+    free(noise);
+
+    // a_0 holds the scaled message until its mask is drawn.
+    arith_scale_by(ring, &out->a[0], &job->msgs[i / job->n_scales], job->scales[i % job->n_scales]);
+    arith_add(ring, &out->b, &out->b, &out->a[0]);
+    for (size_t j = 0; j < key->r; j++)
+    {
+        arith_sample_uniform_seeded(ring, &out->a[j], &job->mask_seeds[i * SAMPLE_SEED_BYTES],
+                                    SAMPLE_SEED_BYTES, j);
+        arith_mul_addto(ring, &out->b, &key->s[j], &out->a[j]);
+    }
+}
+
+void mlwe_RNS_sample_scaled_batch(RNS_MLWE *out, ArithRing ring, RNS_MLWE_Key key,
+                                  const ArithElement *msgs, uint64_t n_msgs,
+                                  uint64_t *const *scales, uint64_t n_scales, uint8_t *mask_seeds,
+                                  uint64_t n_threads)
+{
+    const uint64_t count = n_msgs * n_scales;
+    if (count == 0)
+        return;
+    uint8_t *noise_seeds = (uint8_t *)safe_malloc(count * SAMPLE_SEED_BYTES);
+    generate_random_bytes(count * SAMPLE_SEED_BYTES, mask_seeds);
+    generate_random_bytes(count * SAMPLE_SEED_BYTES, noise_seeds);
+    ArithScalar *scalars = (ArithScalar *)safe_malloc(n_scales * sizeof(ArithScalar));
+    for (uint64_t k = 0; k < n_scales; k++)
+        arith_scalar_new(ring, scales[k], &scalars[k]);
+
+    ScaledSamples job = {out, ring, key, msgs, scalars, n_scales, mask_seeds, noise_seeds};
+    vfhe_parallel_for(count, n_threads, sample_scaled_job, &job);
+
+    for (uint64_t k = 0; k < n_scales; k++)
+        arith_scalar_free(ring, &scalars[k]);
+    free(scalars);
+    free(noise_seeds);
+}
+
 void mlwe_RNSc_sample_of_zero(RNSc_MLWE out, RNS_MLWE_Key key)
 {
     mlwe_RNS_sample_of_zero(out, key);

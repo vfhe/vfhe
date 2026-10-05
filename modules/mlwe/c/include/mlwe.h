@@ -147,6 +147,21 @@ extern "C"
                                         uint64_t seed_len);
     void mlwe_RNSc_sample_seeded(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m,
                                  const uint8_t *seed, uint64_t seed_len);
+    // Fresh samples under `key` of every message times every scalar,
+    // message-major: out[i * n_scales + k] encrypts msgs[i] scaled by
+    // scales[k], a scalar being one value per component as arith_scalar_new
+    // takes it. The messages are in the mul domain over `ring`, which the
+    // samples are allocated over at the key's rank, owned by the caller and
+    // left in the mul domain. Sample i's mask is expanded from the 32 bytes at
+    // mask_seeds[32 * i], which this fills, as mlwe_RNS_sample_of_zero_seeded
+    // expands it, and its noise from a secret seed of its own
+    // (prng_normal_seeded). Every seed is drawn here, on the calling thread
+    // and in order, so the samples do not depend on how many of the up to
+    // `n_threads` threads (0: the library limit) draw them.
+    void mlwe_RNS_sample_scaled_batch(RNS_MLWE *out, ArithRing ring, RNS_MLWE_Key key,
+                                      const ArithElement *msgs, uint64_t n_msgs,
+                                      uint64_t *const *scales, uint64_t n_scales,
+                                      uint8_t *mask_seeds, uint64_t n_threads);
     void mlwe_scale_RNS_mlwe_RNS(RNS_MLWE c, const uint64_t *per_component);
     void mlwe_add_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2);
     void mlwe_add_RNS_sample(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2);

@@ -46,8 +46,17 @@ class GP25:
         self.trace_repack = trace_repack
 
     def generate_sparse_ternary_key(
-        self, input_key: MLWE_Key, output_key: MLWE_Key, h: int, r_prec: int
+        self,
+        input_key: MLWE_Key,
+        output_key: MLWE_Key,
+        h: int,
+        r_prec: int,
+        n_threads: int = 0,
     ) -> SAB_Key:
+        """The SAB key: its MGSW keys drawn in one batch, then the automorphism
+        and packing keys, each on up to ``n_threads`` threads (0: the library
+        limit). The bootstrap itself runs on the ``threads`` given to `GP25`.
+        """
         sab = SAB_Key()
         sab.h = h
         sab.r_prec = r_prec
@@ -57,9 +66,13 @@ class GP25:
         r_max = 1 << r_prec
         cnt_h = 0
 
+        # The gaps between nonzero coefficients and their signs, per component,
+        # so that the MGSW keys they become are drawn in one batch.
+        diffs: list[list[int]] = []
+        signs: list[list[int]] = []
         for i in range(in_r):
-            sab.s.append([])
-            sab.s_sign.append([])
+            diffs.append([])
+            signs.append([])
 
             key_poly = input_key.key[i]
             previous = in_N
@@ -75,14 +88,8 @@ class GP25:
 
                     if not (r_diff < r_max):
                         raise ValueError("r_diff < r_max")
-                    sab.s[i].append(self.encrypt_bits(r_diff, r_prec, output_key))
-                    sign_poly = Polynomial(self.ring).from_array(
-                        [is_negative] + [0] * (self.ring.N - 1)
-                    )
-                    sab.s_sign[i].append(
-                        self.mgsw_scheme.encrypt(sign_poly, output_key)
-                    )
-                    sab.s_sign[i][-1].to_NTT()
+                    diffs[i].append(r_diff)
+                    signs[i].append(is_negative)
 
                     previous = current
                     cnt_h += 1
@@ -91,35 +98,46 @@ class GP25:
                 raise ValueError("cnt_h == h")
             if not (previous < r_max):
                 raise ValueError("previous < r_max")
-            sab.s[i].append(self.encrypt_bits(previous, r_prec, output_key))
+            diffs[i].append(previous)
+
+        bits = [(d >> b) & 1 for row in diffs for d in row for b in range(r_prec)]
+        keys = iter(
+            self.mgsw_scheme.encrypt_constants(
+                bits + [x for row in signs for x in row],
+                output_key,
+                n_threads=n_threads,
+            )
+        )
+        sab.s = [[[next(keys) for _ in range(r_prec)] for _ in row] for row in diffs]
+        sab.s_sign = [[next(keys) for _ in row] for row in signs]
 
         ## generate additional keys
         extracted_lwe_key = self.extract_lwe_key(output_key)
         self.aut_minus1 = self.scheme.gen_ksk_automorphism(
-            output_key, output_key, 2 * self.ring.N - 1
+            output_key, output_key, 2 * self.ring.N - 1, n_threads=n_threads
         )
 
         if self.trace_repack:
             log_N = int(math.log2(self.ring.N))
             gens = [(1 << j) + 1 for j in range(1, log_N + 1)]
             sab.trace_repack_key = self.scheme.gen_ksk_trace(
-                output_key, output_key, gens=gens
+                output_key, output_key, gens=gens, n_threads=n_threads
             )
         else:
             lvl = 0
-            sab.packing_key = self.gen_packing_ksk(output_key, extracted_lwe_key, lvl)
+            sab.packing_key = self.gen_packing_ksk(
+                output_key, extracted_lwe_key, lvl, n_threads
+            )
             sab.trace_repack_key = None
 
         return sab
 
-    def encrypt_bits(self, val: int, bits: int, output_key: MLWE_Key) -> list[MGSW]:
-        res = []
-        for i in range(bits):
-            bit = (val >> i) & 1
-            poly = Polynomial(self.ring).from_array([bit] + [0] * (self.ring.N - 1))
-            res.append(self.mgsw_scheme.encrypt(poly, output_key))
-            res[-1].to_NTT()
-        return res
+    def encrypt_bits(
+        self, val: int, bits: int, output_key: MLWE_Key, n_threads: int = 0
+    ) -> list[MGSW]:
+        return self.mgsw_scheme.encrypt_constants(
+            [(val >> i) & 1 for i in range(bits)], output_key, n_threads=n_threads
+        )
 
     def sab_rlwe_bootstrap(
         self,
@@ -199,30 +217,26 @@ class GP25:
         return mlwe_key.extract_lwe_key()
 
     def gen_packing_ksk(
-        self, key_out: MLWE_Key, lwe_key: LWE_Key, lvl: int
+        self, key_out: MLWE_Key, lwe_key: LWE_Key, lvl: int, n_threads: int = 0
     ) -> MLWE_Set:
-        s = lwe_key.get_s()
-        n = lwe_key.n
-
-        result = []
         special_ring = self.scheme.special_rings[lvl]
-        scalars = self.scheme.gadget_scalars(lvl)
+        gadget = self.scheme.gadget_scalars(lvl)
 
         key_out_special = MLWE_Key(
             key_out.key, key_out.sigma_err, self.scheme, ring=special_ring
         )
 
-        for i in range(n):
-            res_i = []
-            si_poly = Polynomial(special_ring).from_array(
-                [s[i]] + [0] * (self.ring.N - 1)
-            )
-            for scaling_factor in scalars:
-                out = MLWE(self.scheme, lvl=lvl, ring=special_ring)
-                self.scheme.sample(si_poly * scaling_factor, key_out_special, out=out)
-                res_i.append(out)
-            result.append(res_i)
-        return MLWE_Set(result, balanced=self.scheme.balanced)
+        # s_i * g is 1 times the scalar s_i * g, so one message serves the key.
+        one = Polynomial(special_ring).from_array([1])
+        scalars = [[s_i * g_p for g_p in g] for s_i in lwe_key.get_s() for g in gadget]
+        samples = self.scheme.sample_scaled(
+            [one], scalars, key_out_special, lvl, n_threads
+        )
+        width = len(gadget)
+        return MLWE_Set(
+            [samples[i : i + width] for i in range(0, len(samples), width)],
+            balanced=self.scheme.balanced,
+        )
 
     def sab_LUT_packing(self, lut: list[int], size: int, LUT_prec: int):
         rlwe_tv = MLWE(self.scheme)

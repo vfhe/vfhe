@@ -241,9 +241,14 @@ class BFV_Scheme(MLWE_Scheme):
         """Rotates each of the two rows of ``N/2`` slots by ``k`` positions."""
         return self.automorphism(ciphertext, self._rotation_gen(k), ksk)
 
-    def gen_rotation_key(self, key: MLWE_Key, k: int) -> MLWE_Set | list[MLWE_Set]:
-        """Generates the key-switching key :meth:`rotate` needs for ``k``."""
-        return self.gen_ksk_automorphism(key, key, self._rotation_gen(k))
+    def gen_rotation_key(
+        self, key: MLWE_Key, k: int, n_threads: int = 0
+    ) -> MLWE_Set | list[MLWE_Set]:
+        """Generates the key-switching key :meth:`rotate` needs for ``k``, on up
+        to ``n_threads`` threads (0: the library limit)."""
+        return self.gen_ksk_automorphism(
+            key, key, self._rotation_gen(k), n_threads=n_threads
+        )
 
     def _rotation_gen(self, k: int) -> int:
         return pow(5, k % (self.N // 2), 2 * self.N)
@@ -252,9 +257,12 @@ class BFV_Scheme(MLWE_Scheme):
         """Swaps the two rows of slots."""
         return self.automorphism(ciphertext, 2 * self.N - 1, ksk)
 
-    def gen_conjugation_key(self, key: MLWE_Key) -> MLWE_Set | list[MLWE_Set]:
-        """Generates the key-switching key :meth:`conjugate` needs."""
-        return self.gen_ksk_automorphism(key, key, 2 * self.N - 1)
+    def gen_conjugation_key(
+        self, key: MLWE_Key, n_threads: int = 0
+    ) -> MLWE_Set | list[MLWE_Set]:
+        """Generates the key-switching key :meth:`conjugate` needs, on up to
+        ``n_threads`` threads (0: the library limit)."""
+        return self.gen_ksk_automorphism(key, key, 2 * self.N - 1, n_threads=n_threads)
 
     # --- multiplication ---
 

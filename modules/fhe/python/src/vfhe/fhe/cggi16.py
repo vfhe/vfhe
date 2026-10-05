@@ -79,15 +79,13 @@ class CGGI16:
         self.ring = scheme.ring
         self.unfolding = unfolding
 
-    def _encrypt_constant(self, value: int, output_key: MLWE_Key) -> MGSW:
-        poly = Polynomial(self.ring).from_array([value] + [0] * (self.ring.N - 1))
-        mgsw = self.mgsw_scheme.encrypt(poly, output_key)
-        mgsw.to_NTT()
-        return mgsw
-
     def generate_bootstrap_key(
-        self, input_key: MLWE_Key | LWE_Key, output_key: MLWE_Key
+        self, input_key: MLWE_Key | LWE_Key, output_key: MLWE_Key, n_threads: int = 0
     ) -> CGGI16_Key:
+        """The bootstrapping key for ``input_key``, encrypted under
+        ``output_key``: every MGSW key drawn in one batch on up to ``n_threads``
+        threads (0: the library limit), see :meth:`MGSW_Scheme.encrypt_constants`.
+        """
         bk = CGGI16_Key()
         bk.unfolding = self.unfolding
         if isinstance(input_key, MLWE_Key):
@@ -100,14 +98,16 @@ class CGGI16:
             raise ValueError("the blind rotation needs a binary input key")
         bk.n = lwe_key.n
 
+        indicators = []
         for first in range(0, lwe_key.n, self.unfolding):
             bits = s[first : first + self.unfolding]
-            for j in range(1, 1 << len(bits)):
-                indicator = math.prod(
-                    b if (j >> t) & 1 else 1 - b for t, b in enumerate(bits)
-                )
-                bk.bk.append(self._encrypt_constant(indicator, output_key))
-
+            indicators.extend(
+                math.prod(b if (j >> t) & 1 else 1 - b for t, b in enumerate(bits))
+                for j in range(1, 1 << len(bits))
+            )
+        bk.bk = self.mgsw_scheme.encrypt_constants(
+            indicators, output_key, n_threads=n_threads
+        )
         return bk
 
     def _rotation_exponents(self, lwe: LWE, torus_base: int) -> tuple[int, list[int]]:

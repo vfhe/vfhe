@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 
     from .lwe import LWE_Key
 
+# Bytes of the seed a sample's mask is expanded from (`MLWE.seed`).
+SEED_BYTES = 32
+
 # Ciphertext operations preserve the concrete ciphertext class of their input
 # (e.g. a CKKS_Ciphertext stays a CKKS_Ciphertext); see MLWE.new_like.
 CtT = TypeVar("CtT", bound="MLWE")
@@ -239,34 +242,58 @@ class MLWE_Scheme:
         key_poly: list[RNSPolynomial],
         lvl: int,
         radix_log_base: int | None = None,
+        n_threads: int = 0,
     ) -> list[list[MLWE]]:
         """Sample the gadget ciphertexts for one key-switch key per key poly.
 
         Returns the raw component lists (before wrapping in an ``MLWE_Set``) so
         callers such as relinearization can interleave NULL pass-through slots.
+        Every component is drawn in one :meth:`sample_scaled` batch.
         """
         if self != key_out.scheme:
             raise ValueError("Scheme mismatch")
         if lvl is None:
             raise ValueError("Level must be specified")
-        result = []
         scalars = self.gadget_scalars(lvl, radix_log_base)
-        key_out_special = MLWE_Key(
-            key_out.key, key_out.sigma_err, self, ring=self.special_rings[lvl]
+        special = self.special_rings[lvl]
+        key_out_special = MLWE_Key(key_out.key, key_out.sigma_err, self, ring=special)
+        msgs = [
+            poly_j
+            if poly_j.ring == special
+            else Polynomial(special).from_bigint_array(
+                poly_j.get_polynomial(signed=True)
+            )
+            for poly_j in key_poly
+        ]
+        samples = self.sample_scaled(msgs, scalars, key_out_special, lvl, n_threads)
+        width = len(scalars)
+        return [samples[j * width : (j + 1) * width] for j in range(len(msgs))]
+
+    def _gen_ksk_sets(
+        self,
+        key_out: MLWE_Key,
+        key_polys: list[list[RNSPolynomial]],
+        lvl: int,
+        radix_log_base: int | None = None,
+        n_threads: int = 0,
+    ) -> list[MLWE_Set]:
+        """One key-switch key per entry of ``key_polys``, at ``lvl``, all drawn
+        in one batch so that a set of small keys still fills the threads."""
+        flat = [poly for polys in key_polys for poly in polys]
+        components = self._gen_ksk_components(
+            key_out, flat, lvl, radix_log_base, n_threads
         )
-        for j in range(len(key_poly)):
-            poly_j = key_poly[j]
-            if poly_j.ring != self.special_rings[lvl]:
-                poly_j = Polynomial(self.special_rings[lvl]).from_bigint_array(
-                    poly_j.get_polynomial(signed=True)
+        sets, start = [], 0
+        for polys in key_polys:
+            sets.append(
+                MLWE_Set(
+                    components[start : start + len(polys)],
+                    radix_log_base,
+                    self.balanced,
                 )
-            result_i = []
-            for scaling_factor in scalars:
-                out = MLWE(self, lvl=lvl, ring=self.special_rings[lvl])
-                self.sample(poly_j * scaling_factor, key_out_special, out=out)
-                result_i.append(out)
-            result.append(result_i)
-        return result
+            )
+            start += len(polys)
+        return sets
 
     def gen_ksk_for_level(
         self,
@@ -274,13 +301,11 @@ class MLWE_Scheme:
         key_in: MLWE_Key | list[RNSPolynomial],
         lvl: int,
         radix_log_base: int | None = None,
+        n_threads: int = 0,
     ):
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
-        return MLWE_Set(
-            self._gen_ksk_components(key_out, key_poly, lvl, radix_log_base),
-            radix_log_base,
-            self.balanced,
-        )
+        (ksk,) = self._gen_ksk_sets(key_out, [key_poly], lvl, radix_log_base, n_threads)
+        return ksk
 
     def gen_rlk_for_level(
         self,
@@ -288,11 +313,14 @@ class MLWE_Scheme:
         quad_polys: list[RNSPolynomial],
         lvl: int,
         radix_log_base: int | None = None,
+        n_threads: int = 0,
     ):
         # One real key-switch key per quadratic component (r*(r+1)/2 of them),
         # followed by r NULL slots for the linear components, which keep the
         # target key and are copied through by the key-switch.
-        components = self._gen_ksk_components(key_out, quad_polys, lvl, radix_log_base)
+        components = self._gen_ksk_components(
+            key_out, quad_polys, lvl, radix_log_base, n_threads
+        )
         return MLWE_Set(components + [None] * self.r, radix_log_base, self.balanced)
 
     def quadratic_key_polys(self, key: MLWE_Key) -> list[RNSPolynomial]:
@@ -315,6 +343,7 @@ class MLWE_Scheme:
         quad_polys: MLWE_Key | list[RNSPolynomial],
         lvl: int | None = None,
         radix_log_base: int | None = None,
+        n_threads: int = 0,
     ):
         """Relinearization key for the rank-r product.
 
@@ -326,7 +355,8 @@ class MLWE_Scheme:
         :meth:`relinearize`/:meth:`multiply`.
 
         ``radix_log_base`` selects the radix gadget over the RNS one; see
-        :meth:`gadget_scalars`.
+        :meth:`gadget_scalars`. The key is drawn on up to ``n_threads`` threads
+        (0: the library limit), as every key here is; see :meth:`sample_scaled`.
         """
         quad_polys = (
             quad_polys
@@ -336,9 +366,11 @@ class MLWE_Scheme:
         if len(quad_polys) != self.r * (self.r + 1) // 2:
             raise ValueError("expected one quadratic key per pair of key components")
         if lvl is not None:
-            return self.gen_rlk_for_level(key_out, quad_polys, lvl, radix_log_base)
+            return self.gen_rlk_for_level(
+                key_out, quad_polys, lvl, radix_log_base, n_threads
+            )
         return [
-            self.gen_rlk_for_level(key_out, quad_polys, lvl, radix_log_base)
+            self.gen_rlk_for_level(key_out, quad_polys, lvl, radix_log_base, n_threads)
             for lvl in range(len(self.rings))
         ]
 
@@ -348,20 +380,25 @@ class MLWE_Scheme:
         key_in: MLWE_Key | list[RNSPolynomial],
         lvl: int | None = None,
         radix_log_base: int | None = None,
+        n_threads: int = 0,
     ):
         """Key-switch key from ``key_in`` to ``key_out``, for one level or all.
 
         ``radix_log_base`` selects the radix gadget over the RNS one; see
         :meth:`gadget_scalars`. The gadget is fixed here, travels with the key,
-        and is what :meth:`keyswitch` decomposes against.
+        and is what :meth:`keyswitch` decomposes against. The key is drawn on up
+        to ``n_threads`` threads (0: the library limit); see
+        :meth:`sample_scaled`.
         """
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
         if self != key_out.scheme:
             raise ValueError("Scheme mismatch")
         if lvl is not None:
-            return self.gen_ksk_for_level(key_out, key_poly, lvl, radix_log_base)
+            return self.gen_ksk_for_level(
+                key_out, key_poly, lvl, radix_log_base, n_threads
+            )
         return [
-            self.gen_ksk_for_level(key_out, key_poly, lvl, radix_log_base)
+            self.gen_ksk_for_level(key_out, key_poly, lvl, radix_log_base, n_threads)
             for lvl in range(len(self.rings))
         ]
 
@@ -372,9 +409,10 @@ class MLWE_Scheme:
         g: int,
         lvl: int | None = None,
         radix_log_base: int | None = None,
+        n_threads: int = 0,
     ):
         key_perm = [i.automorphism(g) for i in key_in.poly]
-        return self.gen_ksk(key_out, key_perm, lvl, radix_log_base)
+        return self.gen_ksk(key_out, key_perm, lvl, radix_log_base, n_threads)
 
     def gen_ksk_automorphism_set(
         self,
@@ -383,11 +421,22 @@ class MLWE_Scheme:
         generators: list[int],
         lvl: int | None = None,
         radix_log_base: int | None = None,
+        n_threads: int = 0,
     ):
-        return [
-            self.gen_ksk_automorphism(key_out, key_in, g, lvl, radix_log_base)
-            for g in generators
+        """One automorphism key per generator, shaped as
+        :meth:`gen_ksk_automorphism` returns it. The keys of a level are drawn
+        in one batch, on up to ``n_threads`` threads (0: the library limit),
+        which is what lets many small keys use the threads."""
+        key_perms = [[p.automorphism(g) for p in key_in.poly] for g in generators]
+        if lvl is not None:
+            return self._gen_ksk_sets(
+                key_out, key_perms, lvl, radix_log_base, n_threads
+            )
+        leveled = [
+            self._gen_ksk_sets(key_out, key_perms, lvl, radix_log_base, n_threads)
+            for lvl in range(len(self.rings))
         ]
+        return [[sets[i] for sets in leveled] for i in range(len(generators))]
 
     def keyswitch(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
@@ -404,6 +453,7 @@ class MLWE_Scheme:
         gens: list[int] | None = None,
         lvl: int | None = None,
         radix_log_base: int | None = None,
+        n_threads: int = 0,
     ):
         log_N = int(math.log2(self.N))
         gens = (
@@ -411,10 +461,9 @@ class MLWE_Scheme:
             if gens is not None
             else [(1 << (log_N - i + 1)) + 1 for i in range(1, log_N + 1)]
         )
-        result = [
-            self.gen_ksk_automorphism(key_out, key_in, g, lvl, radix_log_base)
-            for g in gens
-        ]
+        result = self.gen_ksk_automorphism_set(
+            key_out, key_in, gens, lvl, radix_log_base, n_threads
+        )
         # The lvl argument decides which shape gen_ksk_automorphism returned.
         if lvl is not None:
             return MLWE_Set().flatten_array(cast("list[MLWE_Set]", result))
@@ -643,6 +692,81 @@ class MLWE_Scheme:
             lib_rlwe.lib.mlwe_RNSc_sample(out.obj, key.obj, msg.as_element())
             out.seed = None
         out.repr = repr.coeff
+        return out
+
+    def sample_scaled(
+        self,
+        msgs: Sequence[RNSPolynomial],
+        scalars: Sequence[Sequence[int]],
+        key: MLWE_Key,
+        lvl: int | None = None,
+        n_threads: int = 0,
+    ) -> list[MLWE]:
+        """Fresh samples of every message times every scalar, message-major.
+
+        Entry ``i * len(scalars) + k`` encrypts ``msgs[i] * scalars[k]`` under
+        ``key`` and in its ring, where the messages must live. A scalar is one
+        integer per prime of that ring, in ``ring.primes`` order, as
+        :meth:`gadget_scalars` gives them. Every key here, MGSW, and
+        bootstrapping key is a few polynomials times every gadget element, so
+        this is where key generation samples.
+
+        The samples are drawn on up to ``n_threads`` threads (0: the library
+        limit, see `vfhe.engine.set_num_threads`). Each is a function of a mask
+        seed, kept as `MLWE.seed` as :meth:`sample` keeps it, and a secret noise
+        seed, all drawn in order on the calling thread, so the samples do not
+        depend on the thread count: under ``entropy.deterministic`` any count
+        gives the same keys. They come back in NTT form, where keys are used.
+        """
+        ring = key.ring
+        if ffi.cast("RNS_MLWE_Key", key.obj).r != self.r:
+            raise ValueError("the key is not of the scheme's rank")
+        for m in msgs:
+            if m.ring.mask != ring.mask or m.ring.base != ring.base:
+                raise ValueError("every message must live in the key's ring")
+        # The caller's polynomials stay as they are: one may be shared with
+        # another thread.
+        msgs = [m if m.repr == repr.ntt else m.copy() for m in msgs]
+        for m in msgs:
+            m.to_NTT()
+        elements = ffi.new("ArithElement[]", len(msgs))
+        for slot, m in zip(elements, msgs, strict=True):
+            slot.handle = m.obj
+            slot.domain = domain_of(m.repr)
+        rows = []
+        for scalar in scalars:
+            if len(scalar) != ring.ell:
+                raise ValueError(
+                    f"expected {ring.ell} values per scalar, got {len(scalar)}"
+                )
+            rows.append(
+                ring.scalar_array(
+                    [v % p for v, p in zip(scalar, ring.primes, strict=True)]
+                )
+            )
+        count = len(msgs) * len(rows)
+        handles = ffi.new("void*[]", count)
+        seeds = ffi.new("uint8_t[]", SEED_BYTES * count)
+        lib_rlwe.lib.mlwe_RNS_sample_scaled_batch(
+            handles,
+            ring.arith_ring,
+            key.obj,
+            elements,
+            len(msgs),
+            ffi.new("uint64_t*[]", rows),
+            len(rows),
+            seeds,
+            n_threads,
+        )
+        if lvl is None:
+            lvl = self.level_of_ring(ring, strict=False)
+        seed_bytes = ffi.buffer(seeds)[:]
+        out = []
+        for i, handle in enumerate(handles):
+            c = MLWE(self, lvl=lvl, ring=ring, obj=handle)
+            c.repr = repr.ntt
+            c.seed = seed_bytes[i * SEED_BYTES : (i + 1) * SEED_BYTES]
+            out.append(c)
         return out
 
     def linear_decrypt(
@@ -1002,6 +1126,7 @@ class MLWE:
         lvl: int | None = None,
         ring: RNSRing | None = None,
         rank: int | None = None,
+        obj=None,
     ) -> None:
         if lvl is None:
             lvl = scheme.level_of_ring(ring, strict=False) if ring is not None else 0
@@ -1010,9 +1135,22 @@ class MLWE:
         # Rank defaults to the scheme's module rank; an extended (non-relinearized)
         # product carries the larger MLWE_Scheme.extended_rank.
         self.r = rank if rank is not None else scheme.r
-        self.obj = lib_rlwe.lib.mlwe_alloc_RNS_sample(
-            ring.N, self.r, ring.mask, ring.base
-        )
+        if obj is None:
+            obj = lib_rlwe.lib.mlwe_alloc_RNS_sample(
+                ring.N, self.r, ring.mask, ring.base
+            )
+        else:
+            # An adopted native sample, owned by this object from here on. Its
+            # primes identify its ring, as the mask does everywhere in RNS.
+            struct = ffi.cast("MLWE", obj)
+            body = ffi.cast("RNS_Polynomial", struct.b.handle)
+            if (
+                struct.r != self.r
+                or body.rns_mask != ring.mask
+                or body.base != ring.base
+            ):
+                raise ValueError("the sample does not live over the ring at this rank")
+        self.obj = obj
         self.ring = ring
         self.scheme = scheme
         self.repr = repr.empty  # also stamps the C-side domains, see the setter
