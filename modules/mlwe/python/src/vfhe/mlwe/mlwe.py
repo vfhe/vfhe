@@ -922,12 +922,17 @@ class MLWE_Set:
         ``radix_log_base`` is the gadget the arrays were generated against (see
         :meth:`MLWE_Scheme.gadget_scalars`); it travels with the key, since a
         key switch has to decompose against the same one.
+
+        The key uses the samples in place, converted to the NTT domain: the
+        set keeps them in `mlwe`, and they must not be modified afterwards.
         """
         if mlwe is None:
             return
         self.mlwe = mlwe
         self.dim = 2
         result_obj = ffi.new("void*[]", len(mlwe))
+        # The native key borrows these arrays; they live as long as the set.
+        self._arrays = []
         for j in range(len(mlwe)):
             # A ``None`` component is a NULL key-switch key: the matching
             # ciphertext component keeps its key and is copied through (used by
@@ -936,17 +941,23 @@ class MLWE_Set:
             if component is None:
                 result_obj[j] = ffi.NULL
                 continue
-            ell = len(component)
             for x in component:
                 x.to_NTT()
-            tmp = ffi.new("void*[]", [i.obj for i in component])
-            result_obj[j] = lib_rlwe.lib.mlwe_create_copy_array(tmp, ell)
+            array = ffi.new("void*[]", [i.obj for i in component])
+            self._arrays.append(array)
+            result_obj[j] = array
         # The key object copies the component-pointer array and carries the
         # accumulator the key switch computes in, allocated in the key's ring.
         self.log_base = radix_log_base or 0
         self.obj = lib_rlwe.lib.mlwe_new_RNS_ks_key(
             result_obj, len(mlwe), self.log_base
         )
+
+    def __del__(self) -> None:
+        # Only a set built from samples owns a native key; a flattened one
+        # holds a plain array of its children's keys.
+        if getattr(self, "dim", None) == 2 and getattr(self, "obj", None):
+            lib_rlwe.lib.free_mlwe_RNS_ks_key(self.obj)
 
     # Turn an array of n-D MLWE_Set into a (n+1)-D MLWE_set
     @staticmethod

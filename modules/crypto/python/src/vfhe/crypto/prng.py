@@ -37,10 +37,6 @@ if TYPE_CHECKING:
 # What `generate_rnd_seed` fills, in 64-bit words.
 SEED_WORDS = 4
 
-# The AES keystream's step, in bytes: the smallest amount `get_rnd_from_hash`
-# is defined for.
-_KEYSTREAM_STEP = 256
-
 
 class EntropyPRNG:
     """The entropy-backed stream: bytes no one can predict.
@@ -104,16 +100,12 @@ class EntropyPRNG:
     def bytes_from_fresh_seed(self, amount: int) -> bytes:
         """`amount` bytes expanded from one freshly drawn seed, bypassing the
         pool. Every call pays for a seed draw, which dominates small requests.
-
-        The AES keystream behind this on tuned x86-64 produces whole 256-byte
-        steps, so a shorter request draws one step and keeps its prefix.
         """
         if amount < 1:
             raise ValueError(f"amount must be at least 1, got {amount}")
-        width = max(amount, _KEYSTREAM_STEP)
-        out = ffi.new("uint8_t[]", width)
-        lib.get_rnd_from_hash(width, out)
-        return bytes(out)[:amount]
+        out = ffi.new("uint8_t[]", amount)
+        lib.get_rnd_from_hash(amount, out)
+        return bytes(out)
 
     def bytes_from_pool(self, amount: int) -> bytes:
         """`amount` bytes from the 1 KiB pool, refilling it when what remains

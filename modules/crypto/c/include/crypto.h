@@ -74,6 +74,13 @@ extern "C"
     // Not thread-safe.
     void generate_random_bytes(uint64_t amount, uint8_t *pointer);
 
+    // Writes `count` values exactly uniform in [0, bound) to out[0..count),
+    // from the entropy stream: each is a fresh 64-bit word masked to the bits
+    // of bound - 1, redrawn while it is not below `bound`. The redraws reveal
+    // only how many draws were discarded. `bound` must be at least 1. Not
+    // thread-safe.
+    void generate_uniform_below(uint64_t *out, uint64_t count, uint64_t bound);
+
     // Returns one sample from a zero-mean Gaussian with standard deviation
     // `sigma`, by Box-Muller over generate_random_bytes (normal.c). Consumes 16
     // random bytes per call, keeping one of the transform's two outputs and

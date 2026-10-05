@@ -133,6 +133,25 @@ void generate_random_bytes(uint64_t amount, uint8_t *pointer)
         get_rnd_from_hash(amount, pointer);
 }
 
+void generate_uniform_below(uint64_t *out, uint64_t count, uint64_t bound)
+{
+    assert(bound >= 1);
+    uint64_t mask = bound - 1;
+    for (unsigned s = 1; s < 64; s <<= 1)
+        mask |= mask >> s;
+    generate_random_bytes(count * sizeof(uint64_t), (uint8_t *)out);
+    for (uint64_t i = 0; i < count; i++)
+    {
+        uint64_t v = out[i] & mask;
+        while (v >= bound)
+        {
+            generate_random_bytes(sizeof(v), (uint8_t *)&v);
+            v &= mask;
+        }
+        out[i] = v;
+    }
+}
+
 // Test-only: pin the PRNG to a reproducible stream (see the note above). The
 // setter also discards any buffered entropy so the next draw starts from the
 // seed; clearing returns to hardware entropy.

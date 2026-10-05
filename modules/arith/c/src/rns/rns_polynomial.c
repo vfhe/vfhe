@@ -394,12 +394,8 @@ void array_to_RNS(RNS_Polynomial out, uint64_t **in)
 
 void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
 {
-    // The sampler and the mod switch both work in 64 bits, so a narrow row is
-    // produced in a wide view and narrowed after.
-    /* The sampler wants 64 bits of entropy per coefficient and the mod switch
-       is defined on that, so a narrow row is produced wide and stored narrow
-       in one vectorized pass -- narrowing the sampler instead would change the
-       distribution. */
+    // The sampler writes 64-bit words, so a narrow row is drawn into a wide
+    // scratch row and narrowed after.
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
     for (size_t i = 0; i < out->base->l; i++)
     {
@@ -408,8 +404,7 @@ void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
             const uint64_t p = out->base->mods[i]->q;
             const bool narrow = rns_row_is_narrow(out->base, i);
             uint64_t *dst = narrow ? scratch : out->rows64[i];
-            generate_random_bytes(sizeof(uint64_t) * out->base->N, (uint8_t *)dst);
-            array_mod_switch_from_2k(dst, dst, p, p, out->base->N);
+            generate_uniform_below(dst, out->base->N, p);
             if (narrow)
                 mod_narrow_w32(out->rows32[i], scratch, out->base->N);
         }

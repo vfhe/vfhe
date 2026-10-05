@@ -12,9 +12,7 @@ extern "C"
 {
 #endif
 
-    // Index and modulus helpers
-    void array_reduce_mod_N(uint64_t *out, uint64_t *in, uint64_t size, uint64_t p);
-    void array_mod_switch_from_2k(uint64_t *out, uint64_t *in, uint64_t p, uint64_t q, uint64_t n);
+    // Index and conversion helpers
     uint64_t double2int(double x);
     uint32_t int_rev(uint32_t b);
     void bit_rev(uint64_t *out, uint64_t *in, uint64_t n, uint64_t log_n);

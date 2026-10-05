@@ -13,8 +13,7 @@ void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uin
     rnd_buffer = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * buffer_size);
     while (hw < h)
     {
-        generate_random_bytes(sizeof(uint64_t) * buffer_size, (uint8_t *)rnd_buffer);
-        array_mod_switch_from_2k(rnd_buffer, rnd_buffer, size, size, buffer_size);
+        generate_uniform_below(rnd_buffer, buffer_size, size);
         uint64_t i = 0;
         while (i < buffer_size && hw < h)
         {
@@ -151,10 +150,7 @@ void lwe_sample(LWE c, uint64_t *m, LWE_Key key)
     {
         const Modulus mod = lwe_limb_mod(key->base, key->mask, i);
         const uint64_t q = mod->q;
-        generate_random_bytes(key->n * sizeof(uint64_t), (uint8_t *)c->a[i]);
-        array_reduce_mod_N(c->a[i], c->a[i], key->n, q); // Fallback, could use modq
-        for (size_t j = 0; j < key->n; j++)
-            c->a[i][j] = modq(c->a[i][j], mod);
+        generate_uniform_below(c->a[i], key->n, q);
 
         uint64_t e = e_val < 0 ? negate_modq((uint64_t)(-e_val), q) : (uint64_t)e_val;
 
