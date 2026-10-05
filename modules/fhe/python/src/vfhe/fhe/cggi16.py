@@ -11,142 +11,59 @@ from vfhe.mlwe.lwe import LWE, LWE_Key, lib_lwe
 from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, lib_rlwe
 
-UNFOLDING_VARIANTS = ("bmmp18", "zyl17")
-# How a group's keys are combined: the C enum ZYL17_Combination, in order.
-KEY_COMBINATIONS = ("evaluation", "precomputed", "coefficient")
-# How one rotation uses several threads: the C enum CGGI16_Parallelism, in order.
-PARALLELISMS = ("pipeline", "data_parallel")
 
-
-def unfolded_group_sizes(n: int, unfolding: int) -> list[int]:
-    """The sizes of the groups ``n`` input coefficients split into."""
-    full, last = divmod(n, unfolding)
-    return [unfolding] * full + ([last] if last else [])
-
-
-def unfolded_key_count(n: int, unfolding: int, variant: str) -> int:
+def unfolded_key_count(n: int, unfolding: int) -> int:
     """MGSW keys in a bootstrapping key over ``n`` input coefficients.
 
-    One per bit pattern of each group of ``unfolding`` coefficients (the last
-    group is shorter when ``unfolding`` does not divide ``n``), less the
-    all-zero pattern for ``"bmmp18"``.
+    ``2^u - 1`` for each step of the rotation, which consumes ``u = unfolding``
+    coefficients (the last step fewer when ``unfolding`` does not divide ``n``).
     """
-    drop = 1 if variant == "bmmp18" else 0
-    return sum((1 << size) - drop for size in unfolded_group_sizes(n, unfolding))
+    full, last = divmod(n, unfolding)
+    return full * ((1 << unfolding) - 1) + ((1 << last) - 1 if last else 0)
 
 
 class CGGI16_Key:
-    """A bootstrapping key: its MGSW keys, group after group (see `CGGI16`)."""
+    """A bootstrapping key: its MGSW keys, step after step (see `CGGI16`)."""
 
     def __init__(self):
         self.bk: list[MGSW] = []
         self.b_prec = 0
         self.n = 0
         self.unfolding = 1
-        self.variant = "bmmp18"
-        self.combination = "evaluation"
-        self._handles = None  # (bk, combination, outer array, row arrays) for C
-        self._monomials = None
+        self._handles = None  # (bk, outer array, row arrays) passed to C
 
-    def _key_domains(self, combined_canonical: bool) -> list[bool]:
-        """Per key, whether the kernel reads it canonical (else in NTT form).
+    def native_handles(self):
+        """The key as the C kernel reads it, built once and kept while `bk` is.
 
-        Only the pipelined coefficient combination (``combined_canonical``)
-        reads keys canonical, and only those of combined groups: a
-        ``"bmmp18"`` group of one coefficient is used as is, by the external
-        product.
+        Moves every key to the NTT domain on the calling thread first.
         """
-        if not combined_canonical:
-            return [False] * len(self.bk)
-        drop = 1 if self.variant == "bmmp18" else 0
-        domains = []
-        for size in unfolded_group_sizes(self.n, self.unfolding):
-            combined = self.variant == "zyl17" or size > 1
-            domains += [combined] * ((1 << size) - drop)
-        return domains
-
-    def native_handles(self, parallelism: str = "pipeline"):
-        """The key as the C kernel reads it, kept while `bk` and its domains are.
-
-        Moves every key to the domain the rotation reads it in, on the
-        calling thread: canonical for the groups the pipelined
-        ``"coefficient"`` combination combines, the NTT domain otherwise.
-        """
-        canonical = self.combination == "coefficient" and parallelism == "pipeline"
-        cached = self._handles
-        if cached is None or cached[0] is not self.bk or cached[1] != canonical:
+        if self._handles is None or self._handles[0] is not self.bk:
             rows = []
-            for mgsw, canonical_key in zip(
-                self.bk, self._key_domains(canonical), strict=True
-            ):
-                if canonical_key:
-                    mgsw.to_coeff()
-                else:
-                    mgsw.to_NTT()
+            for mgsw in self.bk:
+                mgsw.to_NTT()
                 rows.append(ffi.new("void*[]", [c.obj for c in mgsw.obj]))
-            cached = (self.bk, canonical, ffi.new("void*[]", rows), rows)
-            self._handles = cached
-        return cached[2]
-
-    def monomial_table(self):
-        """The precomputed ``X^m`` table over the key's ring, built on first use.
-
-        ``N`` ring elements: the memory the ``"precomputed"`` combination
-        spends to avoid a transform per pattern. ``ffi.NULL`` for the other
-        combinations.
-        """
-        if self.combination != "precomputed" or not self.bk:
-            return ffi.NULL
-        if self._monomials is None:
-            ring = self.bk[0].scheme.ring
-            table = lib.zyl17_monomial_table_new(ring.arith_ring, 0)
-            self._monomials = ffi.gc(table, lib.zyl17_monomial_table_free)
-        return self._monomials
+            self._handles = (self.bk, ffi.new("void*[]", rows), rows)
+        return self._handles[1]
 
 
 class CGGI16:
     """The [CGGI16] functional bootstrap, with an optionally unfolded loop.
 
-    ``unfolding`` groups the input key's coefficients ``u`` at a time and
-    spends one external product per group instead of one per coefficient
-    [ZYL+17]. Each group's keys are MGSW encryptions of the indicators of
-    the bit patterns its coefficients can take, so the input key must be
-    binary. ``variant`` picks the key:
+    Each step of the blind rotation consumes ``unfolding`` (``u``) input
+    coefficients at the price of one gadget decomposition of the accumulator
+    [ZYL+17]. A step's keys are MGSW encryptions of the indicators of the
+    non-zero bit patterns its coefficients can take, the all-zero one left
+    out [BMMP18, Alg. 1], so the input key must be binary and the key grows
+    by ``(2^u - 1) / u``. ``unfolding=1`` is the plain [CGGI16] key, one
+    encryption of ``s_i`` per coefficient.
 
-    - ``"bmmp18"`` (default): the indicators sum to 1, so the all-zero one
-      is left out and the accumulator is added back instead [BMMP18,
-      Alg. 1]: ``2^u - 1`` keys per group. ``unfolding=1`` is the plain
-      [CGGI16] key, one encryption of ``s_i`` per coefficient.
-    - ``"zyl17"``: all ``2^u`` indicators [ZYL+17].
-
-    ``combination`` picks how a group's keys are combined; the result is the
-    same, the cost is not:
-
-    - ``"evaluation"`` (default): one forward transform per pattern, then a
-      pointwise multiply-accumulate into every row.
-    - ``"precomputed"``: the transforms of ``X^m`` come from a table of
-      ``N`` elements of the key's ring, built once per key -- no transform,
-      at that memory (``N^2`` words per prime).
-    - ``"coefficient"``: the keys are rotated and summed in the coefficient
-      domain and the sum is transformed once per row, so the transforms per
-      group do not grow with the number of patterns; it gains as ``u`` grows.
-
-    The key grows by ``(2^u - 1) / u`` (``"bmmp18"``) and each group builds
-    a combined key out of its ``2^u - 1`` (or ``2^u``) keys before the
-    external product. Single-threaded that is more work than it saves; the
-    gain is in the threads (``vfhe.engine.set_num_threads``), and
-    ``parallelism`` picks how one rotation uses them (same result either way):
-
-    - ``"pipeline"`` (default): the other threads combine the keys of the
-      next groups while one runs the chain of external products, which
-      stays sequential.
-    - ``"data_parallel"``: every thread works on every group -- digits,
-      products with each pattern's key, rescale -- with a barrier between
-      the steps; no combined key is formed, so ``combination`` only decides
-      how the factors are computed (``"precomputed"`` reads the table, the
-      others transform them).
-
-    `functional_bootstrap_batch` runs one rotation per thread instead.
+    `functional_bootstrap` runs one rotation on the library's threads
+    (``vfhe.engine.set_num_threads``), all of them on every step;
+    `functional_bootstrap_batch` runs one rotation per thread, for
+    throughput. Unfolding multiplies the work and the key traffic by
+    ``(2^u - 1) / u`` and divides the number of steps by ``u``, so it pays
+    only where the synchronization between steps dominates: many threads,
+    across sockets.
     """
 
     def __init__(
@@ -154,25 +71,13 @@ class CGGI16:
         scheme: MLWE_Scheme,
         gsw_ell: int | None = None,
         unfolding: int = 1,
-        variant: str = "bmmp18",
-        combination: str = "evaluation",
-        parallelism: str = "pipeline",
     ):
         if unfolding < 1:
             raise ValueError("unfolding must be at least 1")
-        if variant not in UNFOLDING_VARIANTS:
-            raise ValueError(f"variant must be one of {UNFOLDING_VARIANTS}")
-        if combination not in KEY_COMBINATIONS:
-            raise ValueError(f"combination must be one of {KEY_COMBINATIONS}")
-        if parallelism not in PARALLELISMS:
-            raise ValueError(f"parallelism must be one of {PARALLELISMS}")
         self.scheme = scheme
         self.mgsw_scheme = MGSW_Scheme(scheme, ell=gsw_ell)
         self.ring = scheme.ring
         self.unfolding = unfolding
-        self.variant = variant
-        self.combination = combination
-        self.parallelism = parallelism
 
     def _encrypt_constant(self, value: int, output_key: MLWE_Key) -> MGSW:
         poly = Polynomial(self.ring).from_array([value] + [0] * (self.ring.N - 1))
@@ -185,8 +90,6 @@ class CGGI16:
     ) -> CGGI16_Key:
         bk = CGGI16_Key()
         bk.unfolding = self.unfolding
-        bk.variant = self.variant
-        bk.combination = self.combination
         if isinstance(input_key, MLWE_Key):
             lwe_key = input_key.extract_lwe_key()
         else:
@@ -197,10 +100,9 @@ class CGGI16:
             raise ValueError("the blind rotation needs a binary input key")
         bk.n = lwe_key.n
 
-        first_pattern = 1 if self.variant == "bmmp18" else 0
         for first in range(0, lwe_key.n, self.unfolding):
             bits = s[first : first + self.unfolding]
-            for j in range(first_pattern, 1 << len(bits)):
+            for j in range(1, 1 << len(bits)):
                 indicator = math.prod(
                     b if (j >> t) & 1 else 1 - b for t, b in enumerate(bits)
                 )
@@ -226,9 +128,7 @@ class CGGI16:
         return to_2n(b), [to_2n(v) for v in a]
 
     def _check_key(self, bk: CGGI16_Key, n: int) -> None:
-        if bk.combination not in KEY_COMBINATIONS:
-            raise ValueError(f"combination must be one of {KEY_COMBINATIONS}")
-        if bk.n != n or len(bk.bk) != unfolded_key_count(n, bk.unfolding, bk.variant):
+        if bk.n != n or len(bk.bk) != unfolded_key_count(n, bk.unfolding):
             raise ValueError("the bootstrapping key does not match the input dimension")
 
     def _rotated_test_vector(self, tv: MLWE, b: int, out: MLWE | None = None) -> MLWE:
@@ -241,16 +141,11 @@ class CGGI16:
         out.repr = repr.coeff
         return out
 
-    def _kernel_arguments(self, bk: CGGI16_Key, parallelism: str = "pipeline") -> tuple:
-        """The key's arguments to the kernel; the batch runs every rotation
-        sequentially, which reads the key as the pipeline does."""
+    def _kernel_arguments(self, bk: CGGI16_Key) -> tuple:
         first = bk.bk[0]
         return (
-            bk.native_handles(parallelism),
+            bk.native_handles(),
             bk.unfolding,
-            int(bk.variant == "zyl17"),
-            KEY_COMBINATIONS.index(bk.combination),
-            bk.monomial_table(),
             first.gadget_size,
             first.scheme.radix_log_base or 0,
         )
@@ -262,14 +157,7 @@ class CGGI16:
         b, a = self._rotation_exponents(rlwe_in, torus_base)
         self._rotated_test_vector(tv, b, out=out)
         a_arr = ffi.new("uint64_t[]", a)
-        lib.cggi16_blind_rotate(
-            out.obj,
-            a_arr,
-            len(a),
-            *self._kernel_arguments(bk, self.parallelism),
-            PARALLELISMS.index(self.parallelism),
-            0,
-        )
+        lib.cggi16_blind_rotate(out.obj, a_arr, len(a), *self._kernel_arguments(bk), 0)
 
     def LUT_packing(self, lut: list[int], size: int, LUT_prec: int):
         rlwe_tv = MLWE(self.scheme)

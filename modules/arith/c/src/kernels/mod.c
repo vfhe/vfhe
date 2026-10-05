@@ -135,10 +135,12 @@ uint64_t mul_modq(uint64_t a, uint64_t b, Modulus mod)
     return modq_wide((uint64_t)(prod >> 64), (uint64_t)prod, mod);
 }
 
+/* The element-wise dispatchers. Each runs the vector family the modulus selects on the longest
+   prefix that is a whole number of MOD_MIN_VECTOR_LEN lanes, and the scalar body on the rest --
+   all of it, for an array shorter than that. */
+
 void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_mul_gen(out + head, in1 + head, in2 + head, n - head, mod);
@@ -161,8 +163,6 @@ void mod_eltwise_mul(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Mo
 
 void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_mul_addto_gen(out + head, in1 + head, in2 + head, n - head, mod);
@@ -185,8 +185,6 @@ void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
 
 void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_mul_subto_gen(out + head, in1 + head, in2 + head, n - head, mod);
@@ -209,8 +207,6 @@ void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
 
 void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_scale_gen(out + head, in + head, scale, n - head, mod);
@@ -233,8 +229,6 @@ void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, 
 
 void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_fma_gen(out + head, in + head, scale, n - head, mod);
@@ -257,8 +251,6 @@ void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Mo
 
 void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_add_scalar_gen(out + head, in + head, scalar, n - head, mod);
@@ -281,8 +273,6 @@ void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64
 
 void mod_eltwise_sub_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_sub_scalar_gen(out + head, in + head, scalar, n - head, mod);
@@ -305,8 +295,6 @@ void mod_eltwise_sub_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64
 
 void mod_eltwise_negate(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_negate_gen(out + head, in + head, n - head, mod);
@@ -329,8 +317,6 @@ void mod_eltwise_negate(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
 
 void mod_eltwise_add(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_add_gen(out + head, in1 + head, in2 + head, n - head, mod);
@@ -353,8 +339,6 @@ void mod_eltwise_add(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Mo
 
 void mod_eltwise_sub(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_sub_gen(out + head, in1 + head, in2 + head, n - head, mod);
@@ -377,8 +361,6 @@ void mod_eltwise_sub(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Mo
 
 void mod_eltwise_reduce(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_reduce_gen(out + head, in + head, n - head, mod);
@@ -401,8 +383,6 @@ void mod_eltwise_reduce(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
 
 void mod_eltwise_reduce_signed(uint64_t *out, int64_t *in, uint64_t n, Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_eltwise_reduce_signed_gen(out + head, in + head, n - head, mod);
@@ -426,8 +406,6 @@ void mod_eltwise_reduce_signed(uint64_t *out, int64_t *in, uint64_t n, Modulus m
 void mod_reduce_array_mp(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
                          Modulus mod)
 {
-    // The vector bodies take whole groups of MOD_MIN_VECTOR_LEN; the scalar
-    // body finishes the rest (all of it, for a short array).
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
     if (head < n)
         mod_reduce_array_mp_gen(out + head, in_high + head, in_low + head, n - head, mod);

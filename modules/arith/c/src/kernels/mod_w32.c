@@ -464,7 +464,7 @@ static void w32_reduce_vec(uint32_t *out, const uint32_t *in, uint64_t n, Modulu
 #endif // VFHE_HAVE_AVX512IFMA
 
 /* --- entry points: the vector body on the longest prefix of whole lane groups, the scalar body
-   on what is left (all of it below one group, and everything without AVX-512). --- */
+   on what is left (all of it below one lane group, and everything without AVX-512). --- */
 
 #if VFHE_HAVE_AVX512IFMA
 #define W32_HEAD(n, lanes) ((n) - (n) % (lanes))

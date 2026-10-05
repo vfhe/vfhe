@@ -14,18 +14,15 @@ FHE schemes built on `vfhe.mlwe`.
   encrypt/decrypt, slot rotation, rescale, and ciphertext-ciphertext /
   ciphertext-plaintext multiplication with relinearization.
 - `cggi16.py`: `CGGI16`: LUT packing, blind rotation, and the functional
-  bootstrap with LWE extraction, single or batched. The blind rotation can be
-  unfolded over groups of `unfolding` key coefficients, one external product
-  per group [ZYL+17], with the 2^u - 1 key of [BMMP18] (default) or the 2^u
-  key of [ZYL+17]; it needs a binary input key.
+  bootstrap with LWE extraction, single (on the library's threads) or batched
+  (one per thread). The blind rotation can be unfolded, each step consuming
+  `unfolding` key coefficients [ZYL+17] with 2^u - 1 keys [BMMP18]; it needs a
+  binary input key.
 - `gp25.py`: `GP25`: the sparse-amortized bootstrap (sparse-ternary key,
   blind rotate over the `gp25_*` kernels, packing / trace repacking).
 
 `c/src/` holds `bfv.c` (an empty placeholder: the scheme needs no kernels of
-its own), the CGGI16 blind rotation (prototyped in `c/include/fhe.h`:
-`cggi16.c` runs the loop sequentially, pipelined across threads, or as a batch
-over ciphertexts, `cggi16_team.c` data-parallel across threads, and
-`zyl17.c` holds the unfolding's groups and key combinations) and the GP25
-bootstrap kernels (`gp25.c`);
+its own), the CGGI16 blind rotation (`cggi16.c`, prototyped in
+`c/include/fhe.h`) and the GP25 bootstrap kernels (`gp25.c`);
 `python/cdef/fhe.cdef` declares the CGGI16 and GP25 ABI (BFV and CKKS reuse
 the arith + mlwe surfaces).

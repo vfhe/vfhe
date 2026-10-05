@@ -322,12 +322,13 @@ def test_lwe_dimension_need_not_fill_a_vector(n):
 
     The element-wise kernels work on whole vector groups and leave the rest
     to a scalar body; a dimension that is not a multiple of the group is
-    where a missing tail shows, as a phase off by the last few terms.
+    where a missing tail shows, as a linear decryption off by the last few
+    terms.
     """
     ring = Ring(N, prime_size=[30, 45], split_degree=1)
     rng = random.Random(n)  # noqa: S311 - test data, not a key
     s = [rng.randint(0, 1) for _ in range(n)]
-    # noiseless, so the phase is m exactly
+    # noiseless, so the linear decryption is m exactly
     key = LWE_Key(ring, key=s, n=n, err_sigma=0.0)
     q = ring.q_l
     m = q // 3
@@ -335,8 +336,8 @@ def test_lwe_dimension_need_not_fill_a_vector(n):
     assert sample.linear_decrypt(key, recompose=True) == m
     b = crt(sample.get_b(), ring.primes)
     a = sample.get_a()
-    phase = b - sum(crt([limb[i] for limb in a], ring.primes) * s[i] for i in range(n))
-    assert phase % q == m
+    linear = b - sum(crt([limb[i] for limb in a], ring.primes) * s[i] for i in range(n))
+    assert linear % q == m
 
 
 def test_lwe_key_encrypts_with_its_noise_parameter_only():

@@ -89,8 +89,6 @@ class CGGI16KeyCodec(Codec):
             "b_prec": obj.b_prec,
             "n": obj.n,
             "unfolding": obj.unfolding,
-            "variant": obj.variant,
-            "combination": obj.combination,
         }
         return Encoded(meta, children=[obj.bk])
 
@@ -100,11 +98,9 @@ class CGGI16KeyCodec(Codec):
         out = CGGI16_Key()
         (out.bk,) = children
         out.b_prec = meta["b_prec"]
-        # A key written before unfolding existed has one key per coefficient.
+        # A record without `n` and `unfolding` holds one key per coefficient.
         out.n = meta.get("n", len(out.bk))
         out.unfolding = meta.get("unfolding", 1)
-        out.variant = meta.get("variant", "bmmp18")
-        out.combination = meta.get("combination", "evaluation")
         return out
 
 

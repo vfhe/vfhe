@@ -151,12 +151,7 @@ def test_cggi16_bootstrap_key():
     data = s.dumps(bk)
     got = s.loads(data, schemes=[out_scheme, cggi16.mgsw_scheme])
     assert got.b_prec == 5 and len(got.bk) == len(bk.bk)
-    assert (got.n, got.unfolding, got.variant, got.combination) == (
-        256,
-        1,
-        "bmmp18",
-        "evaluation",
-    )
+    assert (got.n, got.unfolding) == (256, 1)
     assert all(g.scheme is cggi16.mgsw_scheme for g in got.bk)
     for g, o in zip(got.bk, bk.bk, strict=True):
         assert all(_same(a, b) for a, b in zip(g.obj, o.obj, strict=True))
@@ -165,15 +160,9 @@ def test_cggi16_bootstrap_key():
 
 def test_cggi16_unfolded_bootstrap_key_layout():
     bk = CGGI16_Key()
-    bk.n, bk.unfolding, bk.variant, bk.combination = 7, 3, "zyl17", "coefficient"
+    bk.n, bk.unfolding = 7, 3
     got = Serializer().loads(Serializer().dumps(bk))
-    assert (got.n, got.unfolding, got.variant, got.combination, got.bk) == (
-        7,
-        3,
-        "zyl17",
-        "coefficient",
-        [],
-    )
+    assert (got.n, got.unfolding, got.bk) == (7, 3, [])
 
 
 def test_gp25_sab_key():

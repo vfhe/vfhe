@@ -1,289 +1,388 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "fhe.h"
-#include "cggi16_team.h"
-#include "zyl17.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <util.h>
-
-static void rotation_init(UnfoldedRotation *R, RNSc_MLWE acc, const uint64_t *a, uint64_t n,
-                          RNS_MLWE *const *bk, uint64_t unfolding, int all_patterns,
-                          ZYL17_Combination combination, ZYL17_MonomialTable monomials,
-                          uint64_t ell, uint64_t log_base)
-{
-    R->a = a;
-    R->n = n;
-    R->unfolding = unfolding;
-    R->groups = (n + unfolding - 1) / unfolding;
-    R->keys_per_group = (1ULL << unfolding) - (all_patterns ? 0 : 1);
-    R->two_n = 2 * acc->ring->N;
-    R->bk = bk;
-    R->all_patterns = all_patterns;
-    R->combination = combination;
-    R->monomials = monomials;
-    R->ell = ell;
-    R->log_base = log_base;
-    R->r = acc->r;
-    R->key_ring = n ? bk[0][0]->ring : acc->ring;
-}
-
-// The accumulator and its two scratch samples; `cur` holds the value and may
-// be either of the caller's sample and `spare` after a step.
-typedef struct
-{
-    RNSc_MLWE caller, cur, spare, rotated;
-} Accumulator;
-
-static void accumulator_init(Accumulator *A, RNSc_MLWE acc)
-{
-    A->caller = A->cur = acc;
-    A->spare = mlwe_alloc_sample(acc->ring, acc->r);
-    A->rotated = mlwe_alloc_sample(acc->ring, acc->r);
-}
-
-static void accumulator_finish(Accumulator *A)
-{
-    if (A->cur != A->caller)
-    {
-        mlwe_copy_RNS_sample(A->caller, A->cur);
-        free_mlwe_RNS_sample(A->cur);
-    }
-    else
-        free_mlwe_RNS_sample(A->spare);
-    free_mlwe_RNS_sample(A->rotated);
-}
-
-static void apply_group(const UnfoldedRotation *R, uint64_t g, const CombinedKey *ck,
-                        Accumulator *A)
-{
-    if (zyl17_group_is_combined(R, g))
-    {
-        if (ck->zero)
-            return;
-        mgsw_external_product_canonical(A->spare, ck->rows, A->cur, R->ell, R->log_base);
-    }
-    else
-    {
-        const uint64_t e = R->a[g * R->unfolding] % R->two_n;
-        if (e == 0)
-            return;
-        mlwe_RNSc_mul_by_xai_minus1(A->rotated, A->cur, e);
-        mgsw_external_product_canonical(A->spare, R->bk[g * R->keys_per_group], A->rotated, R->ell,
-                                        R->log_base);
-    }
-    if (!R->all_patterns)
-        mlwe_addto_RNSc_sample(A->spare, A->cur);
-    RNSc_MLWE t = A->cur;
-    A->cur = A->spare;
-    A->spare = t;
-}
-
-static void rotate_sequential(const UnfoldedRotation *R, RNSc_MLWE acc)
-{
-    const int combine = zyl17_needs_combination(R);
-    CombinedKey ck = {0};
-    CombineScratch s = {0};
-    if (combine)
-    {
-        zyl17_combined_key_init(&ck, R);
-        zyl17_scratch_init(&s, R);
-    }
-    Accumulator A;
-    accumulator_init(&A, acc);
-    for (uint64_t g = 0; g < R->groups; g++)
-    {
-        zyl17_combine_group(R, g, &ck, &s);
-        apply_group(R, g, &ck, &A);
-    }
-    accumulator_finish(&A);
-    if (combine)
-    {
-        zyl17_combined_key_free(&ck, R);
-        zyl17_scratch_free(&s, R);
-    }
-}
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#define CPU_RELAX() _mm_pause()
+#else
+#define CPU_RELAX() ((void)0)
+#endif
 
 /* ------------------------------------------------------------------------------------------------
- * The pipeline. Item 0 of the parallel loop runs the external products in group order; every
- * other item claims the next unbuilt group once its slot g % slots is free -- the external product
- * of the group that last used it has finished -- and combines its key there. When the next group
- * has not been claimed yet, item 0 claims and combines it itself, so it waits only on a group a
- * running helper is combining, and a helper waits only on item 0's progress: no thread count,
- * including a loop that runs its items one after the other, can deadlock it.
+ * The blind rotation is a sequence of steps, one per `unfolding` mask coefficients. A step adds
+ * to the accumulator one term per bit pattern j of its key bits [BMMP18, Alg. 1]:
  *
- * A waiting thread sleeps rather than spins (a spinning helper on a sibling hardware thread slows
- * the external products down), and each finished group wakes one helper, since it frees one slot.
+ *   acc <- acc + sum_j (X^e_j - 1) * (sum_t D_t (.) BK_j[t]),   D_t the gadget digits of acc,
+ *
+ * where t runs over the (r + 1) * ell rows of an MGSW key. Each term is the inner product of the
+ * digits with that pattern's key, multiplied by its factor X^e_j - 1 afterwards, so the digits
+ * are computed once per step and every key is read once. A step over a single coefficient
+ * decomposes (X^a - 1) * acc instead and has no factor: the [CGGI16] step. Terms with e_j = 0
+ * vanish, and so do steps where every term does.
+ *
+ * Each step has three stages, every one a set of independent tasks:
+ *
+ *   0  decomposition:  the digits D_t, and the factors X^e_j - 1 in the mul domain;
+ *   1  inner products: for each term j, component i of the accumulator and chunk k of the
+ *                      digits, sum over t in the chunk of D_t (.) BK_j[t].component(i);
+ *   2  update:         component i of acc plus sum_j (X^e_j - 1) * sum_k (the chunks), brought
+ *                      back to the canonical domain and rescaled to the accumulator's ring.
+ *
+ * One vfhe_parallel_for runs the whole rotation, every worker following all the stages: it takes
+ * tasks of the current stage until none is left, the worker finishing the last one opens the next
+ * stage, and the others wait for that (spinning briefly, then sleeping). A worker only waits for
+ * tasks another running worker has taken, so the rotation completes whatever the number of
+ * threads -- including when the loop runs its items one after the other, and item 0 does it all.
  * ------------------------------------------------------------------------------------------------
  */
+
+// How long a worker spins on the stage counter before sleeping.
+#define WAIT_SPINS 4096
+
+// The terms one step adds.
 typedef struct
 {
-    const UnfoldedRotation *R;
+    uint64_t terms;
+    uint64_t *key;      // index in bk of each term's key
+    uint64_t *exponent; // its e_j
+    int single;         // a step over one coefficient: decompose (X^a - 1) * acc
+} Step;
+
+typedef struct
+{
     RNSc_MLWE acc;
-    uint64_t slots;
-    CombinedKey *slot;
-    atomic_uint_fast64_t *slot_group; // g + 1 once slot g % slots holds group g
+    ArithRing ring, key_ring; // the accumulator's, and the keys'
+    RNS_MLWE *const *bk;
+    uint64_t r, ell, log_base;
+    uint64_t components; // r + 1
+    uint64_t digits;     // components * ell
+    uint64_t chunks;     // the digit sum of an inner product is split into this many tasks
+    uint64_t max_terms;
+
+    Step *step;
+    uint64_t steps;
+    ArithElement one;            // canonical 1 over the key's ring
+    ArithElement *digit;         // [digits]
+    ArithElement *factor;        // [max_terms]
+    ArithElement *inner_product; // [max_terms][components][chunks]
+
+    uint64_t stages; // 3 per step
+    uint64_t *tasks;
+    atomic_uint_fast64_t *taken, *done; // per stage
+    atomic_uint_fast64_t stage;         // the stage open to workers
     pthread_mutex_t lock;
-    pthread_cond_t room;  // a slot was freed
-    pthread_cond_t ready; // a slot was filled
-    uint64_t next_claim;  // first group no thread has claimed, under `lock`
-    uint64_t consumed;    // groups whose external product is done, under `lock`
-} Pipeline;
+    pthread_cond_t stage_opened;
+} Rotation;
 
-static int slot_holds(Pipeline *P, uint64_t g)
+static ArithElement *component(RNS_MLWE c, uint64_t i, uint64_t r)
 {
-    return atomic_load_explicit(&P->slot_group[g % P->slots], memory_order_acquire) == g + 1;
+    return i < r ? &c->a[i] : &c->b;
 }
 
-// The next group for a helper, once its slot is free; `groups` when none is left.
-static uint64_t claim_for_helper(Pipeline *P)
+static ArithElement *inner_product_at(Rotation *R, uint64_t j, uint64_t i, uint64_t k)
 {
-    const uint64_t groups = P->R->groups;
-    pthread_mutex_lock(&P->lock);
-    while (P->next_claim < groups && P->next_claim >= P->consumed + P->slots)
-        pthread_cond_wait(&P->room, &P->lock);
-    const uint64_t g = P->next_claim < groups ? P->next_claim++ : groups;
-    pthread_mutex_unlock(&P->lock);
-    return g;
+    return &R->inner_product[(j * R->components + i) * R->chunks + k];
 }
 
-static void pipeline_combine(Pipeline *P, CombineScratch *s)
+// Step s covers mask coefficients s*unfolding onwards, the last step fewer when `unfolding` does
+// not divide n; its keys are those of patterns j = 1 .. 2^size - 1, in that order.
+static void prepare_steps(Rotation *R, const uint64_t *a, uint64_t n, uint64_t unfolding)
 {
-    const UnfoldedRotation *R = P->R;
+    const uint64_t two_n = 2 * R->ring->N, count = (n + unfolding - 1) / unfolding;
+    R->step = (Step *)safe_malloc(count * sizeof(Step));
+    R->steps = 0;
+    R->max_terms = 1;
+    uint64_t first_key = 0;
+    for (uint64_t s = 0; s < count; s++)
+    {
+        const uint64_t first = s * unfolding;
+        const uint64_t size = n - first < unfolding ? n - first : unfolding;
+        const uint64_t patterns = 1ULL << size;
+        Step *S = &R->step[R->steps];
+        S->terms = 0;
+        S->single = size == 1;
+        S->key = (uint64_t *)safe_malloc(patterns * sizeof(uint64_t));
+        S->exponent = (uint64_t *)safe_malloc(patterns * sizeof(uint64_t));
+        for (uint64_t j = 1; j < patterns; j++)
+        {
+            uint64_t e = 0;
+            for (uint64_t t = 0; t < size; t++)
+                if ((j >> t) & 1)
+                    e += a[first + t];
+            e %= two_n;
+            if (e == 0)
+                continue;
+            S->key[S->terms] = first_key + j - 1;
+            S->exponent[S->terms] = e;
+            S->terms++;
+        }
+        first_key += patterns - 1;
+        if (S->terms == 0)
+        {
+            free(S->key);
+            free(S->exponent);
+            continue;
+        }
+        if (S->terms > R->max_terms)
+            R->max_terms = S->terms;
+        R->steps++;
+    }
+}
+
+static uint64_t stage_tasks(const Rotation *R, uint64_t stage)
+{
+    const Step *S = &R->step[stage / 3];
+    switch (stage % 3)
+    {
+    case 0:
+        return R->digits + (S->single ? 0 : S->terms);
+    case 1:
+        return S->terms * R->components * R->chunks;
+    default:
+        return R->components;
+    }
+}
+
+// Task t of the decomposition: digit t, or for t past the digits a factor. `rotated` is the
+// worker's scratch element over the accumulator's ring.
+static void decompose_accumulator(Rotation *R, const Step *S, uint64_t t, ArithElement *rotated)
+{
+    if (t < R->digits)
+    {
+        const uint64_t c = t / R->ell, d = t % R->ell;
+        const ArithElement *source = component(R->acc, c, R->r);
+        if (S->single)
+        {
+            arith_mul_by_monomial(R->ring, rotated, source, S->exponent[0], 1);
+            source = rotated;
+        }
+        gadget_decompose_digit(&R->digit[t], R->bk[0], source, d, R->log_base);
+        return;
+    }
+    const uint64_t j = t - R->digits;
+    arith_mul_by_monomial(R->key_ring, &R->factor[j], &R->one, S->exponent[j], 1);
+    arith_to_mul(R->key_ring, &R->factor[j]);
+}
+
+static void compute_inner_product(Rotation *R, const Step *S, uint64_t t)
+{
+    const uint64_t k = t % R->chunks, i = (t / R->chunks) % R->components;
+    const uint64_t j = t / (R->chunks * R->components);
+    const uint64_t from = k * R->digits / R->chunks, to = (k + 1) * R->digits / R->chunks;
+    RNS_MLWE *key = R->bk[S->key[j]];
+    ArithElement *out = inner_product_at(R, j, i, k);
+    for (uint64_t d = from; d < to; d++)
+    {
+        const ArithElement *row = component(key[d], i, R->r);
+        if (d == from)
+            arith_mul(R->key_ring, out, &R->digit[d], row);
+        else
+            arith_mul_addto(R->key_ring, out, &R->digit[d], row);
+    }
+}
+
+static void update_accumulator(Rotation *R, const Step *S, uint64_t i)
+{
+    ArithRing ring = R->key_ring;
+    ArithElement sum;
+    arith_new(ring, &sum);
+    arith_zero_in(ring, &sum, arith_mul_domain(ring));
+    for (uint64_t j = 0; j < S->terms; j++)
+    {
+        ArithElement *y = inner_product_at(R, j, i, 0);
+        for (uint64_t k = 1; k < R->chunks; k++)
+            arith_add(ring, y, y, inner_product_at(R, j, i, k));
+        if (S->single)
+            arith_add(ring, &sum, &sum, y);
+        else
+            arith_mul_addto(ring, &sum, y, &R->factor[j]);
+    }
+    arith_to_canonical(ring, &sum);
+    arith_round_division(ring, &sum, R->ring);
+    ArithElement *acc = component(R->acc, i, R->r);
+    arith_add(R->ring, acc, acc, &sum);
+    arith_free(ring, &sum);
+}
+
+static void run_task(Rotation *R, uint64_t stage, uint64_t t, ArithElement *rotated)
+{
+    const Step *S = &R->step[stage / 3];
+    switch (stage % 3)
+    {
+    case 0:
+        decompose_accumulator(R, S, t, rotated);
+        break;
+    case 1:
+        compute_inner_product(R, S, t);
+        break;
+    default:
+        update_accumulator(R, S, t);
+        break;
+    }
+}
+
+static void open_stage(Rotation *R, uint64_t stage)
+{
+    atomic_store(&R->stage, stage);
+    pthread_mutex_lock(&R->lock);
+    pthread_cond_broadcast(&R->stage_opened);
+    pthread_mutex_unlock(&R->lock);
+}
+
+static void wait_for_stage(Rotation *R, uint64_t stage)
+{
+    for (int spin = 0; spin < WAIT_SPINS; spin++)
+    {
+        if (atomic_load(&R->stage) >= stage)
+            return;
+        CPU_RELAX();
+    }
+    pthread_mutex_lock(&R->lock);
+    while (atomic_load(&R->stage) < stage)
+        pthread_cond_wait(&R->stage_opened, &R->lock);
+    pthread_mutex_unlock(&R->lock);
+}
+
+static void rotation_worker(void *ctx, uint64_t item)
+{
+    (void)item;
+    Rotation *R = (Rotation *)ctx;
+    ArithElement rotated;
+    arith_new(R->ring, &rotated);
+    uint64_t stage = 0;
     for (;;)
     {
-        const uint64_t g = claim_for_helper(P);
-        if (g >= R->groups)
-            return;
-        zyl17_combine_group(R, g, &P->slot[g % P->slots], s);
-        atomic_store_explicit(&P->slot_group[g % P->slots], g + 1, memory_order_release);
-        pthread_mutex_lock(&P->lock);
-        pthread_cond_signal(&P->ready);
-        pthread_mutex_unlock(&P->lock);
-    }
-}
-
-static void pipeline_apply(Pipeline *P, CombineScratch *s)
-{
-    const UnfoldedRotation *R = P->R;
-    Accumulator A;
-    accumulator_init(&A, P->acc);
-    for (uint64_t g = 0; g < R->groups; g++)
-    {
-        const uint64_t k = g % P->slots;
-        if (!slot_holds(P, g))
+        // A worker that starts late joins at the stage already open.
+        const uint64_t open = (uint64_t)atomic_load(&R->stage);
+        if (open > stage)
+            stage = open;
+        if (stage >= R->stages)
+            break;
+        for (;;)
         {
-            pthread_mutex_lock(&P->lock);
-            const int unclaimed = P->next_claim == g;
-            if (unclaimed)
-                P->next_claim++;
-            else
-                while (!slot_holds(P, g))
-                    pthread_cond_wait(&P->ready, &P->lock);
-            pthread_mutex_unlock(&P->lock);
-            if (unclaimed)
-                zyl17_combine_group(R, g, &P->slot[k], s);
+            const uint64_t t = (uint64_t)atomic_fetch_add(&R->taken[stage], 1);
+            if (t >= R->tasks[stage])
+                break;
+            run_task(R, stage, t, &rotated);
+            if ((uint64_t)atomic_fetch_add(&R->done[stage], 1) + 1 == R->tasks[stage])
+                open_stage(R, stage + 1);
         }
-        apply_group(R, g, &P->slot[k], &A);
-        pthread_mutex_lock(&P->lock);
-        P->consumed = g + 1;
-        if (P->consumed == R->groups)
-            pthread_cond_broadcast(&P->room);
-        else
-            pthread_cond_signal(&P->room);
-        pthread_mutex_unlock(&P->lock);
+        wait_for_stage(R, stage + 1);
+        stage++;
     }
-    accumulator_finish(&A);
+    arith_free(R->ring, &rotated);
 }
 
-static void pipeline_body(void *ctx, uint64_t item)
+static void rotate(RNSc_MLWE acc, const uint64_t *a, uint64_t n, RNS_MLWE *const *bk,
+                   uint64_t unfolding, uint64_t ell, uint64_t log_base, uint64_t threads)
 {
-    Pipeline *P = (Pipeline *)ctx;
-    CombineScratch s;
-    zyl17_scratch_init(&s, P->R);
-    if (item == 0)
-        pipeline_apply(P, &s);
-    else
-        pipeline_combine(P, &s);
-    zyl17_scratch_free(&s, P->R);
+    if (n == 0)
+        return;
+    Rotation R;
+    R.acc = acc;
+    R.ring = acc->ring;
+    R.key_ring = bk[0][0]->ring;
+    R.bk = bk;
+    R.r = acc->r;
+    R.ell = ell;
+    R.log_base = log_base;
+    R.components = R.r + 1;
+    R.digits = R.components * ell;
+    prepare_steps(&R, a, n, unfolding);
+    if (R.steps == 0)
+    {
+        free(R.step);
+        return;
+    }
+    // Enough inner-product tasks for every thread, twice over, when there are few terms.
+    const uint64_t per_chunk = R.components * R.max_terms;
+    const uint64_t chunks = (2 * threads + per_chunk - 1) / per_chunk;
+    R.chunks = chunks > R.digits ? R.digits : chunks;
+
+    ArithRing ring = R.key_ring;
+    const uint64_t value = 1;
+    arith_new(ring, &R.one);
+    arith_from_int_array(ring, &R.one, &value, 1);
+    arith_to_canonical(ring, &R.one);
+    const uint64_t products = R.max_terms * R.components * R.chunks;
+    R.digit = (ArithElement *)safe_malloc(R.digits * sizeof(ArithElement));
+    R.factor = (ArithElement *)safe_malloc(R.max_terms * sizeof(ArithElement));
+    R.inner_product = (ArithElement *)safe_malloc(products * sizeof(ArithElement));
+    for (uint64_t i = 0; i < R.digits; i++)
+        arith_new(ring, &R.digit[i]);
+    for (uint64_t i = 0; i < R.max_terms; i++)
+        arith_new(ring, &R.factor[i]);
+    for (uint64_t i = 0; i < products; i++)
+        arith_new(ring, &R.inner_product[i]);
+
+    R.stages = 3 * R.steps;
+    R.tasks = (uint64_t *)safe_malloc(R.stages * sizeof(uint64_t));
+    R.taken = (atomic_uint_fast64_t *)safe_malloc(R.stages * sizeof(atomic_uint_fast64_t));
+    R.done = (atomic_uint_fast64_t *)safe_malloc(R.stages * sizeof(atomic_uint_fast64_t));
+    for (uint64_t s = 0; s < R.stages; s++)
+    {
+        R.tasks[s] = stage_tasks(&R, s);
+        atomic_init(&R.taken[s], 0);
+        atomic_init(&R.done[s], 0);
+    }
+    atomic_init(&R.stage, 0);
+    pthread_mutex_init(&R.lock, NULL);
+    pthread_cond_init(&R.stage_opened, NULL);
+
+    vfhe_parallel_for(threads, threads, rotation_worker, &R);
+
+    pthread_mutex_destroy(&R.lock);
+    pthread_cond_destroy(&R.stage_opened);
+    free(R.tasks);
+    free(R.taken);
+    free(R.done);
+    for (uint64_t i = 0; i < R.digits; i++)
+        arith_free(ring, &R.digit[i]);
+    for (uint64_t i = 0; i < R.max_terms; i++)
+        arith_free(ring, &R.factor[i]);
+    for (uint64_t i = 0; i < products; i++)
+        arith_free(ring, &R.inner_product[i]);
+    free(R.digit);
+    free(R.factor);
+    free(R.inner_product);
+    arith_free(ring, &R.one);
+    for (uint64_t s = 0; s < R.steps; s++)
+    {
+        free(R.step[s].key);
+        free(R.step[s].exponent);
+    }
+    free(R.step);
 }
 
 void cggi16_blind_rotate(RNSc_MLWE acc, const uint64_t *a, uint64_t n, RNS_MLWE *const *bk,
-                         uint64_t unfolding, int all_patterns, ZYL17_Combination combination,
-                         ZYL17_MonomialTable monomials, uint64_t ell, uint64_t log_base,
-                         CGGI16_Parallelism parallelism, uint64_t n_threads)
+                         uint64_t unfolding, uint64_t ell, uint64_t log_base, uint64_t n_threads)
 {
-    UnfoldedRotation R;
-    rotation_init(&R, acc, a, n, bk, unfolding, all_patterns, combination, monomials, ell,
-                  log_base);
-    // On one thread too, since it reads the keys in its own domain.
-    if (parallelism == CGGI16_DATA_PARALLEL)
-    {
-        cggi16_blind_rotate_team(&R, acc, vfhe_threads_for(n_threads, UINT64_MAX));
-        return;
-    }
-    const uint64_t threads =
-        zyl17_needs_combination(&R) ? vfhe_threads_for(n_threads, R.groups) : 1;
-    if (threads <= 1)
-    {
-        rotate_sequential(&R, acc);
-        return;
-    }
-
-    Pipeline P;
-    P.R = &R;
-    P.acc = acc;
-    P.slots = threads + 1;
-    P.slot = (CombinedKey *)safe_malloc(P.slots * sizeof(CombinedKey));
-    P.slot_group = (atomic_uint_fast64_t *)safe_malloc(P.slots * sizeof(atomic_uint_fast64_t));
-    for (uint64_t k = 0; k < P.slots; k++)
-    {
-        zyl17_combined_key_init(&P.slot[k], &R);
-        atomic_init(&P.slot_group[k], 0);
-    }
-    P.next_claim = 0;
-    P.consumed = 0;
-    pthread_mutex_init(&P.lock, NULL);
-    pthread_cond_init(&P.room, NULL);
-    pthread_cond_init(&P.ready, NULL);
-
-    vfhe_parallel_for(threads, threads, pipeline_body, &P);
-
-    pthread_mutex_destroy(&P.lock);
-    pthread_cond_destroy(&P.room);
-    pthread_cond_destroy(&P.ready);
-    for (uint64_t k = 0; k < P.slots; k++)
-        zyl17_combined_key_free(&P.slot[k], &R);
-    free(P.slot);
-    free(P.slot_group);
+    rotate(acc, a, n, bk, unfolding, ell, log_base, vfhe_threads_for(n_threads, UINT64_MAX));
 }
 
 typedef struct
 {
-    const UnfoldedRotation *R;
     RNSc_MLWE *acc;
+    const uint64_t *a;
+    uint64_t n, unfolding, ell, log_base;
+    RNS_MLWE *const *bk;
 } Batch;
 
-static void batch_body(void *ctx, uint64_t k)
+static void rotate_one_of_batch(void *ctx, uint64_t k)
 {
     const Batch *B = (const Batch *)ctx;
-    UnfoldedRotation R = *B->R;
-    R.a = B->R->a + k * R.n;
-    rotate_sequential(&R, B->acc[k]);
+    rotate(B->acc[k], B->a + k * B->n, B->n, B->bk, B->unfolding, B->ell, B->log_base, 1);
 }
 
 void cggi16_blind_rotate_batch(RNSc_MLWE *acc, const uint64_t *a, uint64_t count, uint64_t n,
-                               RNS_MLWE *const *bk, uint64_t unfolding, int all_patterns,
-                               ZYL17_Combination combination, ZYL17_MonomialTable monomials,
-                               uint64_t ell, uint64_t log_base, uint64_t n_threads)
+                               RNS_MLWE *const *bk, uint64_t unfolding, uint64_t ell,
+                               uint64_t log_base, uint64_t n_threads)
 {
-    if (count == 0)
-        return;
-    UnfoldedRotation R;
-    rotation_init(&R, acc[0], a, n, bk, unfolding, all_patterns, combination, monomials, ell,
-                  log_base);
-    Batch B = {&R, acc};
-    vfhe_parallel_for(count, n_threads, batch_body, &B);
+    Batch B = {acc, a, n, unfolding, ell, log_base, bk};
+    vfhe_parallel_for(count, n_threads, rotate_one_of_batch, &B);
 }

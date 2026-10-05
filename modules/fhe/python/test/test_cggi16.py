@@ -11,7 +11,7 @@ import pytest
 from vfhe import engine
 from vfhe.arith import Ring
 from vfhe.fhe import CGGI16, mod_switch
-from vfhe.fhe.cggi16 import KEY_COMBINATIONS, PARALLELISMS, unfolded_key_count
+from vfhe.fhe.cggi16 import unfolded_key_count
 from vfhe.mlwe import LWE, LWE_Key, MLWE_Scheme
 
 
@@ -122,61 +122,40 @@ class _Setup:
 
 
 @pytest.mark.complete
-@pytest.mark.parametrize(
-    ("unfolding", "variant"),
-    [
-        (1, "zyl17"),
-        (2, "bmmp18"),
-        (2, "zyl17"),
-        (3, "bmmp18"),
-        (3, "zyl17"),
-        (4, "bmmp18"),
-    ],
-)
-def test_unfolded_functional_bootstrap(deterministic_prng, unfolding, variant):
+@pytest.mark.parametrize("unfolding", [1, 2, 3, 4])
+def test_unfolded_functional_bootstrap(deterministic_prng, unfolding):
     deterministic_prng(0xB007C0DE + unfolding)
     random.seed(0xB007C0DE + unfolding)
     setup = _Setup()
-    cggi16 = CGGI16(setup.out_scheme, unfolding=unfolding, variant=variant)
+    cggi16 = CGGI16(setup.out_scheme, unfolding=unfolding)
     bk = cggi16.generate_bootstrap_key(setup.input_key, setup.output_key)
-    assert len(bk.bk) == unfolded_key_count(setup.input_key.n, unfolding, variant)
+    assert len(bk.bk) == unfolded_key_count(setup.input_key.n, unfolding)
 
     msgs = list(range(setup.lut_size))
     lut, tv, inputs = setup.lut_and_inputs(cggi16, msgs)
     engine.set_num_threads(4)
     try:
-        for combination in KEY_COMBINATIONS:
-            for parallelism in PARALLELISMS:
-                bk.combination, cggi16.parallelism = combination, parallelism
-                outs = setup.outputs(len(msgs))
-                for out, c in zip(outs, inputs, strict=True):
-                    cggi16.functional_bootstrap(
-                        out, tv, c, bk, torus_base=setup.lut_size
-                    )
-                assert setup.decrypt(outs) == [lut[m] for m in msgs], (
-                    combination,
-                    parallelism,
-                )
+        outs = setup.outputs(len(msgs))
+        for out, c in zip(outs, inputs, strict=True):
+            cggi16.functional_bootstrap(out, tv, c, bk, torus_base=setup.lut_size)
     finally:
         engine.set_num_threads()
+    assert setup.decrypt(outs) == [lut[m] for m in msgs]
 
 
 @pytest.mark.parametrize(
-    ("unfolding", "variant", "in_N"),
-    [(3, "bmmp18", 256), (3, "bmmp18", 128), (2, "zyl17", 128)],
+    ("unfolding", "in_N"), [(1, 256), (3, 256), (3, 128), (2, 128)]
 )
-def test_blind_rotation_is_deterministic(deterministic_prng, unfolding, variant, in_N):
-    """Every combination, parallelism, thread count and the batch give one result.
+def test_blind_rotation_is_deterministic(deterministic_prng, unfolding, in_N):
+    """Every thread count and the batch give one result, bit for bit.
 
-    With unfolding 3 the last group is one coefficient at n = 256 and two at
-    n = 128; n = 128 also bootstraps into a ring of another dimension. The
-    combination is switched on the one key, which moves its keys between
-    domains.
+    With unfolding 3 the last step is one coefficient at n = 256 and two at
+    n = 128; n = 128 also bootstraps into a ring of another dimension.
     """
     deterministic_prng(0xC0FFEE)
     random.seed(0xC0FFEE)
     setup = _Setup(in_N)
-    cggi16 = CGGI16(setup.out_scheme, unfolding=unfolding, variant=variant)
+    cggi16 = CGGI16(setup.out_scheme, unfolding=unfolding)
     bk = cggi16.generate_bootstrap_key(setup.input_key, setup.output_key)
     msgs = [3, 7, 11]
     lut, tv, inputs = setup.lut_and_inputs(cggi16, msgs)
@@ -196,14 +175,8 @@ def test_blind_rotation_is_deterministic(deterministic_prng, unfolding, variant,
         )
         return outs
 
-    results = []
     try:
-        for combination in (*KEY_COMBINATIONS, "evaluation"):
-            bk.combination = combination
-            for parallelism in PARALLELISMS:
-                cggi16.parallelism = parallelism
-                results += [single(1), single(4)]
-            results.append(batch())
+        results = [single(1), single(3), single(4), batch()]
     finally:
         engine.set_num_threads()
     reference = results[0]
@@ -215,21 +188,14 @@ def test_blind_rotation_is_deterministic(deterministic_prng, unfolding, variant,
 
 
 def test_unfolded_key_layout():
-    assert unfolded_key_count(256, 1, "bmmp18") == 256
-    assert unfolded_key_count(256, 1, "zyl17") == 512
-    assert unfolded_key_count(256, 2, "bmmp18") == 128 * 3
-    assert unfolded_key_count(256, 3, "bmmp18") == 85 * 7 + 1
-    assert unfolded_key_count(256, 3, "zyl17") == 85 * 8 + 2
+    assert unfolded_key_count(256, 1) == 256
+    assert unfolded_key_count(256, 2) == 128 * 3
+    assert unfolded_key_count(256, 3) == 85 * 7 + 1
+    assert unfolded_key_count(256, 4) == 64 * 15
     Rq = Ring(64, prime_size=[50, 50], split_degree=1)
     scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=1)
     with pytest.raises(ValueError, match="unfolding"):
         CGGI16(scheme, unfolding=0)
-    with pytest.raises(ValueError, match="variant"):
-        CGGI16(scheme, variant="cggi")
-    with pytest.raises(ValueError, match="combination"):
-        CGGI16(scheme, combination="fft")
-    with pytest.raises(ValueError, match="parallelism"):
-        CGGI16(scheme, parallelism="openmp")
     ternary = LWE_Key(ring=Rq.quotient_ring(ell=1), key=[1, -1] + [0] * 62, n=64)
     with pytest.raises(ValueError, match="binary"):
         CGGI16(scheme).generate_bootstrap_key(

@@ -145,17 +145,6 @@ void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly
     }
 }
 
-uint64_t gadget_digit_count(RNS_MLWE *ksk, const ArithElement *poly, uint64_t log_base)
-{
-    const uint64_t mask = arith_rns_polynomial(poly)->rns_mask;
-    RNS_Base base = arith_rns_polynomial(&ksk[0]->b)->base;
-    uint64_t n = 0;
-    for (size_t j = 0; j < base->l; j++)
-        if (mask & (1ULL << j))
-            n += gadget_digits_of(base, j, log_base);
-    return n;
-}
-
 void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement *poly, uint64_t i,
                             uint64_t log_base)
 {
