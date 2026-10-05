@@ -150,6 +150,16 @@ def test_key_switch_key(ghs, radix, profile):
         assert len(data) < 0.55 * len(unseeded)
 
 
+def test_key_switch_key_without_the_special_primes(ghs):
+    Rp, scheme, key = ghs
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    ksk = scheme.gen_ksk(key2, key, lvl=0, radix_log_base=4, hybrid=False)
+    back = Serializer().loads(Serializer().dumps(ksk), schemes=scheme)
+    m = Rp.random_element()
+    c = enc(scheme, Rp, m, key)
+    assert same(scheme.keyswitch(c, ksk), scheme.keyswitch(c, back))
+
+
 def test_relinearization_key_keeps_its_pass_through_slots(ghs):
     Rp, scheme, key = ghs
     s_0 = key.poly[0]

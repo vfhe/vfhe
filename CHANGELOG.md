@@ -174,6 +174,10 @@ versions may contain breaking changes.
   longer converts them in place. With the items above, full-packing
   SlotToCoeff on 8 threads goes from 82 to 69 ms at N=2^13 and from 304 to
   272 ms at N=2^14 (avx512ifma; 679 to 548 ms portable at 2^13).
+- `MLWE_Scheme.gen_ksk(..., hybrid=False)`: a key-switch key in the level's
+  own ring rather than its special ring, so the key switch divides by no
+  special prime (BV). For an output key that must stay at a small modulus,
+  such as a sparse one; pair it with a small `radix_log_base`.
 - `CKKS_Scheme.encode` takes any number of values dividing `N/2` and packs
   fewer than `N/2` sparsely (repeated across the slots, so the plaintext is a
   polynomial in `X^(N/2n)`); `decode(..., slots=n)` reads them back.

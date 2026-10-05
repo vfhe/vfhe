@@ -775,6 +775,41 @@ def test_keyswitch_radix_at_a_level(ghs):
     assert scheme.linear_decrypt(c_out, key2).round_division(Rp) == m0
 
 
+@pytest.mark.parametrize("lvl", [0, 1])
+@pytest.mark.parametrize("radix", [4, RADIX_LOG_BASE])
+def test_keyswitch_without_the_special_primes(ghs, lvl, radix):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    m0 = Rp.random_element()
+    c = enc(scheme, Rp, m0, key)
+    if lvl:
+        c.round_division(lvl=lvl)
+    ksk = scheme.gen_ksk(key2, key, lvl=lvl, radix_log_base=radix, hybrid=False)
+    # The key never reaches the special prime.
+    assert all(x.ring == scheme.rings[lvl] for x in ksk.mlwe[0])
+    c_out = scheme.keyswitch(c, ksk)
+    assert c_out.ring == c.ring
+    assert scheme.linear_decrypt(c_out, key2).round_division(Rp) == m0
+
+
+def test_keyswitch_without_the_special_primes_at_one_prime(ghs):
+    # At the last level the plaintext ring is the whole ring, so check the
+    # noise the key switch adds instead of a decryption.
+    _Rq, _Rp, scheme = ghs
+    lvl = len(scheme.rings) - 1
+    ring = scheme.rings[lvl]
+    assert ring.ell == 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    c = scheme.sample(ring.random_element(), key.at_ring(ring), lvl=lvl)
+    ksk = scheme.gen_ksk(key2, key, lvl=lvl, radix_log_base=4, hybrid=False)
+    diff = scheme.linear_decrypt(scheme.keyswitch(c, ksk), key2) - (
+        scheme.linear_decrypt(c, key)
+    )
+    assert max(abs(x) for x in diff.get_polynomial(signed=True)) < 2**20
+
+
 def test_round_division_moves_the_native_ring(ghs):
     # Native code that allocates, rescales or key-switches from a sample takes
     # the ring from the sample itself, so it must name the ring the components

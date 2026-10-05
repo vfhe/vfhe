@@ -244,6 +244,7 @@ class MLWE_Scheme:
         lvl: int,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        hybrid: bool = True,
     ) -> list[list[MLWE]]:
         """Sample the gadget ciphertexts for one key-switch key per key poly.
 
@@ -255,18 +256,20 @@ class MLWE_Scheme:
             raise ValueError("Scheme mismatch")
         if lvl is None:
             raise ValueError("Level must be specified")
-        scalars = self.gadget_scalars(lvl, radix_log_base)
-        special = self.special_rings[lvl]
-        key_out_special = MLWE_Key(key_out.key, key_out.sigma_err, self, ring=special)
+        key_ring = self.special_rings[lvl] if hybrid else self.rings[lvl]
+        scalars = self.gadget_scalars(lvl, radix_log_base, ring=key_ring)
+        key_out_special = MLWE_Key(key_out.key, key_out.sigma_err, self, ring=key_ring)
         msgs = [
             poly_j
-            if poly_j.ring == special
-            else Polynomial(special).from_bigint_array(
+            if poly_j.ring == key_ring
+            else Polynomial(key_ring).from_bigint_array(
                 poly_j.get_polynomial(signed=True)
             )
             for poly_j in key_poly
         ]
-        samples = self.sample_scaled(msgs, scalars, key_out_special, lvl, n_threads)
+        samples = self.sample_scaled(
+            msgs, scalars, key_out_special, lvl, n_threads=n_threads
+        )
         width = len(scalars)
         return [samples[j * width : (j + 1) * width] for j in range(len(msgs))]
 
@@ -277,12 +280,13 @@ class MLWE_Scheme:
         lvl: int,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        hybrid: bool = True,
     ) -> list[MLWE_Set]:
         """One key-switch key per entry of ``key_polys``, at ``lvl``, all drawn
         in one batch so that a set of small keys still fills the threads."""
         flat = [poly for polys in key_polys for poly in polys]
         components = self._gen_ksk_components(
-            key_out, flat, lvl, radix_log_base, n_threads
+            key_out, flat, lvl, radix_log_base, n_threads=n_threads, hybrid=hybrid
         )
         sets, start = [], 0
         for polys in key_polys:
@@ -303,9 +307,17 @@ class MLWE_Scheme:
         lvl: int,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        hybrid: bool = True,
     ):
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
-        (ksk,) = self._gen_ksk_sets(key_out, [key_poly], lvl, radix_log_base, n_threads)
+        (ksk,) = self._gen_ksk_sets(
+            key_out,
+            [key_poly],
+            lvl,
+            radix_log_base,
+            n_threads=n_threads,
+            hybrid=hybrid,
+        )
         return ksk
 
     def gen_rlk_for_level(
@@ -382,6 +394,7 @@ class MLWE_Scheme:
         lvl: int | None = None,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        hybrid: bool = True,
     ):
         """Key-switch key from ``key_in`` to ``key_out``, for one level or all.
 
@@ -390,16 +403,35 @@ class MLWE_Scheme:
         and is what :meth:`keyswitch` decomposes against. The key is drawn on up
         to ``n_threads`` threads (0: the library limit); see
         :meth:`sample_scaled`.
+
+        By default the key lives in the level's special ring, and a key switch
+        divides its products by the special primes. With ``hybrid=False`` it
+        lives in the level's own ring and nothing is divided (a BV key switch),
+        for a ``key_out`` that must only be used at that modulus, such as a
+        sparse key. Its noise grows with the gadget's digits, so pair it with a
+        small ``radix_log_base``. Without special primes the two are the same.
         """
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
         if self != key_out.scheme:
             raise ValueError("Scheme mismatch")
         if lvl is not None:
             return self.gen_ksk_for_level(
-                key_out, key_poly, lvl, radix_log_base, n_threads
+                key_out,
+                key_poly,
+                lvl,
+                radix_log_base,
+                n_threads=n_threads,
+                hybrid=hybrid,
             )
         return [
-            self.gen_ksk_for_level(key_out, key_poly, lvl, radix_log_base, n_threads)
+            self.gen_ksk_for_level(
+                key_out,
+                key_poly,
+                lvl,
+                radix_log_base,
+                n_threads=n_threads,
+                hybrid=hybrid,
+            )
             for lvl in range(len(self.rings))
         ]
 
