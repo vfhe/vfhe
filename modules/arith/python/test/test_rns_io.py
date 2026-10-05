@@ -178,6 +178,8 @@ def test_another_process_with_another_base_order_reads_the_same(tmp_path):
     path = tmp_path / "p.vfhe"
     with open(path, "wb") as f:
         Serializer().dump(p, f)
+    # The child picks its own engine: under an emulator it runs on the bare CPU.
+    env = {k: v for k, v in os.environ.items() if k != "VFHE_ENGINE"}
     out = subprocess.run(  # noqa: S603 - this interpreter, a fixed script
         [
             sys.executable,
@@ -190,7 +192,7 @@ def test_another_process_with_another_base_order_reads_the_same(tmp_path):
         ],
         capture_output=True,
         text=True,
-        env=os.environ,
+        env=env,
         check=True,
     )
     got = json.loads(out.stdout)

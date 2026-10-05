@@ -29,7 +29,11 @@ def test_the_limit_is_set_and_restored():
 
 
 def test_the_environment_sets_the_default():
-    env = {**os.environ, "VFHE_NUM_THREADS": "2"}
+    # The child picks its own engine: under an emulator it runs on the bare CPU.
+    env = {
+        **{k: v for k, v in os.environ.items() if k != "VFHE_ENGINE"},
+        "VFHE_NUM_THREADS": "2",
+    }
     out = subprocess.run(
         [
             sys.executable,

@@ -285,11 +285,13 @@ def test_another_process_with_another_base_order(ghs, tmp_path, profile):
     with open(path, "wb") as f:
         Serializer(profile).dump_secret(stuff, f)
     primes = sorted({p for r in scheme.special_rings for p in r.primes})
+    # The child picks its own engine: under an emulator it runs on the bare CPU.
+    env = {k: v for k, v in os.environ.items() if k != "VFHE_ENGINE"}
     out = subprocess.run(  # noqa: S603 - this interpreter, a fixed script
         [sys.executable, "-W", "ignore", "-c", _CHILD, json.dumps(primes), str(path)],
         capture_output=True,
         text=True,
-        env=os.environ,
+        env=env,
         check=True,
     )
     assert json.loads(out.stdout) == m.get_polynomial()
