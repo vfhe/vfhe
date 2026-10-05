@@ -46,6 +46,10 @@ extern "C"
     void hash_stream_digest(const void *state, uint8_t out[32]);
 
     // --- Randomness (prng.c) ---------------------------------------------
+    //
+    // The entropy-backed generators below may be called from any number of
+    // threads at once: each thread draws from a pool of its own, and a forked
+    // child discards the pool it inherits instead of repeating its parent.
 
     // Fills p[0..3] (32 bytes) with entropy from RDRAND where the build has it,
     // /dev/urandom otherwise. There is no error return: on failure it prints to
@@ -61,24 +65,21 @@ extern "C"
     // new seed, which dominates the cost for small amounts.
     void get_rnd_from_hash(uint64_t amount, uint8_t *pointer);
 
-    // Writes `amount` bytes to `pointer` from a 1 KiB internal pool, refilling
-    // it through get_rnd_from_hash when what remains will not cover the
-    // request. Amortizes the seed draw across many small requests. A request
-    // larger than the pool is served straight from get_rnd_from_hash. The pool
-    // is shared mutable state, so this is not thread-safe.
+    // Writes `amount` bytes to `pointer` from the calling thread's 1 KiB pool,
+    // refilling it through get_rnd_from_hash when what remains will not cover
+    // the request. Amortizes the seed draw across many small requests. A
+    // request larger than the pool is served straight from get_rnd_from_hash.
     void get_rnd_from_buffer(uint64_t amount, uint8_t *pointer);
 
     // Writes `amount` unpredictable bytes to `pointer`. The general-purpose
     // entry point, and the one to reach for by default: it serves requests
     // under 512 bytes from the pool and expands a fresh seed for larger ones.
-    // Not thread-safe.
     void generate_random_bytes(uint64_t amount, uint8_t *pointer);
 
     // Writes `count` values exactly uniform in [0, bound) to out[0..count),
     // from the entropy stream: each is a fresh 64-bit word masked to the bits
     // of bound - 1, redrawn while it is not below `bound`. The redraws reveal
-    // only how many draws were discarded. `bound` must be at least 1. Not
-    // thread-safe.
+    // only how many draws were discarded. `bound` must be at least 1.
     void generate_uniform_below(uint64_t *out, uint64_t count, uint64_t bound);
 
     // Returns one sample from a zero-mean Gaussian with standard deviation
@@ -157,15 +158,17 @@ extern "C"
 
     // Test-only: makes every generator above reproducible by replacing the
     // hardware seed source with a splitmix64 stream started from `seed`. Also
-    // discards pooled bytes, so the next draw comes from `seed`. Reproducible
-    // within one build only, since get_rnd_from_hash's expander is
-    // engine-dependent. Does not affect prng_sample_below, which is already a
-    // pure function of its arguments. Not thread-safe; production never calls
-    // it.
+    // discards every thread's pooled bytes, so the next draw comes from
+    // `seed`. Reproducible within one build only, since get_rnd_from_hash's
+    // expander is engine-dependent, and on one thread only: threads drawing
+    // at once take their seeds from the stream in whatever order they reach
+    // it, though never the same seed. Set or clear it while no other thread
+    // draws. Does not affect prng_sample_below, which is already a pure
+    // function of its arguments. Production never calls it.
     void vfhe_prng_set_deterministic_seed(uint64_t seed);
 
-    // Returns the generators above to hardware entropy and discards pooled
-    // bytes.
+    // Returns the generators above to hardware entropy and discards every
+    // thread's pooled bytes.
     void vfhe_prng_clear_deterministic_seed(void);
 
 #ifdef __cplusplus

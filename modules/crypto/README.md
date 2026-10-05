@@ -20,6 +20,10 @@ singletons in `python/src/vfhe/crypto/prng.py`:
   can recompute them. `context` is a domain-separation tag — a fixed string
   literal per call site.
 
+`entropy` may be drawn from on any number of threads at once: each thread
+keeps a pool of its own, and a forked child discards the pool it inherits
+rather than repeat its parent.
+
 This is the library's only randomness: nothing else in the tree draws from
 `secrets`, `random`, or the OS directly. Use `entropy` where a value must be
 unguessable and `seeded` where it must be reproducible from a transcript.

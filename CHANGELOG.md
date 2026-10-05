@@ -265,6 +265,15 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Make the entropy-backed generators (`generate_random_bytes`,
+  `generate_normal_random`, `generate_uniform_below`, `entropy`) safe to call
+  from several threads at once. The 1 KiB pool and its index were one
+  process-wide buffer, so concurrent callers could be served the same bytes;
+  each thread now keeps a pool of its own. A forked child discards the pool it
+  inherits, which it used to serve again after its parent. The
+  deterministic-seed counter is advanced atomically, so pinned threads never
+  take the same seed, and setting or clearing the override discards every
+  thread's pool. Draws of 512 bytes or more are unchanged.
 - Fix `CKKS_Scheme.multiply` (inherited from `MLWE_Scheme`) returning the
   first operand's `delta` instead of the product of both, so a product taken
   with it decoded at the wrong scale; `*` was right.

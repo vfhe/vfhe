@@ -14,10 +14,11 @@ performance one:
   by another party from data it already has, such as a Fiat-Shamir
   transcript.
 
-Both are module-level singletons over process-global C state; the classes
-exist so the surface is typed and documented in one place, not so callers can
-own an instance. Nothing here is thread-safe (the C pool is shared mutable
-state).
+Both are module-level singletons over C state; the classes exist so the
+surface is typed and documented in one place, not so callers can own an
+instance. Both may be used from any number of threads: `entropy` keeps a pool
+per thread, which a forked child discards instead of repeating its parent,
+and `seeded` keeps no state at all.
 
 `context` is a domain-separation tag: one seed under two different tags gives
 two independent streams. Pass a fixed string literal per call site, never
@@ -41,9 +42,9 @@ SEED_WORDS = 4
 class EntropyPRNG:
     """The entropy-backed stream: bytes no one can predict.
 
-    Every method draws from the process-global generator in `prng.c`, so two
-    calls never return the same thing (short of the test-only override in
-    `deterministic`).
+    Every method draws from the generator in `prng.c`, through the calling
+    thread's pool, so two calls -- on one thread or on several -- never return
+    the same thing (short of the test-only override in `deterministic`).
     """
 
     def bytes(self, amount: int) -> bytes:
@@ -108,9 +109,9 @@ class EntropyPRNG:
         return bytes(out)
 
     def bytes_from_pool(self, amount: int) -> bytes:
-        """`amount` bytes from the 1 KiB pool, refilling it when what remains
-        will not cover the request. A request larger than the pool is served
-        from a fresh seed.
+        """`amount` bytes from the calling thread's 1 KiB pool, refilling it
+        when what remains will not cover the request. A request larger than the
+        pool is served from a fresh seed.
         """
         if amount < 1:
             raise ValueError(f"amount must be at least 1, got {amount}")
@@ -124,7 +125,9 @@ class EntropyPRNG:
 
         Makes every draw above reproducible for the duration of the block,
         within one build only — the expander is engine-dependent, so the same
-        seed gives different bytes on different engines. Does not affect
+        seed gives different bytes on different engines. Draws from several
+        threads at once stay distinct but are not reproducible, since which
+        thread reaches the stream first is up to the scheduler. Does not affect
         `seeded`, which is already a pure function of its arguments. Restores
         hardware entropy on exit.
         """

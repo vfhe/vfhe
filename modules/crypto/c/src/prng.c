@@ -9,6 +9,8 @@
 #endif
 #include <assert.h>
 #include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -22,17 +24,44 @@
 // is set (vfhe_prng_set_deterministic_seed), generate_rnd_seed yields a
 // reproducible, non-repeating stream via splitmix64 instead of hardware
 // entropy. Production never calls the setters, so it keeps using RDRAND /
-// /dev/urandom. Not thread-safe; intended for single-threaded test use.
-static int det_active = 0;
-static uint64_t det_state = 0;
+// /dev/urandom. The counter is shared by every thread and advanced
+// atomically, so concurrent draws never take the same seed, but which thread
+// gets which seed is up to the scheduler.
+static atomic_bool det_active;
+static _Atomic uint64_t det_state;
 
-// Buffered entropy pool (lifted to file scope so the setters can discard it).
-static uint8_t rnd_buffer[1024] __attribute__((aligned(64)));
-static uint64_t rnd_buffer_idx = sizeof(rnd_buffer);
+// --- Buffered entropy pool -------------------------------------------------
+// One pool per thread, so concurrent callers share no mutable state. A pool
+// remembers the epoch it was filled in; the deterministic setters move the
+// epoch, which discards every thread's pool on its next draw.
+static _Thread_local uint8_t rnd_buffer[1024] __attribute__((aligned(64)));
+static _Thread_local uint64_t rnd_buffer_idx = sizeof(rnd_buffer);
+static _Thread_local uint64_t rnd_buffer_epoch;
+static _Atomic uint64_t prng_epoch;
 
-static uint64_t splitmix64_next(uint64_t *s)
+// A forked child holds a copy of the forking thread's pool, the only one it
+// inherits; serving it would repeat the bytes the parent serves next.
+static void prng_discard_pool_in_child(void)
 {
-    uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
+    memset(rnd_buffer, 0, sizeof(rnd_buffer));
+    rnd_buffer_idx = sizeof(rnd_buffer);
+}
+
+// Registered as the library loads, before anything can draw.
+__attribute__((constructor)) static void prng_watch_forks(void)
+{
+    if (pthread_atfork(NULL, NULL, prng_discard_pool_in_child) != 0)
+    {
+        perror("vfhe: pthread_atfork"); /* GCOVR_EXCL_LINE */
+        abort();                        /* GCOVR_EXCL_LINE */
+    }
+}
+
+#define SPLITMIX64_GAMMA 0x9E3779B97F4A7C15ULL
+
+static uint64_t splitmix64_next(_Atomic uint64_t *s)
+{
+    uint64_t z = atomic_fetch_add(s, SPLITMIX64_GAMMA) + SPLITMIX64_GAMMA;
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
     return z ^ (z >> 31);
@@ -48,7 +77,7 @@ static void det_fill_seed(uint64_t *p)
 // Intel hardware RDRAND seed generator
 void generate_rnd_seed(uint64_t *p)
 {
-    if (det_active)
+    if (atomic_load(&det_active))
     {
         det_fill_seed(p);
         return;
@@ -66,7 +95,7 @@ void generate_rnd_seed(uint64_t *p)
 // Fallback urandom seed generator
 void generate_rnd_seed(uint64_t *p)
 {
-    if (det_active)
+    if (atomic_load(&det_active))
     {
         det_fill_seed(p);
         return;
@@ -116,6 +145,12 @@ void get_rnd_from_buffer(uint64_t amount, uint8_t *pointer)
         get_rnd_from_hash(amount, pointer);
         return;
     }
+    const uint64_t epoch = atomic_load(&prng_epoch);
+    if (rnd_buffer_epoch != epoch)
+    {
+        rnd_buffer_epoch = epoch;
+        rnd_buffer_idx = sizeof(rnd_buffer);
+    }
     if (amount > (sizeof(rnd_buffer) - rnd_buffer_idx))
     {
         rnd_buffer_idx = 0;
@@ -153,19 +188,19 @@ void generate_uniform_below(uint64_t *out, uint64_t count, uint64_t bound)
 }
 
 // Test-only: pin the PRNG to a reproducible stream (see the note above). The
-// setter also discards any buffered entropy so the next draw starts from the
-// seed; clearing returns to hardware entropy.
+// setter also discards every thread's buffered entropy so the next draw starts
+// from the seed; clearing returns to hardware entropy.
 void vfhe_prng_set_deterministic_seed(uint64_t seed)
 {
-    det_active = 1;
-    det_state = seed;
-    rnd_buffer_idx = sizeof(rnd_buffer);
+    atomic_store(&det_state, seed);
+    atomic_store(&det_active, true);
+    atomic_fetch_add(&prng_epoch, 1);
 }
 
 void vfhe_prng_clear_deterministic_seed(void)
 {
-    det_active = 0;
-    rnd_buffer_idx = sizeof(rnd_buffer);
+    atomic_store(&det_active, false);
+    atomic_fetch_add(&prng_epoch, 1);
 }
 
 // --- Seeded sampling (deterministic, independent of the stream above) ----

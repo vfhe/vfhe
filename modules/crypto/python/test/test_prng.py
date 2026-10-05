@@ -15,6 +15,9 @@ override does what it says.
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from vfhe.crypto import SEED_WORDS, entropy, seeded
 
@@ -172,3 +175,36 @@ def test_deterministic_override_does_not_reach_the_seeded_sampler():
     baseline = sample(8, 1 << 40)
     with entropy.deterministic(12345):
         assert sample(8, 1 << 40) == baseline
+
+
+def test_entropy_from_several_threads_never_repeats():
+    """Draws made on several threads at once -- cffi releases the GIL around
+    each -- never meet, through the pool or past it."""
+
+    def draw(_):
+        return [entropy.bytes(16) for _ in range(256)] + [entropy.bytes(4096)]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        draws = [chunk for chunks in pool.map(draw, range(8)) for chunk in chunks]
+    words = [chunk[i : i + 8] for chunk in draws for i in range(0, len(chunk), 8)]
+    assert len(set(words)) == len(words)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
+def test_a_forked_child_does_not_repeat_its_parent():
+    """The child inherits the parent's pool and must not serve it again."""
+    entropy.bytes(16)
+    read_end, write_end = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - the child reports through the pipe
+        try:
+            os.write(write_end, entropy.bytes(32))
+        finally:
+            os._exit(0)
+    os.close(write_end)
+    parent = entropy.bytes(32)
+    with os.fdopen(read_end, "rb") as child_out:
+        child = child_out.read()
+    os.waitpid(pid, 0)
+    assert len(child) == 32
+    assert child != parent
