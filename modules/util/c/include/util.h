@@ -36,7 +36,10 @@ extern "C"
     uint64_t vfhe_threads_for(uint64_t requested, uint64_t n_items);
     // Calls body(ctx, i) for every i < n on vfhe_threads_for(n_threads, n)
     // threads, the caller's included, and returns when all are done. Calls run
-    // concurrently, in no particular order.
+    // concurrently, in no particular order. The helper threads are created on
+    // first need and kept, asleep, for later calls; they block every signal.
+    // Loops started by several threads at once share them, and a forked child
+    // creates its own.
     void vfhe_parallel_for(uint64_t n, uint64_t n_threads, void (*body)(void *ctx, uint64_t i),
                            void *ctx);
 
