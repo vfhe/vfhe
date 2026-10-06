@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the protocol machinery (registry, transcript, driver loops) and
 the sumcheck protocol over pure-Python and ring-backed MLE oracles:

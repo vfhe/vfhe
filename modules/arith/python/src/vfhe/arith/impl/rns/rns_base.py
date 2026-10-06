@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import atexit
 
 from vfhe.arith import state
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 
 class RNS_Base_Registry:
@@ -110,12 +110,4 @@ def _reset() -> None:
         cache.clear()
 
 
-def _rebind() -> None:
-    """Replace the registry, which pins `lib` as an instance attribute."""
-    global rns_base_registry
-    rns_base_registry.cleanup()
-    rns_base_registry = RNS_Base_Registry()
-
-
 state.register_reset(_reset)
-state.register_rebind(_rebind)

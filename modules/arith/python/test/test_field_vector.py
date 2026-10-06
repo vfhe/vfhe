@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Vectors of field elements, checked against the same work done one at a time.
 
@@ -97,7 +97,7 @@ class TestConstruction:
         read and write those words, so they have to be reduced -- and nothing
         above the C boundary can see them, which is why this reaches for the
         planes directly."""
-        from vfhe.engine import lib
+        from vfhe.util.bindings import lib
 
         field = make_field()
         values = random_elements(field, n, seed=160)
@@ -307,7 +307,7 @@ class TestArithmetic:
         """The C entry allows `out == a`. The row sweep has to read a row
         before writing over it, which the element-at-a-time form got for free
         and this one does not."""
-        from vfhe.engine import lib
+        from vfhe.util.bindings import lib
 
         field = make_field()
         a = FieldVector(field, 5000)
@@ -570,7 +570,7 @@ class TestAliasingContract:
 
     @staticmethod
     def _call(kernel, *args):
-        from vfhe.engine import lib
+        from vfhe.util.bindings import lib
 
         getattr(lib, kernel)(*args)
 
@@ -602,7 +602,7 @@ class TestAliasingContract:
 
 
 def test_padded_length_is_the_single_source_of_the_plane_size():
-    from vfhe.engine import lib
+    from vfhe.util.bindings import lib
 
     for n in (0, 1, 7, 8, 9, 16, 13):
         padded = lib.field_vec_padded_length(n)
@@ -1288,7 +1288,7 @@ class TestFusedProduct:
         """The header's promise, on this path too: the kernel loads a block's
         operands before it writes any of that block's outputs, which is the
         only reason it holds."""
-        from vfhe.engine import lib
+        from vfhe.util.bindings import lib
 
         field = self.field(d)
         left = self.values(field, 13, seed=70 + d)

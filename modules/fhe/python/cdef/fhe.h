@@ -1,0 +1,21 @@
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the fhe engine. CKKS and BFV reuse the arith + mlwe
+// surfaces; declared here are GP25's sparse-amortized-bootstrap kernels
+// (fhe/c/src/gp25.c, prototyped in mlwe.h) and the CGGI16 blind rotation
+// (fhe/c/src/cggi16.c, prototyped in fhe.h).
+// Handles/handle-matrices are passed as `void *` (cffi converts any pointer or
+// array cdata).
+
+void gp25_RGSW_monomial_mul(void *p0, uint64_t in_N, void *e, uint64_t r_prec, void *ksk,
+                            uint64_t ell, uint64_t special_primes, bool balanced);
+void gp25_RGSW_monomial_mul_mt(void *p0, uint64_t in_N, void *e, uint64_t r_prec, void *ksk,
+                               uint64_t ell, uint64_t special_primes, bool balanced,
+                               uint64_t num_threads);
+void gp25_sub_a_mt(void *p0, uint64_t in_N, uint64_t *a, void *s_sign, uint64_t ell,
+                   uint64_t special_primes, bool balanced, uint64_t N, uint64_t num_threads);
+void cggi16_blind_rotate(void *acc, uint64_t *a, uint64_t n, void *bk, uint64_t unfolding,
+                         uint64_t ell, uint64_t log_base, bool balanced, uint64_t n_threads);
+void cggi16_blind_rotate_batch(void *acc, uint64_t *a, uint64_t count, uint64_t n, void *bk,
+                               uint64_t unfolding, uint64_t ell, uint64_t log_base, bool balanced,
+                               uint64_t n_threads);

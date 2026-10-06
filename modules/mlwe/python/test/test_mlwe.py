@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the (reverted) vfhe.mlwe over the cffi boundary.
 
@@ -15,11 +15,9 @@ import random
 from typing import cast
 
 import pytest
-import vfhe.engine as engine
 from vfhe.arith import Polynomial, Ring, repr
 from vfhe.arith.number_theory import crt
 from vfhe.crypto import entropy
-from vfhe.engine import ffi
 from vfhe.mlwe import (
     CMUX,
     LWE,
@@ -31,6 +29,7 @@ from vfhe.mlwe import (
     MLWE_Set,
 )
 from vfhe.mlwe.io import seed_still_holds
+from vfhe.util.bindings import ffi, lib
 
 N = 256
 
@@ -885,9 +884,9 @@ def test_hoisted_automorphisms_refuse_a_key_of_another_gadget(ghs):
 @pytest.fixture
 def threads():
     """Lets the test's parallel calls use up to 8 threads (vfhe defaults to 1)."""
-    engine.set_num_threads(8)
+    lib.vfhe_set_num_threads(8)
     yield
-    engine.set_num_threads()
+    lib.vfhe_set_num_threads(0)
 
 
 @pytest.mark.parametrize("n_threads", [1, 0])

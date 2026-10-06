@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """The contract every arithmetic parent satisfies, and what follows from it.
 
@@ -34,6 +34,7 @@ from abc import ABC, ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from vfhe.crypto import entropy
+from vfhe.util._cpu import last_level_cache_bytes
 
 from .registry import registered, resolve
 from .spec import Capability, Domain, Spec
@@ -993,27 +994,6 @@ CHUNK_BUDGET_BYTES = 2 << 20
 CHUNK_CACHE_MARGIN = 4
 
 
-def cache_bytes() -> int:
-    """This machine's last level of cache before memory, in bytes.
-
-    0 where the platform does not report it, which callers should read as
-    "unknown" rather than "none": `FieldVector.chunks` takes it as a reason
-    not to split a sequence into windows at all.
-
-    Asked of the machine once and remembered; it cannot change under a
-    running process.
-    """
-    global _CACHE_BYTES
-    if _CACHE_BYTES is None:
-        # Deferred: the front is imported before an engine is picked.
-        from vfhe.engine import lib
-
-        _CACHE_BYTES = int(lib.vfhe_cpu_last_level_cache_bytes())
-    return _CACHE_BYTES
-
-
-_CACHE_BYTES: int | None = None
-
 #: Buffer formats `index_buffer` accepts: unsigned, and 8 bytes wide once the
 #: itemsize agrees. Signed ones are excluded on purpose -- a negative index
 #: means "from the end" in a sequence and would be a huge positive here.
@@ -1408,8 +1388,8 @@ class FieldVector(metaclass=_ImplementationDispatch):
         True when this machine does not report its cache size, so that an
         unknown machine runs the sequence whole rather than on a guess.
         """
-        cache = cache_bytes()
-        if cache == 0:
+        cache = last_level_cache_bytes()
+        if cache is None:
             return True
         return self.chain_bytes(live) <= cache * CHUNK_CACHE_MARGIN
 
@@ -1418,7 +1398,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
         touches in total.
 
         What decides whether `chunks` splits into windows, and the figure to
-        compare against `cache_bytes` when reasoning about a sequence: one
+        compare against `last_level_cache_bytes` when reasoning about a sequence: one
         vector can sit well inside the cache while the sequence around it
         does not fit at all.
         """

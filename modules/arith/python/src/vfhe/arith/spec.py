@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """What an arithmetic parent is, as data: domains, capabilities, and Spec.
 
@@ -15,7 +15,7 @@ Three axes describe an arithmetic object in this library:
     are the same, the storage and kernels are not.
 ``engine``
     Which machine code runs. Chosen once per process by CPU capability
-    (``VFHE_ENGINE``, ``vfhe.engine.active_engine``) and not addressed
+    (``VFHE_ENGINE``, ``vfhe.util._engine.Engine.active()``) and not addressed
     here at all.
 """
 

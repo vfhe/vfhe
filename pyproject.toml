@@ -1,8 +1,8 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 [project]
 name = "vfhe"
-dynamic = ["version"]
+version = "0.0.4.dev0"
 description = "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,10 +14,10 @@ authors = [
     { name = "Daniele Cozzo" },
     { name = "Adrien Dubois" },
     { name = "Dario Fiore" },
-    { name = "Antonio Guimaraes" },
-    { name = "Robin Kostler" },
-    { name = "Michal Osadnik" },
-    { name = "Alin-Petru Rosu" },
+    { name = "Antonio Guimarães" },
+    { name = "Robin Köstler" },
+    { name = "Michał Osadnik" },
+    { name = "Alin-Petru Roșu" },
     { name = "Eduardo Soria-Vazquez" },
 ]
 maintainers = [{ name = "The vFHE Maintainers", email = "maintainers@vfhe.ai" }]
@@ -36,27 +36,20 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Security :: Cryptography",
 ]
-dependencies = [
-    "cffi>=2.1.0",
-    "protobuf>=7.35.1,<8",
-    "mpmath>=1.4.1",
-    "setuptools>=66",
-]
+dependencies = ["cffi>=2.1.0", "protobuf>=7.35.1,<8", "mpmath>=1.4.1"]
+
+[project.optional-dependencies]
+kernels = ["meson>=1.4", "ninja>=1.11"]
 
 [project.urls]
 Homepage = "https://github.com/vfhe/vfhe"
 Repository = "https://github.com/vfhe/vfhe"
 Issues = "https://github.com/vfhe/vfhe/issues"
 Changelog = "https://github.com/vfhe/vfhe/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md"
+Documentation = "https://vfhe.github.io/vfhe/"
 
 [build-system]
-requires = [
-    "meson-python>=0.18",
-    "setuptools-scm>=10.2.1",
-    "cffi>=2.1.0",
-    "grpcio-tools>=1.81,<1.85",
-]
+requires = ["meson-python>=0.18", "cffi>=2.1.0", "grpcio-tools>=1.81,<1.85"]
 build-backend = "mesonpy"
 
 [dependency-groups]
@@ -68,7 +61,6 @@ compile = [
     "meson>=1.4",
     "meson-python>=0.18",
     "ninja>=1.11",
-    "setuptools-scm>=10.2.1",
     "build>=1.2",
 ]
 test = [
@@ -77,6 +69,14 @@ test = [
     "pytest-cov>=7",
     "gcovr>=8.3",
     "mpmath>=1.4.1",
+]
+docs = [
+    { include-group = "compile" },
+    "sphinx>=8",
+    "breathe>=4.36",
+    "furo>=2024.8.6",
+    "myst-parser>=4",
+    "sphinxcontrib-mermaid>=1",
 ]
 lint = [
     { include-group = "test" },
@@ -91,6 +91,7 @@ release = [{ include-group = "compile" }, { include-group = "publish" }]
 smoke = ["tox>=4.21"]
 dev = [
     { include-group = "compile" },
+    { include-group = "docs" },
     { include-group = "lint" },
     { include-group = "release" },
     { include-group = "smoke" },
@@ -102,11 +103,11 @@ skip = "*musllinux* cp3??t-*"
 
 [tool.tox.env.sandbox]
 skip_install = true
-deps = ["{env:VFHE_DIST}"]
+deps = ["{env:VFHE_DIST}", "meson>=1.4", "ninja>=1.11"]
 pass_env = ["VFHE_ENGINE"]
 change_dir = "{env_tmp_dir}"
-allowlist_externals = ["{tox_root}/test/smoke/run.sh"]
-commands = [["{tox_root}/test/smoke/run.sh", "{posargs}"]]
+allowlist_externals = ["{tox_root}/tools/test/smoke/run.sh"]
+commands = [["{tox_root}/tools/test/smoke/run.sh", "{posargs}"]]
 
 [tool.tox.env.pypi]
 base = ["sandbox"]
@@ -114,81 +115,6 @@ base = ["sandbox"]
 [tool.tox.env.testpypi]
 base = ["sandbox"]
 set_env = { PIP_INDEX_URL = "https://test.pypi.org/simple/", PIP_EXTRA_INDEX_URL = "https://pypi.org/simple/" }
-
-[tool.pyright]
-pythonVersion = "3.10"
-typeCheckingMode = "basic"
-reportUnusedImport = "error"
-reportUnusedVariable = "error"
-reportUnusedFunction = "error"
-reportUnusedClass = "error"
-reportUnusedExpression = "error"
-extraPaths = [
-    "build",
-    "test/smoke/cases",
-    "modules/arith/python/src",
-    "modules/circuit/python/src",
-    "modules/crypto/python/src",
-    "modules/fhe/python/src",
-    "modules/mlwe/python/src",
-    "modules/piop/python/src",
-    "modules/polycom/python/src",
-    "modules/util/python/src",
-]
-exclude = [
-    "**/.*",
-    "**/__pycache__",
-    "build/*.p",
-    "dist",
-    "external",
-    # Not part of the repo: a scratch directory for reference implementations
-    # and papers, kept out of the tree through .git/info/exclude. Named here
-    # so a working copy that has one still gets a clean type-check run.
-    "reference",
-]
-
-[tool.ruff]
-cache-dir = ".cache/ruff"
-extend-exclude = ["external"]
-
-[tool.ruff.lint]
-select = [
-    "ARG",
-    "B",
-    "BLE",
-    "C4",
-    "E4",
-    "E7",
-    "E9",
-    "F",
-    "G",
-    "I",
-    "PERF",
-    "PIE",
-    "PYI",
-    "RUF",
-    "S",
-    "SIM",
-    "SLF",
-    "TC",
-    "TID",
-    "UP",
-]
-
-[tool.ruff.lint.per-file-ignores]
-"modules/*/python/test/*" = ["S101", "SLF001"]
-# An implementation's element, field and vector classes share private state
-# by design (a vector borrows its field's native parameters).
-"modules/arith/python/src/vfhe/arith/impl/**" = ["SLF001"]
-# The piop and polycom frameworks arrived with findings this rule set
-# reports: assert as an internal invariant (their tests expect
-# AssertionError), cooperating classes reaching into one another, and
-# unused arguments in protocol implementations. Scoped here rather than
-# rewritten, and to be settled by the authors of that code.
-"modules/piop/python/**" = ["S101", "S311", "SLF001", "ARG002"]
-# mle.py arrived from piop with the same findings and moved unchanged.
-"modules/arith/python/src/vfhe/arith/mle.py" = ["ARG002", "S101", "SLF001"]
-"modules/polycom/python/**" = ["SLF001", "ARG002", "TC001"]
 
 [tool.coverage.run]
 branch = true

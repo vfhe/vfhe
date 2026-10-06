@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
-#pragma once
+#ifndef VFHE_MLWE_H
+#define VFHE_MLWE_H
 #include <arith.h>
 #include <arith_generic.h>
+#include <parallel.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -355,3 +357,5 @@ extern "C"
 #ifdef __cplusplus
 }
 #endif
+
+#endif // VFHE_MLWE_H

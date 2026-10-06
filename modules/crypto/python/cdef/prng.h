@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the generators (crypto/c/src/prng.c and normal.c,
+// prototyped in crypto/c/include/crypto.h). Byte buffers are plain
+// `uint8_t *`; cffi accepts a `bytes` object for a `const uint8_t *`.
+
+void generate_rnd_seed(uint64_t *p);
+void get_rnd_from_hash(uint64_t amount, uint8_t *pointer);
+void get_rnd_from_buffer(uint64_t amount, uint8_t *pointer);
+void generate_random_bytes(uint64_t amount, uint8_t *pointer);
+double generate_normal_random(double sigma);
+void generate_uniform_below(uint64_t *out, uint64_t count, uint64_t bound);
+void prng_sample_below(uint64_t *out, uint64_t count, uint64_t bound, const char *context,
+                       const uint8_t *seed, uint64_t seed_len);
+void prng_sample_below_from(uint64_t *out, uint64_t count, uint64_t start, uint64_t bound,
+                            const char *context, const uint8_t *seed, uint64_t seed_len);
+void prng_expand_key(uint8_t key[16], const char *context, const uint8_t *seed, uint64_t seed_len,
+                     const uint64_t *label, uint64_t label_len);
+void prng_expand_below(uint64_t *out, uint64_t count, uint64_t start, uint64_t bound,
+                       const uint8_t key[16]);
+void prng_expand_below32(uint32_t *out, uint64_t count, uint64_t start, uint64_t bound,
+                         const uint8_t key[16]);
+void prng_aes128_ctr(uint8_t *out, uint64_t count, uint64_t first, uint64_t attempt,
+                     const uint8_t key[16]);
+void vfhe_prng_set_deterministic_seed(uint64_t seed);
+void vfhe_prng_clear_deterministic_seed(void);

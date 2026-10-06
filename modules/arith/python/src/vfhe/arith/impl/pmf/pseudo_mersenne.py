@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Daniele Cozzo <daniele.cozzo@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """
 Arithmetic over a pseudo-Mersenne prime p = 2^n - c (the Crandall family).
@@ -30,7 +30,7 @@ from vfhe.arith.base import Field, FieldElement
 from vfhe.arith.number_theory import gen_pseudo_mersenne_prime, is_prime
 from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
     from .ntt import PseudoMersenneNTT

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // The Reed-Solomon code over an RNS ring. The transform runs per prime and the
@@ -12,7 +12,7 @@
 
 #include <string.h>
 
-#include "util.h"
+#include "alloc.h"
 
 // -------------------------------------------------------------
 // Reed-Solomon (foldable) code over R_q, per RNS prime

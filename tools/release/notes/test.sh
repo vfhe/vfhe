@@ -1,7 +1,8 @@
 #!/bin/sh
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-
+#
+# Checks print.sh against fixtures/changelog.md; pre-commit runs it.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 

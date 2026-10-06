@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Binary Merkle trees over BLAKE3.
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Callable, Sequence
 
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 # Node size, in bytes: BLAKE3's default output length.
 DIGEST_LEN = 32

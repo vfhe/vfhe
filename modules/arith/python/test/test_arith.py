@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the (reverted) vfhe.arith over the cffi boundary.
 
@@ -20,7 +20,7 @@ from vfhe.arith import (
     Ring,
     repr,
 )
-from vfhe.engine import ffi
+from vfhe.util.bindings import ffi
 
 N = 16
 rng = random.Random(0xC0FFEE)  # noqa: S311 - test data, not a key
@@ -632,11 +632,9 @@ def test_rns_rows_is_stable_when_the_incntt_grows():
 def test_ring_follows_a_replaced_registry(monkeypatch):
     """A `Ring` must resolve the RNS base registry at use, not at import.
 
-    A dynamic-extension reload cannot patch the registry's `lib` (an instance
-    attribute, unlike the module-level `lib`/`ffi` `update_cffi_references`
-    rewrites), so the implementation's `state.register_rebind` handler swaps
-    the whole instance. A name bound at import time would keep pointing at the
-    retired one and go on building RNS bases in the unloaded library.
+    The registry is replaceable -- `reset_state` empties it between tests, and
+    anything that swaps the instance leaves a name bound at import time
+    pointing at the retired one, still handing out bases nobody else uses.
     """
     from vfhe.arith.impl.rns import rns_base
 

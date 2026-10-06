@@ -1,25 +1,27 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 
-module = {
-    'sources': files(
-        'c/src/alloc.c',
-        'c/src/build_info.c',
-        'c/src/cpu_probe.c',
-        'c/src/parallel.c',
-        'c/src/util.c',
-    ),
-    'includes': [include_directories('c/include')],
-    'headers': files('c/include/engine.h', 'c/include/util.h'),
-    'cdefs': files('python/cdef/engine.cdef'),
-    'c_tests': files('c/test/test_alloc.c', 'c/test/test_cpu_probe.c', 'c/test/test_parallel.c'),
-    'packages': ['dynamic_extensions', 'engine', 'info', 'io'],
-    # The engine picker's probe, built from just these so asking "what can this
-    # CPU run?" never loads an engine.
-    'probe': {
-        'sources': files('c/src/cpu_probe.c'),
-        'header': files('c/include/vfhe_cpu.h'),
-        'cdef': files('python/cdef/vfhe_cpu.cdef'),
-        'includes': include_directories('c/include'),
-    },
-}
+vfhe_c_sources += files(
+    'c/src/alloc.c',
+    'c/src/parallel.c',
+)
+vfhe_c_include_dirs += include_directories(
+    'c/include',
+)
+vfhe_c_public_headers += files(
+    'c/include/alloc.h',
+    'c/include/parallel.h',
+    'c/include/x86_64.h',
+)
+vfhe_c_unit_tests += files(
+    'c/test/unit/test_alloc.c',
+    'c/test/unit/test_parallel.c',
+)
+vfhe_python_cdefs += files(
+    'python/cdef/parallel.h',
+)
+
+install_subdir(
+    'python/src/vfhe',
+    install_dir: py.get_install_dir(),
+)

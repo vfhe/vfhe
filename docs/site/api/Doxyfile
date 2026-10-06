@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+# Doxygen over the C headers, run from the repository root: `doxygen docs/site/api/Doxyfile`.
+# It emits XML only, which Breathe renders into the Sphinx site. A declaration
+# without a documentation block, or a parameter without a line, is an error.
+
+PROJECT_NAME = vFHE
+INPUT = modules/util/c/include
+RECURSIVE = YES
+OUTPUT_DIRECTORY = build/docs/doxygen
+GENERATE_XML = YES
+# Doxygen 1.9 checks parameter documentation only while it generates HTML; with
+# XML alone it reports every function as undocumented.
+GENERATE_HTML = YES
+HAVE_DOT = NO
+GENERATE_LATEX = NO
+EXTRACT_ALL = NO
+WARN_IF_UNDOCUMENTED = YES
+WARN_NO_PARAMDOC = YES
+WARN_AS_ERROR = YES
+QUIET = YES

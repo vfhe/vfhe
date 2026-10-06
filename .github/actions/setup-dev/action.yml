@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 name: Set up dev environment
 description: Python and the pinned dev dependency group; shared by the preamble of CI jobs.

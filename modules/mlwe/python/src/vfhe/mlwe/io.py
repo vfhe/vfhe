@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""`vfhe.io` codecs for MLWE schemes, samples, key-switch keys, MGSW and LWE.
+"""`vfhe.util.io` codecs for MLWE schemes, samples, key-switch keys, MGSW and LWE.
 
 Samples sharing scheme, ring, level and rank (a key-switch key, an MGSW
 ciphertext) go in one record. A sample is ``b`` and then ``a``, encoded as
@@ -24,8 +24,8 @@ from vfhe.arith.impl.rns.io import (
     ring_key,
     target_domain,
 )
-from vfhe.engine import ffi, lib
-from vfhe.io import (
+from vfhe.util.bindings import ffi, lib
+from vfhe.util.io import (
     Codec,
     Encoded,
     Payload,
@@ -114,7 +114,7 @@ class SchemeCodec(Codec):
     def encode(self, obj: Any, ctx: WriteContext, /) -> Encoded:
         if type(obj) not in self.types:
             # A subclass would come back as this class, without its own state.
-            raise TypeError(f"no vfhe.io codec for {type(obj).__qualname__}")
+            raise TypeError(f"no vfhe.util.io codec for {type(obj).__qualname__}")
         return Encoded({**scheme_meta(obj, ctx), **self.parameters(obj)})
 
     def decode(
@@ -303,7 +303,7 @@ class SampleCodec(Codec):
 
     def encode(self, obj: MLWE, ctx: WriteContext, /) -> Encoded:
         if type(obj) not in self.types:
-            raise TypeError(f"no vfhe.io codec for {type(obj).__qualname__}")
+            raise TypeError(f"no vfhe.util.io codec for {type(obj).__qualname__}")
         batch = SampleBatch([obj], ctx)
         return Encoded({**batch.meta, **self.parameters(obj)}, batch.size, batch.write)
 

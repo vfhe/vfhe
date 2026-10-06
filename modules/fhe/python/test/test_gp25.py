@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the (reverted) vfhe.fhe GP25 sparse-amortized
 bootstrap over the cffi boundary.
@@ -13,10 +13,10 @@ import math
 import random
 
 import pytest
-from vfhe import engine
 from vfhe.arith import Polynomial, Ring
 from vfhe.fhe import GP25, mod_switch
 from vfhe.mlwe import LWE, MLWE, LWE_Key, MLWE_Scheme
+from vfhe.util.bindings import lib
 
 
 def get_min_prec(key):
@@ -75,11 +75,11 @@ def test_packing_ksk(balanced, keygen_threads):
     lwe_key = LWE_Key(ring=Rq, sec_sigma=3.2, err_sigma=3.2, n=in_N)
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
     gp25 = GP25(out_scheme)
-    engine.set_num_threads(keygen_threads)
+    lib.vfhe_set_num_threads(keygen_threads)
     try:
         packing_key = gp25.gen_packing_ksk(output_key, lwe_key, 0)
     finally:
-        engine.set_num_threads()
+        lib.vfhe_set_num_threads(0)
 
     extracted = []
     for i in range(in_N):
@@ -183,11 +183,11 @@ def test_sab(deterministic_prng, threads, balanced):
     # to garbage. The keys are drawn on that many threads too, which gives
     # the same keys as one, so the seed holds for both.
     gp25 = GP25(out_scheme, threads=threads)
-    engine.set_num_threads(threads)
+    lib.vfhe_set_num_threads(threads)
     try:
         sab_key = gp25.generate_sparse_ternary_key(input_key, output_key, 17, r_prec)
     finally:
-        engine.set_num_threads()
+        lib.vfhe_set_num_threads(0)
     sab_key.b_prec = msg_prec
 
     lut = [

@@ -5,6 +5,7 @@
 from collections import Counter
 
 from vfhe.arith import Polynomial, Ring
+from vfhe.crypto import entropy
 from vfhe.mlwe import LWE, LWE_Key
 
 N = 4096
@@ -26,7 +27,10 @@ def _balanced(counts, total, classes, tolerance=0.02):
 
 def test_low_bits_of_a_wide_prime_are_uniform():
     ring = Ring(N, prime_size=[60], split_degree=1)
-    values = _residues(ring, 16)
+    # Pinned: the 5% bound is 3.3 sigma, which an unseeded draw crosses in about
+    # one run of 70.
+    with entropy.deterministic(1):
+        values = _residues(ring, 16)
     assert all(v < ring.primes[0] for v in values)
     # 2^16 values over 16 classes: a rounding pattern in the low bits fails this.
     assert _balanced(Counter(v & 15 for v in values), len(values), 16, 0.05)

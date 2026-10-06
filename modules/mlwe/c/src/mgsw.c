@@ -1,7 +1,7 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
-#include "util.h"
+#include "alloc.h"
 
 void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
                            uint64_t special_primes, uint64_t log_base, bool balanced)

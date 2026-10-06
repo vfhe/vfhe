@@ -66,7 +66,7 @@ a * b -> 1.0000-0.5000j  (plaintext (1-0.5j))
 
 The trailing digits differ per run, because CKKS carries encryption noise.
 A result wrong in the first decimals means the parameters are too small for
-the computation, not that the install is broken.
+the computation.
 
 ## Next steps
 
@@ -74,7 +74,8 @@ the computation, not that the install is broken.
   cost of speed and ciphertext size.
 - Read each module's `__init__` re-exports for its public API, listed in the
   [README](https://github.com/vfhe/vfhe/blob/main/README.md#modules).
-- Compile your own C against the installed library with
-  `vfhe.dynamic_extensions`.
+- Compile your own C kernels into the library with `vfhe.util.kernels`, so the
+  compiler inlines vfhe's primitives into your loops. It needs a C compiler, and
+  meson and ninja from `pip install vfhe[kernels]`.
 
 Additional examples will be added as the library evolves.

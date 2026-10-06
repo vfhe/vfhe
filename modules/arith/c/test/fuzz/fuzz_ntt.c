@@ -1,0 +1,81 @@
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
+/* SPDX-License-Identifier: Apache-2.0 */
+/**
+ * @file fuzz_ntt.c
+ * @brief Fuzzes the arith NTT surface.
+ *
+ * Each input is decoded into a ring size N, a special prime, and N coefficients,
+ * then driven through the forward and inverse transforms. Two properties are
+ * asserted so a violation aborts (and the fuzzer minimizes the crash):
+ *
+ *   1. forward-then-inverse NTT is the identity;
+ *   2. none of the exercised kernels read/write out of bounds (ASan/UBSan).
+ *
+ * Deterministic per input (no RNG), so a saved crash reproduces exactly.
+ */
+#include <stdint.h>
+#include <stdlib.h>
+
+#include <arith.h>
+#include <alloc.h> /* safe_aligned_malloc: the SIMD kernels need 64-byte-aligned buffers */
+
+/* Little cursor over the fuzzer input; reads zero-padded once exhausted. */
+typedef struct
+{
+    const uint8_t *p;
+    size_t n, i;
+} cursor;
+
+static uint64_t take_u64(cursor *c)
+{
+    uint64_t v = 0;
+    for (int b = 0; b < 8; b++)
+        v = (v << 8) | (uint64_t)(c->i < c->n ? c->p[c->i++] : 0);
+    return v;
+}
+
+static uint8_t take_u8(cursor *c) { return (uint8_t)(c->i < c->n ? c->p[c->i++] : 0); }
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
+{
+    cursor c = {data, size, 0};
+
+    /* The domain the suites cover. Shorter transforms are legal (they take
+     * arith's scalar path); these are the vectorized sizes worth fuzzing. */
+    static const uint64_t Ns[4] = {64, 256, 1024, 4096};
+    const uint64_t n = Ns[take_u8(&c) & 3];
+    /* next_special_prime searches upward, so a bucket yields a prime somewhat
+     * above 2^qbits. 61 is the widest that keeps it under 2^62, which is where
+     * mod_new stops: past that a reduction's product overflows, so no kernel
+     * can hold the modulus. */
+    const uint64_t qbits = 20 + (take_u8(&c) % 42); /* 20..61 */
+    const uint64_t q = next_special_prime((uint64_t)1 << qbits, n, true);
+
+    Modulus mod = mod_new(q);
+    if (!mod)
+        return 0;
+    NTT_Plan plan = ntt_new_plan(n, mod);
+    if (!plan)
+    {
+        mod_free(mod);
+        return 0;
+    }
+
+    uint64_t *in = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *fwd = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *back = safe_aligned_malloc(n * sizeof(uint64_t));
+    for (uint64_t i = 0; i < n; i++)
+        in[i] = take_u64(&c) % q;
+    ntt_forward(fwd, in, plan);
+    ntt_reverse(back, fwd, plan);
+    for (uint64_t i = 0; i < n; i++)
+        if (back[i] != in[i])
+            abort(); /* NTT roundtrip must be the identity */
+
+    free(in);
+    free(fwd);
+    free(back);
+    ntt_free_plan(plan);
+    mod_free(mod);
+    return 0;
+}

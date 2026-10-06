@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
-#pragma once
+#ifndef VFHE_MERKLE_H
+#define VFHE_MERKLE_H
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -60,3 +61,5 @@ extern "C"
 #ifdef __cplusplus
 }
 #endif
+
+#endif // VFHE_MERKLE_H

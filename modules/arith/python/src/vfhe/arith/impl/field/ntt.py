@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """The negacyclic NTT over an `ExtensionField`, with the root in F_(p^d).
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
     from .field import ExtensionField, ExtensionFieldElement

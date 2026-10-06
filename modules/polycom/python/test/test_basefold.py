@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the basefold PCS over R_q with Merkle-committed codewords:
 commit once / evaluate many (the commitment is a succinct root, reused

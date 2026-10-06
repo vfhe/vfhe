@@ -1,23 +1,17 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Naming an engine asks for a fuzzing build; a session fuzzes exactly one ISA.
 option(
     'fuzz',
-    type: 'boolean',
-    value: false,
-    description: 'build the instrumented kernel archive and its harnesses alone: no Python headers, no protobuf toolchain, no tests',
-)
-
-option(
-    'fuzz_engine',
     type: 'string',
     value: '',
-    description: 'with -Dfuzz=true, the one engine to build, and required there: a session fuzzes exactly one',
+    description: 'engine to fuzz; naming one builds the fuzzers and nothing else',
 )
 
 option(
     'fuzz_link_args',
     type: 'string',
     value: '',
-    description: 'with -Dfuzz=true, the \$LIB_FUZZING_ENGINE ClusterFuzzLite sets: the C++ library supplying main()',
+    description: 'the C++ library supplying main(), from $LIB_FUZZING_ENGINE',
 )

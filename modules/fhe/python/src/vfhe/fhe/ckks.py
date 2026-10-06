@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from vfhe.arith import (
     RNSRing,
     repr,
 )
-from vfhe.engine import ffi
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
+from vfhe.util.bindings import ffi
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -339,7 +339,7 @@ class CKKS_Scheme(MLWE_Scheme):
         down a level unmultiplied (:meth:`MLWE.mod_reduce`, on a copy), which needs
         nested levels unless ``n`` is a power of two. Each tree level's products run
         on up to ``n_threads`` threads (0: the library limit, see
-        `vfhe.engine.set_num_threads`).
+        `lib.vfhe_set_num_threads`).
         """
         n = len(cts)
         if n == 0:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // The negacyclic transform over F_p[x]/(x^d - w), with the root in the
@@ -26,7 +26,7 @@
 #include <arith.h>
 #include <stdio.h>
 #include "arith_internal.h"
-#include "util.h"
+#include "alloc.h"
 
 // Reverse the low `bits` bits, the permutation Cooley-Tukey leaves in its
 // output and therefore the order the twiddle tables are stored in.

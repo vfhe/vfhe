@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""`vfhe.io` codecs for the schemes, ciphertexts and keys of this package.
+"""`vfhe.util.io` codecs for the schemes, ciphertexts and keys of this package.
 
 The schemes are `vfhe.mlwe.io` scheme records plus their own parameters;
 a BFV ciphertext is a plain MLWE sample of a BFV scheme. Key containers
@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from vfhe.io import Codec, Encoded, Payload, ReadContext, WriteContext, register
 from vfhe.mlwe.io import SampleCodec, SchemeCodec
+from vfhe.util.io import Codec, Encoded, Payload, ReadContext, WriteContext, register
 
 from .bfv import BFV_Scheme
 from .cggi16 import CGGI16_Key

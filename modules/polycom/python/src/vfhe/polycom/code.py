@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Foldable codes over R_q for the basefold commitment.
 
@@ -58,7 +58,7 @@ from typing import TYPE_CHECKING, TypeVar
 from vfhe.arith import Polynomial, RNSPolynomial, RNSRing
 from vfhe.arith.mle import element_array, mark_ntt
 from vfhe.crypto import hash_bytes, leaf_digest, seeded
-from vfhe.engine import lib
+from vfhe.util.bindings import lib
 
 if TYPE_CHECKING:
     from collections.abc import Callable
