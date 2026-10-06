@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "merkle.h"
 
@@ -7,7 +7,7 @@
 #include <string.h>
 
 #include "crypto.h"
-#include "util.h"
+#include "alloc.h"
 
 // -------------------------------------------------------------
 // Binary Merkle tree over BLAKE3 digests

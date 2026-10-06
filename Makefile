@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 
 PYTHON ?= python3
@@ -27,13 +27,12 @@ PACKAGE = $(or $(wildcard $(DIST)),$(REQUIREMENT),$(wildcard dist/*.tar.gz))
 
 export PYTHONDONTWRITEBYTECODE := 1
 
-.PHONY: build clean deps dev-env format help lint release-notes sbom-embed sdist smoke spellcheck test version wheels
+.PHONY: build clean deps dev-env docs format help lint release-notes sbom-embed sdist smoke spellcheck test wheel
 .DEFAULT_GOAL := help
 
 build:    ## compile everything into build/ (KERNELS=<engine> alone, VFHE_SANITIZE=address)
-	meson setup build --reconfigure \
-		-Db_coverage=$(VFHE_COVERAGE) \
-		-Db_sanitize=$(VFHE_SANITIZE)
+	meson setup build
+	meson configure build -Db_coverage=$(VFHE_COVERAGE) -Db_sanitize=$(VFHE_SANITIZE)
 	meson compile -C build $(if $(KERNELS),vfhe_$(KERNELS))
 
 clean:    ## remove all generated/build artifacts and caches
@@ -45,9 +44,13 @@ deps:     ## install DEPENDENCY_GROUPS (default dev) into this environment
 	$(PYTHON) -m pip install --upgrade "pip>=25.1"
 	$(PYTHON) -m pip install $(addprefix --group ,$(DEPENDENCY_GROUPS))
 
-dev-env: DEPENDENCY_GROUPS = dev
 dev-env: deps  ## everything a contributor needs: the dev group, then the git hooks
 	$(PYTHON) -m pre_commit install
+
+docs: build  ## generate the documentation site into build/docs/html (needs doxygen)
+	mkdir -p build/docs/doxygen
+	doxygen docs/site/api/Doxyfile
+	$(PYTHON) -m sphinx -W --keep-going -q docs/site build/docs/html
 
 format:   ## format all Python (ruff) and C (clang-format) sources in place
 	find modules \( -name '*.c' -o -name '*.h' \) -print0 | xargs -0 clang-format -i
@@ -75,18 +78,22 @@ sdist:    ## build the source distribution into a fresh dist/
 	rm -rf dist
 	$(PYTHON) -m build --sdist
 
-smoke: $(if $(DIST)$(REQUIREMENT),,sdist)  ## run test/smoke/cases against PACKAGE in a sandbox venv (SMOKE_CASES="info ckks")
+smoke: $(if $(DIST)$(REQUIREMENT),,sdist)  ## run test/smoke against PACKAGE in a sandbox venv (SMOKE_CASES="info ckks")
 	VFHE_DIST="$(PACKAGE)" $(PYTHON) -m tox run -e $(INDEX) --recreate -- $(SMOKE_CASES)
 
 spellcheck:  ## codespell over the tree; manual-only, so no gate blocks on prose
 	$(PYTHON) -m pre_commit run --hook-stage manual codespell --all-files
 
 test: build  ## SUITES on ENGINE (ENGINE=all|<name> SUITES=c,fast EMULATE=1 VFHE_COVERAGE=true)
-	test/unit/run.sh build
+	tools/test/unit/run.sh build
 
-version:  ## print the version a build would carry
-	@tools/release/version.sh
-
-wheels:   ## build this interpreter's wheel into a fresh dist/ (then `make sbom-embed`)
+wheel:    ## build this interpreter's wheel into a fresh dist/ (then `make sbom-embed`)
 	rm -rf dist
+# install_subdir copies the tree as it stands, so bytecode left by a bare
+# `python -c` would ship. Clear it, then prove none reached the wheel; the
+# check covers every package at once.
+	find modules -type d -name __pycache__ -prune -exec rm -rf {} +
 	$(PYTHON) -m build --wheel
+	@if unzip -l dist/*.whl | grep -q '\.pyc'; then \
+		echo 'bytecode reached the wheel' >&2; exit 1; \
+	fi

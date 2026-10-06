@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""RNS rings and polynomials through vfhe.io, and polynomials from a seed."""
+"""RNS rings and polynomials through vfhe.util.io, and polynomials from a seed."""
 
 import json
 import os
@@ -12,8 +12,8 @@ import textwrap
 import pytest
 from vfhe.arith import Polynomial, Ring
 from vfhe.arith import repr as Repr
-from vfhe.engine import ffi, lib
-from vfhe.io import Serializer
+from vfhe.util.bindings import ffi, lib
+from vfhe.util.io import Serializer
 
 # Narrow (stored 32-bit), a prime between 2^30 and 2^32 (stored 64-bit,
 # written as 4-byte words), and wide primes up to the 62-bit limit.
@@ -154,7 +154,7 @@ _CHILD = textwrap.dedent(
     import json, sys
     from vfhe.arith import Polynomial, Ring
     from vfhe.arith import repr as Repr
-    from vfhe.io import Serializer
+    from vfhe.util.io import Serializer
     primes = json.loads(sys.argv[1])
     # Populate the base with the primes in reverse, and another prime first,
     # so every prime sits at another base index than in the writer.

@@ -5,9 +5,9 @@
 import random
 
 import pytest
-import vfhe.engine as engine
 from vfhe.arith import Polynomial, Ring
 from vfhe.fhe import CKKS_LinearTransform, CKKS_Scheme
+from vfhe.util.bindings import lib
 
 N = 64
 M = N // 2
@@ -18,9 +18,9 @@ rng = random.Random(0x1A7)  # noqa: S311 - test data, not a key
 @pytest.fixture
 def threads():
     """Lets the test's parallel calls use up to 8 threads (vfhe defaults to 1)."""
-    engine.set_num_threads(8)
+    lib.vfhe_set_num_threads(8)
     yield
-    engine.set_num_threads()
+    lib.vfhe_set_num_threads(0)
 
 
 def _values(n):

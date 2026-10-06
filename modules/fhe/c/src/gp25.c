@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <stdlib.h>
 #include <pthread.h>
@@ -64,7 +64,7 @@ static inline int pthread_barrier_wait(pthread_barrier_t *barrier)
 #endif
 
 #include "mlwe.h"
-#include <util.h>
+#include <parallel.h>
 
 void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
                             RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,

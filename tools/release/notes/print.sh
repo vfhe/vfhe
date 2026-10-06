@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Prints one version's section of a Keep a Changelog file, compare link included.
@@ -15,8 +15,8 @@ root=$(cd "$(dirname "$0")/../../.." && pwd)
 version=$1
 changelog=${2:-$root/CHANGELOG.md}
 
-# index() matches literally, so 1.1 never answers for 1.1.0 and a version's dots
-# are not wildcards. Command substitution drops the trailing blank lines, and the
+# index() matches literally, so 1.1 matches only itself and a version's dots
+# are plain characters. Command substitution drops the trailing blank lines, and the
 # `seen` guard drops the leading ones.
 section=$(awk -v heading="## [$version]" '
     index($0, heading) == 1              { inside = 1; next }

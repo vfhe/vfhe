@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Daniele Cozzo <daniele.cozzo@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """
 Over-aligned cffi buffers, shared by every wrapper whose C side uses AVX-512.
@@ -12,7 +12,7 @@ This lives in its own module because the invariant is cross-cutting: two private
 copies of the allocator would be two things to keep in step.
 """
 
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 aligned64 = ffi.new_allocator(
     alloc=lambda size: lib.safe_aligned_malloc(size),

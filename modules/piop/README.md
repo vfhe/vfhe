@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.piop
 
@@ -87,6 +87,6 @@ set of the coefficient domain (`Ring` / `Field`), never from a set carried
 by the statement.
 
 `c/src/sumcheck.c` holds the sumcheck round-message kernels
-(`python/cdef/sumcheck.cdef`), the module's only C. The dense-MLE kernels
+(`python/cdef/sumcheck.h`), the module's only C. The dense-MLE kernels
 they mirror are `vfhe.arith`'s (`arith/c/src/mle.c`), and the vector
 commitment the PCS layer uses is `vfhe.crypto`'s `Merkle`.

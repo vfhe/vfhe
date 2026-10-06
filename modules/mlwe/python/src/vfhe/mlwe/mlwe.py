@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from vfhe.arith import (
     repr,
 )
 from vfhe.crypto import entropy
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -496,7 +496,7 @@ class MLWE_Scheme:
         automorphism only costs its key products. All keys must share a gadget and
         a ring, as automorphism keys generated together for one level do. Runs on up
         to ``n_threads`` threads (0: the library limit, see
-        `vfhe.engine.set_num_threads`).
+        `lib.vfhe_set_num_threads`).
         """
         if len(gens) != len(ksks):
             raise ValueError("expected one key per generator")
@@ -712,7 +712,7 @@ class MLWE_Scheme:
         this is where key generation samples.
 
         The samples are drawn on up to ``n_threads`` threads (0: the library
-        limit, see `vfhe.engine.set_num_threads`). Each is a function of a mask
+        limit, see `lib.vfhe_set_num_threads`). Each is a function of a mask
         seed, kept as `MLWE.seed` as :meth:`sample` keeps it, and a secret noise
         seed, all drawn in order on the calling thread, so the samples do not
         depend on the thread count: under ``entropy.deterministic`` any count
@@ -1181,7 +1181,7 @@ class MLWE:
     def ell(self) -> int:
         return self.ring.ell
 
-    def new_like(  # noqa: PYI019 - Self needs 3.11
+    def new_like(
         self: CtT,
         lvl: int | None = None,
         ring: RNSRing | None = None,
@@ -1326,7 +1326,7 @@ class MLWE:
         self.repr = other.repr
         self.seed = other.seed
 
-    def round_division(  # noqa: PYI019 - Self needs 3.11
+    def round_division(
         self: CtT, ring: RNSRing | None = None, lvl: int | None = None
     ) -> CtT:
         """Round-divide the ciphertext down into a smaller (quotient) ring.
@@ -1353,7 +1353,7 @@ class MLWE:
         self.ring = ring
         return self
 
-    def mod_reduce(  # noqa: PYI019 - Self needs 3.11
+    def mod_reduce(
         self: CtT, ring: RNSRing | None = None, lvl: int | None = None
     ) -> CtT:
         """Reduces the ciphertext into a smaller (quotient) ring, in place.

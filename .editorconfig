@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 root = true
 
@@ -11,15 +11,11 @@ trim_trailing_whitespace = true
 [*.md]
 trim_trailing_whitespace = false
 
-[*.{c,h}]
+[*.{c,h,py,toml,json}]
 indent_style = space
 indent_size = 4
 
-[*.py]
-indent_style = space
-indent_size = 4
-
-[*.{yml,yaml,toml,json}]
+[*.{yml,yaml}]
 indent_style = space
 indent_size = 2
 

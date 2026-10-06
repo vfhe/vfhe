@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""The vfhe.io container: framing, containers, definitions, checksums and the
+"""The vfhe.util.io container: framing, containers, definitions, checksums and the
 secret guard, through codecs defined here (the real ones live with their
 types and are tested there)."""
 
@@ -9,7 +9,7 @@ import json
 import struct
 
 import pytest
-from vfhe.io import ALIGN, Codec, Encoded, Serializer, register
+from vfhe.util.io import ALIGN, Codec, Encoded, Serializer, register
 
 
 class Blob:
@@ -171,13 +171,13 @@ def test_malformed_streams_are_refused():
     data = s.dumps([Blob(b"abc")])
     with pytest.raises(EOFError):
         s.loads(data[:-40])
-    with pytest.raises(ValueError, match=r"not a vfhe\.io stream"):
+    with pytest.raises(ValueError, match=r"not a vfhe\.util\.io stream"):
         s.loads(b"NOTVFHE" + data[7:])
     with pytest.raises(ValueError, match="more than one value"):
         # A second value where the end record should be.
         first = data[: -(24 + 32)]
         s.loads(first + data[16:])
-    with pytest.raises(TypeError, match=r"no vfhe\.io codec"):
+    with pytest.raises(TypeError, match=r"no vfhe\.util\.io codec"):
         s.dumps(object())
 
 
@@ -209,13 +209,13 @@ def test_streams_through_file_objects(tmp_path):
 
 
 def test_the_checksum_algorithm_is_recorded(monkeypatch):
-    from vfhe.io import _core
+    from vfhe.util.io import _stream
 
     def algorithm(data):
         return struct.unpack_from("<I", data, 8)[0] >> 8 & 0xFF
 
     with monkeypatch.context() as m:
-        m.setattr(_core, "_CHECKSUMS", {1: _core._CHECKSUMS[1]})
+        m.setattr(_stream, "_CHECKSUMS", {1: _stream._CHECKSUMS[1]})
         blake2 = Serializer().dumps(Blob(b"x"))
     assert algorithm(blake2) == 1
     import vfhe.crypto  # noqa: F401  # pyright: ignore[reportUnusedImport]

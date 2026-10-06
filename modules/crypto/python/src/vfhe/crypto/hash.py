@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 
 class Blake3Stream:

@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, TypeVar
 
 from vfhe.arith.number_theory import crt
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
     from vfhe.arith import RNSRing

@@ -1,4 +1,7 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 
-module = {'protos': files('proto/vfhe/circuit/gkr/v1/gkr.proto')}
+install_subdir(
+    'python/src/vfhe',
+    install_dir: py.get_install_dir(),
+)

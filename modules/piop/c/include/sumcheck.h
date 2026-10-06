@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
-#pragma once
+#ifndef VFHE_SUMCHECK_H
+#define VFHE_SUMCHECK_H
 #include <arith.h>
 #include <arith_generic.h>
 
@@ -45,3 +46,5 @@ extern "C"
 #ifdef __cplusplus
 }
 #endif
+
+#endif // VFHE_SUMCHECK_H

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // Interleaving two planes into one, the move every split-and-recombine layout

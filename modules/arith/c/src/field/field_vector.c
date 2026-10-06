@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // Vectors of extension-field elements, stored as d coefficient planes.
@@ -12,7 +12,7 @@
 #include <blake3.h>
 #include <string.h>
 #include "arith_internal.h"
-#include "util.h"
+#include "alloc.h"
 #include <crypto.h>
 
 uint64_t field_vec_padded_length(uint64_t n)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from vfhe.arith.impl.mp.multiprecision import Multiprecision
 from vfhe.arith.number_theory import crt, is_prime
 from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 from .rns_base import registry
 

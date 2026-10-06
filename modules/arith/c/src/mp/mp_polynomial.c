@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <inttypes.h>
 #include <arith.h>
-#include <util.h>
+#include <alloc.h>
 #include <crypto.h>
 #include "kernels/ifma52.h"
 // RNS row width and accessors, for the RNS <-> MP conversions below.

@@ -1,6 +1,9 @@
 #!/bin/sh
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
+#
+# Checks that blake3.cdx.json names the BLAKE3 version and commit the submodule
+# holds; pre-commit runs it.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 # Pull request checks; branch protection requires this workflow's CI Presubmit OK.
 name: CI Presubmit
@@ -15,6 +15,10 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------- checks ---
+
+  docs:
+    name: Docs
+    uses: ./.github/workflows/docs.yml
 
   lint:
     name: Lint
@@ -48,9 +52,31 @@ jobs:
             pkg:pypi/docutils, pkg:pypi/lxml
           allow-licenses: >-
             Apache-2.0, MIT, MIT-0, BSD-2-Clause, BSD-3-Clause, ISC, PSF-2.0,
-            Python-2.0, MPL-2.0, CC-BY-4.0, CC-PDDC, 0BSD, Unlicense,
-            Apache-2.0 WITH LLVM-exception, LicenseRef-scancode-protobuf,
-            LicenseRef-scancode-public-domain
+            BSD-2-Clause-Views, Python-2.0, MPL-2.0, CC-BY-4.0, CC-PDDC, CC0-1.0,
+            0BSD, Unlicense, Apache-2.0 WITH LLVM-exception,
+            LicenseRef-scancode-protobuf, LicenseRef-scancode-public-domain
+
+  proto-compatibility:
+    name: Proto Compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up buf
+        uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          setup_only: true
+      - name: Check for breaking changes
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        # A base branch may still hold the module at modules/circuit/proto.
+        run: |
+          against=$(git ls-tree -d --name-only "origin/$BASE" modules/circuit/proto)
+          buf breaking proto --against ".git#branch=origin/$BASE,subdir=${against:-proto}"
 
   # ------------------------------------------------------------------ test ---
 
@@ -210,8 +236,10 @@ jobs:
     if: always()
     needs:
       - dependency-review
+      - docs
       - fuzz-changed-code
       - lint
+      - proto-compatibility
       - release-build
       - scan-vulnerability
       - test-c

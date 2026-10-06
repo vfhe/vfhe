@@ -31,11 +31,14 @@ have the shape they have; the workflow files state what runs.
   pull request; the complete set is deferred to main. This keeps
   pull-request time short, and with no continuous delivery or deployment a
   red main is acceptable, blocking the next manual release.
+- `docs.yml` builds the documentation site with warnings as errors, so an
+  undocumented C declaration or a malformed docstring fails the gate.
 
 ### Push to main — `ci-postsubmit.yml`, `hardware-test.yml`
 
 - `release-build` runs on every commit on `main`, stamped `0+g<commit>`
 - `hardware-test.yml` skips documentation-only pushes
+- `ci-postsubmit.yml` deploys the documentation site `docs.yml` built to GitHub Pages
 
 ### Release — `release-pypi.yml`, `release-testpypi.yml`
 
@@ -121,18 +124,31 @@ check means:
 | the C and Python suites | `make test`, `make test ENGINE=all SUITES=c,fast` |
 | the sanitized jobs | `make test VFHE_SANITIZE=address,undefined` |
 | the coverage table | `make test VFHE_COVERAGE=true` |
-| the emulated jobs | `make test EMULATE=1` |
-| the version a build carries | `make version` |
+| the emulated jobs | `make test ENGINE=avx512ifma EMULATE=1` |
 | the release notes the publish job posts | `make release-notes CHANGELOG_VERSION=x.y.z` |
 | the installed package | `make smoke`, `make smoke REQUIREMENT=vfhe==<version>` |
 
 ## Releasing
 
-- **TestPyPI** — dispatch **Release TestPyPI** from `main` with a `version`
-  such as `0.0.2rc1`.
-- **PyPI** — push a bare-semver tag (`0.1.0`, no leading `v`), then dispatch
-  **Release PyPI** from that tag. A GitHub Release with the sdist, wheels
-  and build provenance is created alongside.
+The version is one line in `pyproject.toml`. Nothing computes it: a release is
+a commit that sets it, and both release workflows refuse to publish a version
+that is not the one declared there.
+
+- **TestPyPI** — set the version to a candidate such as `0.0.4rc1`, commit it
+  to `main`, then dispatch **Release TestPyPI** with the same string. No tag.
+  The file keeps that version until the next bump.
+- **PyPI** — set the version to the release (`0.0.4`), write its
+  `CHANGELOG.md` section, and merge. Then tag it bare-semver (no leading `v`)
+  and dispatch **Release PyPI** from that tag. A GitHub Release with the
+  sdist, wheels and build provenance is created alongside.
+
+  ```sh
+  git tag -s 0.0.4 -m "0.0.4 release"
+  git push origin 0.0.4
+  ```
+
+- **After a release**, open the next cycle: set the version to `0.0.5.dev0`
+  and commit.
 - Read `make release-notes CHANGELOG_VERSION=x.y.z` before tagging: the
   publish job feeds that text to the GitHub Release, and a version the
   changelog never documents fails loudly.

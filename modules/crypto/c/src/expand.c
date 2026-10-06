@@ -9,7 +9,9 @@
 // AES-NI path, key schedule included, runs in time independent of the key,
 // which the entropy stream (prng.c) relies on. The table-based path does not,
 // so it only ever sees public keys: the portable entropy stream uses BLAKE3.
-#include <engine.h>
+#include <x86_64.h>
+
+#include "x86_64_crypto.h"
 
 #include <assert.h>
 #include <stdint.h>

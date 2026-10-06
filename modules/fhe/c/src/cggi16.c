@@ -5,7 +5,8 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
-#include <util.h>
+#include <alloc.h>
+#include <parallel.h>
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #define CPU_RELAX() _mm_pause()

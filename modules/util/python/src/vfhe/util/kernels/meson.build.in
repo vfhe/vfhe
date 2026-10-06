@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+# How vfhe.util.kernels builds an engine: vfhe's C and your kernels, the way the
+# root meson.build builds the shipped engines. vfhe.util.kernels._meson fills in
+# the placeholders.
+
+project('vfhe-kernels', 'c', default_options: ['c_std=gnu11', 'buildtype=release'])
+
+# LTO is the point: inlining vfhe's kernels into the caller's loops is the
+# reason to build at all.
+options = ['b_lto=true', 'b_lundef=false']
+includes = include_directories(@INCLUDE_DIRS@)
+python = import('python').find_installation('@PYTHON@')
+deps = [
+    meson.get_compiler('c').find_library('m', required: false),
+    dependency('threads'),
+    python.dependency(embed: false),
+]
+
+# vfhe's C, with the engine's own flags.
+vfhe = static_library(
+    'vfhe',
+    [@LIB_SOURCES@],
+    c_args: [@C_ARGS@],
+    include_directories: includes,
+    dependencies: deps,
+    override_options: options,
+)
+
+# Your kernels and the cffi wrapper, compiled against the public headers and
+# linked with vfhe's objects into the engine's module.
+shared_module(
+    '@MODULE@',
+    [@USER_SOURCES@],
+    objects: vfhe.extract_all_objects(recursive: true),
+    c_args: [@USER_C_ARGS@],
+    include_directories: includes,
+    dependencies: deps,
+    override_options: options,
+    name_prefix: '',
+    name_suffix: 'so',
+    install: true,
+    install_dir: '@DIRECTORY@',
+)

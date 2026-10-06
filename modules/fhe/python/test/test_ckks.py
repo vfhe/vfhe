@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the (reverted) vfhe.fhe CKKS scheme over cffi.
 
@@ -10,12 +10,11 @@ import cmath
 import math
 
 import pytest
-import vfhe.engine as engine
 from vfhe.arith import Ring
 from vfhe.arith.residue_selection import search_log_residues_minq0
 from vfhe.crypto import entropy
-from vfhe.engine import ffi
 from vfhe.fhe import CKKS_Ciphertext, CKKS_Scheme
+from vfhe.util.bindings import ffi, lib
 
 N = 256
 
@@ -469,9 +468,9 @@ def test_ciphertext_multiplication_module_rank(r, N_r):
 @pytest.fixture
 def threads():
     """Lets the test's parallel calls use up to 8 threads (vfhe defaults to 1)."""
-    engine.set_num_threads(8)
+    lib.vfhe_set_num_threads(8)
     yield
-    engine.set_num_threads()
+    lib.vfhe_set_num_threads(0)
 
 
 def _product_scheme(n_levels, n=N):

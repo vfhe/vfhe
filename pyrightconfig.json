@@ -1,0 +1,29 @@
+{
+    "pythonVersion": "3.10",
+    "typeCheckingMode": "basic",
+    "reportUnusedImport": "error",
+    "reportUnusedVariable": "error",
+    "reportUnusedFunction": "error",
+    "reportUnusedClass": "error",
+    "reportUnusedExpression": "error",
+    "extraPaths": [
+        "build",
+        "build/proto",
+        "test/smoke",
+        "modules/arith/python/src",
+        "modules/circuit/python/src",
+        "modules/crypto/python/src",
+        "modules/fhe/python/src",
+        "modules/mlwe/python/src",
+        "modules/piop/python/src",
+        "modules/polycom/python/src",
+        "modules/util/python/src"
+    ],
+    "exclude": [
+        "**/.*",
+        "**/__pycache__",
+        "build/*.p",
+        "dist",
+        "external"
+    ]
+}

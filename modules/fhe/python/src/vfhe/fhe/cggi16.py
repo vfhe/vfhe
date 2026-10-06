@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import math
 
 from vfhe.arith import Polynomial, repr
 from vfhe.arith.number_theory import crt
-from vfhe.engine import ffi, lib
 from vfhe.mlwe.lwe import LWE, LWE_Key, lib_lwe
 from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, lib_rlwe
+from vfhe.util.bindings import ffi, lib
 
 
 def unfolded_key_count(n: int, unfolding: int) -> int:
@@ -58,7 +58,7 @@ class CGGI16:
     encryption of ``s_i`` per coefficient.
 
     `functional_bootstrap` runs one rotation on the library's threads
-    (``vfhe.engine.set_num_threads``), all of them on every step;
+    (``lib.vfhe_set_num_threads``), all of them on every step;
     `functional_bootstrap_batch` runs one rotation per thread, for
     throughput. Unfolding multiplies the work and the key traffic by
     ``(2^u - 1) / u`` and divides the number of steps by ``u``, so it pays

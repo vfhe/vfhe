@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.fhe
 
@@ -24,5 +24,5 @@ FHE schemes built on `vfhe.mlwe`.
 `c/src/` holds `bfv.c` (an empty placeholder: the scheme needs no kernels of
 its own), the CGGI16 blind rotation (`cggi16.c`, prototyped in
 `c/include/fhe.h`) and the GP25 bootstrap kernels (`gp25.c`);
-`python/cdef/fhe.cdef` declares the CGGI16 and GP25 ABI (BFV and CKKS reuse
+`python/cdef/fhe.h` declares the CGGI16 and GP25 ABI (BFV and CKKS reuse
 the arith + mlwe surfaces).

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Characterization test for the (reverted) vfhe.fhe CGGI16 functional
 bootstrap over the cffi boundary: bootstrap-key generation, LUT packing, blind
@@ -8,11 +8,11 @@ rotation (CMUX), and LWE extraction, verified against a random lookup table.
 import random
 
 import pytest
-from vfhe import engine
 from vfhe.arith import Ring
 from vfhe.fhe import CGGI16, mod_switch
 from vfhe.fhe.cggi16 import unfolded_key_count
 from vfhe.mlwe import LWE, LWE_Key, MLWE_Scheme
+from vfhe.util.bindings import lib
 
 
 @pytest.mark.complete
@@ -40,11 +40,11 @@ def test_functional_bootstrap(deterministic_prng, balanced, keygen_threads):
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=False)
 
     cggi16 = CGGI16(out_scheme)
-    engine.set_num_threads(keygen_threads)
+    lib.vfhe_set_num_threads(keygen_threads)
     try:
         bk_key = cggi16.generate_bootstrap_key(input_lwe_key, output_key)
     finally:
-        engine.set_num_threads()
+        lib.vfhe_set_num_threads(0)
 
     lut_size = 1 << (msg_prec - 1)
     lut = [random.randint(0, (1 << (msg_prec - 1)) - 1) for _ in range(lut_size)]  # noqa: S311 - test data, not a key
@@ -142,13 +142,13 @@ def test_unfolded_functional_bootstrap(deterministic_prng, unfolding):
 
     msgs = list(range(setup.lut_size))
     lut, tv, inputs = setup.lut_and_inputs(cggi16, msgs)
-    engine.set_num_threads(4)
+    lib.vfhe_set_num_threads(4)
     try:
         outs = setup.outputs(len(msgs))
         for out, c in zip(outs, inputs, strict=True):
             cggi16.functional_bootstrap(out, tv, c, bk, torus_base=setup.lut_size)
     finally:
-        engine.set_num_threads()
+        lib.vfhe_set_num_threads(0)
     assert setup.decrypt(outs) == [lut[m] for m in msgs]
 
 
@@ -170,14 +170,14 @@ def test_blind_rotation_is_deterministic(deterministic_prng, unfolding, in_N):
     lut, tv, inputs = setup.lut_and_inputs(cggi16, msgs)
 
     def single(threads: int) -> list[LWE]:
-        engine.set_num_threads(threads)
+        lib.vfhe_set_num_threads(threads)
         outs = setup.outputs(len(msgs))
         for out, c in zip(outs, inputs, strict=True):
             cggi16.functional_bootstrap(out, tv, c, bk, torus_base=setup.lut_size)
         return outs
 
     def batch() -> list[LWE]:
-        engine.set_num_threads(4)
+        lib.vfhe_set_num_threads(4)
         outs = setup.outputs(len(msgs))
         cggi16.functional_bootstrap_batch(
             outs, tv, inputs, bk, torus_base=setup.lut_size
@@ -187,7 +187,7 @@ def test_blind_rotation_is_deterministic(deterministic_prng, unfolding, in_N):
     try:
         results = [single(1), single(3), single(4), batch()]
     finally:
-        engine.set_num_threads()
+        lib.vfhe_set_num_threads(0)
     reference = results[0]
     for outs in results[1:]:
         for a, b in zip(reference, outs, strict=True):

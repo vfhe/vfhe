@@ -1,13 +1,10 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #ifndef __NTT_H__
 #define __NTT_H__
 
-#include <engine.h>
+#include <x86_64.h>
 
-#if VFHE_HAVE_AVX512IFMA
-#include <immintrin.h>
-#endif
 #include <stdbool.h>
 #include <stdint.h>
 #include <assert.h>
@@ -17,10 +14,23 @@
 #include <math.h>
 #include <pthread.h>
 
+// The width the multiprecision kernels work in: one 64-bit word on the portable
+// engine, one 512-bit vector where the engine has IFMA.
+//
+// Opaque to anyone but this library. The API only ever passes POINTERS to it, so
+// both spellings have the same ABI -- which means a consumer compiling against
+// this header needs none of our engine flags to agree with us about layout. The
+// build defines VFHE_BUILDING_LIBRARY for our own sources, which read the vector
+// and therefore need the concrete type.
+#ifdef VFHE_BUILDING_LIBRARY
 #if VFHE_HAVE_AVX512IFMA
+#include <immintrin.h>
 typedef __m512i mp_vector_t;
 #else
 typedef uint64_t mp_vector_t;
+#endif
+#else
+typedef struct _mp_vector mp_vector_t;
 #endif
 
 #ifdef __cplusplus
@@ -198,19 +208,6 @@ extern "C"
        kernel family that will read the tables reduces with -- see
        NTT_Plan::shoup_shift. The portable engine builds scalar tables and
        ignores it. */
-#if VFHE_HAVE_AVX512IFMA
-    void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t shoup_shift,
-                            __m512i ***out_ws, __m512i ***out_w_precon);
-    void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity,
-                            uint64_t shoup_shift, __m512i ***out_ws, __m512i ***out_w_precon);
-    void ntt_free_precompute(__m512i **ws, __m512i **w_precon, uint64_t n);
-#else
-void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t shoup_shift,
-                        uint64_t ***out_ws, uint64_t ***out_w_precon);
-void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uint64_t shoup_shift,
-                        uint64_t ***out_ws, uint64_t ***out_w_precon);
-void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
-#endif
 
     void ntt_forward(uint64_t *out, uint64_t *in, NTT_Plan plan);
     void ntt_reverse(uint64_t *out, uint64_t *in, NTT_Plan plan);
@@ -1044,6 +1041,13 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
        exactly 2^k. k is at most 64. */
     void mp_polynomial_scale_to_2k(uint64_t *out, MPPolynomial in, const uint64_t *half,
                                    uint64_t q_inv_neg, uint64_t k);
+    // Index and modulus helpers (util.c)
+    void array_reduce_mod_N(uint64_t *out, uint64_t *in, uint64_t size, uint64_t p);
+    void array_mod_switch_from_2k(uint64_t *out, uint64_t *in, uint64_t p, uint64_t q, uint64_t n);
+    uint64_t double2int(double x);
+    uint32_t int_rev(uint32_t b);
+    void bit_rev(uint64_t *out, uint64_t *in, uint64_t n, uint64_t log_n);
+
     MPScalar mp_load(uint64_t *in, uint64_t d);
     mp_vector_t *load_m512(uint64_t in);
     int get_mp_vector_size(void);

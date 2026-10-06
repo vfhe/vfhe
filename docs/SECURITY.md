@@ -50,7 +50,7 @@ It states what the project reasons about, not a guarantee.
 | Attacker supplying data to a caller | untrusted | any bytes that reach the API as ciphertexts or serialized messages |
 | Host RNG | trusted | key and noise generation |
 | Build/supply chain | trusted, verified | the compiled extension and vendored software |
-| Caller of dynamic extensions | trusted (compiles C) | runtime-compiled native code |
+| Caller of `vfhe.util.kernels` | trusted (compiles C) | C compiled into the library itself |
 
 The primary trust boundary is the **Python -> C (cffi) boundary**: every
 public Python call crosses into C, where nothing checks bounds or lifetimes
@@ -92,9 +92,8 @@ loads the optimal one at import.
 - **The cryptographic soundness of the implemented schemes.** vFHE implements
   published schemes and assumes their security claims. Report a scheme or
   parameter regime shown insecure by cryptanalysis to the scheme's authors.
-- **C given to runtime compilation.** vFHE compiles caller-provided C into
-  the process on request via dynamic extensions, which runs with
-  the caller's full trust.
+- **C given to `vfhe.util.kernels`.** On request vFHE compiles caller-provided C
+  into the library itself, which runs with the caller's full trust.
 - **Timing and other side channels.** vFHE is not constant-time; do not use it
   where an adversary observes timing, cache, or power.
 - **Production use.** Unaudited pre-release software; a finding that

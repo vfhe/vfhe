@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.arith
 
@@ -34,6 +34,6 @@ other module builds on.
     evaluations: add / sub / scale only, `evaluate` raises. The layer is
     asyncio-free; a consumer's unresolved protocol values are its own concern.
 
-`python/cdef/arith.cdef` declares the C ABI Python calls (opaque handles plus a
-few structs cdef'd for field access); `python/cdef/mle.cdef` the dense-MLE
+`python/cdef/arith.h` declares the C ABI Python calls (opaque handles plus a
+few structs cdef'd for field access); `python/cdef/mle.h` the dense-MLE
 kernels of `c/src/mle.c`.

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import math
 from math import log2
 
 from vfhe.arith import Polynomial, RNSPolynomial, repr
-from vfhe.engine import ffi, lib
 from vfhe.mlwe.lwe import LWE, LWE_Key
 from vfhe.mlwe.mgsw import CMUX, MGSW, NCMUX, MGSW_Scheme
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, lib_rlwe
+from vfhe.util.bindings import ffi, lib
 
 
 def mod_switch(v, q, p):

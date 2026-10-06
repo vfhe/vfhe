@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // Vectors of pseudo-Mersenne elements, stored as L limb planes.
@@ -30,7 +30,7 @@
 #include <string.h>
 
 #include "arith_internal.h"
-#include "util.h"
+#include "alloc.h"
 #include "pmf_vec_group.h"
 
 uint64_t pmf_vec_padded_length(uint64_t n)
