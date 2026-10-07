@@ -49,8 +49,7 @@ class MGSW_Scheme:
     ):
         """An MGSW encryption of ``msg``: for each component ``s_j`` of the key
         one encryption of ``-s_j * msg`` per gadget element, then the same for
-        ``msg`` itself. Drawn on up to ``n_threads`` threads (0: the library
-        limit); see :meth:`MLWE_Scheme.sample_scaled`.
+        ``msg`` itself, drawn as one :meth:`MLWE_Scheme.sample_scaled` batch.
         """
         # Base extend msg to self.ring if needed
         if msg.ring != self.ring:
@@ -77,8 +76,7 @@ class MGSW_Scheme:
         What a bootstrapping key is made of. A constant folds into the gadget
         scalars -- ``s_j * c`` times ``g`` is ``s_j`` times ``c * g`` -- so the
         messages are the same for every value and only the scalars differ, and
-        the whole key is one draw on up to ``n_threads`` threads (0: the
-        library limit).
+        the whole key is one draw.
         """
         key_special = MLWE_Key(key.key, key.sigma_err, self.mlwe_scheme, ring=self.ring)
         one = Polynomial(self.ring).from_array([1])

@@ -368,8 +368,7 @@ class MLWE_Scheme:
         :meth:`relinearize`/:meth:`multiply`.
 
         ``radix_log_base`` selects the radix gadget over the RNS one; see
-        :meth:`gadget_scalars`. The key is drawn on up to ``n_threads`` threads
-        (0: the library limit), as every key here is; see :meth:`sample_scaled`.
+        :meth:`gadget_scalars`.
         """
         quad_polys = (
             quad_polys
@@ -400,9 +399,7 @@ class MLWE_Scheme:
 
         ``radix_log_base`` selects the radix gadget over the RNS one; see
         :meth:`gadget_scalars`. The gadget is fixed here, travels with the key,
-        and is what :meth:`keyswitch` decomposes against. The key is drawn on up
-        to ``n_threads`` threads (0: the library limit); see
-        :meth:`sample_scaled`.
+        and is what :meth:`keyswitch` decomposes against.
 
         By default the key lives in the level's special ring, and a key switch
         divides its products by the special primes. With ``hybrid=False`` it
@@ -458,8 +455,7 @@ class MLWE_Scheme:
     ):
         """One automorphism key per generator, shaped as
         :meth:`gen_ksk_automorphism` returns it. The keys of a level are drawn
-        in one batch, on up to ``n_threads`` threads (0: the library limit),
-        which is what lets many small keys use the threads."""
+        in one batch, which is what lets many small keys use the threads."""
         key_perms = [[p.automorphism(g) for p in key_in.poly] for g in generators]
         if lvl is not None:
             return self._gen_ksk_sets(
@@ -527,9 +523,7 @@ class MLWE_Scheme:
         Same results as :meth:`automorphism` per generator, up to noise, but ``c``
         is decomposed once and the decomposition reused (hoisting), so each extra
         automorphism only costs its key products. All keys must share a gadget and
-        a ring, as automorphism keys generated together for one level do. Runs on up
-        to ``n_threads`` threads (0: the library limit, see
-        `vfhe.engine.set_num_threads`).
+        a ring, as automorphism keys generated together for one level do.
         """
         if len(gens) != len(ksks):
             raise ValueError("expected one key per generator")
@@ -567,8 +561,7 @@ class MLWE_Scheme:
         ksks: Sequence[MLWE_Set | list[MLWE_Set] | None],
         n_threads: int = 0,
     ) -> list[CtT]:
-        """``automorphism(cts[i], gens[i], ksks[i])`` for every ``i``, on up to
-        ``n_threads`` threads (0: the library limit).
+        """``automorphism(cts[i], gens[i], ksks[i])`` for every ``i``.
 
         The ciphertexts must share a level; they may be in either domain and are
         not modified. The results are in the coefficient domain. A generator of 1
@@ -612,8 +605,7 @@ class MLWE_Scheme:
         ksks: Sequence[MLWE_Set | list[MLWE_Set] | None],
         n_threads: int = 0,
     ) -> CtT:
-        """``sum_i automorphism(cts[i], gens[i], ksks[i])``, on up to ``n_threads``
-        threads (0: the library limit).
+        """``sum_i automorphism(cts[i], gens[i], ksks[i])``.
 
         Cheaper than summing :meth:`automorphism_batch`: the key switches share
         one division by the special primes, so the sum also carries a single
@@ -677,9 +669,9 @@ class MLWE_Scheme:
         n_threads: int = 0,
     ) -> list[CtT]:
         """One :meth:`linear_combination` of ``cts`` per row of coefficients (a
-        plaintext matrix times a vector of ciphertexts), on up to ``n_threads``
-        threads (0: the library limit). ``None`` skips a term. A matrix applied
-        to many vectors can be prepared once as a :class:`PlaintextMatrix`.
+        plaintext matrix times a vector of ciphertexts). ``None`` skips a term. A
+        matrix applied to many vectors can be prepared once as a
+        :class:`PlaintextMatrix`.
         """
         matrix = rows if isinstance(rows, PlaintextMatrix) else PlaintextMatrix(rows)
         if not cts or matrix.n_columns != len(cts):
@@ -785,12 +777,11 @@ class MLWE_Scheme:
         bootstrapping key is a few polynomials times every gadget element, so
         this is where key generation samples.
 
-        The samples are drawn on up to ``n_threads`` threads (0: the library
-        limit, see `vfhe.engine.set_num_threads`). Each is a function of a mask
-        seed, kept as `MLWE.seed` as :meth:`sample` keeps it, and a secret noise
-        seed, all drawn in order on the calling thread, so the samples do not
-        depend on the thread count: under ``entropy.deterministic`` any count
-        gives the same keys. They come back in NTT form, where keys are used.
+        Each sample is a function of a mask seed, kept as `MLWE.seed` as
+        :meth:`sample` keeps it, and a secret noise seed, all drawn in order on the
+        calling thread, so the samples do not depend on the thread count: under
+        ``entropy.deterministic`` any count gives the same keys. They come back in
+        NTT form, where keys are used.
         """
         ring = key.ring
         if ffi.cast("RNS_MLWE_Key", key.obj).r != self.r:
@@ -974,9 +965,8 @@ class MLWE_Scheme:
         *,
         lvl: int | None = None,
     ) -> list[CtT]:
-        """``multiply(lhs[i], rhs[i], ksk)`` for every ``i``, on up to ``n_threads``
-        threads (0: the library limit). All ciphertexts must share one ring and
-        level.
+        """``multiply(lhs[i], rhs[i], ksk)`` for every ``i``. All ciphertexts must
+        share one ring and level.
 
         With ``lvl`` (and ``ksk``), each product is also round-divided to that
         level (:meth:`MLWE.round_division`), whose ring must be a quotient of the
@@ -1036,7 +1026,7 @@ class MLWE_Scheme:
         self, cts: Sequence[CtT], lvl: int, n_threads: int = 0
     ) -> list[CtT]:
         """:meth:`MLWE.round_division` of each (distinct) ciphertext to level ``lvl``,
-        in place, on up to ``n_threads`` threads (0: the library limit).
+        in place.
         """
         if len({id(c) for c in cts}) != len(cts):
             raise ValueError("the ciphertexts must be distinct")

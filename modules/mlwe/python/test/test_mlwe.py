@@ -1256,6 +1256,29 @@ def test_keygen_does_not_depend_on_the_thread_count(r, N_r):
     assert keys[0] == keys[1] == keys[2]
 
 
+@pytest.mark.parametrize("lvl", [0, 1])
+@pytest.mark.usefixtures("threads")
+def test_keygen_without_the_special_primes_does_not_depend_on_the_thread_count(
+    ghs, lvl
+):
+    """Pinned, a ``hybrid=False`` key is the same on 1, 3 and 8 threads, and
+    stays in the level's own ring on each."""
+    _Rq, _Rp, scheme = ghs
+
+    def bv_key(n_threads):
+        with entropy.deterministic(0x7EAD5):
+            key = scheme.key_gen_sparse(N // 8, 3.2)
+            key2 = scheme.key_gen_sparse(N // 8, 3.2)
+            ksk = scheme.gen_ksk(
+                key2, key, lvl=lvl, radix_log_base=4, n_threads=n_threads, hybrid=False
+            )
+        assert all(c.ring == scheme.rings[lvl] for c in ksk.mlwe[0])
+        return _ksk_digests(ksk)
+
+    keys = [bv_key(n_threads) for n_threads in (1, 3, 0)]
+    assert keys[0] == keys[1] == keys[2]
+
+
 @pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])
 @pytest.mark.usefixtures("threads")
 def test_keys_drawn_on_several_threads_switch_keys(r, N_r):

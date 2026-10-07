@@ -122,9 +122,7 @@ class CKKS_LinearTransform:
 
         ``ksks[k]`` is the rotation key for ``k`` slots
         (`CKKS_Scheme.gen_rotation_key`), for every ``k`` in :attr:`rotations`. The
-        result's ``delta`` is the input's times ``scale``. Runs on up to
-        ``n_threads`` threads (0: the library limit, see
-        `vfhe.engine.set_num_threads`).
+        result's ``delta`` is the input's times ``scale``.
         """
         scheme = self.scheme
         if ciphertext.lvl != self.lvl or ciphertext.ring != scheme.rings[self.lvl]:

@@ -185,7 +185,7 @@ class CKKS_Scheme(MLWE_Scheme):
         self, key: MLWE_Key, k: int, n_threads: int = 0
     ) -> MLWE_Set | list[MLWE_Set]:
         """Generates the rotation key (automorphism key-switching key) for rotation
-        by k slots, on up to ``n_threads`` threads (0: the library limit)."""
+        by k slots."""
         N = self.ring.N
         k_mod = k % (N // 2)
         gen = pow(5, k_mod, 2 * N)
@@ -230,8 +230,8 @@ class CKKS_Scheme(MLWE_Scheme):
         scale: float | None = None,
         n_threads: int = 0,
     ) -> list[CKKS_Ciphertext]:
-        """One :meth:`linear_combination` of ``cts`` per row of coefficients, on up to
-        ``n_threads`` threads (0: the library limit). ``None`` skips a term.
+        """One :meth:`linear_combination` of ``cts`` per row of coefficients.
+        ``None`` skips a term.
         """
         if any(c.delta != cts[0].delta for c in cts):
             raise ValueError("the ciphertexts must share one scaling factor")
@@ -250,8 +250,7 @@ class CKKS_Scheme(MLWE_Scheme):
     def gen_conjugation_key(
         self, key: MLWE_Key, n_threads: int = 0
     ) -> MLWE_Set | list[MLWE_Set]:
-        """Generates the key-switching key :meth:`conjugate` needs, on up to
-        ``n_threads`` threads (0: the library limit)."""
+        """Generates the key-switching key :meth:`conjugate` needs."""
         return self.gen_ksk_automorphism(key, key, 2 * self.N - 1, n_threads=n_threads)
 
     def rescale(self, ciphertext: CKKS_Ciphertext) -> CKKS_Ciphertext:
@@ -280,8 +279,7 @@ class CKKS_Scheme(MLWE_Scheme):
     def rescale_batch(
         self, cts: Sequence[CKKS_Ciphertext], n_threads: int = 0
     ) -> list[CKKS_Ciphertext]:
-        """:meth:`rescale` of each ciphertext (distinct, at one level), on up to
-        ``n_threads`` threads (0: the library limit).
+        """:meth:`rescale` of each ciphertext (distinct, at one level).
 
         In place like :meth:`rescale`, except on non-nested chains, where
         :meth:`rational_rescale` returns new ciphertexts one at a time.
@@ -324,8 +322,7 @@ class CKKS_Scheme(MLWE_Scheme):
         *,
         lvl: int | None = None,
     ) -> list[CKKS_Ciphertext]:
-        """``lhs[i] * rhs[i]`` for every ``i``, relinearized with ``ksk``, on up to
-        ``n_threads`` threads (0: the library limit).
+        """``lhs[i] * rhs[i]`` for every ``i``, relinearized with ``ksk``.
 
         Not rescaled, unless ``lvl`` is given: each product is then rescaled to
         that level, whose ring must be a quotient of the operands'.
@@ -348,9 +345,7 @@ class CKKS_Scheme(MLWE_Scheme):
         each, instead of ``n - 1``. Each product is relinearized with :attr:`rlk`
         and rescaled. When a tree level has an odd count, its last factor is carried
         down a level unmultiplied (:meth:`MLWE.mod_reduce`, on a copy), which needs
-        nested levels unless ``n`` is a power of two. Each tree level's products run
-        on up to ``n_threads`` threads (0: the library limit, see
-        `vfhe.engine.set_num_threads`).
+        nested levels unless ``n`` is a power of two.
         """
         n = len(cts)
         if n == 0:

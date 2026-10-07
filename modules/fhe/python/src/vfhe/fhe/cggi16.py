@@ -83,8 +83,8 @@ class CGGI16:
         self, input_key: MLWE_Key | LWE_Key, output_key: MLWE_Key, n_threads: int = 0
     ) -> CGGI16_Key:
         """The bootstrapping key for ``input_key``, encrypted under
-        ``output_key``: every MGSW key drawn in one batch on up to ``n_threads``
-        threads (0: the library limit), see :meth:`MGSW_Scheme.encrypt_constants`.
+        ``output_key``: every MGSW key drawn in one batch, see
+        :meth:`MGSW_Scheme.encrypt_constants`.
         """
         bk = CGGI16_Key()
         bk.unfolding = self.unfolding

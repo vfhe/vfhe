@@ -244,8 +244,7 @@ class BFV_Scheme(MLWE_Scheme):
     def gen_rotation_key(
         self, key: MLWE_Key, k: int, n_threads: int = 0
     ) -> MLWE_Set | list[MLWE_Set]:
-        """Generates the key-switching key :meth:`rotate` needs for ``k``, on up
-        to ``n_threads`` threads (0: the library limit)."""
+        """Generates the key-switching key :meth:`rotate` needs for ``k``."""
         return self.gen_ksk_automorphism(
             key, key, self._rotation_gen(k), n_threads=n_threads
         )
@@ -260,8 +259,7 @@ class BFV_Scheme(MLWE_Scheme):
     def gen_conjugation_key(
         self, key: MLWE_Key, n_threads: int = 0
     ) -> MLWE_Set | list[MLWE_Set]:
-        """Generates the key-switching key :meth:`conjugate` needs, on up to
-        ``n_threads`` threads (0: the library limit)."""
+        """Generates the key-switching key :meth:`conjugate` needs."""
         return self.gen_ksk_automorphism(key, key, 2 * self.N - 1, n_threads=n_threads)
 
     # --- multiplication ---

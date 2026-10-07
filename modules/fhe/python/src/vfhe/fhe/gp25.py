@@ -54,8 +54,8 @@ class GP25:
         n_threads: int = 0,
     ) -> SAB_Key:
         """The SAB key: its MGSW keys drawn in one batch, then the automorphism
-        and packing keys, each on up to ``n_threads`` threads (0: the library
-        limit). The bootstrap itself runs on the ``threads`` given to `GP25`.
+        and packing keys. The bootstrap itself runs on the ``threads`` given to
+        `GP25`.
         """
         sab = SAB_Key()
         sab.h = h
