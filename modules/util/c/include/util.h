@@ -24,6 +24,42 @@ extern "C"
     // for huge pages. Release with plain `free`.
     void *safe_aligned_malloc(size_t size);
 
+    // Memory pool: buffers released with mempool_free are kept by the
+    // releasing thread and handed out again for a request of the same size,
+    // instead of going back to the C library. What the pool retains over all
+    // threads is bounded by its capacity. A sanitized build bypasses it.
+    //
+    // 64-byte aligned like safe_aligned_malloc; the contents are undefined.
+    void *mempool_aligned_malloc(size_t bytes);
+    // `ptr` must be 64-byte aligned and at least `bytes` long, and come from
+    // mempool_aligned_malloc or safe_aligned_malloc. A buffer from
+    // mempool_aligned_malloc may also be released with plain `free`.
+    void mempool_free(void *ptr, size_t bytes);
+    // The same, zeroing the buffer first: for buffers that held secrets.
+    void mempool_free_and_wipe(void *ptr, size_t bytes);
+    // Returns every buffer retained, on every thread, to the C library.
+    void mempool_release_all(void);
+
+// Capacity settings besides a number of bytes. AUTO retains at most the most
+// the pool ever had handed out at once; DEFAULT is VFHE_MEMPOOL_CAPACITY if
+// set (bytes), else AUTO. 0 retains nothing.
+#define MEMPOOL_CAPACITY_AUTO UINT64_MAX
+#define MEMPOOL_CAPACITY_DEFAULT (UINT64_MAX - 1)
+    // Lowering the capacity below what is retained releases everything.
+    void mempool_set_capacity(uint64_t bytes);
+    uint64_t mempool_capacity(void); // the setting: bytes or AUTO
+
+    typedef struct
+    {
+        uint64_t retained_bytes;         // in free lists, all threads
+        uint64_t outstanding_bytes;      // handed out, not yet released to the pool
+        uint64_t peak_outstanding_bytes; // highest outstanding_bytes so far
+        uint64_t retention_limit_bytes;  // what the capacity allows right now
+        uint64_t hits;                   // requests served from a free list
+        uint64_t misses;                 // requests passed to the C library
+    } MempoolStatistics;
+    void mempool_statistics(MempoolStatistics *out);
+
     // Parallelism. One library-wide limit caps the threads of every operation:
     // VFHE_NUM_THREADS if set, else 1. vfhe_set_num_threads changes it (0
     // restores the default).
