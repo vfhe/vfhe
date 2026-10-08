@@ -193,6 +193,25 @@ versions may contain breaking changes.
   native (`vfhe_parallel_for` in util), and a parallel operation started
   inside another runs on its caller's thread. The complex-FFT batch, which
   always used 8 threads, now follows the limit too.
+- Add a memory pool for the buffers the library allocates and frees
+  repeatedly (`vfhe.engine.memory_pool`). A released RNS polynomial row, field
+  or pseudo-Mersenne vector, or complex polynomial is kept by the thread that
+  released it and handed out again for the next request of its size, instead
+  of going back to the C library and being faulted in afresh. At N=2^14 the
+  CKKS batch calls (`multiply_batch`, `automorphism_batch`, hoisted
+  `automorphisms`) went from 1,700-3,500 minor page faults per call to none;
+  an allocating add of 128 MiB field vectors from about 1,100 to none; a
+  basefold evaluation proof over 2^20 coefficients from about 26,000 to 2,700.
+  What the pool keeps is bounded by `set_capacity(n_bytes | "auto" | None)`:
+  `"auto"` (the default) keeps at most the most the library ever had in use at
+  once, so a process keeps its peak working set resident -- about 280 MiB more
+  for that basefold proof. `0` turns the pool off, `release_all()` hands back
+  what it keeps, and `statistics()` reports it. `set_wipe_on_release(True)`
+  zeroes every buffer as it is released; off by default, as it costs a pass
+  over each buffer (estimated at 3-11% of a CKKS evaluation call).
+  `VFHE_MEMPOOL_CAPACITY`
+  and `VFHE_MEMPOOL_WIPE_ON_RELEASE=1` set the defaults, and both settings are
+  kept across `dynamic_extensions` reloads. An ASan build bypasses the pool.
 
 ### Changed
 
