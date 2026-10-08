@@ -819,7 +819,13 @@ therefore lives inside the PCS's evaluation protocol
    predicates for sublinear verification (a sparse-evaluation protocol
    registered for the `committed` kind); the line-restriction 2-to-1
    [Tha22, §4.5.2] should a single-point opening ever pay.
-4. **Lookup relation**, reducing to a mix of Eval and Sum claims.
+4. **Lookup relation**: done (`lookup.py`, `range.py`; see
+   [range.md](range.md)). `Relation_Lookup` reduces, by offline memory
+   checking over four grand products, to two `Relation_Sum` claims over
+   degree-3 virtual oracles plus four `Relation_Eval` claims;
+   `Relation_Range` reduces to it. Open follow-ups: batching the four
+   fingerprints into one sumcheck, and a products-form round kernel in C --
+   the degree-3 rounds are pure Python today (item 3a).
 5. **Field coefficient domains** are done (`MLE(field=...)`, the
    whole-vector round messages, `Field`'s samplers); binding a variable
    other than the first still unpacks the vector to elements.
