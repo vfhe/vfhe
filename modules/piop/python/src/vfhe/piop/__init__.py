@@ -3,6 +3,7 @@
 # vfhe.piop public API re-exports.
 from .circuit import GKR, Relation_Circuit
 from .fs import FS_Verifier
+from .lookup import Lookup, Relation_Lookup
 from .piop import (
     IOP,
     OracleKind,
@@ -24,6 +25,7 @@ from .piop import (
     element_digest,
     oracle_kind,
 )
+from .range import RangeDecomposition, Relation_Range
 from .sumcheck import Sumcheck, SumcheckProd
 from .virtual import ImplicitEval, ImplicitOracle, VirtualEval, VirtualOracle
 
@@ -33,15 +35,19 @@ __all__ = [
     "FS_Verifier",
     "ImplicitEval",
     "ImplicitOracle",
+    "Lookup",
     "OracleKind",
     "Party",
     "Proof",
     "Protocol",
     "Prover",
+    "RangeDecomposition",
     "Rejection",
     "Relation",
     "Relation_Circuit",
     "Relation_Eval",
+    "Relation_Lookup",
+    "Relation_Range",
     "Relation_Sum",
     "Relation_SumProd",
     "Relation_Zero",

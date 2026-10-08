@@ -48,6 +48,14 @@ module's.
   proof)` checks it with no prover, witnesses, or oracles present, reading
   the proof in a single forward pass and rejecting messages that arrive out
   of turn, run out, or are left over.
+- `range.py` / `lookup.py`: range checks over packed `R_q` polynomials, and
+  the lookup argument they rest on.
+  `Relation_Range` (every coefficient below a bound `B`) reduces, via
+  `RangeDecomposition`, to a `Relation_Lookup` on the base-`beta` digits
+  plus evaluation claims on the digits and on the original oracle. The
+  digits live over a large prime field while the oracle stays over `R_q`;
+  the bridge is the unpacked-evaluation lemma, so the digit polynomial is
+  never committed on the ring side. See [range.md](range.md).
 - `sumcheck.py`: `Sumcheck` (reduces `Relation_Sum` to `Relation_Eval` in
   `num_vars` rounds) and the Libra-style `SumcheckProd` (reduces
   `Relation_SumProd` to one `Relation_Eval` per factor). Round messages are
