@@ -225,6 +225,15 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `vfhe_parallel_for` keeps its helper threads between calls and wakes only
+  the ones a call uses. Idle workers wait each on its own condition variable,
+  most recently idle first; a call hands itself to up to `threads - 1` of
+  them and wakes one, each of which wakes two more, and takes back the ones
+  that have not started when its items run out. On a 96-core Xeon 6975P-C
+  with 191 idle workers, a call over two short items costs 37 us instead of
+  240 us, and the product tree of 64 CKKS ciphertexts at N = 2^14 (one
+  multiplication batch per layer) takes 67 ms instead of 105 ms at 8 threads
+  and 51 ms instead of 60 ms at 192 (median of three).
 - Key generation leaves its keys in the NTT domain: `MGSW_Scheme.encrypt` and
   the key-switch key generators return samples in NTT form, which every
   consumer converted them to anyway, without the round trip through the
