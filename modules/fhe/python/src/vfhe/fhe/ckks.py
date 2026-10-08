@@ -61,26 +61,48 @@ class CKKS_Scheme(MLWE_Scheme):
         ``len(values)`` must divide ``N/2``; fewer values are repeated to fill the
         slots (sparse packing), and ``decode(..., slots=len(values))`` reads them
         back. ``ring`` is the plaintext's ring (default: level 0's) and ``scale``
-        multiplies the values (default: ``scaling_factor``).
+        multiplies the values (default: ``scaling_factor``). A contiguous buffer
+        of complex doubles (a numpy ``complex128`` array) is read in place.
         """
+        return self.encode_batch([values], ring=ring, scale=scale)[0]
+
+    def encode_batch(
+        self,
+        values: Sequence[Sequence[complex | float]],
+        *,
+        ring: RNSRing | None = None,
+        scale: float | None = None,
+        n_threads: int = 0,
+    ) -> list[RNSPolynomial]:
+        """:meth:`encode` of each of ``values``, in one native call."""
+        return self._encode_rotated(values, None, ring, scale, n_threads)
+
+    def _encode_rotated(
+        self,
+        values: Sequence[Sequence[complex | float]],
+        shifts: Sequence[int] | None,
+        ring: RNSRing | None,
+        scale: float | None,
+        n_threads: int,
+    ) -> list[RNSPolynomial]:
+        """:meth:`encode_batch`, with ``values[k]`` rotated left by ``shifts[k]``
+        slots first."""
         ring = self.ring if ring is None else ring
         if ring.N != self.ring.N:
             raise ValueError(
                 f"Expected a ring of dimension {self.ring.N}, got {ring.N}"
             )
-        slots = self.ring.N // 2
-        if not values or slots % len(values):
-            raise ValueError(
-                f"Expected a number of values dividing {slots}, got {len(values)}"
-            )
-        c_poly = ComplexPolynomial(self.complex_ring)
-        c_poly.from_array(list(values) * (slots // len(values)))
-        c_poly.IFFT()
-        c_poly *= self.scaling_factor if scale is None else scale
-        poly = c_poly.round_to_RNS_cpp(ring)
-        # Restrict the RNS mask of the encoded polynomial to the primes of `ring`
-        ffi.cast("RNS_Polynomial", poly.obj).rns_mask = ring.mask
-        return poly
+        polys = self.complex_ring.values_ifft_scale_round_to_RNS_batch(
+            values,
+            ring,
+            self.scaling_factor if scale is None else scale,
+            shifts,
+            n_threads,
+        )
+        for poly in polys:
+            # Restrict the RNS mask of the encoded polynomial to the primes of `ring`
+            ffi.cast("RNS_Polynomial", poly.obj).rns_mask = ring.mask
+        return polys
 
     def decode(
         self,

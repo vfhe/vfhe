@@ -22,6 +22,7 @@ HElib.* CRYPTO 2018.
 from __future__ import annotations
 
 import cmath
+import itertools
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
@@ -36,6 +37,10 @@ if TYPE_CHECKING:
 
     from .ckks import CKKS_Ciphertext, CKKS_Scheme
 
+# Diagonals are encoded this many at a time, which bounds the converted copies
+# of non-buffer diagonals held at once.
+_ENCODE_CHUNK = 512
+
 
 class CKKS_LinearTransform:
     """A slot matrix encoded for one level, ready to apply to ciphertexts there.
@@ -43,7 +48,9 @@ class CKKS_LinearTransform:
     ``diagonals`` maps ``d`` to ``diag_d`` (length ``n``), or is an iterable of
     such pairs; only the nonzero diagonals need be given. Each is rotated,
     tiled to ``N/2`` slots and encoded once, in ``scheme.rings[lvl]`` at
-    ``scale`` (default: ``scaling_factor``). ``baby_steps`` is ``b`` (default:
+    ``scale`` (default: ``scaling_factor``), as :meth:`CKKS_Scheme.encode_batch`
+    does: a diagonal given as a buffer of complex doubles (a numpy
+    ``complex128`` array) is read in place. ``baby_steps`` is ``b`` (default:
     ``ceil(sqrt(n))``).
     """
 
@@ -56,6 +63,7 @@ class CKKS_LinearTransform:
         lvl: int = 0,
         scale: float | None = None,
         baby_steps: int | None = None,
+        n_threads: int = 0,
     ) -> None:
         pairs = (
             cast("Mapping[int, Sequence[complex]]", diagonals).items()
@@ -82,18 +90,25 @@ class CKKS_LinearTransform:
         ring = scheme.rings[lvl]
         # giant j -> baby i -> plaintext of rot(diag_(j*b+i), -j*b)
         self.plaintexts: dict[int, dict[int, RNSPolynomial]] = {}
-        for d, diag in _chain(first, items):
-            if not 0 <= d < n or len(diag) != n:
-                raise ValueError(
-                    f"diagonal {d} must have index below {n} and length {n}"
-                )
-            j, i = divmod(d, b)
-            if i in self.plaintexts.get(j, {}):
-                raise ValueError(f"diagonal {d} given twice")
-            cut = n - j * b  # rotated[t] = diag[t - j*b]
-            rotated = [*diag[cut:], *diag[:cut]]
-            pt = scheme.encode(rotated * (slots // n), ring=ring, scale=self.scale)
-            self.plaintexts.setdefault(j, {})[i] = pt
+        seen: set[int] = set()
+        pairs_left = _chain(first, items)
+        while chunk := list(itertools.islice(pairs_left, _ENCODE_CHUNK)):
+            for d, diag in chunk:
+                if not 0 <= d < n or len(diag) != n:
+                    raise ValueError(
+                        f"diagonal {d} must have index below {n} and length {n}"
+                    )
+                if d in seen:
+                    raise ValueError(f"diagonal {d} given twice")
+                seen.add(d)
+            # rotated[t] = diag[t - j*b]
+            shifts = [-(d // b) * b for d, _ in chunk]
+            pts = scheme._encode_rotated(  # noqa: SLF001 - same package
+                [diag for _, diag in chunk], shifts, ring, self.scale, n_threads
+            )
+            for (d, _), pt in zip(chunk, pts, strict=True):
+                j, i = divmod(d, b)
+                self.plaintexts.setdefault(j, {})[i] = pt
         self._prepare()
 
     def _prepare(self) -> None:

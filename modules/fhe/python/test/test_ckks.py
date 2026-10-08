@@ -72,6 +72,45 @@ def test_sparse_encoding(n):
         scheme.decode(pt, slots=3)
 
 
+def test_encode_batch_matches_encode():
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
+    )
+    ring = scheme.rings[1]
+    batch = [rand_values(n) for n in (1, 4, N // 2, 32, N // 2)]
+    engine.set_num_threads(8)
+    try:
+        polys = scheme.encode_batch(batch, ring=ring, scale=2**20, n_threads=3)
+    finally:
+        engine.set_num_threads()
+    for values, poly in zip(batch, polys, strict=True):
+        expected = scheme.encode(values, ring=ring, scale=2**20)
+        assert poly.get_polynomial(signed=True) == expected.get_polynomial(signed=True)
+    assert scheme.encode_batch([]) == []
+    with pytest.raises(ValueError, match="dividing"):
+        scheme.encode_batch([rand_values(4), rand_values(3)])
+    with pytest.raises(NotImplementedError, match="str"):
+        scheme.encode(["1"] * 4)  # pyright: ignore[reportArgumentType]
+
+
+def test_encode_reads_complex_buffers():
+    np = pytest.importorskip("numpy")
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
+    )
+    values = rand_values(N // 2)
+    expected = scheme.encode(values).get_polynomial(signed=True)
+    for buffer in (
+        np.array(values),  # read in place
+        np.repeat(np.array(values), 2)[::2],  # not contiguous: converted
+    ):
+        assert scheme.encode(buffer).get_polynomial(signed=True) == expected
+    reals = [v.real for v in values]
+    assert scheme.encode(np.array(reals)).get_polynomial(signed=True) == scheme.encode(
+        reals
+    ).get_polynomial(signed=True)
+
+
 def test_encrypt_decrypt():
     scheme = CKKS_Scheme(
         Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1

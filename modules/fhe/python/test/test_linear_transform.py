@@ -7,7 +7,7 @@ import random
 import pytest
 import vfhe.engine as engine
 from vfhe.arith import Polynomial, Ring
-from vfhe.fhe import CKKS_LinearTransform, CKKS_Scheme
+from vfhe.fhe import CKKS_LinearTransform, CKKS_Scheme, linear_transform
 
 N = 64
 M = N // 2
@@ -177,10 +177,32 @@ def test_linear_combination_matches_term_by_term_products(setup):
     assert _close(dec, expected)
 
 
-def test_refusals(setup):
+@pytest.mark.usefixtures("threads")
+def test_diagonals_are_encoded_rotated(setup, monkeypatch):
+    # rot(diag_(j*b+i), -j*b), encoded in chunks smaller than the input.
+    monkeypatch.setattr(linear_transform, "_ENCODE_CHUNK", 2)
+    scheme, _, _ = setup
+    n, b = 16, 3
+    diagonals = {d: _values(n) for d in (0, 1, 5, 6, 10, 15)}
+    lt = CKKS_LinearTransform(
+        scheme, iter(diagonals.items()), baby_steps=b, n_threads=3
+    )
+    for d, diag in diagonals.items():
+        j, i = divmod(d, b)
+        cut = n - j * b
+        expected = scheme.encode([*diag[cut:], *diag[:cut]])
+        assert lt.plaintexts[j][i].get_polynomial(
+            signed=True
+        ) == expected.get_polynomial(signed=True)
+
+
+def test_refusals(setup, monkeypatch):
     scheme, key, _ = setup
     with pytest.raises(ValueError, match="power of two"):
         CKKS_LinearTransform(scheme, {0: _values(6)})
+    with pytest.raises(ValueError, match="twice"):
+        CKKS_LinearTransform(scheme, [(1, _values(M)), (1, _values(M))])
+    monkeypatch.setattr(linear_transform, "_ENCODE_CHUNK", 1)
     with pytest.raises(ValueError, match="twice"):
         CKKS_LinearTransform(scheme, [(1, _values(M)), (1, _values(M))])
     lt = CKKS_LinearTransform(scheme, {0: _values(M), 3: _values(M)})

@@ -803,6 +803,17 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
                                                      uint64_t count, uint64_t n_complex,
                                                      uint32_t log_prec, double **gs_ws,
                                                      double temp_delta);
+    // For each k < count: the n = lengths[k] complex values at values[k], as
+    // (real, imaginary) pairs, rotated so that value shifts[k] mod n comes
+    // first and repeated to n_complex values (n a power of two dividing
+    // n_complex = 2^log_prec), are bit-reversed, transformed by GS_RN,
+    // multiplied by scale / n_complex and rounded into outs[k] as
+    // complex_poly_round_to_RNS does. Runs on up to n_threads threads (0: the
+    // library limit).
+    void complex_values_ifft_scale_round_to_RNS_batch(
+        RNS_Polynomial *outs, const double *const *values, const uint64_t *lengths,
+        const uint64_t *shifts, uint64_t count, uint64_t n_complex, uint32_t log_prec,
+        double **gs_ws, double scale, uint64_t n_threads);
 
     // polynomial
     IntPolynomial polynomial_new_int_polynomial(uint64_t N);

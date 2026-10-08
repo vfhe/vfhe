@@ -529,3 +529,47 @@ void complex_polys_ifft_scale_round_to_RNS_batch(void **rows_in, void **outs_rns
     ComplexBatch batch = {rows_in, outs_rns, n_complex, log_prec, gs_ws, temp_delta};
     vfhe_parallel_for(count, 0, complex_batch_item, &batch);
 }
+
+typedef struct
+{
+    const double *const *values;
+    const uint64_t *lengths;
+    const uint64_t *shifts;
+    RNS_Polynomial *outs;
+    uint64_t n_complex;
+    uint32_t log_prec;
+    double **gs_ws;
+    double scale;
+} ComplexValuesBatch;
+
+static void complex_values_batch_item(void *ctx, uint64_t k)
+{
+    const ComplexValuesBatch *a = (const ComplexValuesBatch *)ctx;
+    const uint64_t n_complex = a->n_complex, mask = a->lengths[k] - 1;
+    const uint64_t shift = a->shifts[k] & mask;
+    const double *in = a->values[k];
+    const size_t bytes = 2 * n_complex * sizeof(double);
+    double *row = (double *)mempool_aligned_malloc(bytes);
+    // Gathered straight into bit-reversed order, the input GS_RN expects.
+    for (uint64_t i = 0; i < n_complex; i++)
+    {
+        const uint64_t j = (i + shift) & mask;
+        const uint32_t r = bit_reverse((uint32_t)i, a->log_prec);
+        row[r] = in[2 * j];
+        row[r + n_complex] = in[2 * j + 1];
+    }
+    GS_RN(row, a->gs_ws, n_complex);
+    complex_poly_scale_double(row, a->scale / (double)n_complex, n_complex);
+    complex_poly_round_to_RNS(a->outs[k], row, n_complex);
+    mempool_free(row, bytes);
+}
+
+void complex_values_ifft_scale_round_to_RNS_batch(RNS_Polynomial *outs, const double *const *values,
+                                                  const uint64_t *lengths, const uint64_t *shifts,
+                                                  uint64_t count, uint64_t n_complex,
+                                                  uint32_t log_prec, double **gs_ws, double scale,
+                                                  uint64_t n_threads)
+{
+    ComplexValuesBatch batch = {values, lengths, shifts, outs, n_complex, log_prec, gs_ws, scale};
+    vfhe_parallel_for(count, n_threads, complex_values_batch_item, &batch);
+}

@@ -82,6 +82,58 @@ class ComplexRing:
             p.repr = repr.ntt
         return res
 
+    def values_ifft_scale_round_to_RNS_batch(
+        self,
+        values: Sequence[object],
+        ring: RNSRing,
+        scale: float,
+        shifts: Sequence[int] | None = None,
+        n_threads: int = 0,
+    ) -> list[RNSPolynomial]:
+        """For each vector in ``values``: rotated left by ``shifts[k]`` (default
+        0), repeated to ``N`` values, inverse transformed, scaled by ``scale``
+        and rounded into ``ring``, in the NTT domain.
+
+        Each vector's length must be a power of two dividing ``N``. A contiguous
+        one-dimensional buffer of complex doubles (format ``Zd``, e.g. a numpy
+        ``complex128`` array) is read in place; anything else is converted, and
+        may hold any ``numbers.Complex``.
+        """
+        count = len(values)
+        if shifts is not None and len(shifts) != count:
+            raise ValueError(f"Expected {count} shifts, got {len(shifts)}")
+        if count == 0:
+            return []
+        rows, lengths = zip(*(_interleaved_values(v) for v in values), strict=True)
+        for n in lengths:
+            if n < 1 or n & (n - 1) or self.N % n:
+                raise ValueError(
+                    f"Expected a number of values dividing {self.N}, got {n}"
+                )
+        res = [Polynomial(ring) for _ in range(count)]
+        self.lib.complex_values_ifft_scale_round_to_RNS_batch(
+            ffi.new(
+                "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", p.obj) for p in res]
+            ),
+            ffi.new("double *[]", [ffi.cast("double *", row) for row in rows]),
+            ffi.new("uint64_t[]", lengths),
+            ffi.new(
+                "uint64_t[]",
+                [0] * count
+                if shifts is None
+                else [k % n for k, n in zip(shifts, lengths, strict=True)],
+            ),
+            count,
+            self.N,
+            self.logN,
+            self.GS_rous,
+            scale,
+            n_threads,
+        )
+        for p in res:
+            p.repr = repr.ntt
+        return res
+
     @staticmethod
     # special RoUs for CKKS
     def gen_special_rous(rou, N):
@@ -116,6 +168,31 @@ class ComplexRing:
 
 
 _BUILTIN_NUMBERS = frozenset((complex, float, int))
+
+
+def _interleaved_values(v: object) -> tuple[ffi.CData, int]:
+    """``v``'s values as an array of complex doubles, and how many there are.
+    A contiguous buffer of complex doubles is shared, not copied."""
+    try:
+        view = memoryview(v)  # type: ignore[arg-type]
+    except TypeError:
+        view = None
+    if view is not None:
+        if view.format == "Zd" and view.ndim == 1 and view.c_contiguous:
+            return ffi.from_buffer("double _Complex[]", view), len(view)
+        try:
+            v = view.tolist()
+        except NotImplementedError:  # a format memoryview cannot unpack
+            v = list(v)  # type: ignore[call-overload]
+    values = v if isinstance(v, list | tuple) else list(v)  # type: ignore[call-overload]
+    try:
+        return ffi.new("double _Complex[]", values), len(values)
+    except TypeError:
+        pass
+    for val in values:
+        if type(val) not in _BUILTIN_NUMBERS and not isinstance(val, numbers.Complex):
+            raise NotImplementedError(f"cannot assign a {type(val).__name__}")
+    return ffi.new("double _Complex[]", [complex(x) for x in values]), len(values)
 
 
 class ComplexPolynomial:

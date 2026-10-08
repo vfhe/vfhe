@@ -14,6 +14,16 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add `CKKS_Scheme.encode_batch(values, ring=, scale=, n_threads=)`: encode
+  many vectors in one native call (`complex_values_ifft_scale_round_to_RNS_batch`,
+  on `vfhe_parallel_for`). `encode` is one such call, so the two agree bit
+  for bit. A contiguous buffer of complex doubles, such as a numpy
+  `complex128` array, is read in place; any other sequence is converted in
+  one pass. `CKKS_LinearTransform` encodes its diagonals this way, rotating
+  them by index rather than by copying, a chunk at a time, and takes
+  `n_threads`. At N = 2^15 over two primes, a diagonal costs 1.6 ms given as
+  a list and 1.0 ms as a buffer on one thread, and 0.21 ms on eight, where it
+  took 7.1 ms (i7-11850H, avx512ifma).
 - Generate keys on several threads. Every key generator samples through
   `MLWE_Scheme.sample_scaled` (`mlwe_RNS_sample_scaled_batch`, on
   `vfhe_parallel_for`): `gen_ksk`, `gen_rlk`, `gen_ksk_automorphism(_set)`,
