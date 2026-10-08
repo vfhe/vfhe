@@ -9,6 +9,7 @@ picks one at import; this module re-exports its ``ffi`` / ``lib`` plus a
 
 import warnings
 
+from . import memory_pool as memory_pool
 from ._native import active, ffi, lib, runnable
 
 

@@ -49,6 +49,10 @@ def update_cffi_references(new_ffi, new_lib):
     old_ffi = libvfhe_mod.ffi
     old_lib = libvfhe_mod.lib
 
+    # The old library has a memory pool of its own. Buffers it allocated are
+    # still released through it after the swap; from now on it keeps none.
+    old_lib.mempool_set_capacity(0)
+
     libvfhe_mod.ffi = new_ffi
     libvfhe_mod.lib = new_lib
 
@@ -113,3 +117,12 @@ def reinit_thread_limit(_new_ffi, new_lib):
     import vfhe.engine as engine
 
     new_lib.vfhe_set_num_threads(engine._thread_limit)  # noqa: SLF001 - same module
+
+
+@register_reinitializer
+def reinit_memory_pool_settings(_new_ffi, new_lib):
+    """Carry the memory pool's settings into the new module's own copy."""
+    from vfhe.engine import memory_pool
+
+    new_lib.mempool_set_capacity(memory_pool._capacity_setting)  # noqa: SLF001 - same package
+    new_lib.mempool_set_wipe_on_release(memory_pool._wipe_setting)  # noqa: SLF001

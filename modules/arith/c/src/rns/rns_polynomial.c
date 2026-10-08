@@ -229,11 +229,11 @@ RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, RNS_
         if (rns_row_is_narrow(base, i))
         {
             res->rows64[i] = NULL;
-            res->rows32[i] = (uint32_t *)safe_aligned_malloc(sizeof(uint32_t) * base->N);
+            res->rows32[i] = (uint32_t *)mempool_aligned_malloc(sizeof(uint32_t) * base->N);
         }
         else
         {
-            res->rows64[i] = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * base->N);
+            res->rows64[i] = (uint64_t *)mempool_aligned_malloc(sizeof(uint64_t) * base->N);
             res->rows32[i] = NULL;
         }
     }
@@ -315,12 +315,12 @@ void polynomial_RNS_zero(RNS_Polynomial p)
 void free_RNS_polynomial(void *p)
 {
     RNS_Polynomial pp = (RNS_Polynomial)p;
-    // One of the two is NULL for each row, and free(NULL) is a no-op, so this
-    // needs no width test and cannot go wrong if the base grew meanwhile.
+    // One of the two is NULL for each row, and releasing NULL is a no-op, so
+    // this needs no width test and cannot go wrong if the base grew meanwhile.
     for (size_t i = 0; i < pp->allocated_l; i++)
     {
-        free(pp->rows64[i]);
-        free(pp->rows32[i]);
+        mempool_free(pp->rows64[i], sizeof(uint64_t) * pp->base->N);
+        mempool_free(pp->rows32[i], sizeof(uint32_t) * pp->base->N);
     }
     free(pp->rows64);
     free(pp->rows32);

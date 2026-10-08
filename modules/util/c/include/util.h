@@ -35,8 +35,20 @@ extern "C"
     // mempool_aligned_malloc or safe_aligned_malloc. A buffer from
     // mempool_aligned_malloc may also be released with plain `free`.
     void mempool_free(void *ptr, size_t bytes);
-    // The same, zeroing the buffer first: for buffers that held secrets.
+    // The same, zeroing the buffer first whatever mempool_wipe_on_release says:
+    // for buffers known to hold secrets.
     void mempool_free_and_wipe(void *ptr, size_t bytes);
+    // Whether every buffer released to the pool is zeroed first, so nothing a
+    // buffer held outlives its release. Off by default:
+    // VFHE_MEMPOOL_WIPE_ON_RELEASE=1 turns it on, and a negative argument
+    // restores that default.
+    void mempool_set_wipe_on_release(int enabled);
+    int mempool_wipe_on_release(void);
+    // For an owner that cannot keep the size, such as a cffi free callback:
+    // the size is recorded ahead of the buffer, so only the pointer is needed
+    // to release it. A buffer from one must be released with the other.
+    void *mempool_aligned_malloc_with_size_header(size_t bytes);
+    void mempool_free_with_size_header(void *ptr);
     // Returns every buffer retained, on every thread, to the C library.
     void mempool_release_all(void);
 

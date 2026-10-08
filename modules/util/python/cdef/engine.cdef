@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of util: which engine this binary is, used by the runtime
-// "you could be faster" hint (see vfhe/engine/__init__.py), and the
-// library-wide thread limit. The rest of util is internal support with no
-// Python symbols.
+// "you could be faster" hint (see vfhe/engine/__init__.py), the
+// library-wide thread limit, and the memory pool: its controls, and its
+// allocator for the buffers Python owns. The rest of util is internal support
+// with no Python symbols.
 
 const char *vfhe_engine_active(void);
 
@@ -14,3 +15,24 @@ uint64_t vfhe_cpu_last_level_cache_bytes(void);
 // The library-wide thread limit (see util.h).
 uint64_t vfhe_num_threads(void);
 void vfhe_set_num_threads(uint64_t n);
+
+// The memory pool's capacity, wiping and accounting (see util.h).
+#define MEMPOOL_CAPACITY_AUTO ...
+#define MEMPOOL_CAPACITY_DEFAULT ...
+typedef struct
+{
+    uint64_t retained_bytes;
+    uint64_t outstanding_bytes;
+    uint64_t peak_outstanding_bytes;
+    uint64_t retention_limit_bytes;
+    uint64_t hits;
+    uint64_t misses;
+} MempoolStatistics;
+void *mempool_aligned_malloc_with_size_header(size_t bytes);
+void mempool_free_with_size_header(void *ptr);
+void mempool_set_capacity(uint64_t bytes);
+uint64_t mempool_capacity(void);
+void mempool_release_all(void);
+void mempool_set_wipe_on_release(int enabled);
+int mempool_wipe_on_release(void);
+void mempool_statistics(MempoolStatistics *out);

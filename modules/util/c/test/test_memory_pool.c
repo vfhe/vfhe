@@ -179,6 +179,42 @@ static void a_wiped_buffer_reaches_the_next_holder_without_its_contents(void)
     mempool_free(next, SIZE);
 }
 
+static void a_size_header_buffer_is_released_by_pointer_alone(void)
+{
+    uint8_t *p = (uint8_t *)mempool_aligned_malloc_with_size_header(SIZE);
+    TEST_ASSERT_EQUAL_UINT64(0, (uint64_t)((uintptr_t)p % 64));
+    memset(p, 0x5A, SIZE);
+    mempool_free_with_size_header(p);
+    TEST_ASSERT_EQUAL_UINT64(SIZE + 64, stats().retained_bytes);
+    uint8_t *q = (uint8_t *)mempool_aligned_malloc_with_size_header(SIZE);
+    TEST_ASSERT_EQUAL_PTR(p, q);
+    mempool_free_with_size_header(q);
+    mempool_free_with_size_header(NULL);
+}
+
+static void wipe_on_release_zeroes_every_released_buffer(void)
+{
+    const char *env = getenv("MALLOC_PERTURB_");
+    const int perturb = env ? atoi(env) & 0xff : 0;
+    uint8_t secret = 0x11;
+    while (secret == perturb || secret == (perturb ^ 0xff))
+        secret += 0x11;
+
+    TEST_ASSERT_EQUAL_INT(0, mempool_wipe_on_release());
+    mempool_set_wipe_on_release(1);
+    uint8_t *buf = (uint8_t *)mempool_aligned_malloc(SIZE);
+    memset(buf, secret, SIZE);
+    mempool_free(buf, SIZE);
+    uint8_t *next = (uint8_t *)mempool_aligned_malloc(SIZE);
+    TEST_ASSERT_EQUAL_PTR(buf, next);
+    for (size_t i = 0; i < SIZE; i++)
+        if (next[i] == secret)
+            TEST_FAIL_MESSAGE("a byte survived the release");
+    mempool_free(next, SIZE);
+    mempool_set_wipe_on_release(-1);
+    TEST_ASSERT_EQUAL_INT(0, mempool_wipe_on_release());
+}
+
 typedef struct
 {
     pthread_barrier_t retained, released;
@@ -355,6 +391,8 @@ int main(void)
     RUN_TEST(auto_capacity_keeps_the_peak_live_set);
     RUN_TEST(many_sizes_evict_the_least_recently_used);
     RUN_TEST(a_wiped_buffer_reaches_the_next_holder_without_its_contents);
+    RUN_TEST(wipe_on_release_zeroes_every_released_buffer);
+    RUN_TEST(a_size_header_buffer_is_released_by_pointer_alone);
     RUN_TEST(release_all_reaches_a_waiting_thread);
     RUN_TEST(a_buffer_released_on_another_thread_is_kept_there);
     RUN_TEST(a_thread_exit_returns_its_buffers);

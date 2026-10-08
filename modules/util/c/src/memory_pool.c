@@ -67,6 +67,9 @@ static atomic_uint_fast64_t peak_outstanding = 0;
 // MEMPOOL_CAPACITY_DEFAULT until first read or after a reset: the environment
 // is read on first use rather than at load.
 static atomic_uint_fast64_t capacity_setting = MEMPOOL_CAPACITY_DEFAULT;
+// 1 when every released buffer is zeroed, 0 when not, -1 until first read or
+// after a reset (the environment is read on first use).
+static atomic_int wipe_setting = -1;
 
 static _Thread_local ThreadStorage *own_storage = NULL;
 static pthread_key_t thread_exit_key;
@@ -323,10 +326,8 @@ void *mempool_aligned_malloc(size_t bytes)
     return buffer;
 }
 
-void mempool_free(void *ptr, size_t bytes)
+static void release(void *ptr, size_t bytes)
 {
-    if (ptr == NULL)
-        return;
     if (MEMPOOL_BYPASS || bytes < MEMPOOL_MIN_BYTES)
     {
         free(ptr);
@@ -352,12 +353,40 @@ void mempool_free(void *ptr, size_t bytes)
     pthread_mutex_unlock(&s->lock);
 }
 
+int mempool_wipe_on_release(void)
+{
+    int setting = atomic_load(&wipe_setting);
+    if (setting < 0)
+    {
+        const char *env = getenv("VFHE_MEMPOOL_WIPE_ON_RELEASE");
+        int unset = -1;
+        atomic_compare_exchange_strong(&wipe_setting, &unset,
+                                       env != NULL && strcmp(env, "1") == 0 ? 1 : 0);
+        setting = atomic_load(&wipe_setting);
+    }
+    return setting;
+}
+
+void mempool_set_wipe_on_release(int enabled)
+{
+    atomic_store(&wipe_setting, enabled < 0 ? -1 : enabled != 0);
+}
+
+void mempool_free(void *ptr, size_t bytes)
+{
+    if (ptr == NULL)
+        return;
+    if (mempool_wipe_on_release())
+        wipe(ptr, bytes);
+    release(ptr, bytes);
+}
+
 void mempool_free_and_wipe(void *ptr, size_t bytes)
 {
     if (ptr == NULL)
         return;
     wipe(ptr, bytes);
-    mempool_free(ptr, bytes);
+    release(ptr, bytes);
 }
 
 void mempool_release_all(void)
@@ -391,4 +420,23 @@ void mempool_statistics(MempoolStatistics *out)
     out->outstanding_bytes = now > 0 ? (uint64_t)now : 0;
     out->peak_outstanding_bytes = (uint64_t)atomic_load(&peak_outstanding);
     out->retention_limit_bytes = retention_limit();
+}
+
+// The size sits in the 64 bytes ahead of the buffer, which keeps the buffer
+// 64-byte aligned.
+#define SIZE_HEADER_BYTES 64u
+
+void *mempool_aligned_malloc_with_size_header(size_t bytes)
+{
+    uint8_t *block = (uint8_t *)mempool_aligned_malloc(bytes + SIZE_HEADER_BYTES);
+    *(size_t *)block = bytes;
+    return block + SIZE_HEADER_BYTES;
+}
+
+void mempool_free_with_size_header(void *ptr)
+{
+    if (ptr == NULL)
+        return;
+    uint8_t *block = (uint8_t *)ptr - SIZE_HEADER_BYTES;
+    mempool_free(block, *(size_t *)block + SIZE_HEADER_BYTES);
 }
