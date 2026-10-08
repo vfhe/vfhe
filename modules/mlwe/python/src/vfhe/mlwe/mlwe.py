@@ -18,7 +18,7 @@ from vfhe.arith import (
     repr,
 )
 from vfhe.crypto import entropy
-from vfhe.engine import ffi, lib
+from vfhe.engine import ffi, lib, local_num_threads
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -467,11 +467,14 @@ class MLWE_Scheme:
         ]
         return [[sets[i] for sets in leveled] for i in range(len(generators))]
 
-    def keyswitch(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
+    def keyswitch(
+        self, c: CtT, ksk: MLWE_Set | list[MLWE_Set], n_threads: int = 0
+    ) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
         out = c.new_like(lvl=c.lvl, ring=self.rings[c.lvl])
-        c.to_coeff()
-        lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(out.obj, c.obj, ksk.obj, c.lvl)
+        with local_num_threads(n_threads):
+            c.to_coeff()
+            lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(out.obj, c.obj, ksk.obj, c.lvl)
         out.repr = repr.coeff
         return out
 
@@ -503,11 +506,14 @@ class MLWE_Scheme:
             result_leveled.append(MLWE_Set().flatten_array(result_lvl_i))
         return result_leveled
 
-    def automorphism(self, c: CtT, gen: int, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
+    def automorphism(
+        self, c: CtT, gen: int, ksk: MLWE_Set | list[MLWE_Set], n_threads: int = 0
+    ) -> CtT:
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
         out = c.new_like(lvl=c.lvl, ring=self.rings[c.lvl])
-        c.to_coeff()
-        lib_rlwe.lib.mlwe_automorphism_RNSc_GHS(out.obj, c.obj, gen, ksk.obj, c.lvl)
+        with local_num_threads(n_threads):
+            c.to_coeff()
+            lib_rlwe.lib.mlwe_automorphism_RNSc_GHS(out.obj, c.obj, gen, ksk.obj, c.lvl)
         out.repr = repr.coeff
         return out
 
@@ -918,6 +924,7 @@ class MLWE_Scheme:
         in1: CtT,
         in2: MLWE,
         ksk: MLWE_Set | list[MLWE_Set] | None = None,
+        n_threads: int = 0,
     ) -> CtT:
         """Tensors the two ciphertexts and (optionally) relinearizes.
 
@@ -939,20 +946,21 @@ class MLWE_Scheme:
             raise ValueError("Ciphertexts must be from the same scheme")
         if in1.lvl != in2.lvl:
             raise ValueError("Ciphertexts must have the same level")
-        in1.to_NTT()
-        in2.to_NTT()
+        with local_num_threads(n_threads):
+            in1.to_NTT()
+            in2.to_NTT()
 
-        if ksk is None:
-            out = in1.new_like(lvl=in1.lvl, rank=in1.scheme.extended_rank)
-            out.is_extended = True
-            lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ffi.NULL)
-            out.repr = repr.ntt
-            return out
+            if ksk is None:
+                out = in1.new_like(lvl=in1.lvl, rank=in1.scheme.extended_rank)
+                out.is_extended = True
+                lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ffi.NULL)
+                out.repr = repr.ntt
+                return out
 
-        ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[in1.lvl]
-        # Relinearization key-switches into the extended ring, so the output
-        out = in1.new_like(lvl=in1.lvl, ring=in1.scheme.rings[in1.lvl])
-        lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ksk.obj)
+            ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[in1.lvl]
+            # Relinearization key-switches into the extended ring, so the output
+            out = in1.new_like(lvl=in1.lvl, ring=in1.scheme.rings[in1.lvl])
+            lib_rlwe.lib.mlwe_multiply(out.obj, in1.obj, in2.obj, ksk.obj)
         out.repr = repr.ntt
         return out
 
@@ -1059,7 +1067,9 @@ class MLWE_Scheme:
             for c in pending:
                 c.repr = repr.ntt
 
-    def relinearize(self, c_ext: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
+    def relinearize(
+        self, c_ext: CtT, ksk: MLWE_Set | list[MLWE_Set], n_threads: int = 0
+    ) -> CtT:
         """Relinearize an extended product back to rank r.
 
         Reuses the GHS hybrid key-switch: the rlk key-switches the quadratic
@@ -1067,10 +1077,11 @@ class MLWE_Scheme:
         """
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c_ext.lvl]
         out = c_ext.new_like(lvl=c_ext.lvl, ring=self.rings[c_ext.lvl])
-        c_ext.to_coeff()
-        lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(
-            out.obj, c_ext.obj, ksk.obj, c_ext.lvl
-        )
+        with local_num_threads(n_threads):
+            c_ext.to_coeff()
+            lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch(
+                out.obj, c_ext.obj, ksk.obj, c_ext.lvl
+            )
         out.repr = repr.coeff
         return out
 
@@ -1449,7 +1460,10 @@ class MLWE:
         self.seed = other.seed
 
     def round_division(  # noqa: PYI019 - Self needs 3.11
-        self: CtT, ring: RNSRing | None = None, lvl: int | None = None
+        self: CtT,
+        ring: RNSRing | None = None,
+        lvl: int | None = None,
+        n_threads: int = 0,
     ) -> CtT:
         """Round-divide the ciphertext down into a smaller (quotient) ring.
 
@@ -1469,8 +1483,9 @@ class MLWE:
             ring = self.scheme.rings[lvl]
         if not (ring.is_quotient_ring(self.ring)):
             raise ValueError("destination must be a quotient of the current ring")
-        self.to_coeff()
-        lib_rlwe.lib.mlwe_round_division(self.obj, ring.arith_ring)
+        with local_num_threads(n_threads):
+            self.to_coeff()
+            lib_rlwe.lib.mlwe_round_division(self.obj, ring.arith_ring)
         self.lvl = lvl
         self.ring = ring
         return self

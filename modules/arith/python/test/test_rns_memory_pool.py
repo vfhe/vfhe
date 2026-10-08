@@ -3,10 +3,22 @@
 """RNS polynomial rows come from and return to the memory pool."""
 
 import gc
+from pathlib import Path
 
 import pytest
 from vfhe.arith import Polynomial, Ring
 from vfhe.engine import memory_pool
+
+
+def _asan_runtime_loaded() -> bool:
+    maps = Path("/proc/self/maps")
+    return maps.exists() and "libasan" in maps.read_text()
+
+
+# An ASan build bypasses the pool, so there is nothing here to observe.
+pytestmark = pytest.mark.skipif(
+    _asan_runtime_loaded(), reason="the memory pool is bypassed under ASan"
+)
 
 N = 4096
 # Two 64-bit rows and one 32-bit row per polynomial.

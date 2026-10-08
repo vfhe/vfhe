@@ -137,6 +137,8 @@ typedef struct
 void *monomial_mul_worker(void *arg)
 {
     worker_args_t *args = (worker_args_t *)arg;
+    // The workers already take the threads: what a worker calls stays on it.
+    const uint64_t local = vfhe_set_local_num_threads(1);
     RNS_MLWE *p[2] = {args->p0, args->p1};
 
     for (size_t i = 0; i < args->r_prec; i++)
@@ -170,6 +172,7 @@ void *monomial_mul_worker(void *arg)
         pthread_barrier_wait(args->barrier);
     }
 
+    vfhe_set_local_num_threads(local);
     return NULL;
 }
 
@@ -266,6 +269,9 @@ typedef struct
 static void *suba_worker(void *arg)
 {
     suba_args_t *A = (suba_args_t *)arg;
+    // As in monomial_mul_worker; it may also run on the caller, so the
+    // caller's local number of threads is restored.
+    const uint64_t local = vfhe_set_local_num_threads(1);
     const uint64_t N = A->N, two_n = 2 * N;
     const uint64_t r = A->p0[0]->r;
     ArithRing ring = A->p0[0]->ring;
@@ -296,6 +302,7 @@ static void *suba_worker(void *arg)
     free_mlwe_RNS_sample(tmp);
     free_mlwe_RNS_sample(ext);
     free_mlwe_RNS_sample(pax_ntt);
+    vfhe_set_local_num_threads(local);
     return NULL;
 }
 

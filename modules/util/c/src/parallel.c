@@ -11,9 +11,14 @@
 // environment is read on first use rather than at load.
 static atomic_uint_fast64_t thread_limit = 0;
 
-// Set while a thread (the caller's included) runs loop bodies, so a loop
-// started inside a body runs serially instead of spawning more threads.
-static _Thread_local int inside_parallel_loop = 0;
+// The calling thread's local number of threads, 0 for none set. A loop sets
+// it for the threads running its bodies to their share of the loop's threads,
+// so a loop started inside a body divides that share instead of multiplying
+// threads.
+static _Thread_local uint64_t local_num_threads = 0;
+
+// The smallest share of a loop's threads that its bodies are lent.
+#define MIN_LENT_SHARE 4
 
 static uint64_t default_thread_limit(void)
 {
@@ -42,12 +47,29 @@ uint64_t vfhe_num_threads(void)
 
 void vfhe_set_num_threads(uint64_t n) { atomic_store(&thread_limit, n); }
 
+uint64_t vfhe_set_local_num_threads(uint64_t n)
+{
+    const uint64_t previous = local_num_threads;
+    local_num_threads = n;
+    return previous;
+}
+
+uint64_t vfhe_local_num_threads(void) { return local_num_threads; }
+
+// The threads a loop asking for `requested` may use, before its item count.
+static uint64_t thread_budget(uint64_t requested)
+{
+    uint64_t n = vfhe_num_threads();
+    if (local_num_threads != 0 && local_num_threads < n)
+        n = local_num_threads;
+    return (requested == 0 || requested > n) ? n : requested;
+}
+
 uint64_t vfhe_threads_for(uint64_t requested, uint64_t n_items)
 {
-    if (inside_parallel_loop || n_items <= 1)
+    if (n_items <= 1)
         return 1;
-    const uint64_t limit = vfhe_num_threads();
-    uint64_t n = (requested == 0 || requested > limit) ? limit : requested;
+    const uint64_t n = thread_budget(requested);
     return n < n_items ? n : n_items;
 }
 
@@ -58,6 +80,7 @@ typedef struct ParallelLoop
     void (*body)(void *ctx, uint64_t i);
     void *ctx;
     uint64_t n;
+    uint64_t share; // the local number of threads of every thread running bodies
     atomic_uint_fast64_t next;
     // Guarded by pool.lock.
     uint64_t helpers_wanted;  // further helpers that may still join
@@ -116,7 +139,6 @@ static ParallelLoop *loop_to_join(void)
 static void *worker_main(void *arg)
 {
     Worker *self = (Worker *)arg;
-    inside_parallel_loop = 1;
     pthread_mutex_lock(&pool.lock);
     for (;;)
     {
@@ -133,6 +155,7 @@ static void *worker_main(void *arg)
                 pthread_cond_signal(&loop->handed[c]->wake);
         for (;;)
         {
+            local_num_threads = loop->share;
             draw_items(loop);
             pthread_mutex_lock(&pool.lock);
             if (--loop->helpers_running == 0)
@@ -215,14 +238,23 @@ static void grow_pool(uint64_t n_workers)
 void vfhe_parallel_for(uint64_t n, uint64_t n_threads, void (*body)(void *ctx, uint64_t i),
                        void *ctx)
 {
-    const uint64_t threads = vfhe_threads_for(n_threads, n);
+    // The loop's threads split its budget: each body may use budget / threads,
+    // so a loop over few items lends the rest to loops inside its bodies. A
+    // share below MIN_LENT_SHARE is not lent: so few threads on one body cost
+    // more in hand-offs than they return.
+    const uint64_t budget = thread_budget(n_threads);
+    const uint64_t threads = n <= 1 ? 1 : (budget < n ? budget : n);
+    const uint64_t caller_local = local_num_threads;
     if (threads <= 1)
     {
+        local_num_threads = budget;
         for (uint64_t i = 0; i < n; i++)
             body(ctx, i);
+        local_num_threads = caller_local;
         return;
     }
-    ParallelLoop loop = {body, ctx, n, 0, threads - 1, 0, NULL, 0, NULL};
+    const uint64_t share = budget / threads >= MIN_LENT_SHARE ? budget / threads : 1;
+    ParallelLoop loop = {body, ctx, n, share, 0, threads - 1, 0, NULL, 0, NULL};
     pthread_mutex_lock(&pool.lock);
     grow_pool(threads - 1);
     const uint64_t most_handed = threads - 1 < pool.n_workers ? threads - 1 : pool.n_workers;
@@ -245,9 +277,9 @@ void vfhe_parallel_for(uint64_t n, uint64_t n_threads, void (*body)(void *ctx, u
     if (loop.n_handed > 0)
         pthread_cond_signal(&handed[0]->wake);
 
-    inside_parallel_loop = 1;
+    local_num_threads = loop.share;
     draw_items(&loop);
-    inside_parallel_loop = 0;
+    local_num_threads = caller_local;
 
     // Every item has been drawn, so no worker joins from here on. The ones
     // given the loop that have not started are taken back rather than waited

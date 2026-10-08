@@ -237,9 +237,15 @@ class BFV_Scheme(MLWE_Scheme):
 
     # --- slots ---
 
-    def rotate(self, ciphertext: MLWE, k: int, ksk: MLWE_Set | list[MLWE_Set]) -> MLWE:
+    def rotate(
+        self,
+        ciphertext: MLWE,
+        k: int,
+        ksk: MLWE_Set | list[MLWE_Set],
+        n_threads: int = 0,
+    ) -> MLWE:
         """Rotates each of the two rows of ``N/2`` slots by ``k`` positions."""
-        return self.automorphism(ciphertext, self._rotation_gen(k), ksk)
+        return self.automorphism(ciphertext, self._rotation_gen(k), ksk, n_threads)
 
     def gen_rotation_key(
         self, key: MLWE_Key, k: int, n_threads: int = 0
@@ -252,9 +258,11 @@ class BFV_Scheme(MLWE_Scheme):
     def _rotation_gen(self, k: int) -> int:
         return pow(5, k % (self.N // 2), 2 * self.N)
 
-    def conjugate(self, ciphertext: MLWE, ksk: MLWE_Set | list[MLWE_Set]) -> MLWE:
+    def conjugate(
+        self, ciphertext: MLWE, ksk: MLWE_Set | list[MLWE_Set], n_threads: int = 0
+    ) -> MLWE:
         """Swaps the two rows of slots."""
-        return self.automorphism(ciphertext, 2 * self.N - 1, ksk)
+        return self.automorphism(ciphertext, 2 * self.N - 1, ksk, n_threads)
 
     def gen_conjugation_key(
         self, key: MLWE_Key, n_threads: int = 0

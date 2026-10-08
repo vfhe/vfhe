@@ -15,6 +15,8 @@ uint64_t vfhe_cpu_last_level_cache_bytes(void);
 // The library-wide thread limit (see util.h).
 uint64_t vfhe_num_threads(void);
 void vfhe_set_num_threads(uint64_t n);
+uint64_t vfhe_set_local_num_threads(uint64_t n);
+uint64_t vfhe_local_num_threads(void);
 
 // The memory pool's capacity, wiping and accounting (see util.h).
 #define MEMPOOL_CAPACITY_AUTO ...

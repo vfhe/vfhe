@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
+#include "rns_rows.h"
 #include "util.h"
 #include <crypto.h>
 
@@ -363,11 +364,16 @@ void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_M
                                 uint64_t lvl)
 {
     RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, out->r);
-    for (size_t i = 0; i < out->r; i++)
+    if (out->ring->impl == ARITH_IMPL_RNS)
+        mlwe_rns_permute(tmp, in, gen);
+    else
     {
-        arith_permute(out->ring, &tmp->a[i], &in->a[i], gen);
+        for (size_t i = 0; i < out->r; i++)
+        {
+            arith_permute(out->ring, &tmp->a[i], &in->a[i], gen);
+        }
+        arith_permute(out->ring, &tmp->b, &in->b, gen);
     }
-    arith_permute(out->ring, &tmp->b, &in->b, gen);
     mlwe_RNSc_GHS_hybrid_keyswitch(out, tmp, ksk, lvl);
     free_mlwe_RNS_sample(tmp);
 }
@@ -739,6 +745,11 @@ void mlwe_addto_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in) { mlwe_add_RNSc_sample(
 
 void mlwe_RNSc_to_RNS(RNS_MLWE out, RNSc_MLWE in)
 {
+    if (out->ring->impl == ARITH_IMPL_RNS)
+    {
+        mlwe_rns_convert(out, in, arith_mul_domain(out->ring));
+        return;
+    }
     for (size_t i = 0; i < out->r; i++)
     {
         arith_copy(out->ring, &out->a[i], &in->a[i]);
@@ -750,6 +761,11 @@ void mlwe_RNSc_to_RNS(RNS_MLWE out, RNSc_MLWE in)
 
 void mlwe_RNS_to_RNSc(RNSc_MLWE out, RNS_MLWE in)
 {
+    if (out->ring->impl == ARITH_IMPL_RNS)
+    {
+        mlwe_rns_convert(out, in, ARITH_DOMAIN_CANONICAL);
+        return;
+    }
     for (size_t i = 0; i < out->r; i++)
     {
         arith_copy(out->ring, &out->a[i], &in->a[i]);
@@ -893,6 +909,8 @@ void mlwe_tensor_product(ArithElement *out, RNS_MLWE in1, RNS_MLWE in2)
     const uint64_t r = in1->r;
     assert(in2->r == r);
     const uint64_t R = mlwe_extended_rank(r);
+    if (in1->ring->impl == ARITH_IMPL_RNS && mlwe_rns_tensor_product(out, in1, in2) == 0)
+        return;
     size_t k = 0;
 
     // Quadratic slots: q_ij for i <= j.
@@ -1059,6 +1077,11 @@ void mlwe_round_division(RNSc_MLWE out, ArithRing to)
 {
     if (out->ring == to)
     {
+        return;
+    }
+    if (out->ring->impl == ARITH_IMPL_RNS)
+    {
+        mlwe_rns_round_division(out, to);
         return;
     }
     for (size_t j = 0; j < out->r; j++)

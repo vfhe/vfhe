@@ -892,6 +892,13 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // `in` must be distinct and share a base.
     void polynomial_RNS_automorphism_index(uint32_t *idx, uint64_t N, uint64_t gen);
     void polynomial_RNS_permute(RNS_Polynomial out, RNS_Polynomial in, const uint32_t *idx);
+    /* The two permutations on the rows in `rows` alone, which must be rows of
+       `in`: they write those rows of `out` and touch nothing else, its mask
+       included, so different rows may be permuted at the same time. */
+    void polynomial_RNSc_permute_rows(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t gen,
+                                      uint64_t rows);
+    void polynomial_RNS_permute_rows(RNS_Polynomial out, RNS_Polynomial in, const uint32_t *idx,
+                                     uint64_t rows);
     void free_RNS_polynomial(void *p);
     void polynomial_RNSc_negate(RNSc_Polynomial out, RNSc_Polynomial in);
     void polynomial_add_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1,
@@ -960,6 +967,25 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void polynomial_scale_RNS_polynomial_RNS(RNS_Polynomial out, RNS_Polynomial in1,
                                              uint64_t *scale);
     void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide_mask);
+    /* polynomial_round_division_RNSc_wo_free in three steps, so the rows that
+       stay can be divided independently: `_prepare` brings the rows that
+       leave to the values the division reads (each p's half added, and each
+       divided by the primes before it); `_rows` then divides the staying rows
+       in `rows`, which no other call may be dividing at the same time, and
+       reads only the rows that leave; `_finish` zeroes the rows that leave and
+       drops them from the mask. Together they give the same result. */
+    void polynomial_round_division_RNSc_prepare(RNSc_Polynomial out, uint64_t divide_mask);
+    void polynomial_round_division_RNSc_rows(RNSc_Polynomial out, uint64_t divide_mask,
+                                             uint64_t rows);
+    void polynomial_round_division_RNSc_finish(RNSc_Polynomial out, uint64_t divide_mask);
+    /* A view of `p` holding only the rows of `p` that `mask` selects: it
+       shares p's rows, so an operation on the view reads and writes those rows
+       of `p` and no other. The view lives in `storage`. An operation that
+       sets its output's mask sets the view's, never p's; an operation that
+       touches rows outside its operands' masks, such as
+       polynomial_RNSc_permute, must not be given a view. */
+    RNS_Polynomial polynomial_RNS_view(struct _RNS_Polynomial *storage, RNS_Polynomial p,
+                                       uint64_t mask);
     bool polynomial_eq(RNS_Polynomial a, RNS_Polynomial b);
     void polynomial_multo_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in);
     int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in);

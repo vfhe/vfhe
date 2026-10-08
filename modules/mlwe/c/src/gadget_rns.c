@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
+#include "rns_rows.h"
 #include "util.h"
 
 // Gadget decompositions against the RNS base.
@@ -62,45 +63,83 @@ static uint64_t gadget_digits_of(RNS_Base base, size_t j, uint64_t log_base)
     return log_base ? gadget_radix_digits(base->mods[j]->q, log_base) : 1;
 }
 
+typedef struct
+{
+    RNS_MLWE out;
+    RNS_MLWE *ksk;
+    RNS_Polynomial source, key;
+    uint64_t log_base;
+    bool balanced;
+    int subtract;
+} KeyProduct;
+
+static RNS_Polynomial sample_part(RNS_MLWE c, uint64_t k)
+{
+    return arith_rns_polynomial(k < c->r ? &c->a[k] : &c->b);
+}
+
+// Row `row` of the product: every digit lifted to that prime alone,
+// transformed, and multiplied into the same row of every component of `out`.
+static void key_product_row(void *ctx, uint64_t row, uint64_t part)
+{
+    (void)part;
+    const KeyProduct *p = (const KeyProduct *)ctx;
+    RNS_Base base = p->key->base;
+    const uint64_t row_mask = 1ULL << row, parts = p->out->r + 1;
+    RNSc_Polynomial tmp = (RNSc_Polynomial)polynomial_new_RNS_polynomial(base->N, row_mask, base);
+    struct _RNS_Polynomial out_storage, key_storage;
+
+    uint64_t ksk_idx = 0;
+    for (size_t j = 0; j < base->l; j++)
+    {
+        if (!(p->source->rns_mask & (1ULL << j)))
+            continue;
+        const uint64_t digits = gadget_digits_of(base, j, p->log_base);
+        for (uint64_t d = 0; d < digits; d++, ksk_idx++)
+        {
+            gadget_digit(tmp, (RNSc_Polynomial)p->source, j, p->log_base, d, p->balanced);
+            polynomial_RNSc_to_RNS((RNS_Polynomial)tmp, tmp);
+            for (uint64_t k = 0; k < parts; k++)
+            {
+                RNS_Polynomial o =
+                    polynomial_RNS_view(&out_storage, sample_part(p->out, k), row_mask);
+                RNS_Polynomial x =
+                    polynomial_RNS_view(&key_storage, sample_part(p->ksk[ksk_idx], k), row_mask);
+                if (p->subtract)
+                    polynomial_mul_subto_RNS_polynomial(o, x, (RNS_Polynomial)tmp);
+                else
+                    polynomial_mul_addto_RNS_polynomial(o, x, (RNS_Polynomial)tmp);
+            }
+        }
+    }
+    free_RNS_polynomial(tmp);
+}
+
 static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
                                   int subtract, uint64_t log_base, bool balanced)
 {
     // This file knows the representation, so it calls the RNS entry points
     // rather than routing through the dispatcher: nothing here would gain from
-    // a ring it cannot have. Only the per-ciphertext multiply below stays
-    // generic -- that operation belongs to mlwe.c, over r+1 whole elements.
+    // a ring it cannot have. The product is formed prime by prime -- each row
+    // of `out` takes every digit, lifted to that prime alone -- so the rows
+    // are independent tasks.
     RNS_Polynomial source = arith_rns_polynomial(poly);
     RNS_Polynomial key = arith_rns_polynomial(&ksk[0]->b);
-    const uint64_t mask = source->rns_mask;
+    if (source->rns_mask == 0)
+        return;
+    KeyProduct p = {out, ksk, source, key, log_base, balanced, subtract};
+    rns_rows_for(key->base->N, key->rns_mask, 1, key_product_row, &p);
 
-    RNSc_Polynomial tmp =
-        (RNSc_Polynomial)polynomial_new_RNS_polynomial(key->base->N, key->rns_mask, key->base);
-    ArithElement factor = {tmp, ARITH_DOMAIN_MUL};
-
-    uint64_t ksk_idx = 0;
+    // Each row's last product set that row's mask in its view; the mask of
+    // the whole element is what that product gives on every row.
+    uint64_t last = 0;
     for (size_t j = 0; j < key->base->l; j++)
     {
-        if (!(mask & (1ULL << j)))
-            continue;
-        // The j-th residue lifted to the key's ring, then transformed so the
-        // multiply below is pointwise -- as one piece for the RNS gadget, or
-        // one digit at a time for the radix one.
-        const uint64_t digits = gadget_digits_of(key->base, j, log_base);
-        for (uint64_t d = 0; d < digits; d++)
-        {
-            gadget_digit(tmp, (RNSc_Polynomial)source, j, log_base, d, balanced);
-            polynomial_RNSc_to_RNS((RNS_Polynomial)tmp, tmp);
-            if (subtract)
-            {
-                mlwe_RNS_mul_subto_by_poly(out, ksk[ksk_idx++], &factor);
-            }
-            else
-            {
-                mlwe_RNS_mul_addto_by_poly(out, ksk[ksk_idx++], &factor);
-            }
-        }
+        if (source->rns_mask & (1ULL << j))
+            last += gadget_digits_of(key->base, j, log_base);
     }
-    free_RNS_polynomial(tmp);
+    for (uint64_t k = 0; k <= out->r; k++)
+        sample_part(out, k)->rns_mask = sample_part(ksk[last - 1], k)->rns_mask & key->rns_mask;
 }
 
 void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
@@ -118,6 +157,38 @@ void gadget_mul_subto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement
 // Digits stay in the mul domain on a fully split ring, where an automorphism
 // just permutes them; otherwise they stay canonical, and each product
 // transforms its permuted copy.
+typedef struct
+{
+    GadgetDigits *out;
+    RNS_Polynomial source;
+    RNS_Base base;
+    uint64_t log_base;
+    bool balanced;
+    int mul_domain;
+} Decomposition;
+
+static void decompose_row(void *ctx, uint64_t row, uint64_t part)
+{
+    (void)part;
+    const Decomposition *dec = (const Decomposition *)ctx;
+    struct _RNS_Polynomial storage;
+    uint64_t i = 0;
+    for (size_t j = 0; j < dec->base->l; j++)
+    {
+        if (!(dec->source->rns_mask & (1ULL << j)))
+            continue;
+        const uint64_t digits = gadget_digits_of(dec->base, j, dec->log_base);
+        for (uint64_t d = 0; d < digits; d++, i++)
+        {
+            RNSc_Polynomial digit = (RNSc_Polynomial)polynomial_RNS_view(
+                &storage, (RNS_Polynomial)dec->out->digit[i].handle, 1ULL << row);
+            gadget_digit(digit, (RNSc_Polynomial)dec->source, j, dec->log_base, d, dec->balanced);
+            if (dec->mul_domain)
+                polynomial_RNSc_to_RNS((RNS_Polynomial)digit, digit);
+        }
+    }
+}
+
 void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly, uint64_t log_base,
                       bool balanced)
 {
@@ -135,24 +206,15 @@ void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly
     }
     out->n = n;
     out->digit = (ArithElement *)safe_malloc(n * sizeof(ArithElement));
-
-    uint64_t i = 0;
-    for (size_t j = 0; j < base->l; j++)
+    for (uint64_t i = 0; i < n; i++)
     {
-        if (!(mask & (1ULL << j)))
-            continue;
-        const uint64_t digits = gadget_digits_of(base, j, log_base);
-        for (uint64_t d = 0; d < digits; d++, i++)
-        {
-            RNSc_Polynomial digit =
-                (RNSc_Polynomial)polynomial_new_RNS_polynomial(base->N, key->rns_mask, base);
-            gadget_digit(digit, (RNSc_Polynomial)source, j, log_base, d, balanced);
-            if (mul_domain)
-                polynomial_RNSc_to_RNS((RNS_Polynomial)digit, digit);
-            out->digit[i].handle = digit;
-            out->digit[i].domain = mul_domain ? ARITH_DOMAIN_MUL : ARITH_DOMAIN_CANONICAL;
-        }
+        out->digit[i].handle = polynomial_new_RNS_polynomial(base->N, key->rns_mask, base);
+        out->digit[i].domain = mul_domain ? ARITH_DOMAIN_MUL : ARITH_DOMAIN_CANONICAL;
     }
+    // Each digit row is the residue lifted to that prime alone, so the rows
+    // are independent tasks.
+    Decomposition dec = {out, source, base, log_base, balanced, mul_domain};
+    rns_rows_for(base->N, key->rns_mask, 1, decompose_row, &dec);
 }
 
 void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement *poly, uint64_t i,
@@ -188,6 +250,53 @@ void gadget_digits_free(GadgetDigits *digits)
     digits->n = 0;
 }
 
+typedef struct
+{
+    RNS_MLWE out;
+    RNS_MLWE *ksk;
+    const GadgetDigits *digits;
+    uint64_t gen;
+    const uint32_t *idx;
+    int mul_domain;
+} AutomorphismProduct;
+
+// Row `row` of the product: every digit permuted on that prime alone, and
+// multiplied into the same row of every component of `out`.
+static void automorphism_product_row(void *ctx, uint64_t row, uint64_t part)
+{
+    (void)part;
+    const AutomorphismProduct *p = (const AutomorphismProduct *)ctx;
+    RNS_Polynomial first = (RNS_Polynomial)p->digits->digit[0].handle;
+    RNS_Base base = first->base;
+    const uint64_t row_mask = 1ULL << row, parts = p->out->r + 1;
+    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(base->N, row_mask, base);
+    struct _RNS_Polynomial out_storage, key_storage, digit_storage;
+
+    for (uint64_t i = 0; i < p->digits->n; i++)
+    {
+        RNS_Polynomial digit = (RNS_Polynomial)p->digits->digit[i].handle;
+        RNS_Polynomial factor = tmp;
+        if (p->mul_domain && p->gen == 1)
+            factor = polynomial_RNS_view(&digit_storage, digit, row_mask);
+        else if (p->mul_domain)
+            polynomial_RNS_permute_rows(tmp, digit, p->idx, row_mask);
+        else
+        {
+            polynomial_RNSc_permute_rows((RNSc_Polynomial)tmp, (RNSc_Polynomial)digit, p->gen,
+                                         row_mask);
+            polynomial_RNSc_to_RNS(tmp, (RNSc_Polynomial)tmp);
+        }
+        for (uint64_t k = 0; k < parts; k++)
+        {
+            RNS_Polynomial o = polynomial_RNS_view(&out_storage, sample_part(p->out, k), row_mask);
+            RNS_Polynomial x =
+                polynomial_RNS_view(&key_storage, sample_part(p->ksk[i], k), row_mask);
+            polynomial_mul_subto_RNS_polynomial(o, x, factor);
+        }
+    }
+    free_RNS_polynomial(tmp);
+}
+
 void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
                                    uint64_t gen)
 {
@@ -204,29 +313,12 @@ void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigi
         idx = (uint32_t *)safe_malloc(N * sizeof(uint32_t));
         polynomial_RNS_automorphism_index(idx, N, gen);
     }
-    RNS_Polynomial tmp = polynomial_new_RNS_polynomial(N, first->rns_mask, base);
-    ArithElement factor = {tmp, ARITH_DOMAIN_MUL};
-
-    for (uint64_t i = 0; i < digits->n; i++)
-    {
-        RNS_Polynomial digit = (RNS_Polynomial)digits->digit[i].handle;
-        if (mul_domain && gen == 1)
-        {
-            ArithElement unpermuted = {digit, ARITH_DOMAIN_MUL};
-            mlwe_RNS_mul_subto_by_poly(out, ksk[i], &unpermuted);
-            continue;
-        }
-        if (mul_domain)
-        {
-            polynomial_RNS_permute(tmp, digit, idx);
-        }
-        else
-        {
-            polynomial_RNSc_permute((RNSc_Polynomial)tmp, (RNSc_Polynomial)digit, gen);
-            polynomial_RNSc_to_RNS(tmp, (RNSc_Polynomial)tmp);
-        }
-        mlwe_RNS_mul_subto_by_poly(out, ksk[i], &factor);
-    }
-    free_RNS_polynomial(tmp);
+    AutomorphismProduct p = {out, ksk, digits, gen, idx, mul_domain};
+    rns_rows_for(N, first->rns_mask, 1, automorphism_product_row, &p);
     free(idx);
+
+    // As in gadget_mul_accumulate: the mask the last product gives every row.
+    for (uint64_t k = 0; k <= out->r; k++)
+        sample_part(out, k)->rns_mask =
+            sample_part(ksk[digits->n - 1], k)->rns_mask & first->rns_mask;
 }

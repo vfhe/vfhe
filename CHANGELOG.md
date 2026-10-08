@@ -201,7 +201,8 @@ versions may contain breaking changes.
   use all of it by default; gp25's `threads` is capped by it, so gp25 too is
   single-threaded until the limit is raised. The threads are
   native (`vfhe_parallel_for` in util), and a parallel operation started
-  inside another runs on its caller's thread. The complex-FFT batch, which
+  inside another gets that operation's spare threads, so nesting never goes
+  past the limit. The complex-FFT batch, which
   always used 8 threads, now follows the limit too.
 - Add a memory pool for the buffers the library allocates and frees
   repeatedly (`vfhe.engine.memory_pool`). A released RNS polynomial row, field
@@ -225,6 +226,26 @@ versions may contain breaking changes.
 
 ### Changed
 
+- Single operations run on several threads: the key switch, automorphism,
+  multiplication (tensor product and relinearization), round division and
+  rescale, the domain conversions of a sample, and the decomposition and key
+  product of the hoisted automorphisms are split over the primes of the ring,
+  one task per prime, with the same result on any number of threads. They
+  use the library limit, and `keyswitch`, `automorphism`, `multiply`,
+  `relinearize`, `round_division`, and CKKS's and BFV's `rotate`,
+  `conjugate`, `rescale` and `multiply` take `n_threads`. A ring below
+  N = 4096 stays on one thread. A batch over fewer items than its threads
+  lends the spare ones to its items, when each gets at least four:
+  `multiply_batch` of two products on eight threads runs each on four. Add
+  `vfhe_set_local_num_threads` / `vfhe_local_num_threads` (C) and
+  `vfhe.engine.local_num_threads(n)`, a limit on the threads of the calls one
+  thread makes, below the library-wide one. On a 96-core Xeon 6975P-C (min of three), a rotation at N = 2^14
+  over 17 primes takes 3.9 ms on 192 threads against 25.5 ms before, a
+  multiplication 4.7 against 29.6 and a two-product batch 5.5 against 28.5;
+  over 10 primes 2.3, 3.1 and 3.4 ms against 9.8, 12.0 and 11.7; at N = 2^13
+  over 7 primes about 1.0 and 1.3 ms against 2.4 and 3.0. On one thread
+  they take 10-23 % less than before at N >= 2^13, and 3-4 % more at
+  N = 2^11, below the cut-off.
 - `vfhe_parallel_for` keeps its helper threads between calls and wakes only
   the ones a call uses. Idle workers wait each on its own condition variable,
   most recently idle first; a call hands itself to up to `threads - 1` of

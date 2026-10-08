@@ -116,6 +116,59 @@ static void a_nested_loop_stays_on_its_thread(void)
     TEST_ASSERT_EQUAL_UINT64(4, vfhe_threads_for(0, 100));
 }
 
+static atomic_uint_fast64_t share_seen[2];
+static atomic_int nested_items_run;
+
+static void counted_body(void *ctx, uint64_t i)
+{
+    (void)ctx;
+    (void)i;
+    atomic_fetch_add(&nested_items_run, 1);
+}
+
+static void lending_body(void *ctx, uint64_t i)
+{
+    (void)ctx;
+    atomic_store(&share_seen[i], vfhe_threads_for(0, 1000));
+    vfhe_parallel_for(64, 0, counted_body, NULL);
+}
+
+static void a_loop_over_few_items_lends_its_threads(void)
+{
+    vfhe_set_num_threads(8);
+    atomic_store(&nested_items_run, 0);
+    vfhe_parallel_for(2, 0, lending_body, NULL);
+    TEST_ASSERT_EQUAL_UINT64(4, atomic_load(&share_seen[0]));
+    TEST_ASSERT_EQUAL_UINT64(4, atomic_load(&share_seen[1]));
+    TEST_ASSERT_EQUAL_INT(128, atomic_load(&nested_items_run));
+    // A single item runs on the caller with the whole budget.
+    vfhe_parallel_for(1, 0, lending_body, NULL);
+    TEST_ASSERT_EQUAL_UINT64(8, atomic_load(&share_seen[0]));
+    // A loop asking for fewer threads lends only what it was allowed, and a
+    // share below 4 is not lent at all.
+    vfhe_set_num_threads(16);
+    vfhe_parallel_for(2, 8, lending_body, NULL);
+    TEST_ASSERT_EQUAL_UINT64(4, atomic_load(&share_seen[0]));
+    vfhe_parallel_for(2, 6, lending_body, NULL);
+    TEST_ASSERT_EQUAL_UINT64(1, atomic_load(&share_seen[0]));
+    vfhe_set_num_threads(8);
+    TEST_ASSERT_EQUAL_UINT64(8, vfhe_threads_for(0, 100));
+}
+
+static void the_local_number_bounds_the_callers_loops(void)
+{
+    vfhe_set_num_threads(8);
+    TEST_ASSERT_EQUAL_UINT64(0, vfhe_set_local_num_threads(3));
+    TEST_ASSERT_EQUAL_UINT64(3, vfhe_local_num_threads());
+    TEST_ASSERT_EQUAL_UINT64(3, vfhe_threads_for(0, 100));
+    TEST_ASSERT_EQUAL_UINT64(2, vfhe_threads_for(2, 100));
+    atomic_store(&record.n_seen, 0);
+    vfhe_parallel_for(ITEMS, 0, count_body, &record);
+    TEST_ASSERT_LESS_OR_EQUAL_INT(3, atomic_load(&record.n_seen));
+    TEST_ASSERT_EQUAL_UINT64(3, vfhe_set_local_num_threads(0));
+    TEST_ASSERT_EQUAL_UINT64(8, vfhe_threads_for(0, 100));
+}
+
 static void zero_restores_the_default(void)
 {
     const uint64_t original = vfhe_num_threads();
@@ -255,6 +308,8 @@ int main(void)
     RUN_TEST(the_limit_bounds_the_threads);
     RUN_TEST(one_thread_is_the_callers);
     RUN_TEST(a_nested_loop_stays_on_its_thread);
+    RUN_TEST(a_loop_over_few_items_lends_its_threads);
+    RUN_TEST(the_local_number_bounds_the_callers_loops);
     RUN_TEST(zero_restores_the_default);
     RUN_TEST(the_threads_are_kept_between_loops);
     RUN_TEST(concurrent_callers_share_the_threads);

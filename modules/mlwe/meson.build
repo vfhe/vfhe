@@ -8,6 +8,7 @@ module = {
         'c/src/mgsw.c',
         'c/src/mlwe.c',
         'c/src/mlwe_rns.c',
+        'c/src/rns_rows.c',
     ),
     'includes': [include_directories('c/include')],
     'headers': files('c/include/mlwe.h', 'c/include/rns-rlwe.h'),

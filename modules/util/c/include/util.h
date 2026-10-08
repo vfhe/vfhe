@@ -77,17 +77,26 @@ extern "C"
     // restores the default).
     uint64_t vfhe_num_threads(void);
     void vfhe_set_num_threads(uint64_t n);
+    // The calling thread's local number of threads: a limit on the threads of
+    // the parallel calls it makes, below the library-wide one (0: none),
+    // returning the previous one. Inside a vfhe_parallel_for body it is the
+    // body's share of the loop's threads.
+    uint64_t vfhe_set_local_num_threads(uint64_t n);
+    uint64_t vfhe_local_num_threads(void);
     // Threads to use for `n_items` independent items when `requested` were
-    // asked for (0: as many as the limit allows): never more than the limit or
-    // the items, and 1 inside a vfhe_parallel_for body, so nested parallel
-    // calls do not multiply threads.
+    // asked for (0: as many as allowed): never more than the limit, the
+    // calling thread's local number of threads or the items.
     uint64_t vfhe_threads_for(uint64_t requested, uint64_t n_items);
     // Calls body(ctx, i) for every i < n on vfhe_threads_for(n_threads, n)
     // threads, the caller's included, and returns when all are done. Calls run
-    // concurrently, in no particular order. The helper threads are created on
-    // first need and kept, asleep, for later calls; they block every signal.
-    // Loops started by several threads at once share them, and a forked child
-    // creates its own.
+    // concurrently, in no particular order. The threads the loop was allowed
+    // but does not use go to its bodies: each runs with a local number of
+    // threads of the allowed count divided by the loop's threads when that is
+    // at least 4, and of 1 otherwise, so nested calls never multiply threads
+    // past the limit.
+    // The helper threads are created on first need and kept, asleep, for
+    // later calls; they block every signal. Loops started by several threads
+    // at once share them, and a forked child creates its own.
     void vfhe_parallel_for(uint64_t n, uint64_t n_threads, void (*body)(void *ctx, uint64_t i),
                            void *ctx);
 

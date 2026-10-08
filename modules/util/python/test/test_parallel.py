@@ -28,6 +28,23 @@ def test_the_limit_is_set_and_restored():
         engine.set_num_threads(0)
 
 
+def test_a_local_number_of_threads_holds_inside_and_is_restored():
+    lib = engine.libvfhe.lib
+    assert lib.vfhe_local_num_threads() == 0
+    with engine.local_num_threads(3):
+        assert lib.vfhe_local_num_threads() == 3
+        with engine.local_num_threads(5):  # a nested one only lowers
+            assert lib.vfhe_local_num_threads() == 3
+        with engine.local_num_threads(2):
+            assert lib.vfhe_local_num_threads() == 2
+        assert lib.vfhe_local_num_threads() == 3
+    assert lib.vfhe_local_num_threads() == 0
+    with engine.local_num_threads(0):
+        assert lib.vfhe_local_num_threads() == 0
+    with pytest.raises(ValueError, match="at least 0"), engine.local_num_threads(-1):
+        pass
+
+
 def test_the_environment_sets_the_default():
     # The child picks its own engine: under an emulator it runs on the bare CPU.
     env = {

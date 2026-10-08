@@ -8,6 +8,8 @@ picks one at import; this module re-exports its ``ffi`` / ``lib`` plus a
 """
 
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from . import memory_pool as memory_pool
 from ._native import active, ffi, lib, runnable
@@ -46,6 +48,27 @@ def set_num_threads(n: int | None = None) -> None:
 def num_threads() -> int:
     """The library-wide thread limit (see `set_num_threads`)."""
     return lib.vfhe_num_threads()
+
+
+@contextmanager
+def local_num_threads(n: int) -> Iterator[None]:
+    """Limits the threads of the vfhe calls this thread makes inside to ``n``.
+
+    ``0`` sets no local limit. The library limit still applies, and a local
+    limit set inside another can only lower it.
+    """
+    if n < 0:
+        raise ValueError(f"the local number of threads must be at least 0, got {n}")
+    if n == 0:
+        yield
+        return
+    current = lib
+    outer = current.vfhe_local_num_threads()
+    previous = current.vfhe_set_local_num_threads(n if outer == 0 else min(n, outer))
+    try:
+        yield
+    finally:
+        current.vfhe_set_local_num_threads(previous)
 
 
 def active_engine() -> str:

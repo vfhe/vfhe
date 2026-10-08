@@ -1279,6 +1279,48 @@ def test_keygen_without_the_special_primes_does_not_depend_on_the_thread_count(
     assert keys[0] == keys[1] == keys[2]
 
 
+@pytest.mark.parametrize("radix", [None, 9])
+@pytest.mark.parametrize("r", [1, 2])
+@pytest.mark.usefixtures("threads")
+def test_single_operations_do_not_depend_on_the_thread_count(radix, r):
+    """A key switch, an automorphism, a product, a division and hoisted
+    automorphisms split over the primes give the same samples on 1, 3 and 8
+    threads. N = 4096 is large enough for them to run in parallel."""
+    n = 4096
+    Rq = Ring(n, prime_size=[45] * 5 + [50], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=r)
+    with entropy.deterministic(0x1A7E):
+        key = scheme.key_gen_sparse(n * r // 8, 3.2)
+        key2 = scheme.key_gen_sparse(n * r // 8, 3.2)
+        ksk = scheme.gen_ksk(key2, key, radix_log_base=radix)
+        auts = [
+            scheme.gen_ksk_automorphism(key, key, g, radix_log_base=radix)
+            for g in (5, 25)
+        ]
+        rlk = scheme.gen_rlk(key, key, radix_log_base=radix)
+        c = enc(scheme, Rp, Rp.random_element(), key)
+
+    def run(n_threads):
+        out = [scheme.keyswitch(c.copy(), ksk, n_threads)]
+        out.append(scheme.automorphism(c.copy(), 5, auts[0], n_threads))
+        prod = scheme.multiply(c.copy(), c.copy(), rlk, n_threads)
+        out.append(prod.copy())
+        out.append(prod.round_division(lvl=1, n_threads=n_threads))
+        with engine.local_num_threads(n_threads):
+            out += scheme.automorphisms(c.copy(), [5, 25], auts)
+        for x in out:
+            x.to_coeff()
+        return _digests(out)
+
+    runs = [run(n_threads) for n_threads in (1, 3, 0)]
+    assert runs[0] == runs[1] == runs[2]
+    m_out = scheme.linear_decrypt(scheme.keyswitch(c.copy(), ksk, 3), key2)
+    assert m_out.round_division(Rp) == scheme.linear_decrypt(
+        c.copy(), key
+    ).round_division(Rp)
+
+
 @pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])
 @pytest.mark.usefixtures("threads")
 def test_keys_drawn_on_several_threads_switch_keys(r, N_r):
