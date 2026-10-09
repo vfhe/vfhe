@@ -797,6 +797,99 @@ class MLWE_Scheme:
         res.repr = repr.ntt
         return res
 
+    def level_with_primes(self, ring: RNSRing) -> int:
+        """The level of this scheme over the primes of ``ring``, compared by
+        value, so ``ring`` may be of another dimension."""
+        primes = sorted(ring.primes)
+        for lvl, level_ring in enumerate(self.rings):
+            if sorted(level_ring.primes) == primes:
+                return lvl
+        raise ValueError("no level of this scheme has the ring's primes")
+
+    def gen_ring_switch_key(
+        self,
+        key_out: MLWE_Key,
+        key_in: MLWE_Key,
+        lvl: int,
+        radix_log_base: int | None = None,
+        n_threads: int = 0,
+        hybrid: bool = True,
+    ) -> MLWE_Set:
+        """The key `ring_switch` takes from ``key_in``, of a scheme over
+        ``R_N``, to ``key_out``, of this one over ``R_n``, at level ``lvl``.
+        One dimension divides the other, ``k`` the ratio; the ranks are free.
+
+        Down (``N = k n``): for each component ``s_i`` of ``key_in``, keys for
+        ``s_i^(0)`` and ``Y s_i^(k - j)``, ``j = 1, ..., k - 1``, where
+        ``s_i^(l)`` holds coefficients ``l + k m`` of ``s_i``. Up (``n = k
+        N``): a key for ``s_i(X^k)``. ``radix_log_base``, ``n_threads`` and
+        ``hybrid`` are as in `gen_ksk`.
+        """
+        N, n = key_in.scheme.N, self.N
+        polys: list[list[int]] = []
+        if N % n == 0:
+            k = N // n
+            for s_i in key_in.key:
+                parts = [s_i[j::k] for j in range(k)]
+                polys.append(parts[0])
+                for j in range(1, k):
+                    # Y * s_i^(k - j) in R_n: a negacyclic shift by one.
+                    part = parts[k - j]
+                    polys.append([-part[-1], *part[:-1]])
+        elif n % N == 0:
+            k = n // N
+            for s_i in key_in.key:
+                embedded = [0] * n
+                embedded[::k] = s_i
+                polys.append(embedded)
+        else:
+            raise ValueError("one ring dimension must divide the other")
+        ring = self.rings[lvl]
+        return self.gen_ksk_for_level(
+            key_out,
+            [Polynomial(ring).from_array(p) for p in polys],
+            lvl,
+            radix_log_base,
+            n_threads=n_threads,
+            hybrid=hybrid,
+        )
+
+    def ring_switch(self, c: MLWE, ksk: MLWE_Set, n_threads: int = 0) -> MLWE:
+        """``c``, a sample of a scheme over ``R_N``, as a sample of this one
+        over ``R_n`` under the key ``ksk`` switches to (`gen_ring_switch_key`),
+        at the level with ``c``'s primes. ``R_n`` is ``Z[X^k]`` inside
+        ``R_N`` or contains ``R_N`` as ``Z[Y^k]``, whichever the dimensions
+        say.
+
+        Down (``N = k n``), the result decrypts to coefficients ``k m`` of
+        what ``c`` decrypts to, at ``m``: exactly the message when it lies in
+        ``Z[X^k]``, its other coefficients dropped otherwise. Up (``n = k
+        N``), it decrypts to ``m(Y^k)``. The only noise added is the key
+        switch's.
+        """
+        lvl = self.level_with_primes(c.ring)
+        N, n = c.ring.N, self.N
+        if N % n and n % N:
+            raise ValueError("one ring dimension must divide the other")
+        rank = c.r * (N // n) if n <= N else c.r
+        first = next(x for x in ksk.mlwe if x is not None)[0]
+        if (
+            first.scheme != self
+            or len(ksk.mlwe) != rank
+            or first.ring.mask
+            not in (self.special_rings[lvl].mask, self.rings[lvl].mask)
+        ):
+            raise ValueError(
+                "the key is not a ring-switch key of this scheme from the "
+                "sample's dimension and rank, at its level"
+            )
+        out = MLWE(self, lvl=lvl)
+        with local_num_threads(n_threads):
+            c.to_coeff()
+            lib_rlwe.lib.mlwe_ring_switch(out.obj, c.obj, ksk.obj)
+        out.repr = repr.coeff
+        return out
+
     def sample(
         self,
         msg: RNSPolynomial,

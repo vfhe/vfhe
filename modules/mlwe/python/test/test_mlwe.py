@@ -789,6 +789,234 @@ def test_full_packing_keyswitch_scaled(ghs, count):
         assert round(d[k * stride] / (count * delta)) == k + 1
 
 
+# --- LWE extraction and the packing key switch -------------------------------
+
+
+def _mod_switch(v, q, p):
+    return round((v * p) / q) % p
+
+
+def _schemes_on_shared_primes(*shapes, prime_size=(50, 50, 50), special_primes=1):
+    """One scheme per ``(dimension, rank)`` in ``shapes``, all on the same
+    primes: drawn for the largest dimension (an NTT prime for twice it serves
+    every smaller one) and given to the others, whose rings have bases of
+    their own."""
+    big = max(d for d, _ in shapes)
+    rings = {big: Ring(big, prime_size=list(prime_size), split_degree=1)}
+    schemes = []
+    for d, r in shapes:
+        if d not in rings:
+            rings[d] = Ring(d, primes=list(rings[big].primes), split_degree=1)
+        schemes.append(
+            MLWE_Scheme(rings[d], special_primes=special_primes, module_rank=r)
+        )
+    return schemes
+
+
+def test_lwe_extraction():
+    N = 256
+    Rq = Ring(N, prime_size=[50, 50, 50], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=1)
+    key = scheme.key_gen_sparse(64, 3.2, ternary=True)
+    lwe_key = key.extract_lwe_key()
+
+    msg_coeffs = [((i + 1) * 123) % Rp.primes[0] for i in range(N)]
+    msg = Polynomial(Rp).from_array(msg_coeffs)
+    delta = Rq.modulus_ratio(Rp, return_pointer=True)
+    rlwe_sample = scheme.sample(msg.scaled_lift(Rq, delta=delta), key)
+
+    for idx in [0, 1, N // 2, N - 1]:
+        lwe_sample = scheme.extract_lwe(rlwe_sample, idx)
+        decryption = lwe_sample.linear_decrypt(lwe_key, recompose=True)
+        res = _mod_switch(decryption, Rq.q_l, Rp.primes[0])
+        diff = (res - msg_coeffs[idx]) % Rp.primes[0]
+        diff = min(diff, Rp.primes[0] - diff)
+        assert diff < 1000
+
+
+def test_lwe_extraction_over_a_populated_base():
+    N = 256
+    _, _, scheme = _scheme_over_a_populated_base()
+    Rq = scheme.rings[0]
+    Rp = Rq.quotient_ring(ell=1)
+    key = scheme.key_gen_sparse(64, 3.2, ternary=True)
+    lwe_key = key.extract_lwe_key()
+
+    msg_coeffs = [((i + 1) * 123) % Rp.primes[0] for i in range(N)]
+    msg = Polynomial(Rp).from_array(msg_coeffs)
+    delta = Rq.modulus_ratio(Rp, return_pointer=True)
+    rlwe_sample = scheme.sample(msg.scaled_lift(Rq, delta=delta), key)
+
+    for idx in [0, 1, N // 2, N - 1]:
+        lwe_sample = scheme.extract_lwe(rlwe_sample, idx)
+        decryption = lwe_sample.linear_decrypt(lwe_key, recompose=True)
+        res = _mod_switch(decryption, Rq.q_l, Rp.primes[0])
+        diff = (res - msg_coeffs[idx]) % Rp.primes[0]
+        assert min(diff, Rp.primes[0] - diff) < 1000
+
+
+def _check_packing(out_scheme, output_key, count, radix_log_base=None):
+    Rq = out_scheme.rings[0]
+    lwe_key = LWE_Key(ring=Rq, sec_sigma=3.2, err_sigma=3.2, n=Rq.N)
+    packing_key = out_scheme.gen_packing_ksk(
+        output_key, lwe_key, radix_log_base=radix_log_base
+    )
+    extracted = []
+    for i in range(count):
+        m_i = _mod_switch((i * 137), 2000, Rq.q_l)
+        extracted.append(LWE(ring=Rq, m=[m_i % q for q in Rq.primes], key=lwe_key))
+
+    out_repacked = out_scheme.packing_keyswitch(extracted, packing_key)
+    out_coeffs = out_scheme.linear_decrypt(out_repacked, output_key).get_polynomial()
+    for j in range(Rq.N):
+        expected = (j * 137) % 2000 if j < count else 0
+        m_j = _mod_switch(out_coeffs[j], Rq.q_l, 2000)
+        diff = (m_j - expected) % 2000
+        assert min(diff, 2000 - diff) <= 5
+
+
+@pytest.mark.parametrize("balanced", [False, True])
+@pytest.mark.parametrize("keygen_threads", [1, 4])
+def test_packing_ksk(balanced, keygen_threads):
+    Rq = Ring(256, prime_size=[50, 50, 50], split_degree=1)
+    out_scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=4, balanced=balanced)
+    output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
+    engine.set_num_threads(keygen_threads)
+    try:
+        _check_packing(out_scheme, output_key, 256)
+    finally:
+        engine.set_num_threads()
+
+
+def test_packing_ksk_radix():
+    Rq = Ring(256, prime_size=[50, 50], split_degree=1)
+    out_scheme = MLWE_Scheme(Rq, special_primes=0, max_lvl=1)
+    output_key = out_scheme.key_gen_sparse(64, 3.2)
+    _check_packing(out_scheme, output_key, 256, radix_log_base=10)
+
+
+def test_packing_ksk_over_a_populated_base():
+    _, _, out_scheme = _scheme_over_a_populated_base(module_rank=4)
+    output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
+    _check_packing(out_scheme, output_key, 256)
+
+
+@pytest.mark.parametrize("n", [16, 128])
+def test_packing_samples_of_another_dimension(n):
+    # Samples extracted from R_N packed into R_n: the two rings have their own
+    # bases, so the primes are matched by value.
+    N = 64
+    io, rotation = _schemes_on_shared_primes((n, 1), (N, 2))
+    output_key = io.key_gen_sparse(16 * io.r, 3.2)
+    rotation_key = rotation.key_gen_sparse(16 * rotation.r, 3.2)
+    ring = rotation.rings[0]
+    assert ring.base != io.rings[0].base
+    delta = 1 << 70
+    count = min(n, 40)
+    extracted = [
+        rotation.extract_lwe(
+            rotation.sample(
+                Polynomial(ring).from_bigint_array([(k + 1) * delta]), rotation_key
+            ),
+            0,
+        )
+        for k in range(count)
+    ]
+    packing_key = io.gen_packing_ksk(output_key, rotation_key.extract_lwe_key())
+    out = io.packing_keyswitch(extracted, packing_key)
+    d = io.linear_decrypt(out, output_key).get_polynomial(signed=True)
+    assert [round(x / delta) for x in d] == [k + 1 for k in range(count)] + [0] * (
+        n - count
+    )
+
+
+# --- Ring switching -----------------------------------------------------------
+#
+# Between R_N and R_n, N = k n, through the subring Z[X^k]: down keeps the
+# coefficients k m of the message, up embeds it with Y = X^k. The subring maps
+# only move coefficients, so the noise left is the key switch's.
+
+RING_SWITCH_DELTA = 1 << 70
+
+
+def _ring_switch_case(src, dst, lvl=0, **key_options):
+    """Encrypts a message in every coefficient under a key of ``src`` at
+    ``lvl``, switches it to ``dst`` and returns (message, decryption in
+    units of the scale, noise bits)."""
+    key_src = src.key_gen_sparse(16 * src.r, 3.2)
+    key_dst = dst.key_gen_sparse(16 * dst.r, 3.2)
+    out_lvl = dst.level_with_primes(src.rings[lvl])
+    ksk = dst.gen_ring_switch_key(key_dst, key_src, out_lvl, **key_options)
+    rng = random.Random(0xC0FFEE)  # noqa: S311 - test data, not a key
+    msg = [rng.randrange(-1000, 1000) for _ in range(src.N)]
+    poly = Polynomial(src.rings[lvl]).from_bigint_array(
+        [m * RING_SWITCH_DELTA for m in msg]
+    )
+    out = dst.ring_switch(src.sample(poly, key_src, lvl=lvl), ksk)
+    assert out.lvl == out_lvl
+    assert out.ring.N == dst.N
+    d = dst.linear_decrypt(out, key_dst).get_polynomial(signed=True)
+    got = [round(x / RING_SWITCH_DELTA) for x in d]
+    noise = max(abs(x - g * RING_SWITCH_DELTA) for x, g in zip(d, got, strict=True))
+    return msg, got, noise.bit_length()
+
+
+def _switched(msg, n):
+    """What a switch of ``msg`` to dimension ``n`` decrypts to."""
+    N = len(msg)
+    if n <= N:
+        return msg[:: N // n]
+    k = n // N
+    return [msg[m // k] if m % k == 0 else 0 for m in range(n)]
+
+
+@pytest.mark.parametrize(
+    ("N_from", "n_to"), [(256, 64), (256, 128), (64, 256), (128, 128)]
+)
+@pytest.mark.parametrize(("rank_from", "rank_to"), [(1, 1), (2, 1), (1, 3)])
+def test_ring_switch(N_from, n_to, rank_from, rank_to):
+    src, dst = _schemes_on_shared_primes((N_from, rank_from), (n_to, rank_to))
+    msg, got, noise = _ring_switch_case(src, dst)
+    assert got == _switched(msg, n_to)
+    assert noise < 16
+
+
+@pytest.mark.parametrize("direction", ["down", "up"])
+def test_ring_switch_at_a_level(direction):
+    dims = [(256, 1), (64, 2)] if direction == "down" else [(64, 2), (256, 1)]
+    src, dst = _schemes_on_shared_primes(*dims, prime_size=(50, 50, 50, 50))
+    msg, got, _ = _ring_switch_case(src, dst, lvl=1)
+    assert got == _switched(msg, dst.N)
+
+
+@pytest.mark.parametrize("hybrid", [True, False])
+def test_ring_switch_radix(hybrid):
+    src, dst = _schemes_on_shared_primes((256, 1), (64, 1))
+    msg, got, noise = _ring_switch_case(
+        src, dst, radix_log_base=RADIX_LOG_BASE, hybrid=hybrid
+    )
+    assert got == _switched(msg, 64)
+    if not hybrid:
+        # Without the special prime the digits' products stay: a BV switch.
+        assert noise > 16
+
+
+def test_ring_switch_checks_its_key():
+    src, dst = _schemes_on_shared_primes((256, 1), (64, 1), prime_size=(50, 50, 50, 50))
+    wide, _ = _schemes_on_shared_primes((256, 2), (64, 1))
+    key_src = src.key_gen_sparse(16, 3.2)
+    key_dst = dst.key_gen_sparse(16, 3.2)
+    c = src.sample(Polynomial(src.rings[0]).from_array([1]), key_src)
+    with pytest.raises(ValueError, match="ring-switch key"):
+        # A key for another level.
+        dst.ring_switch(c, dst.gen_ring_switch_key(key_dst, key_src, 1))
+    with pytest.raises(ValueError, match="ring-switch key"):
+        # A key for a source of another rank.
+        key_wide = wide.key_gen_sparse(16, 3.2)
+        dst.ring_switch(c, dst.gen_ring_switch_key(key_dst, key_wide, 0))
+
+
 # --- MGSW x MGSW, automorphisms, trivial MGSW ---------------------------------
 #
 # Without special primes an MGSW's rows live in the ring it multiplies, so
@@ -1298,7 +1526,7 @@ def test_special_primes_of_a_ring_that_is_not_the_first_of_its_base():
     assert scheme.special_rings[0].ell == scheme.rings[0].ell + 1
 
 
-def _scheme_over_a_populated_base():
+def _scheme_over_a_populated_base(module_rank=1):
     """A GHS scheme whose ring is not the first built over its base.
 
     Its working primes' base indices do not ascend -- the first is new, the
@@ -1309,7 +1537,7 @@ def _scheme_over_a_populated_base():
     """
     Ring(N, prime_size=[43, 43, 53], split_degree=1)
     Rq = Ring(N, prime_size=[37, 43, 43, 53], split_degree=1)
-    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=1)
+    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=module_rank)
     work = scheme.rings[0].prime_indices
     special = set(scheme.special_rings[0].prime_indices) - set(work)
     assert work != sorted(work)

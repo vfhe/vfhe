@@ -6,10 +6,10 @@
 
 // Key switching and the operations built on it: the GHS hybrid key switch
 // (a BV one when the key lives in the sample's own ring), automorphisms --
-// single, hoisted, batched and summed --, the trace, and packing through the
-// trace. Everything here works one whole ring element at a time through
-// arith_*; the gadget products are gadget_rns.c's, and what needs residues
-// is in keyswitch_rns.c.
+// single, hoisted, batched and summed --, the trace, packing through the
+// trace, and ring switching. Everything here works one whole ring element at
+// a time through arith_*; the gadget products are gadget_rns.c's, and what
+// needs residues is in keyswitch_rns.c.
 
 // GHS hybrid key switch. The product must accumulate in the ring the key
 // lives in: `out` is only guaranteed to be allocated for its own, narrower
@@ -417,4 +417,21 @@ void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_K
     free_mlwe_RNS_sample(tmp2);
     free(even);
     free(odd);
+}
+
+// Ring switching: the subring map into the key ring's dimension, then a key
+// switch, which may change the rank, from the key the map leaves the sample
+// under.
+void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk)
+{
+    const uint64_t N = in->ring->N, n = out->ring->N;
+    const uint64_t rank = N >= n ? in->r * (N / n) : in->r;
+    assert(ksk->count == rank);
+    RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, rank);
+    if (N >= n)
+        mlwe_project_subring(tmp, in);
+    else
+        mlwe_embed_subring(tmp, in);
+    mlwe_RNSc_GHS_hybrid_keyswitch(out, tmp, ksk, 0);
+    free_mlwe_RNS_sample(tmp);
 }

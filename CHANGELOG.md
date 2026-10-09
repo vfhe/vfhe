@@ -14,6 +14,19 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add ring switching between `R_N` and `R_n` when one dimension divides the
+  other, `R_n` being `Z[X^k]` inside `R_N`:
+  `MLWE_Scheme.ring_switch(c, ksk)` takes a sample of a scheme of the other
+  dimension to the level of this one with the same primes, and
+  `gen_ring_switch_key(key_out, key_in, lvl, radix_log_base, n_threads,
+  hybrid)` makes its key, between any two ranks. Down, the sample is read as
+  one of rank `r k` over `R_n` and key-switched, and decrypts to the
+  coefficients `k m` of the message; up, it is embedded with `Y = X^k` and
+  key-switched. The subring maps (`mlwe_project_subring`,
+  `mlwe_embed_subring`) only move coefficients, one pass per row (a k-way
+  deinterleave or spread, vectorized on AVX-512), so the noise is a key
+  switch's. Native `mlwe_ring_switch`; `MLWE_Scheme.level_with_primes(ring)`
+  finds the level over a ring's primes, by value.
 - Add MGSW internal products, automorphisms and noiseless keys:
   `MGSW.internal_product(other)` (also `MGSW * MGSW`, native
   `mgsw_internal_product`) is the external product of `self` with every row

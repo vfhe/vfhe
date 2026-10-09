@@ -49,6 +49,7 @@ module = {
     'fuzz': files('c/fuzz/fuzz_ntt.c'),
     'c_tests': files(
         'c/test/test_arith_generic.c',
+        'c/test/test_interleave.c',
         'c/test/test_mod.c',
         'c/test/test_ntt.c',
         'c/test/test_number_theory.c',

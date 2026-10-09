@@ -9,7 +9,7 @@ LWE / Module-LWE and MGSW over the `vfhe.arith` ring.
 - `mlwe.py`: `MLWE_Scheme` / `MLWE` / `MLWE_Key` / `MLWE_Set`: module-LWE
   encryption and linear decryption, homomorphic add / sub / scalar and polynomial
   multiplication, BV and GHS key-switching, automorphisms, trace, packing
-  key-switch, and relinearized ciphertext multiplication.
+  key-switch, ring switching, and relinearized ciphertext multiplication.
 - `mgsw.py`: `MGSW_Scheme` / `MGSW` with the external product and the
   `CMUX` / `NCMUX` gates that the bootstraps in `vfhe.fhe` build on.
 

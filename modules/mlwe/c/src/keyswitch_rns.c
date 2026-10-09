@@ -9,7 +9,8 @@
 // The key-switching operations that need the RNS representation itself.
 //
 // mlwe_full_packing_keyswitch assembles ring elements coefficient by
-// coefficient from a vector of scalar LWE samples. The key-switch key
+// coefficient from a vector of scalar LWE samples, and the subring maps of
+// ring switching move coefficients between dimensions. The key-switch key
 // plumbing lives here because deriving a key's ring and relabeling its
 // accumulator into it are mask operations, which is how RNS identifies a
 // ring.
@@ -136,4 +137,129 @@ void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key)
 {
     free(key->s);
     free(key);
+}
+
+// --- Subring maps --------------------------------------------------------
+//
+// R_n = Z[Y]/(Y^n + 1) sits in R_N = Z[X]/(X^N + 1) as Y = X^k, k = N / n.
+// Both maps below only move coefficients: per row, the projection is a k-way
+// deinterleave and the embedding a k-way spread (arith's vector kernels). The
+// two rings have bases of their own, so a row is found in the other base by
+// its prime. Every row of the output is written whole, so it is not zeroed
+// first.
+
+// row[i], for every base index i of `from` that `from_mask` selects: the
+// index in `to`'s base of the same prime, which `to_mask` must select. The
+// masks select the same primes. Indices outside `from_mask` are unused.
+static uint64_t *rows_by_prime(RNS_Base from, uint64_t from_mask, RNS_Base to, uint64_t to_mask)
+{
+    assert(rns_mask_to_l(from_mask) == rns_mask_to_l(to_mask));
+    uint64_t *row = (uint64_t *)safe_malloc(from->l * sizeof(uint64_t));
+    for (size_t i = 0; i < from->l; i++)
+    {
+        row[i] = UINT64_MAX;
+        if (!(from_mask & (1ULL << i)))
+            continue;
+        for (size_t j = 0; j < to->l; j++)
+            if ((to_mask & (1ULL << j)) && to->mods[j]->q == from->mods[i]->q)
+                row[i] = j;
+        assert(row[i] != UINT64_MAX);
+    }
+    return row;
+}
+
+// Labels every element of `out` canonical over all of its ring's primes, the
+// state the maps leave it in once they have written every row.
+static void claim_rows(MLWE out, uint64_t mask)
+{
+    for (size_t e = 0; e <= out->r; e++)
+    {
+        ArithElement *x = e < out->r ? &out->a[e] : &out->b;
+        arith_rns_polynomial(x)->rns_mask = mask;
+        x->domain = ARITH_DOMAIN_CANONICAL;
+    }
+}
+
+// The k outputs of a deinterleave: row `oi` of out->a[first + j], j < k.
+#define DEINTERLEAVE_ROW(W, out, first, oi, in, ii, k, n)                                          \
+    do                                                                                             \
+    {                                                                                              \
+        uint##W##_t **rows_ = (uint##W##_t **)safe_malloc((k) * sizeof(uint##W##_t *));            \
+        for (size_t j_ = 0; j_ < (k); j_++)                                                        \
+            rows_[j_] = rns_row##W(arith_rns_polynomial(&(out)->a[(first) + j_]), (oi));           \
+        vec_deinterleave_u##W(rows_, rns_row##W((in), (ii)), (k), (n));                            \
+        free(rows_);                                                                               \
+    } while (0)
+
+void mlwe_project_subring(MLWE out, MLWE in)
+{
+    assert(mlwe_domain(in) == ARITH_DOMAIN_CANONICAL);
+    const uint64_t n = out->ring->N;
+    assert(in->ring->N % n == 0);
+    const uint64_t k = in->ring->N / n;
+    assert(out->r == in->r * k);
+    RNS_Polynomial in_b = arith_rns_polynomial(&in->b);
+    RNS_Polynomial out_b = arith_rns_polynomial(&out->b);
+    const uint64_t out_mask = arith_rns_ring_mask(out->ring);
+    uint64_t *row = rows_by_prime(in_b->base, in_b->rns_mask, out_b->base, out_mask);
+    for (size_t i = 0; i < in_b->base->l; i++)
+    {
+        if (!(in_b->rns_mask & (1ULL << i)))
+            continue;
+        const bool narrow = rns_row_is_narrow(in_b->base, i);
+        for (size_t c = 0; c < in->r; c++)
+        {
+            RNS_Polynomial a = arith_rns_polynomial(&in->a[c]);
+            if (narrow)
+                DEINTERLEAVE_ROW(32, out, c * k, row[i], a, i, k, n);
+            else
+                DEINTERLEAVE_ROW(64, out, c * k, row[i], a, i, k, n);
+        }
+        // Only part 0 of the body is kept.
+        if (narrow)
+        {
+            uint32_t *o = rns_row32(out_b, row[i]);
+            const uint32_t *b = rns_row32(in_b, i);
+            for (size_t m = 0; m < n; m++)
+                o[m] = b[k * m];
+        }
+        else
+        {
+            uint64_t *o = rns_row64(out_b, row[i]);
+            const uint64_t *b = rns_row64(in_b, i);
+            for (size_t m = 0; m < n; m++)
+                o[m] = b[k * m];
+        }
+    }
+    free(row);
+    claim_rows(out, out_mask);
+}
+
+void mlwe_embed_subring(MLWE out, MLWE in)
+{
+    assert(mlwe_domain(in) == ARITH_DOMAIN_CANONICAL);
+    const uint64_t n = in->ring->N;
+    assert(out->ring->N % n == 0);
+    const uint64_t k = out->ring->N / n;
+    assert(out->r == in->r);
+    RNS_Polynomial in_b = arith_rns_polynomial(&in->b);
+    RNS_Polynomial out_b = arith_rns_polynomial(&out->b);
+    const uint64_t out_mask = arith_rns_ring_mask(out->ring);
+    uint64_t *row = rows_by_prime(in_b->base, in_b->rns_mask, out_b->base, out_mask);
+    for (size_t i = 0; i < in_b->base->l; i++)
+    {
+        if (!(in_b->rns_mask & (1ULL << i)))
+            continue;
+        for (size_t e = 0; e <= in->r; e++)
+        {
+            RNS_Polynomial src = e < in->r ? arith_rns_polynomial(&in->a[e]) : in_b;
+            RNS_Polynomial dst = e < in->r ? arith_rns_polynomial(&out->a[e]) : out_b;
+            if (rns_row_is_narrow(in_b->base, i))
+                vec_spread_u32(rns_row32(dst, row[i]), rns_row32(src, i), k, n);
+            else
+                vec_spread_u64(rns_row64(dst, row[i]), rns_row64(src, i), k, n);
+        }
+    }
+    free(row);
+    claim_rows(out, out_mask);
 }

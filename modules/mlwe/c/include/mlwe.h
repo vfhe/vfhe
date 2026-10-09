@@ -273,6 +273,31 @@ extern "C"
     void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
                                             uint64_t lvl);
 
+    // Subring maps between R_N = Z[X]/(X^N + 1) and R_n = Z[Y]/(Y^n + 1),
+    // N = k * n, R_n embedded as Y = X^k. Both move coefficients only, so they
+    // add no noise; the input is canonical and the output is written
+    // canonical over its own ring, which must have the input ring's primes
+    // (by value: the two dimensions have bases of their own).
+    //
+    // mlwe_project_subring: `in` over R_N of rank r, `out` over R_n of rank
+    // r * k. Component i * k + j of `out` holds coefficients j + k * m of
+    // component i of `in` (at m), the body coefficients k * m. Its linear
+    // decryption under the key whose components i * k + j are s_i^(0) for
+    // j = 0 and Y * s_i^(k - j) otherwise -- s_i^(l) being coefficients
+    // l + k * m of s_i -- is coefficients k * m of the linear decryption of
+    // `in` under s: the subring part of the message, and the rest dropped.
+    void mlwe_project_subring(MLWE out, MLWE in);
+    // mlwe_embed_subring: `in` over R_n, `out` over R_N, both of rank r; out
+    // is in with Y = X^k, so it decrypts under s(X^k) to m(X^k).
+    void mlwe_embed_subring(MLWE out, MLWE in);
+    // Ring switching: mlwe_project_subring (if `in`'s dimension is at least
+    // `out`'s) or mlwe_embed_subring into a sample over `out`'s ring, then a
+    // key switch with `ksk`, whose components switch from the key that map
+    // leaves the sample under (one per component it produces, r * k down and
+    // r up) to `out`'s key, at any rank. `ksk` belongs to the level of `out`'s
+    // ring.
+    void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk);
+
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);
     // Reduces every component into `to`, a quotient of the sample's ring, in
     // place and in either domain. Unlike mlwe_round_division, the value is not

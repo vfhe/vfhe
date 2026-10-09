@@ -13,6 +13,15 @@
 // out[2i] = even[i], out[2i + 1] = odd[i]. No modulus: the values pass through
 // unchanged, so the caller's reduction state is whatever it already was.
 void vec_interleave_u64(uint64_t *out, const uint64_t *even, const uint64_t *odd, uint64_t n);
+// k-way deinterleave, out[j][m] = in[j + k * m] for j < k and m < n: the
+// transpose of `in` read as n rows of k. The k outputs hold n words each and
+// alias neither one another nor `in`.
+void vec_deinterleave_u64(uint64_t *const *out, const uint64_t *in, uint64_t k, uint64_t n);
+void vec_deinterleave_u32(uint32_t *const *out, const uint32_t *in, uint64_t k, uint64_t n);
+// k-way spread, out[k * m] = in[m] for m < n and the other words of out's
+// k * n zero. `out` does not alias `in`.
+void vec_spread_u64(uint64_t *out, const uint64_t *in, uint64_t k, uint64_t n);
+void vec_spread_u32(uint32_t *out, const uint32_t *in, uint64_t k, uint64_t n);
 
 void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
