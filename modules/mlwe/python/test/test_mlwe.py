@@ -27,6 +27,7 @@ from vfhe.mlwe import (
     MLWE,
     LWE_Key,
     MGSW_Scheme,
+    MLWE_Key,
     MLWE_Scheme,
     MLWE_Set,
     PlaintextMatrix,
@@ -725,6 +726,162 @@ def test_mgsw_external_product_radix(bv):
 
     res = ct_id.external_product(ct1)
     assert scheme.linear_decrypt(res, key).round_division(Rp) == m1
+
+
+@pytest.mark.parametrize("radix", [None, RADIX_LOG_BASE])
+def test_mgsw_products_at_a_level(ghs, radix):
+    # A key encrypted for a level multiplies that level's samples, and what
+    # it produces stays at that level.
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    one, zero = MGSW_Scheme(scheme, radix_log_base=radix).encrypt_constants(
+        [1, 0], key, lvl=1
+    )
+    m = [Rp.random_element() for _ in range(2)]
+    c = [enc(scheme, Rp, x, key).round_division(lvl=1) for x in m]
+
+    for out, expected in (
+        (one.external_product(c[0]), m[0]),
+        (CMUX(c[0], c[1], one), m[1]),
+        (CMUX(c[0], c[1], zero), m[0]),
+    ):
+        assert out.lvl == 1
+        assert out.ring == scheme.rings[1]
+        assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+
+
+def test_mgsw_products_refuse_another_level(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    (one,) = MGSW_Scheme(scheme).encrypt_constants([1], key)
+    c = enc(scheme, Rp, Rp.random_element(), key).round_division(lvl=1)
+    with pytest.raises(ValueError, match="level 1"):
+        one.external_product(c)
+    with pytest.raises(ValueError, match="level 1"):
+        CMUX(c, c, one)
+
+
+@pytest.mark.parametrize("count", [N // 16, N])
+def test_full_packing_keyswitch_scaled(ghs, count):
+    # Sample k carries k + 1 in its constant coefficient and noise-sized
+    # junk elsewhere; packing keeps the constants, at k * N / count, scaled by
+    # count.
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    log_n = N.bit_length() - 1
+    ksk = scheme.gen_ksk_trace(
+        key, key, gens=[(1 << j) + 1 for j in range(1, log_n + 1)], lvl=0
+    )
+    delta = 1 << 60
+    vec = [
+        scheme.sample(
+            Polynomial(scheme.rings[0]).from_bigint_array(
+                [(k + 1) * delta] + [entropy.below(1 << 40) for _ in range(N - 1)]
+            ),
+            key,
+        )
+        for k in range(count)
+    ]
+    packed = scheme.full_packing_keyswitch_scaled(vec, ksk)
+    d = scheme.linear_decrypt(packed, key).get_polynomial(signed=True)
+    stride = N // count
+    for k in range(count):
+        assert round(d[k * stride] / (count * delta)) == k + 1
+
+
+# --- MGSW x MGSW, automorphisms, trivial MGSW ---------------------------------
+#
+# Without special primes an MGSW's rows live in the ring it multiplies, so
+# every operation takes keys of level 0 (with the radix gadget, which is what
+# keeps BV noise down). With special primes the rows live over the key ring,
+# which is a level only of a scheme with one more special prime: the second
+# scheme of `_two_schemes`, holding the same secret.
+
+
+def _monomial(ring, e):
+    return Polynomial(ring).from_array([0] * e + [1] + [0] * (ring.N - e - 1))
+
+
+def _bv_mgsw(module_rank=1):
+    Rq = Ring(N, prime_size=[45, 45, 45], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=module_rank)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    mgsw = MGSW_Scheme(scheme, radix_log_base=RADIX_LOG_BASE)
+    keys = {
+        "aut": lambda g: scheme.gen_ksk_automorphism(
+            key, key, g, lvl=0, radix_log_base=RADIX_LOG_BASE
+        ),
+        "rlk": lambda: scheme.gen_rlk(key, key, lvl=0, radix_log_base=RADIX_LOG_BASE),
+    }
+    return Rp, scheme, key, mgsw, mgsw, key, keys
+
+
+def _two_schemes(module_rank=1):
+    base = Ring(N, prime_size=[45, 45, 45, 50, 50], split_degree=1)
+    scheme = MLWE_Scheme(
+        base.quotient_ring(ell=4), special_primes=1, module_rank=module_rank
+    )
+    rows = MLWE_Scheme(base, special_primes=1, module_rank=module_rank)
+    assert rows.rings[0].mask == scheme.special_rings[0].mask
+    Rp = scheme.rings[0].quotient_ring(ell=1)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    rows_key = MLWE_Key(key.key, key.sigma_err, rows)
+    keys = {
+        "aut": lambda g: rows.gen_ksk_automorphism(rows_key, rows_key, g, lvl=0),
+        "rlk": lambda: rows.gen_rlk(rows_key, rows_key, lvl=0),
+    }
+    return Rp, scheme, key, MGSW_Scheme(scheme), MGSW_Scheme(rows), rows_key, keys
+
+
+CASES = {"bv_radix": _bv_mgsw, "special_primes": _two_schemes}
+
+
+def _check_product(scheme, Rp, key, mgsw, factor):
+    m = Rp.random_element()
+    out = mgsw.external_product(enc(scheme, Rp, m, key))
+    assert scheme.linear_decrypt(out, key).round_division(Rp) == m * factor
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("module_rank", [1, 2])
+def test_mgsw_trivial(case, module_rank):
+    Rp, scheme, key, mgsw, _, _, _ = CASES[case](module_rank)
+    _check_product(scheme, Rp, key, mgsw.trivial(_monomial(Rp, 5)), _monomial(Rp, 5))
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("module_rank", [1, 2])
+def test_mgsw_internal_product(case, module_rank):
+    Rp, scheme, key, mgsw, rows_mgsw, rows_key, _ = CASES[case](module_rank)
+    a = rows_mgsw.encrypt(_monomial(Rp, 2), rows_key)
+    b = mgsw.encrypt(_monomial(Rp, 3), key)
+    product = a.internal_product(b)
+    assert len(product.obj) == len(b.obj)
+    assert all(x.ring == y.ring for x, y in zip(product.obj, b.obj, strict=True))
+    _check_product(scheme, Rp, key, product, _monomial(Rp, 5))
+    # From a trivial key, as a chain of monomial keys starts: X^2 * X^(N-1)
+    # wraps to -X.
+    chain = a.internal_product(mgsw.trivial(_monomial(Rp, N - 1)))
+    _check_product(scheme, Rp, key, chain, -_monomial(Rp, 1))
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("module_rank", [1, 2])
+@pytest.mark.parametrize("g", [5, 2 * N - 1])
+def test_mgsw_automorphism(case, module_rank, g):
+    Rp, scheme, key, mgsw, _, _, keys = CASES[case](module_rank)
+    m = Rp.random_element()
+    c = mgsw.encrypt(m, key)
+    out = mgsw.automorphism(c, g, keys["aut"](g), keys["rlk"]())
+    _check_product(scheme, Rp, key, out, m.automorphism(g))
+
+
+def test_mgsw_internal_product_refuses_rows_it_cannot_consume():
+    _Rp, _scheme, key, mgsw, _, _, _ = _two_schemes()
+    b = mgsw.encrypt(_monomial(_Rp, 1), key)
+    with pytest.raises(ValueError, match="cannot multiply the other's rows"):
+        b.internal_product(b)
 
 
 def test_keyswitch_radix_single_component():

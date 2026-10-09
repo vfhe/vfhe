@@ -69,13 +69,38 @@ LWE mlwe_extract_LWE(RNSc_MLWE in, uint64_t idx)
     return res;
 }
 
-void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key key,
-                                 uint64_t lvl)
+// Writes one value per sample, sample k at coefficient k * stride of `poly`'s
+// rows over the samples' primes; the other coefficients are zero.
+static void spread_lwe_values(RNSc_Polynomial poly, uint64_t mask, LWE *in, uint64_t size,
+                              uint64_t stride, uint64_t l, const uint64_t *index)
 {
-    (void)lvl;
+    const uint64_t N = poly->base->N;
+    for (size_t j = 0; j < poly->base->l; j++)
+        if (mask & (1ULL << j))
+            RNS_ROW_ZERO(poly, j, N);
+    for (size_t limb = 0; limb < l; limb++)
+    {
+        const int g_idx = rns_mask_get_active_index(mask, limb);
+        assert(g_idx >= 0);
+        const bool narrow = rns_row_is_narrow(poly->base, g_idx);
+        for (size_t k = 0; k < size; k++)
+        {
+            const uint64_t v = index == NULL ? in[k]->b[limb] : in[k]->a[limb][*index];
+            if (narrow)
+                poly->rows32[g_idx][k * stride] = (uint32_t)v;
+            else
+                poly->rows64[g_idx][k * stride] = v;
+        }
+    }
+}
+
+void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, uint64_t stride,
+                                 RNS_MLWE_KS_Key key)
+{
     const uint64_t N = arith_rns_polynomial(&out->b)->base->N;
     const uint64_t in_n = in[0]->n;
     const uint64_t lwe_l = in[0]->l;
+    assert(size * stride <= N);
 
     const uint64_t target_mask = arith_rns_polynomial(&out->b)->rns_mask;
     const uint64_t extended_mask = key->mask;
@@ -92,68 +117,17 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
 
     RNSc_Polynomial tmp_poly = (RNSc_Polynomial)polynomial_new_RNS_polynomial(
         N, target_mask, arith_rns_polynomial(&out->b)->base);
-    RNSc_Polynomial tmp_poly_red = (RNSc_Polynomial)polynomial_new_RNS_polynomial(
-        N, extended_mask, arith_rns_polynomial(&out->b)->base);
-    RNS_Polynomial tmp_rns = (RNS_Polynomial)polynomial_new_RNS_polynomial(
-        N, extended_mask, arith_rns_polynomial(&out->b)->base);
+    ArithElement column = {tmp_poly, ARITH_DOMAIN_CANONICAL};
 
+    // out -= sum_i (sum_k a_k[i] X^(k * stride)) (x) KS(s_i)
     for (size_t i = 0; i < in_n; i++)
     {
-        for (size_t j = 0; j < tmp_poly->base->l; j++)
-        {
-            if (tmp_poly->rns_mask & (1ULL << j))
-            {
-                RNS_ROW_ZERO(tmp_poly, j, N);
-            }
-        }
-
-        for (size_t limb = 0; limb < lwe_l; limb++)
-        {
-            int g_idx = rns_mask_get_active_index(target_mask, limb);
-            assert(g_idx >= 0);
-            if (rns_row_is_narrow(tmp_poly->base, g_idx))
-                for (size_t k = 0; k < size; k++)
-                    tmp_poly->rows32[g_idx][k] = (uint32_t)in[k]->a[limb][i];
-            else
-                for (size_t k = 0; k < size; k++)
-                    tmp_poly->rows64[g_idx][k] = in[k]->a[limb][i];
-        }
-
-        uint64_t ksk_idx = 0;
-        for (size_t j = 0; j < tmp_poly->base->l; j++)
-        {
-            if (tmp_poly->rns_mask & (1ULL << j))
-            {
-                if (key->balanced)
-                    polynomial_RNSc_mod_reduce_lifted_centered(tmp_poly_red, tmp_poly, j);
-                else
-                    polynomial_RNSc_mod_reduce_lifted(tmp_poly_red, tmp_poly, j);
-                polynomial_RNSc_to_RNS(tmp_rns, tmp_poly_red);
-                ArithElement factor = {tmp_rns, ARITH_DOMAIN_MUL};
-                mlwe_RNS_mul_subto_by_poly(out, key->s[i][ksk_idx++], &factor);
-            }
-        }
+        spread_lwe_values(tmp_poly, target_mask, in, size, stride, lwe_l, &i);
+        gadget_mul_subto_polynomial(out, key->s[i], &column, key->log_base, key->balanced);
     }
 
-    // body part: out->b += sum B_k X^k
-    for (size_t j = 0; j < tmp_poly->base->l; j++)
-    {
-        if (tmp_poly->rns_mask & (1ULL << j))
-        {
-            RNS_ROW_ZERO(tmp_poly, j, N);
-        }
-    }
-    for (size_t limb = 0; limb < lwe_l; limb++)
-    {
-        int g_idx = rns_mask_get_active_index(target_mask, limb);
-        assert(g_idx >= 0);
-        if (rns_row_is_narrow(tmp_poly->base, g_idx))
-            for (size_t k = 0; k < size; k++)
-                tmp_poly->rows32[g_idx][k] = (uint32_t)in[k]->b[limb];
-        else
-            for (size_t k = 0; k < size; k++)
-                tmp_poly->rows64[g_idx][k] = in[k]->b[limb];
-    }
+    // body part: out->b += sum B_k X^(k * stride)
+    spread_lwe_values(tmp_poly, target_mask, in, size, stride, lwe_l, NULL);
 
     mlwe_RNS_to_RNSc(out, out);
     if (divide_mask > 0)
@@ -171,8 +145,6 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
     mlwe_RNSc_to_RNS(out, out);
 
     free_RNS_polynomial(tmp_poly);
-    free_RNS_polynomial(tmp_poly_red);
-    free_RNS_polynomial(tmp_rns);
 }
 
 RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count, uint64_t log_base, bool balanced)

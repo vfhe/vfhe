@@ -852,7 +852,7 @@ void mlwe_full_packing_keyswitch_scaled_rec(RNSc_MLWE *vec, uint64_t ell, RNS_ML
     const uint64_t r = vec[0]->r;
 
     RNSc_MLWE tmp = mlwe_alloc_sample(vec[0]->ring, r);
-    RNSc_MLWE tmp2 = mlwe_alloc_sample(ksks[ell - 1]->ring, r);
+    RNSc_MLWE tmp2 = mlwe_alloc_sample(vec[0]->ring, r);
 
     // tmp = odd[0] * X^(N>>ell)
     mlwe_RNSc_mul_by_xai(tmp, odd[0], N >> ell);

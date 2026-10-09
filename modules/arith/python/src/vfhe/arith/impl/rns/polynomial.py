@@ -448,7 +448,10 @@ class RNSPolynomial(Polynomial):
         keep = []  # keep row buffers alive across the (copying) C call
         for k, idx in enumerate(self.ring.prime_indices):
             p = self.ring.primes[k]
-            row = ffi.new("uint64_t[]", [v % p for v in array])
+            # Zero-initialized at the full degree, so a shorter array is
+            # padded with zero coefficients as in from_array.
+            row = ffi.new("uint64_t[]", self.ring.N)
+            row[0 : len(array)] = [v % p for v in array]
             keep.append(row)
             rows[idx] = row
         matrix = ffi.new("uint64_t*[]", rows)

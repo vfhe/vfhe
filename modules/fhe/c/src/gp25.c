@@ -1,335 +1,183 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
+#include "fhe.h"
+
 #include <stdlib.h>
-#include <pthread.h>
-
-#ifdef __APPLE__
-// Custom implementation of pthread_barrier for macOS
-typedef struct
-{
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    unsigned int count;
-    unsigned int limit;
-    unsigned int trip_count;
-} pthread_barrier_t;
-
-#ifndef PTHREAD_BARRIER_SERIAL_THREAD
-#define PTHREAD_BARRIER_SERIAL_THREAD 1
-#endif
-
-static inline int pthread_barrier_init(pthread_barrier_t *barrier, const void *attr,
-                                       unsigned int count)
-{
-    if (count == 0)
-        return -1;
-    barrier->count = 0;
-    barrier->limit = count;
-    barrier->trip_count = 0;
-    pthread_mutex_init(&barrier->mutex, NULL);
-    pthread_cond_init(&barrier->cond, NULL);
-    return 0;
-}
-
-static inline int pthread_barrier_destroy(pthread_barrier_t *barrier)
-{
-    pthread_mutex_destroy(&barrier->mutex);
-    pthread_cond_destroy(&barrier->cond);
-    return 0;
-}
-
-static inline int pthread_barrier_wait(pthread_barrier_t *barrier)
-{
-    pthread_mutex_lock(&barrier->mutex);
-    barrier->count++;
-    if (barrier->count >= barrier->limit)
-    {
-        barrier->trip_count++;
-        barrier->count = 0;
-        pthread_cond_broadcast(&barrier->cond);
-        pthread_mutex_unlock(&barrier->mutex);
-        return PTHREAD_BARRIER_SERIAL_THREAD;
-    }
-    else
-    {
-        unsigned int current_trip = barrier->trip_count;
-        while (current_trip == barrier->trip_count)
-        {
-            pthread_cond_wait(&barrier->cond, &barrier->mutex);
-        }
-        pthread_mutex_unlock(&barrier->mutex);
-        return 0;
-    }
-}
-#endif
-
-#include "mlwe.h"
 #include <util.h>
 
-void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                            RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
-                            bool balanced)
-{
-    const uint64_t r = p0[0]->r;
-    ArithRing ring = p0[0]->ring;
-
-    // Allocate p1 array of size in_N
-    RNS_MLWE *p1 = (RNS_MLWE *)malloc(in_N * sizeof(RNS_MLWE));
-    for (size_t i = 0; i < in_N; i++)
-    {
-        p1[i] = mlwe_alloc_sample(ring, r);
-    }
-
-    RNS_MLWE *p[2] = {p0, p1};
-
-    for (size_t i = 0; i < r_prec; i++)
-    {
-        uint64_t power = 1ULL << i;
-        uint64_t out_idx = (i + 1) & 1;
-        uint64_t in_idx = out_idx ^ 1;
-
-        for (size_t j = 0; j < power; j++)
-        {
-            mgsw_NCMUX_to_coeff(p[out_idx][j], p[in_idx][j], p[in_idx][in_N - power + j], e[i], ksk,
-                                ell, special_primes, 0, balanced);
-        }
-
-        for (size_t j = 0; j < in_N - power; j++)
-        {
-            mgsw_CMUX_to_coeff(p[out_idx][j + power], p[in_idx][j + power], p[in_idx][j], e[i], ell,
-                               special_primes, 0, balanced);
-        }
-        // _to_coeff variants already leave each output in coefficient form.
-    }
-
-    if ((r_prec & 1) == 1)
-    {
-        for (size_t i = 0; i < in_N; i++)
-        {
-            mlwe_copy_RNS_sample(p0[i], p1[i]);
-        }
-    }
-
-    // Free p1 array
-    for (size_t i = 0; i < in_N; i++)
-    {
-        free_mlwe_RNS_sample(p1[i]);
-    }
-    free(p1);
-}
-
-typedef struct
-{
-    RNS_MLWE *p0;
-    RNS_MLWE *p1;
-    uint64_t in_N;
-    RNS_MLWE **e;
-    uint64_t r_prec;
-    RNS_MLWE_KS_Key ksk;
-    uint64_t ell;
-    uint64_t special_primes;
-    bool balanced;
-    uint64_t start_k;
-    uint64_t stride;
-    pthread_barrier_t *barrier;
-} worker_args_t;
-
-void *monomial_mul_worker(void *arg)
-{
-    worker_args_t *args = (worker_args_t *)arg;
-    // The workers already take the threads: what a worker calls stays on it.
-    const uint64_t local = vfhe_set_local_num_threads(1);
-    RNS_MLWE *p[2] = {args->p0, args->p1};
-
-    for (size_t i = 0; i < args->r_prec; i++)
-    {
-        uint64_t power = 1ULL << i;
-        uint64_t out_idx = (i + 1) & 1;
-        uint64_t in_idx = out_idx ^ 1;
-
-        // Strided (round-robin) index assignment: NCMUX ops (k < power, each ~2x a CMUX
-        // due to the extra automorphism) cluster in the low indices, so contiguous chunks
-        // would dump them all on the first few threads and stall the rest at the barrier.
-        // Striding interleaves NCMUX/CMUX evenly across threads.
-        // The _to_coeff variants leave the output in coefficient form directly,
-        // folding in the per-index inverse NTT and avoiding a forward NTT of in1.
-        for (size_t k = args->start_k; k < args->in_N; k += args->stride)
-        {
-            if (k < power)
-            {
-                mgsw_NCMUX_to_coeff(p[out_idx][k], p[in_idx][k], p[in_idx][args->in_N - power + k],
-                                    args->e[i], args->ksk, args->ell, args->special_primes, 0,
-                                    args->balanced);
-            }
-            else
-            {
-                mgsw_CMUX_to_coeff(p[out_idx][k], p[in_idx][k], p[in_idx][k - power], args->e[i],
-                                   args->ell, args->special_primes, 0, args->balanced);
-            }
-        }
-
-        // Synchronize before moving to the next stage
-        pthread_barrier_wait(args->barrier);
-    }
-
-    vfhe_set_local_num_threads(local);
-    return NULL;
-}
-
-void gp25_RGSW_monomial_mul_mt(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                               RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
-                               bool balanced, uint64_t num_threads)
-{
-    num_threads = vfhe_threads_for(num_threads, in_N);
-    if (num_threads <= 1)
-    {
-        gp25_RGSW_monomial_mul(p0, in_N, e, r_prec, ksk, ell, special_primes, balanced);
-        return;
-    }
-
-    const uint64_t r = p0[0]->r;
-    ArithRing ring = p0[0]->ring;
-
-    // Allocate p1 array of size in_N
-    RNS_MLWE *p1 = (RNS_MLWE *)malloc(in_N * sizeof(RNS_MLWE));
-    for (size_t i = 0; i < in_N; i++)
-    {
-        p1[i] = mlwe_alloc_sample(ring, r);
-    }
-
-    pthread_barrier_t barrier;
-    pthread_barrier_init(&barrier, NULL, num_threads);
-
-    pthread_t *threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
-    worker_args_t *args = (worker_args_t *)malloc(num_threads * sizeof(worker_args_t));
-
-    for (size_t t = 0; t < num_threads; t++)
-    {
-        args[t].p0 = p0;
-        args[t].p1 = p1;
-        args[t].in_N = in_N;
-        args[t].e = e;
-        args[t].r_prec = r_prec;
-        args[t].ksk = ksk;
-        args[t].ell = ell;
-        args[t].special_primes = special_primes;
-        args[t].balanced = balanced;
-        args[t].barrier = &barrier;
-        // strided assignment: thread t handles indices t, t+num_threads, t+2*num_threads, ...
-        args[t].start_k = t;
-        args[t].stride = num_threads;
-
-        pthread_create(&threads[t], NULL, monomial_mul_worker, &args[t]);
-    }
-
-    for (size_t t = 0; t < num_threads; t++)
-    {
-        pthread_join(threads[t], NULL);
-    }
-
-    if ((r_prec & 1) == 1)
-    {
-        for (size_t i = 0; i < in_N; i++)
-        {
-            mlwe_copy_RNS_sample(p0[i], p1[i]);
-        }
-    }
-
-    // Free p1 array
-    for (size_t i = 0; i < in_N; i++)
-    {
-        free_mlwe_RNS_sample(p1[i]);
-    }
-    free(p1);
-
-    pthread_barrier_destroy(&barrier);
-    free(threads);
-    free(args);
-}
-
 /* ------------------------------------------------------------------------------------------------
- * sub_a, multithreaded. Per accumulator coefficient k (all INDEPENDENT, so no barrier):
- *     p[k] <- p[k] * X^a[k]
- *     tmp  <- p[k] * (X^{(-2 a[k]) mod 2N} - 1)
- *     p[k] <- p[k] + s_sign (X) tmp        (one fixed MGSW `s_sign`, external product)
- * This replaces the per-element Python loop (which serialized 2048 external products through
- * ctypes); the work is identical, just done in one parallel C kernel.
+ * The blind rotation of [GP25] runs on a vector of n accumulators. Per input component, a sparse
+ * key s = sum_t s_t Y^j_t (j_1 > ... > j_h) is consumed as h + 1 gaps -- n - j_1, j_1 - j_2, ...,
+ * j_h, which sum to n -- each an oblivious rotation of the vector, and after each of the first h
+ * a multiplication of every accumulator k by X^(+-a_k), the sign that of s_t. A rotation by a
+ * gap is one layer per bit of it, and a layer is n independent CMUXes, one per accumulator, so
+ * each layer is one parallel loop. The signed monomial of accumulator k needs only accumulator k,
+ * so it runs inside the last layer of its gap, on the same item.
+ *
+ * Layers read one array of accumulators and write the other. The arrays alternate over the whole
+ * rotation, and the result is copied back once at the end if it is not in the caller's.
  * ------------------------------------------------------------------------------------------------
  */
+
 typedef struct
 {
-    RNS_MLWE *p0;
-    uint64_t *a;
-    RNS_MLWE *s_sign; /* the MGSW: (r+1)*ell rows, in NTT form */
-    uint64_t in_N, ell, special_primes;
+    RNSc_MLWE *in, *out; // out == NULL: no rotation, the monomial is applied to `in` in place
+    uint64_t n, power;
+    RNS_MLWE *bit; // MGSW of this layer's bit
+    RNS_MLWE_KS_Key aut;
+    const uint64_t *a; // NULL: no monomial
+    RNS_MLWE *sign;    // MGSW of the sign bit; NULL: X^a_k whatever the sign
+    uint64_t ell, log_base;
     bool balanced;
-    uint64_t N, start_k, end_k;
-} suba_args_t;
+} Layer;
 
-static void *suba_worker(void *arg)
+// acc <- acc * X^a if the sign is 0, acc * X^-a if it is 1: a CMUX between the two.
+static void signed_monomial(RNSc_MLWE acc, uint64_t a, RNS_MLWE *sign, uint64_t ell,
+                            uint64_t log_base, bool balanced)
 {
-    suba_args_t *A = (suba_args_t *)arg;
-    // As in monomial_mul_worker; it may also run on the caller, so the
-    // caller's local number of threads is restored.
-    const uint64_t local = vfhe_set_local_num_threads(1);
-    const uint64_t N = A->N, two_n = 2 * N;
-    const uint64_t r = A->p0[0]->r;
-    ArithRing ring = A->p0[0]->ring;
-
-    RNSc_MLWE pax = mlwe_alloc_sample(ring, r); /* p[k]*X^a (coeff)     */
-    RNSc_MLWE tmp = mlwe_alloc_sample(ring, r); /* pax*(X^m2a - 1)      */
-    RNS_MLWE ext = mlwe_alloc_sample(ring, r);  /* s_sign (X) tmp (NTT) */
-    RNS_MLWE pax_ntt = mlwe_alloc_sample(ring, r);
-
-    for (size_t k = A->start_k; k < A->end_k; k++)
+    const uint64_t two_n = 2 * acc->ring->N;
+    RNSc_MLWE positive = mlwe_alloc_sample(acc->ring, acc->r);
+    mlwe_RNSc_mul_by_xai(positive, acc, a % two_n);
+    if (sign == NULL)
     {
-        RNSc_MLWE pk = A->p0[k];
-        const uint64_t ai = A->a[k];
-        mlwe_RNSc_mul_by_xai(pax, pk, ai);                       /* pax = p[k] * X^a       */
-        const uint64_t m2a = (two_n - (2 * ai) % two_n) % two_n; /* (-2a) mod 2N           */
-        mlwe_RNSc_mul_by_xai_minus1(tmp, pax, m2a);              /* tmp = pax * (X^m2a - 1) */
-        mgsw_external_product(ext, A->s_sign, tmp, A->ell, A->special_primes, 0,
-                              A->balanced); /* ext = s_sign (X) tmp */
-        mlwe_copy_RNS_sample(pax_ntt, pax);
-        mlwe_RNSc_to_RNS(pax_ntt, pax_ntt); /* pax -> NTT for the add  */
-        for (size_t i = 0; i < r; i++)
-            arith_add(ring, &ext->a[i], &ext->a[i], &pax_ntt->a[i]);
-        arith_add(ring, &ext->b, &ext->b, &pax_ntt->b);
-        mlwe_RNS_to_RNSc(A->p0[k], ext); /* result (coeff) into p[k] */
-    }
-
-    free_mlwe_RNS_sample(pax);
-    free_mlwe_RNS_sample(tmp);
-    free_mlwe_RNS_sample(ext);
-    free_mlwe_RNS_sample(pax_ntt);
-    vfhe_set_local_num_threads(local);
-    return NULL;
-}
-
-void gp25_sub_a_mt(RNS_MLWE *p0, uint64_t in_N, uint64_t *a, RNS_MLWE *s_sign, uint64_t ell,
-                   uint64_t special_primes, bool balanced, uint64_t N, uint64_t num_threads)
-{
-    num_threads = vfhe_threads_for(num_threads, in_N);
-
-    if (num_threads == 1)
-    {
-        suba_args_t args = {p0, a, s_sign, in_N, ell, special_primes, balanced, N, 0, in_N};
-        suba_worker(&args);
+        mlwe_copy_RNSc_sample(acc, positive);
+        free_mlwe_RNS_sample(positive);
         return;
     }
+    RNSc_MLWE negative = mlwe_alloc_sample(acc->ring, acc->r);
+    mlwe_RNSc_mul_by_xai(negative, acc, (two_n - a % two_n) % two_n);
+    mgsw_CMUX_to_coeff(acc, positive, negative, sign, ell, 0, log_base, balanced);
+    free_mlwe_RNS_sample(positive);
+    free_mlwe_RNS_sample(negative);
+}
 
-    pthread_t *threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
-    suba_args_t *args = (suba_args_t *)malloc(num_threads * sizeof(suba_args_t));
-    uint64_t chunk = in_N / num_threads, rem = in_N % num_threads, cur = 0;
-    for (size_t t = 0; t < num_threads; t++)
+static void layer_item(void *ctx, uint64_t k)
+{
+    const Layer *L = (const Layer *)ctx;
+    RNSc_MLWE acc = L->in[k];
+    if (L->out != NULL)
     {
-        uint64_t end = cur + chunk + (t < rem ? 1 : 0);
-        args[t] = (suba_args_t){p0, a, s_sign, in_N, ell, special_primes, balanced, N, cur, end};
-        cur = end;
-        pthread_create(&threads[t], NULL, suba_worker, &args[t]);
+        acc = L->out[k];
+        if (k < L->power)
+            mgsw_NCMUX_to_coeff(acc, L->in[k], L->in[L->n - L->power + k], L->bit, L->aut, L->ell,
+                                0, L->log_base, L->balanced);
+        else
+            mgsw_CMUX_to_coeff(acc, L->in[k], L->in[k - L->power], L->bit, L->ell, 0, L->log_base,
+                               L->balanced);
     }
-    for (size_t t = 0; t < num_threads; t++)
-        pthread_join(threads[t], NULL);
-    free(threads);
-    free(args);
+    if (L->a != NULL)
+        signed_monomial(acc, L->a[k], L->sign, L->ell, L->log_base, L->balanced);
+}
+
+// The accumulators as a pair of arrays, `cur` holding the current values.
+typedef struct
+{
+    RNSc_MLWE *caller, *scratch, *cur, *next;
+    uint64_t n;
+} Accumulators;
+
+static void accumulators_init(Accumulators *A, RNSc_MLWE *acc, uint64_t n)
+{
+    A->caller = acc;
+    A->n = n;
+    A->scratch = (RNSc_MLWE *)safe_malloc(n * sizeof(RNSc_MLWE));
+    for (uint64_t k = 0; k < n; k++)
+        A->scratch[k] = mlwe_alloc_sample(acc[0]->ring, acc[0]->r);
+    A->cur = acc;
+    A->next = A->scratch;
+}
+
+typedef struct
+{
+    RNSc_MLWE *out, *in;
+} Copy;
+
+static void copy_item(void *ctx, uint64_t k)
+{
+    const Copy *c = (const Copy *)ctx;
+    mlwe_copy_RNSc_sample(c->out[k], c->in[k]);
+}
+
+static void accumulators_finish(Accumulators *A, uint64_t n_threads)
+{
+    if (A->cur != A->caller)
+    {
+        Copy c = {A->caller, A->cur};
+        vfhe_parallel_for(A->n, n_threads, copy_item, &c);
+    }
+    for (uint64_t k = 0; k < A->n; k++)
+        free_mlwe_RNS_sample(A->scratch[k]);
+    free(A->scratch);
+}
+
+// Rotates by the value of `bits` (LSB first); with `a`, multiplies by the signed monomials after
+// the last bit.
+static void rotate_then_multiply(Accumulators *A, RNS_MLWE *const *bits, uint64_t n_bits,
+                                 RNS_MLWE_KS_Key aut, const uint64_t *a, RNS_MLWE *sign,
+                                 uint64_t ell, uint64_t log_base, bool balanced, uint64_t n_threads)
+{
+    Layer L = {A->cur, NULL, A->n, 0, NULL, aut, NULL, sign, ell, log_base, balanced};
+    for (uint64_t b = 0; b < n_bits; b++)
+    {
+        L.in = A->cur;
+        L.out = A->next;
+        L.power = 1ULL << b;
+        L.bit = bits[b];
+        L.a = b + 1 == n_bits ? a : NULL;
+        vfhe_parallel_for(A->n, n_threads, layer_item, &L);
+        A->next = A->cur;
+        A->cur = L.out;
+    }
+    if (n_bits == 0 && a != NULL)
+    {
+        L.in = A->cur;
+        L.out = NULL;
+        L.a = a;
+        vfhe_parallel_for(A->n, n_threads, layer_item, &L);
+    }
+}
+
+void gp25_rotate(RNSc_MLWE *acc, uint64_t n, RNS_MLWE *const *bits, uint64_t n_bits,
+                 RNS_MLWE_KS_Key aut, uint64_t ell, uint64_t log_base, bool balanced,
+                 uint64_t n_threads)
+{
+    Accumulators A;
+    accumulators_init(&A, acc, n);
+    rotate_then_multiply(&A, bits, n_bits, aut, NULL, NULL, ell, log_base, balanced, n_threads);
+    accumulators_finish(&A, n_threads);
+}
+
+void gp25_multiply_by_signed_monomials(RNSc_MLWE *acc, uint64_t n, const uint64_t *a,
+                                       RNS_MLWE *sign, uint64_t ell, uint64_t log_base,
+                                       bool balanced, uint64_t n_threads)
+{
+    Layer L = {acc, NULL, n, 0, NULL, NULL, a, sign, ell, log_base, balanced};
+    vfhe_parallel_for(n, n_threads, layer_item, &L);
+}
+
+void gp25_blind_rotate(RNSc_MLWE *acc, uint64_t n, const uint64_t *a, uint64_t rank, uint64_t h,
+                       uint64_t gap_bits, RNS_MLWE *const *gap_keys, RNS_MLWE *const *sign_keys,
+                       RNS_MLWE_KS_Key aut, uint64_t ell, uint64_t log_base, bool balanced,
+                       uint64_t n_threads)
+{
+    const uint64_t two_n = 2 * acc[0]->ring->N;
+    Accumulators A;
+    accumulators_init(&A, acc, n);
+    uint64_t *exponent = (uint64_t *)safe_malloc(n * sizeof(uint64_t));
+    for (uint64_t i = 0; i < rank; i++)
+    {
+        // Each component's rotations wrap every accumulator once, which applies X -> X^-1 to
+        // what it holds; the odd components are negated so the wraps do not cancel them.
+        for (uint64_t k = 0; k < n; k++)
+            exponent[k] = i & 1 ? (two_n - a[i * n + k] % two_n) % two_n : a[i * n + k] % two_n;
+        for (uint64_t t = 0; t <= h; t++)
+        {
+            rotate_then_multiply(&A, gap_keys, gap_bits, aut, t < h ? exponent : NULL,
+                                 t < h && sign_keys != NULL ? sign_keys[i * h + t] : NULL, ell,
+                                 log_base, balanced, n_threads);
+            gap_keys += gap_bits;
+        }
+    }
+    free(exponent);
+    accumulators_finish(&A, n_threads);
 }

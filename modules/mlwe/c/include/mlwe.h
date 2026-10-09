@@ -268,9 +268,13 @@ extern "C"
     void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                             uint64_t size, uint64_t lvl);
     void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl);
-    // The samples in `in` live over exactly the primes of `out`'s ring.
-    void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key ksk,
-                                     uint64_t lvl);
+    // Packs `size` LWE samples into one: out decrypts to sum_k m_k X^(k *
+    // stride), m_k what in[k] decrypts to (size * stride <= N). The samples
+    // live over exactly the primes of `out`'s ring, under a key whose
+    // coefficients `ksk` switches from: component i of `ksk` encrypts the
+    // i-th coefficient, against the key's gadget.
+    void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, uint64_t stride,
+                                     RNS_MLWE_KS_Key ksk);
     void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
                                             uint64_t lvl);
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);
@@ -345,14 +349,36 @@ extern "C"
     void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                              RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
                              uint64_t log_base, bool balanced);
-    void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                                RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
-                                bool balanced);
-    void gp25_RGSW_monomial_mul_mt(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                                   RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
-                                   bool balanced, uint64_t num_threads);
-    void gp25_sub_a_mt(RNS_MLWE *p0, uint64_t in_N, uint64_t *a, RNS_MLWE *s_sign, uint64_t ell,
-                       uint64_t special_primes, bool balanced, uint64_t N, uint64_t num_threads);
+
+    // MGSW keys as arrays of (r + 1) * `width` samples, row j * width + k
+    // encrypting mu_j * g_k for the gadget elements g_k, with mu_j = -s_j * m
+    // for j < r and mu_r = m: the layout of `mgsw_external_product`'s key.
+    // Rows are in the mul domain over the key's ring; what these allocate the
+    // caller owns.
+
+    // The noiseless MGSW of `msg` (in the mul domain over `ring`): row j * width + k
+    // is zero but for component j (the body for j = r), which is msg times
+    // the gadget element `scales[k]` (one value per component, as
+    // arith_scalar_new takes it). It decrypts as m * G under any key of rank r.
+    void mgsw_trivial(RNS_MLWE *out, ArithRing ring, uint64_t r, const ArithElement *msg,
+                      uint64_t *const *scales, uint64_t width);
+
+    // The internal product: out[i] = a (x) b[i] for each of the `rows` rows of
+    // an MGSW key b, so `out` is an MGSW key of the product of the two
+    // messages, laid out as b and over b's ring. `a` (with `ell` gadget keys
+    // per component) must consume samples over that ring: with special
+    // primes, b's rows live over its key ring, so `a` belongs to a scheme
+    // where that ring is a level. Up to `n_threads` threads.
+    void mgsw_internal_product(RNS_MLWE *out, RNS_MLWE *a, uint64_t ell, RNS_MLWE *b, uint64_t rows,
+                               uint64_t log_base, bool balanced, uint64_t n_threads);
+
+    // The MGSW key of Aut_gen(m) from that of m (`in`, gadget `width`):
+    // its m rows go through the automorphism and `aut` (Aut_gen(s) -> s),
+    // and the -s_j m rows are rebuilt from them through the relinearization
+    // key `rlk` (the quadratic terms -(s_p s_q) -> s, as for a product). Both
+    // keys consume samples over the rows' ring. Up to `n_threads` threads.
+    void mgsw_automorphism(RNS_MLWE *out, RNS_MLWE *in, uint64_t width, uint64_t gen,
+                           RNS_MLWE_KS_Key aut, RNS_MLWE_KS_Key rlk, uint64_t n_threads);
 
     // lwe
     LWE_Key lwe_alloc_key(uint64_t n, uint64_t mask, RNS_Base base);

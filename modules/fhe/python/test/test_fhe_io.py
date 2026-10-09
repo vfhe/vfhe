@@ -4,7 +4,6 @@
 containers and CKKS linear transforms through vfhe.io."""
 
 import random
-from typing import cast
 
 import pytest
 from vfhe.arith import Polynomial, Ring
@@ -17,9 +16,10 @@ from vfhe.fhe import (
     CKKS_Ciphertext,
     CKKS_LinearTransform,
     CKKS_Scheme,
+    mod_switch,
 )
 from vfhe.io import Serializer
-from vfhe.mlwe import MLWE_Scheme, MLWE_Set
+from vfhe.mlwe import MLWE, MLWE_Scheme
 
 N = 64
 PROFILES = ["default", "compact", "fast"]
@@ -165,28 +165,41 @@ def test_cggi16_unfolded_bootstrap_key_layout():
     assert (got.n, got.unfolding, got.bk) == (7, 3, [])
 
 
-def test_gp25_sab_key():
-    from vfhe.fhe.gp25 import SAB_Key
-
-    Rq = Ring(256, prime_size=[50, 50, 50], split_degree=1)
-    out_scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=1, max_lvl=1)
-    output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
-    gp25 = GP25(out_scheme)
-    sab = SAB_Key()
-    sab.h, sab.b_prec, sab.r_prec = 3, 5, 2
-    one = Polynomial(gp25.mgsw_scheme.ring).from_array([1])
-    sab.s = [[[gp25.mgsw_scheme.encrypt(one, output_key)]]]
-    sab.s_sign = [[gp25.mgsw_scheme.encrypt(one, output_key)]]
-    packing_key = cast("MLWE_Set", out_scheme.gen_ksk(output_key, output_key, lvl=0))
-    sab.packing_key = packing_key
+@pytest.mark.parametrize("trace_repack", [False, True])
+def test_gp25_bootstrap_key(deterministic_prng, trace_repack):
+    # A loaded key bootstraps like the one it was saved from.
+    deterministic_prng(0x5AB00004)
+    in_scheme = MLWE_Scheme(
+        Ring(N, prime_size=[50, 50], split_degree=1), special_primes=0
+    )
+    out_scheme = MLWE_Scheme(
+        Ring(N, prime_size=[50, 50, 50], split_degree=1), special_primes=1, max_lvl=1
+    )
+    input_key = GP25.sample_input_key(in_scheme, 3, 7, 3.2)
+    output_key = out_scheme.key_gen_sparse(16, 3.2)
+    gp25 = GP25(out_scheme, trace_repack=trace_repack)
+    sab = gp25.generate_bootstrap_key(input_key, output_key, 3, 7)
     got = Serializer().loads(
         Serializer().dumps(sab), schemes=[out_scheme, gp25.mgsw_scheme]
     )
-    assert (got.h, got.b_prec, got.r_prec) == (3, 5, 2)
-    assert got.hw_reducing_key is None and got.trace_repack_key is None
+    assert (got.n, got.h, got.gap_bits) == (N, 3, 7)
     assert all(
-        _same(a, b) for a, b in zip(got.s[0][0][0].obj, sab.s[0][0][0].obj, strict=True)
+        _same(a, b)
+        for a, b in zip(got.gaps[0][0][0].obj, sab.gaps[0][0][0].obj, strict=True)
     )
-    got_samples, samples = got.packing_key.mlwe[0], packing_key.mlwe[0]
-    assert got_samples is not None and samples is not None
-    assert all(_same(a, b) for a, b in zip(got_samples, samples, strict=True))
+    assert (got.packing_key is None) == trace_repack
+    assert (got.trace_repack_key is None) != trace_repack
+
+    q = out_scheme.rings[0].q_l
+    tv = gp25.test_vector([mod_switch(t, 16, q) for t in range(8)])
+    msg = [k % 8 for k in range(N)]
+    ring = in_scheme.rings[0]
+    rlwe_in = in_scheme.sample(
+        Polynomial(ring).from_bigint_array([mod_switch(x, 16, ring.q_l) for x in msg]),
+        input_key,
+    )
+    for key in (sab, got):
+        out = MLWE(out_scheme)
+        gp25.bootstrap(out, rlwe_in, tv, key)
+        d = out_scheme.linear_decrypt(out, output_key).get_polynomial()
+        assert [mod_switch(v, q, 16) for v in d] == msg

@@ -14,6 +14,19 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add MGSW internal products, automorphisms and noiseless keys:
+  `MGSW.internal_product(other)` (also `MGSW * MGSW`, native
+  `mgsw_internal_product`) is the external product of `self` with every row
+  of `other`, an MGSW of the product of the messages in `other`'s layout;
+  `MGSW_Scheme.automorphism(c, g, aut_key, relin_key)` (`mgsw_automorphism`)
+  is the MGSW of `m(X^g)`, its message rows key-switched and its `-s_j m`
+  rows rebuilt through a relinearization key; `MGSW_Scheme.trivial(msg)`
+  (`mgsw_trivial`) is the gadget matrix times `msg`. Without special primes
+  the keys are of level 0 (pair them with the radix gadget). With special
+  primes the rows live over the key ring, so the product key and the
+  automorphism keys come from a scheme with one more special prime, where that
+  ring is a level: a product then adds 5-7 bits of noise to the next external
+  product, against 39 for the radix route (N = 256, three 45-bit primes).
 - Add `CKKS_Scheme.encode_batch(values, ring=, scale=, n_threads=)`: encode
   many vectors in one native call (`complex_values_ifft_scale_round_to_RNS_batch`,
   on `vfhe_parallel_for`). `encode` is one such call, so the two agree bit
@@ -226,6 +239,38 @@ versions may contain breaking changes.
 
 ### Changed
 
+- Rework GP25 (breaking). The blind rotation is one native call,
+  `gp25_blind_rotate`, with one parallel loop per layer on the library's
+  threads (`vfhe.engine.set_num_threads`); the signed monomial of each
+  accumulator runs inside the last layer of its gap. The building blocks are
+  public: `GP25.rotate` (`gp25_rotate`) and
+  `GP25.multiply_by_signed_monomials` (`gp25_multiply_by_signed_monomials`).
+  New surface: `GP25(scheme, gsw_ell=, radix_log_base=, trace_repack=)`
+  (the radix gadget on the MGSW, automorphism and packing keys);
+  `GP25.sample_input_key` (rejection sampling on every gap, the last
+  included) and `GP25.gaps`; `generate_bootstrap_key(input_key, output_key,
+  h, gap_bits, ternary=)`, where `ternary=False` takes a binary key without
+  sign keys; `test_vector(table)`
+  from exact integers mod q, with the rounding offset built in;
+  `blind_rotate` and `bootstrap`. Input keys of any rank, and inputs of any
+  dimension `n <= N`, whose coefficient k lands at `k * N / n`. Removed:
+  `threads=`, `generate_sparse_ternary_key`, `sab_LUT_packing`,
+  `sab_rlwe_bootstrap`, `setup_tv_xb`, `sab_blind_rotate`, `sparse_mul`,
+  `RGSW_monomial_mul`, `sub_a`, `CMUX`/`NCMUX`/`mul_by_xai*` wrappers,
+  `get_noise*`, `encrypt_bits`, `extract_lwe_key` (use
+  `MLWE_Key.extract_lwe_key`), and the `gp25_RGSW_monomial_mul(_mt)` and
+  `gp25_sub_a_mt` kernels; `gen_packing_ksk` and `packing_keyswitch` lost
+  `lvl` (level 0), and the latter takes `stride`. `SAB_Key` holds `gaps`,
+  `signs`, `gap_bits`, `n` and its own `automorphism_key`, in place of `s`,
+  `s_sign`, `r_prec`, `b_prec` and `hw_reducing_key`. At n = N = 512 and 1024 (h = 16, one 100-bit
+  level), a bootstrap takes 13-23% less time on one thread and 27-37% less on
+  eight (i7-1165G7, avx512ifma).
+- `mlwe_full_packing_keyswitch(out, in, size, stride, ksk)` places sample k
+  at coefficient `k * stride`, decomposes through the key's gadget (so it
+  takes radix keys), and no longer takes the unused `lvl`.
+- `mgsw_CMUX_to_coeff` and `mgsw_NCMUX_to_coeff` keep the external product
+  canonical, skipping a transform pair per call.
+
 - Single operations run on several threads: the key switch, automorphism,
   multiplication (tensor product and relinearization), round division and
   rescale, the domain conversions of a sample, and the decomposition and key
@@ -376,6 +421,19 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix GP25 on a scheme with several levels reading the automorphism key of
+  the last level for gadget keys of level 0: an out-of-bounds read.
+- Fix GP25 rejecting every input key of rank above 1.
+- Fix `MGSW.external_product` and `CMUX` returning a level-0 sample whatever
+  the input's level; below level 0 it decrypted to garbage. The products now
+  keep the input's level and type, and raise `ValueError` when the MGSW was
+  encrypted for another level (`MGSW.check_level`,
+  `MGSW_Scheme.gadget_size`).
+- Fix `full_packing_keyswitch_scaled` (and GP25's `trace_repack`) adding an
+  automorphism allocated over the key's ring to a sample of the ciphertext's:
+  every packed value was garbage.
+- Fix RNS `Polynomial.from_bigint_array` with fewer than N values reading past
+  its buffers: the remaining coefficients were heap contents instead of zero.
 - Fix `arith_scalar_new` on an RNS ring whose primes do not start the base
   copying one value per prime when the scaling kernels index the scalar by
   base row: they read past the copy, and `arith_scale_by` and

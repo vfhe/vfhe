@@ -233,6 +233,20 @@ def test_centered_doubles_match_the_exact_crt(sizes, n):
         assert out[k] == pytest.approx(centered / 2, rel=1e-14, abs=0)
 
 
+def test_short_arrays_are_padded_with_zeros():
+    R = Ring(64, prime_size=[50, 50], split_degree=1)
+    big = (1 << 90) + 7
+    zeros = [0] * (R.N - 2)
+    for _ in range(8):  # freed rows full of non-zero values to land on
+        Polynomial(R).from_bigint_array([R.q_l - 1] * R.N)
+        assert Polynomial(R).from_bigint_array([0, big]).get_polynomial() == [
+            0,
+            big,
+            *zeros,
+        ]
+        assert Polynomial(R).from_array([0, 5]).get_polynomial() == [0, 5, *zeros]
+
+
 def test_encode_rounding_is_round_half_to_even():
     # The native rounding (vectorized on avx512ifma) against Python's round.
     cring = ComplexRing(32)
