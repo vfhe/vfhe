@@ -108,7 +108,7 @@ void *mlwe_extract_LWE(void *in, uint64_t idx);
 void *mlwe_new_RNS_ks_key(void *s, uint64_t count, uint64_t log_base, bool balanced);
 void free_mlwe_RNS_ks_key(void *key);
 void mlwe_full_packing_keyswitch(void *out, void *in, uint64_t size, void *ksk);
-void mlwe_full_packing_keyswitch_scaled(void *vec, uint64_t ell, void *ksks, uint64_t lvl);
+void mlwe_trace_pack(void *vec, uint64_t ell, void *ksks);
 void mlwe_project_subring(void *out, void *in);
 void mlwe_embed_subring(void *out, void *in, uint64_t count);
 void mlwe_ring_switch(void *out, void *in, uint64_t count, void *ksk);
@@ -125,6 +125,7 @@ int mlwe_automorphism_sum_RNSc_GHS(void *out, void *in, const uint64_t *gens, vo
                                    uint64_t n, uint64_t n_threads);
 void mlwe_partial_trace(void *out, void *in, uint64_t *gens, void *ksks, uint64_t size, uint64_t lvl);
 void mlwe_trace(void *out, void *in, void *ksks, uint64_t lvl);
+void mlwe_normalized_trace(void *out, void *in, uint64_t n, void *ksks);
 uint64_t mlwe_extended_rank(uint64_t r);
 void mlwe_tensor_product(ArithElement *out, void *in1, void *in2);
 void mlwe_multiply(void *out, void *in1, void *in2, void *ksk);

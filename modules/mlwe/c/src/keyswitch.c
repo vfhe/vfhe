@@ -372,56 +372,81 @@ void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl
     free(gens);
 }
 
-void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
-                                        uint64_t lvl)
+// The trace evaluation of [AP13], one automorphism per level of the
+// power-of-two tower, with the halving of [LY26]'s reverse homomorphic trace:
+// each level halves the sample before adding its automorphism, so h + Aut(h)
+// is the sample itself where the automorphism fixes a coefficient and zero
+// where it negates one, whatever the value of h. The generators ascend,
+// 2^k + 1 from k = log2(n) + 1, so a coefficient is only ever merely permuted
+// before the level that zeroes it, and once zeroed it is fixed by every level
+// after: the junk a halving leaves (up to q/2, exact since q is odd) never
+// survives.
+void mlwe_normalized_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t n, RNS_MLWE_KS_Key *ksks)
+{
+    const uint64_t N = in->ring->N;
+    assert(n >= 1 && N % n == 0 && (n & (n - 1)) == 0);
+    assert(in->ring->impl == ARITH_IMPL_RNS);
+    const uint64_t log_N = (uint64_t)__builtin_ctzll(N), log_n = (uint64_t)__builtin_ctzll(n);
+    RNSc_MLWE acc = mlwe_alloc_sample(in->ring, in->r);
+    RNSc_MLWE image = mlwe_alloc_sample(in->ring, in->r);
+    mlwe_copy_RNSc_sample(acc, in);
+    for (uint64_t k = log_n + 1; k <= log_N; k++)
+    {
+        mlwe_rns_halve(acc);
+        mlwe_automorphism_RNSc_GHS(image, acc, (1ULL << k) + 1, ksks[k - 1], 0);
+        mlwe_addto_RNSc_sample(acc, image);
+    }
+    mlwe_copy_RNSc_sample(out, acc);
+    free_mlwe_RNS_sample(acc);
+    free_mlwe_RNS_sample(image);
+}
+
+// The packing of [CDKS21] (PackLWEs) with the difference of each level
+// halved before its automorphism [LY26]: a level computes
+// h + Aut(h) + X^t odd with h = (even - X^t odd) / 2, t = N >> ell. Where the
+// automorphism fixes a coefficient, h + Aut(h) is twice h, which is the
+// difference itself; where it negates one, the sum is zero. Either holds for
+// any value of h, so halving modulo q (exact, q odd) is enough, even where a
+// coefficient of the difference is odd and its half is near q/2. The packed
+// values keep their scale, and a level's key-switch noise is added once
+// instead of being doubled by every level above it.
+void mlwe_trace_pack(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks)
 {
     if (ell == 0)
-    {
         return;
-    }
     const uint64_t half = 1ULL << (ell - 1);
-    RNSc_MLWE *even = (RNSc_MLWE *)malloc(half * sizeof(RNSc_MLWE));
-    RNSc_MLWE *odd = (RNSc_MLWE *)malloc(half * sizeof(RNSc_MLWE));
+    RNSc_MLWE *even = (RNSc_MLWE *)safe_malloc(half * sizeof(RNSc_MLWE));
+    RNSc_MLWE *odd = (RNSc_MLWE *)safe_malloc(half * sizeof(RNSc_MLWE));
     for (size_t i = 0; i < half; i++)
     {
         even[i] = vec[2 * i];
         odd[i] = vec[2 * i + 1];
     }
+    mlwe_trace_pack(even, ell - 1, ksks);
+    mlwe_trace_pack(odd, ell - 1, ksks);
 
-    mlwe_full_packing_keyswitch_scaled(even, ell - 1, ksks, lvl);
-    mlwe_full_packing_keyswitch_scaled(odd, ell - 1, ksks, lvl);
+    RNSc_MLWE packed = even[0];
+    RNSc_MLWE shifted = mlwe_alloc_sample(packed->ring, packed->r);
+    RNSc_MLWE image = mlwe_alloc_sample(packed->ring, packed->r);
+    mlwe_RNSc_mul_by_xai(shifted, odd[0], packed->ring->N >> ell);
+    mlwe_sub_RNSc_sample(packed, packed, shifted);
+    assert(packed->ring->impl == ARITH_IMPL_RNS);
+    mlwe_rns_halve(packed);
+    mlwe_automorphism_RNSc_GHS(image, packed, (1ULL << ell) + 1, ksks[ell - 1], 0);
+    mlwe_addto_RNSc_sample(packed, image);
+    mlwe_addto_RNSc_sample(packed, shifted);
 
-    RNSc_MLWE C_tilde = even[0];
-    const uint64_t N = vec[0]->ring->N;
-    const uint64_t r = vec[0]->r;
-
-    RNSc_MLWE tmp = mlwe_alloc_sample(vec[0]->ring, r);
-    RNSc_MLWE tmp2 = mlwe_alloc_sample(vec[0]->ring, r);
-
-    // tmp = odd[0] * X^(N>>ell)
-    mlwe_RNSc_mul_by_xai(tmp, odd[0], N >> ell);
-
-    // C_tilde = even[0] - tmp
-    mlwe_sub_RNSc_sample(C_tilde, even[0], tmp);
-
-    // tmp2 = autom(C_tilde, (1<<ell) + 1)
-    uint64_t gen = (1ULL << ell) + 1;
-    mlwe_automorphism_RNSc_GHS(tmp2, C_tilde, gen, ksks[ell - 1], lvl);
-
-    // C_tilde = C_tilde + tmp2 + 2 * tmp
-    mlwe_scale_RNSc_mlwe(tmp, 2);
-    mlwe_addto_RNSc_sample(C_tilde, tmp2);
-    mlwe_addto_RNSc_sample(C_tilde, tmp);
-
-    free_mlwe_RNS_sample(tmp);
-    free_mlwe_RNS_sample(tmp2);
+    free_mlwe_RNS_sample(shifted);
+    free_mlwe_RNS_sample(image);
     free(even);
     free(odd);
 }
 
-// Ring switching: the subring map into the key ring's dimension, then a key
-// switch, which may change the rank, from the key the map leaves the sample
-// under.
+// Ring switching [GHPS12]: the subring map into the key ring's dimension,
+// then a key switch, which may change the rank, from the key the map leaves
+// the sample under. Going down, the map reads the sample as one of higher rank
+// over the subring, where [GHPS12] key-switches into the subring first and
+// then takes the trace of the ciphertext.
 void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE *in, uint64_t count, RNS_MLWE_KS_Key ksk)
 {
     const uint64_t N = in[0]->ring->N, n = out->ring->N;

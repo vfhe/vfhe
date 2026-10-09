@@ -14,13 +14,29 @@ versions may contain breaking changes.
 
 ### Added
 
-- Add ring switching between `R_N` and `R_n` when one dimension divides the
-  other, `R_n` being `Z[X^k]` inside `R_N`:
+- Add `MLWE_Scheme.trace_pack(vec, ksk)` (`mlwe_trace_pack`): the trace
+  packing of [CDKS21] with each level's difference halved (times `2^-1 mod
+  q`) before its automorphism, after [LY26]'s reverse homomorphic trace. The
+  packed values keep their scale (no `count^-1` to fold into the message),
+  and each level's key-switch noise is
+  added once instead of being doubled by every level above it: at N = 256,
+  4 vs 7-8 bits of noise packing 16 samples and 5 vs 12 packing 256. With an
+  odd modulus the halving is exact, so the method needs none of the
+  rounding a power-of-two modulus pays for it.
+- Add `MLWE_Scheme.normalized_trace(c, ksk, n=1)` (`mlwe_normalized_trace`):
+  the normalized trace onto the subring `Z[X^(N/n)]` [AP13], each level
+  halved before its automorphism as in [LY26]'s reverse homomorphic trace --
+  the coefficients at the multiples of `N / n` at their scale and zero
+  elsewhere, with the noise of `log2(N / n)` key switches. It takes the ascending automorphism keys of `trace_pack`;
+  `trace` keeps its factor `N` and its keys.
+- Add ring switching [GHPS12] between `R_N` and `R_n` when one dimension
+  divides the other, `R_n` being `Z[X^k]` inside `R_N`:
   `MLWE_Scheme.ring_switch(c, ksk)` takes a sample of a scheme of the other
   dimension to the level of this one with the same primes, and
   `gen_ring_switch_key(key_out, key_in, lvl, radix_log_base, n_threads,
   hybrid)` makes its key, between any two ranks. Down, the sample is read as
-  one of rank `r k` over `R_n` and key-switched, and decrypts to the
+  one of rank `r k` over `R_n` and key-switched (rather than key-switched
+  into the subring and traced, as in [GHPS12]), and decrypts to the
   coefficients `k m` of the message; up, it is embedded with `Y = X^k` and
   key-switched. The subring maps (`mlwe_project_subring`,
   `mlwe_embed_subring`) only move coefficients, one pass per row (a k-way
@@ -252,6 +268,11 @@ versions may contain breaking changes.
 
 ### Changed
 
+- GP25 repacks through the trace by default (`trace_repack=True`); pass
+  `trace_repack=False` for the packing key switch.
+- Remove `MLWE_Scheme.full_packing_keyswitch_scaled` and
+  `mlwe_full_packing_keyswitch_scaled`: `trace_pack` packs the same samples
+  without the factor and with less noise.
 - GP25's trace repacking (`trace_repack=True`) works for any `n` and `N`,
   through ring switching: for `n <= N` the `n` accumulators pack into the
   subring `Z[X^(N/n)]` of `R_N` (`log2 n` automorphism keys) and a ring
@@ -260,14 +281,13 @@ versions may contain breaking changes.
   switch also moves to the output key, at any rank, so trace repacking into
   a key of another rank works too. `SAB_Key.output_switch_key` is now a
   ring-switch key (`gen_ring_switch_key`), `None` only when `n == N` and the
-  rotation and output keys are one. `test_vector(table, n=None)` takes the
-  input dimension: with trace repacking the factor it divides by is
-  `min(n, N)`. At N = 1024 over three 50-bit primes, the repacking keys are
-  1-3 MiB against 36-576 MiB for the packing key switch (n = 256-4096), at
-  about 7-9 more bits of output noise and a similar repacking time.
-  `MLWE_Scheme.ring_switch` takes a list of up to `n / N` samples going up,
-  interleaved coefficient by coefficient (`mlwe_embed_subring` and
-  `mlwe_ring_switch` take an array and a count).
+  rotation and output keys are one. The packing is `trace_pack` (below), so
+  the test vector no longer carries a factor `N^-1`. At N = 1024 over three
+  50-bit primes, the repacking keys are 1-3 MiB against 36-576 MiB for the
+  packing key switch (n = 256-4096), at 1-3 bits *less* output noise and a
+  similar repacking time. `MLWE_Scheme.ring_switch` takes a list of up to
+  `n / N` samples going up, interleaved coefficient by coefficient
+  (`mlwe_embed_subring` and `mlwe_ring_switch` take an array and a count).
 - Move LWE extraction and the packing key switch from GP25 to `MLWE_Scheme`
   (breaking): `extract_lwe(c, idx)`, `gen_packing_ksk(key_out, lwe_key, lvl,
   radix_log_base, n_threads)` and `packing_keyswitch(extracted, packing_key,

@@ -241,3 +241,13 @@ int mlwe_rns_tensor_product(ArithElement *out, MLWE in1, MLWE in2)
     }
     return 0;
 }
+
+void mlwe_rns_halve(MLWE c)
+{
+    RNS_Polynomial b = arith_rns_polynomial(&c->b);
+    uint64_t half[64] = {0};
+    for (size_t i = 0; i < b->base->l; i++)
+        if (b->rns_mask & (1ULL << i))
+            half[i] = (b->base->mods[i]->q + 1) / 2;
+    mlwe_scale_RNS_mlwe_RNS(c, half);
+}

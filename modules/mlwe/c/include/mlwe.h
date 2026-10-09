@@ -262,7 +262,20 @@ extern "C"
                                        RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
     void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                             uint64_t size, uint64_t lvl);
+    // The trace Tr_(K/Q) of in's message (canonical): `out` decrypts to N times
+    // its constant coefficient. Evaluated over the tower of power-of-two
+    // cyclotomics, one automorphism per level [AP13]: ksks[i] is the key for
+    // 2^(log2 N - i) + 1, i < log2 N.
     void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl);
+    // The normalized trace (n / N) Tr_(K/K_n) [AP13] of `in` (canonical), K_n
+    // the subring Z[X^(N/n)], each level halved before its automorphism after
+    // [LY26]: `out` decrypts to the coefficients of in's message at the
+    // multiples of N / n and to zero elsewhere (n = 1: the constant
+    // coefficient alone), with the noise of log2(N / n) key switches, which
+    // later levels do not amplify. n is a power of two dividing N; ksks[j] is
+    // the automorphism key for 2^(j + 1) + 1, as for mlwe_trace_pack, and only
+    // those with j >= log2(n) are read. `out` may alias `in`.
+    void mlwe_normalized_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t n, RNS_MLWE_KS_Key *ksks);
     // Packs `size` LWE samples into one: out decrypts to sum_k m_k X^k, m_k
     // what in[k] decrypts to (size <= N). The samples live over the same
     // primes as `out`'s ring -- by value: they may come from a ring of
@@ -270,8 +283,14 @@ extern "C"
     // component i of `ksk` encrypts the i-th coefficient, against the key's
     // gadget.
     void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key ksk);
-    void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
-                                            uint64_t lvl);
+    // Packs the constant coefficients of the 2^ell canonical samples of `vec`
+    // into vec[0]: it decrypts to m_k at k * N / 2^ell, m_k the constant
+    // coefficient of what vec[k] decrypts to, and to junk elsewhere. The values
+    // keep their scale, and each level adds one key switch's noise, which the
+    // levels after it do not amplify. ksks[j] is the automorphism key for
+    // 2^(j + 1) + 1 at the
+    // samples' level, j < ell. The other samples of `vec` are overwritten.
+    void mlwe_trace_pack(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks);
 
     // Subring maps between R_N = Z[X]/(X^N + 1) and R_n = Z[Y]/(Y^n + 1),
     // N = k * n, R_n embedded as Y = X^k. Both move coefficients only, so they
@@ -294,12 +313,14 @@ extern "C"
     // zero. With one input it is the embedding Y = X^k, and with k the inverse
     // of mlwe_project_subring's split of the mask.
     void mlwe_embed_subring(MLWE out, MLWE *in, uint64_t count);
-    // Ring switching: mlwe_project_subring of in[0] (if its dimension is at
-    // least `out`'s; `count` is then 1) or mlwe_embed_subring of the `count`
-    // inputs, into a sample over `out`'s ring, then a key switch with `ksk`,
-    // whose components switch from the key that map leaves the sample under
-    // (one per component it produces, r * k down and r up) to `out`'s key, at
-    // any rank. `ksk` belongs to the level of `out`'s ring.
+    // Ring switching [GHPS12], down by reading the sample as one of rank r * k
+    // over the subring before the key switch: mlwe_project_subring of in[0]
+    // (if its dimension is at least `out`'s; `count` is then 1) or
+    // mlwe_embed_subring of the `count` inputs, into a sample over `out`'s
+    // ring, then a key switch with `ksk`, whose components switch from the
+    // key that map leaves the sample under (one per component it produces,
+    // r * k down and r up) to `out`'s key, at any rank. `ksk` belongs to the
+    // level of `out`'s ring.
     void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE *in, uint64_t count, RNS_MLWE_KS_Key ksk);
 
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);

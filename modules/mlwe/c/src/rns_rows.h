@@ -28,4 +28,8 @@ void mlwe_rns_round_division(MLWE out, ArithRing to);
 // every operand element is in the mul domain over the same primes.
 int mlwe_rns_tensor_product(ArithElement *out, MLWE in1, MLWE in2);
 
+// Multiplies every element of `c` by 2^-1 modulo its ring's modulus, in
+// place and in either domain; exact, since every prime is odd.
+void mlwe_rns_halve(MLWE c);
+
 #endif // VFHE_MLWE_RNS_ROWS_H

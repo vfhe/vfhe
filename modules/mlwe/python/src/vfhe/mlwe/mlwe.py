@@ -702,6 +702,13 @@ class MLWE_Scheme:
         return outs
 
     def trace(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
+        """The trace ``Tr_(K/Q)`` of ``c``'s message: the result decrypts to
+        ``N`` times its constant coefficient. Evaluated over the tower of
+        power-of-two cyclotomics, one automorphism per level [AP13], with the
+        keys of :meth:`gen_ksk_trace`'s default generators (``N + 1, N/2 + 1,
+        ..., 3``). :meth:`normalized_trace` gives the constant without the
+        factor and with less noise.
+        """
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
         out = c.new_like(lvl=c.lvl, ring=self.rings[c.lvl])
         c.to_coeff()
@@ -709,25 +716,50 @@ class MLWE_Scheme:
         out.repr = repr.coeff
         return out
 
-    def full_packing_keyswitch_scaled(
-        self, vec: list[MLWE], ksk: MLWE_Set | list[MLWE_Set]
-    ):
-        # log_size is the packing depth (log2 of the vector length), based on the number of elements to pack
-        log_size = int(math.log2(len(vec)))
+    def normalized_trace(
+        self, c: CtT, ksk: MLWE_Set | list[MLWE_Set], n: int = 1
+    ) -> CtT:
+        """The normalized trace ``(n / N) Tr_(K/K_n)`` [AP13] of ``c``, ``K_n``
+        the subring ``Z[X^(N/n)]``, each level halved before its automorphism
+        after [LY26]: the result decrypts to the coefficients of ``c``'s
+        message at the multiples of ``N / n`` and to zero elsewhere -- with
+        ``n = 1``, to its constant coefficient, which :meth:`trace` gives
+        multiplied by ``N``. Because of the halving, the noise is that of
+        ``log2(N / n)`` key switches, which later levels do not amplify.
+        ``ksk`` holds the automorphism keys for ``2^j + 1``, ``j = 1, ...,
+        log2 N`` (:meth:`gen_ksk_trace` with those generators, as for
+        :meth:`trace_pack`).
+        """
+        if n < 1 or self.N % n or n & (n - 1):
+            raise ValueError("n must be a power of two dividing N")
+        ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[c.lvl]
+        out = c.new_like(lvl=c.lvl, ring=self.rings[c.lvl])
+        c.to_coeff()
+        lib_rlwe.lib.mlwe_normalized_trace(out.obj, c.obj, n, ksk.obj)
+        out.repr = repr.coeff
+        return out
+
+    def trace_pack(self, vec: list[MLWE], ksk: MLWE_Set | list[MLWE_Set]) -> MLWE:
+        """Packs the constant coefficients of the ``len(vec)`` samples (a
+        power of two, at one level) into one: it decrypts to the constant
+        coefficient of ``vec[k]``'s message at ``k * N / len(vec)``, and to
+        junk elsewhere. The packing of [CDKS21] with each level's difference
+        halved before its automorphism [LY26], so the values keep their scale
+        and the noise grows with ``log2 len(vec)`` key switches rather than
+        with ``len(vec)^2``.
+        ``ksk`` holds the automorphism keys for ``2^j + 1``, ``j = 1, ...``
+        (:meth:`gen_ksk_trace` with those generators). The samples of
+        ``vec`` are overwritten; the result is ``vec[0]``.
+        """
+        log_size = len(vec).bit_length() - 1
+        if not vec or 1 << log_size != len(vec):
+            raise ValueError("the number of samples must be a power of two")
         ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[vec[0].lvl]
-        if 1 << log_size != len(vec):
-            raise ValueError("failed: 1 << log_size != len(vec)")
         for c in vec:
             c.to_coeff()
-
-        # create C array of handles for vec
-        vec_ptr_array = ffi.new("void*[]", [c.obj for c in vec])
-
-        lib_rlwe.lib.mlwe_full_packing_keyswitch_scaled(
-            vec_ptr_array, log_size, ksk.obj, vec[0].lvl
+        lib_rlwe.lib.mlwe_trace_pack(
+            ffi.new("void*[]", [c.obj for c in vec]), log_size, ksk.obj
         )
-
-        # The output is in vec[0]
         vec[0].repr = repr.coeff
         return vec[0]
 
@@ -815,8 +847,8 @@ class MLWE_Scheme:
         n_threads: int = 0,
         hybrid: bool = True,
     ) -> MLWE_Set:
-        """The key `ring_switch` takes from ``key_in``, of a scheme over
-        ``R_N``, to ``key_out``, of this one over ``R_n``, at level ``lvl``.
+        """The key `ring_switch` [GHPS12] takes from ``key_in``, of a scheme
+        over ``R_N``, to ``key_out``, of this one over ``R_n``, at level ``lvl``.
         One dimension divides the other, ``k`` the ratio; the ranks are free.
 
         Down (``N = k n``): for each component ``s_i`` of ``key_in``, keys for
@@ -857,20 +889,22 @@ class MLWE_Scheme:
     def ring_switch(
         self, c: MLWE | Sequence[MLWE], ksk: MLWE_Set, n_threads: int = 0
     ) -> MLWE:
-        """``c``, a sample of a scheme over ``R_N``, as a sample of this one
-        over ``R_n`` under the key ``ksk`` switches to (`gen_ring_switch_key`),
-        at the level with ``c``'s primes. ``R_n`` is ``Z[X^k]`` inside
-        ``R_N`` or contains ``R_N`` as ``Z[Y^k]``, whichever the dimensions
-        say.
+        """Ring switching [GHPS12]: ``c``, a sample of a scheme over ``R_N``,
+        as a sample of this one over ``R_n`` under the key ``ksk`` switches to
+        (`gen_ring_switch_key`), at the level with ``c``'s primes. ``R_n`` is
+        ``Z[X^k]`` inside ``R_N`` or contains ``R_N`` as ``Z[Y^k]``, whichever
+        the dimensions say.
 
-        Down (``N = k n``), the result decrypts to coefficients ``k m`` of
-        what ``c`` decrypts to, at ``m``: exactly the message when it lies in
-        ``Z[X^k]``, its other coefficients dropped otherwise. Up (``n = k
-        N``), it decrypts to ``m(Y^k)``; given a list of up to ``k`` samples
-        (one ring, one rank), to ``sum_i Y^i m_i(Y^k)``, coefficient ``i + k
-        m`` holding coefficient ``m`` of ``m_i`` -- with ``k`` of them, the
-        inverse of the split going down. The only noise added is one key
-        switch's.
+        Down (``N = k n``), ``c`` is read as a sample of rank ``k r`` over
+        ``R_n`` and key-switched (where [GHPS12] key-switches into the subring
+        and traces the ciphertext); the result decrypts to coefficients
+        ``k m`` of what ``c`` decrypts to, at ``m``: exactly the message when
+        it lies in ``Z[X^k]``, its other coefficients dropped otherwise. Up
+        (``n = k N``), it decrypts to ``m(Y^k)``; given a list of up to ``k``
+        samples (one ring, one rank), to ``sum_i Y^i m_i(Y^k)``, coefficient
+        ``i + k m`` holding coefficient ``m`` of ``m_i`` -- with ``k`` of
+        them, the inverse of the split going down. The only noise added is
+        one key switch's.
         """
         samples = [c] if isinstance(c, MLWE) else list(c)
         first_in = samples[0]

@@ -109,14 +109,19 @@ class GP25:
     accumulators at ``scheme``'s level 0, one per coefficient, each holding
     the test vector rotated by that coefficient's phase; they are then
     repacked into one sample over ``R_n`` under the output key, coefficient
-    ``k`` at coefficient ``k``. Repacking goes through LWE extraction and a
-    packing key switch, or, with ``trace_repack``, through the trace [CDKS21]
-    and a ring switch: for ``n <= N`` the ``n`` accumulators pack into the
-    subring ``Z[X^(N/n)]`` of ``R_N``, which the switch down projects onto;
-    for ``n > N`` each of the ``n / N`` interleaved groups packs into ``R_N``
-    and the switch up interleaves them. Level 0 of ``scheme`` must have the primes of a level of
-    the output key's scheme (by value: the two rings have their own bases),
-    which is where outputs land.
+    ``k`` at coefficient ``k``. Repacking goes, with ``trace_repack`` (the
+    default), through the trace packing of [CDKS21] with each level halved
+    first [LY26], so the values keep their scale, and a ring switch; or,
+    without it, through LWE extraction and a packing key switch, whose key
+    has ``r * N`` gadget rows over ``R_n`` where the trace's has ``log2
+    min(n, N)`` automorphism keys and one ring-switch key, and whose output
+    carries a little more noise. With the trace: for ``n <= N`` the ``n``
+    accumulators pack into
+    the subring ``Z[X^(N/n)]`` of ``R_N``, which the switch down projects
+    onto; for ``n > N`` each of the ``n / N`` interleaved groups packs into
+    ``R_N`` and the switch up interleaves them. Level 0 of ``scheme`` must
+    have the primes of a level of the output key's scheme (by value: the two
+    rings have their own bases), which is where outputs land.
 
     ``gsw_ell`` and ``radix_log_base`` choose the MGSW gadget as in
     :class:`MGSW_Scheme`; every other key uses the same radix. Everything
@@ -128,7 +133,7 @@ class GP25:
         scheme: MLWE_Scheme,
         gsw_ell: int | None = None,
         radix_log_base: int | None = None,
-        trace_repack: bool = False,
+        trace_repack: bool = True,
     ):
         self.scheme = scheme
         self.ring = scheme.rings[0]
@@ -360,7 +365,7 @@ class GP25:
 
     # -- the bootstrap ------------------------------------------------------
 
-    def test_vector(self, table: Sequence[int], n: int | None = None) -> MLWE:
+    def test_vector(self, table: Sequence[int]) -> MLWE:
         """The test vector that makes the bootstrap of a coefficient of phase
         ``p`` (in ``Z_2N``, after the input's switch to ``2N``) read
         ``table[i]`` for ``p`` within half a step of ``i * N / len(table)``,
@@ -369,9 +374,7 @@ class GP25:
 
         Values are integers mod the level-0 modulus ``q``, the message as it
         is to be decrypted (scaled already); ``len(table)`` divides ``N``. The
-        rounding offset of half a step is part of the test vector, and so is,
-        with ``trace_repack``, the factor ``min(n, N)`` the trace leaves,
-        ``n`` the dimension of the inputs (by default ``N``).
+        rounding offset of half a step is part of the test vector.
         """
         N = self.ring.N
         size = len(table)
@@ -379,8 +382,6 @@ class GP25:
             raise ValueError("len(table) must divide N")
         q = self.ring.q_l
         step = N // size
-        packed = min(N if n is None else n, N)
-        scale = pow(packed, -1, q) if self.trace_repack else 1
 
         def at(p: int) -> int:
             i = (p + step // 2) // step
@@ -389,9 +390,9 @@ class GP25:
         # Every accumulator ends as tv(X^-1) * X^-p or tv * X^p, whose
         # constant coefficient is tv_0 at p = 0 and -tv_(N - p) otherwise.
         coeffs = [0] * N
-        coeffs[0] = at(0) * scale % q
+        coeffs[0] = at(0) % q
         for p in range(1, N):
-            coeffs[N - p] = -at(p) * scale % q
+            coeffs[N - p] = -at(p) % q
         tv = MLWE(self.scheme)
         lib_rlwe.lib.mlwe_RNS_trivial_sample_of_zero(tv.obj)
         tv.repr = repr.ntt
@@ -489,9 +490,7 @@ class GP25:
             # accumulators k = i mod n / N, each filling R_N.
             groups = max(key.n // self.ring.N, 1)
             packed = [
-                self.scheme.full_packing_keyswitch_scaled(
-                    acc[i::groups], key.trace_repack_key
-                )
+                self.scheme.trace_pack(acc[i::groups], key.trace_repack_key)
                 for i in range(groups)
             ]
             if key.output_switch_key is None:

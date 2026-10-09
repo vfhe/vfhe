@@ -197,7 +197,7 @@ def test_gp25_bootstrap_key(deterministic_prng, trace_repack, n):
     assert (got.output_switch_key is None) != trace_repack
 
     q = rotation.rings[0].q_l
-    tv = gp25.test_vector([mod_switch(t, 16, q) for t in range(8)], n=n)
+    tv = gp25.test_vector([mod_switch(t, 16, q) for t in range(8)])
     msg = [k % 8 for k in range(n)]
     c = io.sample(
         Polynomial(io.rings[0]).from_bigint_array(

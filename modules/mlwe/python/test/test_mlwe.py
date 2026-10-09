@@ -762,10 +762,10 @@ def test_mgsw_products_refuse_another_level(ghs):
 
 
 @pytest.mark.parametrize("count", [N // 16, N])
-def test_full_packing_keyswitch_scaled(ghs, count):
-    # Sample k carries k + 1 in its constant coefficient and noise-sized
-    # junk elsewhere; packing keeps the constants, at k * N / count, scaled by
-    # count.
+def test_trace_pack(ghs, count):
+    # Sample k carries k + 1 in its constant coefficient and noise-sized junk
+    # elsewhere; packing keeps the constants, at k * N / count and at their
+    # scale, with the noise of log2(count) key switches.
     _Rq, _Rp, scheme = ghs
     key = scheme.key_gen_sparse(N // 8, 3.2)
     log_n = N.bit_length() - 1
@@ -782,11 +782,62 @@ def test_full_packing_keyswitch_scaled(ghs, count):
         )
         for k in range(count)
     ]
-    packed = scheme.full_packing_keyswitch_scaled(vec, ksk)
-    d = scheme.linear_decrypt(packed, key).get_polynomial(signed=True)
+    d = scheme.linear_decrypt(scheme.trace_pack(vec, ksk), key).get_polynomial(
+        signed=True
+    )
     stride = N // count
     for k in range(count):
-        assert round(d[k * stride] / (count * delta)) == k + 1
+        assert round(d[k * stride] / delta) == k + 1
+    # Measured at N = 256: 4 bits at 16 samples and 5 at 256, where the
+    # [CDKS21] packing, which doubles every level's noise at each level above
+    # it, left 7-8 and 12.
+    noise = max(abs(d[k * stride] - (k + 1) * delta) for k in range(count))
+    assert noise.bit_length() <= (6 if count < N else 8)
+
+
+@pytest.mark.parametrize("n", [1, 4, N // 2])
+def test_normalized_trace(ghs, n):
+    # A message in every coefficient keeps those at the multiples of N / n,
+    # at their scale, and loses the rest, with the noise of log2(N / n) key
+    # switches.
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    log_n = N.bit_length() - 1
+    ksk = scheme.gen_ksk_trace(
+        key, key, gens=[(1 << j) + 1 for j in range(1, log_n + 1)], lvl=0
+    )
+    delta = 1 << 60
+    rng = random.Random(n)  # noqa: S311 - test data, not a key
+    msg = [rng.randrange(-1000, 1000) for _ in range(N)]
+    c = scheme.sample(
+        Polynomial(scheme.rings[0]).from_bigint_array([m * delta for m in msg]), key
+    )
+    d = scheme.linear_decrypt(scheme.normalized_trace(c, ksk, n), key).get_polynomial(
+        signed=True
+    )
+    step = N // n
+    expected = [msg[j] if j % step == 0 else 0 for j in range(N)]
+    assert [round(x / delta) for x in d] == expected
+    # Measured at N = 256: 4 bits, where the scaled trace's constant carries
+    # 6-9 (the noise of its first levels doubled by every level after).
+    noise = max(abs(x - e * delta) for x, e in zip(d, expected, strict=True))
+    assert noise.bit_length() <= 6
+
+
+def test_normalized_trace_needs_a_power_of_two(ghs):
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    c = scheme.sample(Polynomial(scheme.rings[0]).from_array([1]), key)
+    with pytest.raises(ValueError, match="power of two"):
+        scheme.normalized_trace(c, [], 3)
+
+
+def test_trace_pack_needs_a_power_of_two(ghs):
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    c = scheme.sample(Polynomial(scheme.rings[0]).from_array([1]), key)
+    with pytest.raises(ValueError, match="power of two"):
+        scheme.trace_pack([c, c, c], [])
 
 
 # --- LWE extraction and the packing key switch -------------------------------

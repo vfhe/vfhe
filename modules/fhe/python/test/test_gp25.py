@@ -215,18 +215,10 @@ PRECISION = 4
 
 CASES = {
     "default": {},
-    "trace_repack": {"trace": True},
-    "trace_repack_one_key": {"trace": True, "same_key": True},
-    "trace_repack_smaller_input": {"trace": True, "n": 16},
-    "trace_repack_larger_input": {"trace": True, "n": 128},
-    "trace_repack_rank_change": {"trace": True, "rotation_rank": 2},
-    "trace_repack_radix_without_special_primes": {
-        "trace": True,
-        "n": 16,
-        "radix": 10,
-        "primes": (50, 50),
-        "special": 0,
-    },
+    "packing_key_switch": {"trace": False},
+    "packing_key_switch_smaller_input": {"trace": False, "n": 16},
+    "packing_key_switch_larger_input": {"trace": False, "n": 128},
+    "one_key": {"same_key": True},
     "binary": {"ternary": False},
     "input_rank_2": {"io_rank": 2},
     "rotation_rank_2": {"rotation_rank": 2},
@@ -234,6 +226,12 @@ CASES = {
     "smaller_input": {"n": 16},
     "larger_input": {"n": 128},
     "radix_without_special_primes": {"radix": 10, "primes": (50, 50), "special": 0},
+    "radix_without_special_primes_smaller_input": {
+        "n": 16,
+        "radix": 10,
+        "primes": (50, 50),
+        "special": 0,
+    },
     "several_levels": {"primes": (50, 50, 50, 50)},
 }
 
@@ -243,7 +241,7 @@ def _bootstrap_case(
     n=64,
     h=4,
     ternary=True,
-    trace=False,
+    trace=True,
     same_key=False,
     radix=None,
     hybrid=True,
@@ -268,7 +266,7 @@ def _bootstrap_case(
     q = rotation.rings[0].q_l
     size = 1 << (PRECISION - 1)
     table = [random.randrange(size) for _ in range(size)]  # noqa: S311 - test data
-    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in table], n=n)
+    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in table])
     msg = [random.randrange(size) for _ in range(n)]  # noqa: S311 - test data
     rlwe_in = _encrypt_at_the_bottom(io, msg, output_key)
     return gp25, key, tv, rlwe_in, io, output_key, table, msg
