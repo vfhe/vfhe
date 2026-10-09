@@ -1002,6 +1002,46 @@ def test_ring_switch_radix(hybrid):
         assert noise > 16
 
 
+@pytest.mark.parametrize("count", [2, 3, 4])
+def test_ring_switch_up_interleaves_several_samples(count):
+    # Up by k = 4: sample i lands at coefficients i + 4 m, the rest are zero.
+    src, dst = _schemes_on_shared_primes((64, 2), (256, 1))
+    key_src = src.key_gen_sparse(32, 3.2)
+    key_dst = dst.key_gen_sparse(16, 3.2)
+    ksk = dst.gen_ring_switch_key(key_dst, key_src, 0)
+    rng = random.Random(count)  # noqa: S311 - test data, not a key
+    msgs = [[rng.randrange(-1000, 1000) for _ in range(64)] for _ in range(count)]
+    samples = [
+        src.sample(
+            Polynomial(src.rings[0]).from_bigint_array(
+                [m * RING_SWITCH_DELTA for m in msg]
+            ),
+            key_src,
+        )
+        for msg in msgs
+    ]
+    out = dst.ring_switch(samples, ksk)
+    d = dst.linear_decrypt(out, key_dst).get_polynomial(signed=True)
+    expected = [msgs[c % 4][c // 4] if c % 4 < count else 0 for c in range(256)]
+    assert [round(x / RING_SWITCH_DELTA) for x in d] == expected
+
+
+def test_ring_switch_takes_several_samples_only_going_up():
+    src, dst = _schemes_on_shared_primes((256, 1), (64, 1))
+    key_src = src.key_gen_sparse(16, 3.2)
+    key_dst = dst.key_gen_sparse(16, 3.2)
+    ksk = dst.gen_ring_switch_key(key_dst, key_src, 0)
+    c = src.sample(Polynomial(src.rings[0]).from_array([1]), key_src)
+    with pytest.raises(ValueError, match="at most n / N samples"):
+        dst.ring_switch([c, c], ksk)
+    up_src, up_dst = _schemes_on_shared_primes((64, 1), (128, 1))
+    up_key_src = up_src.key_gen_sparse(16, 3.2)
+    up_ksk = up_dst.gen_ring_switch_key(up_dst.key_gen_sparse(16, 3.2), up_key_src, 0)
+    c = up_src.sample(Polynomial(up_src.rings[0]).from_array([1]), up_key_src)
+    with pytest.raises(ValueError, match="at most n / N samples"):
+        up_dst.ring_switch([c, c, c], up_ksk)
+
+
 def test_ring_switch_checks_its_key():
     src, dst = _schemes_on_shared_primes((256, 1), (64, 1), prime_size=(50, 50, 50, 50))
     wide, _ = _schemes_on_shared_primes((256, 2), (64, 1))

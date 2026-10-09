@@ -854,7 +854,9 @@ class MLWE_Scheme:
             hybrid=hybrid,
         )
 
-    def ring_switch(self, c: MLWE, ksk: MLWE_Set, n_threads: int = 0) -> MLWE:
+    def ring_switch(
+        self, c: MLWE | Sequence[MLWE], ksk: MLWE_Set, n_threads: int = 0
+    ) -> MLWE:
         """``c``, a sample of a scheme over ``R_N``, as a sample of this one
         over ``R_n`` under the key ``ksk`` switches to (`gen_ring_switch_key`),
         at the level with ``c``'s primes. ``R_n`` is ``Z[X^k]`` inside
@@ -864,14 +866,25 @@ class MLWE_Scheme:
         Down (``N = k n``), the result decrypts to coefficients ``k m`` of
         what ``c`` decrypts to, at ``m``: exactly the message when it lies in
         ``Z[X^k]``, its other coefficients dropped otherwise. Up (``n = k
-        N``), it decrypts to ``m(Y^k)``. The only noise added is the key
+        N``), it decrypts to ``m(Y^k)``; given a list of up to ``k`` samples
+        (one ring, one rank), to ``sum_i Y^i m_i(Y^k)``, coefficient ``i + k
+        m`` holding coefficient ``m`` of ``m_i`` -- with ``k`` of them, the
+        inverse of the split going down. The only noise added is one key
         switch's.
         """
-        lvl = self.level_with_primes(c.ring)
-        N, n = c.ring.N, self.N
+        samples = [c] if isinstance(c, MLWE) else list(c)
+        first_in = samples[0]
+        lvl = self.level_with_primes(first_in.ring)
+        N, n = first_in.ring.N, self.N
         if N % n and n % N:
             raise ValueError("one ring dimension must divide the other")
-        rank = c.r * (N // n) if n <= N else c.r
+        if len(samples) > max(n // N, 1):
+            raise ValueError(
+                "at most n / N samples, and only switching up to a larger ring"
+            )
+        if any(x.ring != first_in.ring or x.r != first_in.r for x in samples):
+            raise ValueError("the samples must share a ring and a rank")
+        rank = first_in.r * (N // n) if n <= N else first_in.r
         first = next(x for x in ksk.mlwe if x is not None)[0]
         if (
             first.scheme != self
@@ -885,8 +898,14 @@ class MLWE_Scheme:
             )
         out = MLWE(self, lvl=lvl)
         with local_num_threads(n_threads):
-            c.to_coeff()
-            lib_rlwe.lib.mlwe_ring_switch(out.obj, c.obj, ksk.obj)
+            for x in samples:
+                x.to_coeff()
+            lib_rlwe.lib.mlwe_ring_switch(
+                out.obj,
+                ffi.new("void *[]", [x.obj for x in samples]),
+                len(samples),
+                ksk.obj,
+            )
         out.repr = repr.coeff
         return out
 

@@ -252,6 +252,22 @@ versions may contain breaking changes.
 
 ### Changed
 
+- GP25's trace repacking (`trace_repack=True`) works for any `n` and `N`,
+  through ring switching: for `n <= N` the `n` accumulators pack into the
+  subring `Z[X^(N/n)]` of `R_N` (`log2 n` automorphism keys) and a ring
+  switch down projects onto it; for `n > N` each of the `n / N` interleaved
+  groups packs into `R_N` and one ring switch up interleaves them. The ring
+  switch also moves to the output key, at any rank, so trace repacking into
+  a key of another rank works too. `SAB_Key.output_switch_key` is now a
+  ring-switch key (`gen_ring_switch_key`), `None` only when `n == N` and the
+  rotation and output keys are one. `test_vector(table, n=None)` takes the
+  input dimension: with trace repacking the factor it divides by is
+  `min(n, N)`. At N = 1024 over three 50-bit primes, the repacking keys are
+  1-3 MiB against 36-576 MiB for the packing key switch (n = 256-4096), at
+  about 7-9 more bits of output noise and a similar repacking time.
+  `MLWE_Scheme.ring_switch` takes a list of up to `n / N` samples going up,
+  interleaved coefficient by coefficient (`mlwe_embed_subring` and
+  `mlwe_ring_switch` take an array and a count).
 - Move LWE extraction and the packing key switch from GP25 to `MLWE_Scheme`
   (breaking): `extract_lwe(c, idx)`, `gen_packing_ksk(key_out, lwe_key, lvl,
   radix_log_base, n_threads)` and `packing_keyswitch(extracted, packing_key,

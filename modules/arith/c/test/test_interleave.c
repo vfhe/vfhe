@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file test_interleave.c
- * @brief The k-way deinterleave and spread kernels checked word for word
+ * @brief The k-way deinterleave, interleave and spread kernels checked word for word
  *        against plain loops, over every shape class the vector paths
  *        distinguish: k below, at and above a vector's lanes, k that is not
  *        a power of two, and lengths with a tail.
@@ -60,6 +60,23 @@ static uint64_t next_word(uint64_t *state)
         }                                                                                          \
         free(out);                                                                                 \
                                                                                                    \
+        /* The interleave, with every third row missing (read as zeros). */                        \
+        const uint##W##_t **rows = (const uint##W##_t **)malloc(k * sizeof(uint##W##_t *));        \
+        for (uint64_t j = 0; j < k; j++)                                                           \
+            rows[j] = j % 3 == 2 ? NULL : in + j * n;                                              \
+        uint##W##_t *joined_buf =                                                                  \
+            (uint##W##_t *)malloc((k * n + GUARD + 1) * sizeof(uint##W##_t));                      \
+        uint##W##_t *joined = joined_buf + 1;                                                      \
+        for (uint64_t i = 0; i < k * n + GUARD; i++)                                               \
+            joined[i] = (uint##W##_t)SENTINEL;                                                     \
+        vec_interleave_k_u##W(joined, rows, k, n);                                                 \
+        for (uint64_t i = 0; i < k * n; i++)                                                       \
+            TEST_ASSERT_EQUAL_UINT64(rows[i % k] != NULL ? rows[i % k][i / k] : 0, joined[i]);     \
+        for (uint64_t i = k * n; i < k * n + GUARD; i++)                                           \
+            TEST_ASSERT_EQUAL_UINT64((uint##W##_t)SENTINEL, joined[i]);                            \
+        free(joined_buf);                                                                          \
+        free(rows);                                                                                \
+                                                                                                   \
         uint##W##_t *spread_buf =                                                                  \
             (uint##W##_t *)malloc((k * n + GUARD + 1) * sizeof(uint##W##_t));                      \
         uint##W##_t *spread = spread_buf + 1;                                                      \
@@ -77,14 +94,14 @@ static uint64_t next_word(uint64_t *state)
 CHECK_KERNELS(64)
 CHECK_KERNELS(32)
 
-static void test_deinterleave_and_spread_u64(void)
+static void test_k_way_kernels_u64(void)
 {
     for (size_t a = 0; a < sizeof(KS) / sizeof(KS[0]); a++)
         for (size_t b = 0; b < sizeof(NS) / sizeof(NS[0]); b++)
             check_u64(KS[a], NS[b], 1000 * a + b);
 }
 
-static void test_deinterleave_and_spread_u32(void)
+static void test_k_way_kernels_u32(void)
 {
     for (size_t a = 0; a < sizeof(KS) / sizeof(KS[0]); a++)
         for (size_t b = 0; b < sizeof(NS) / sizeof(NS[0]); b++)
@@ -94,7 +111,7 @@ static void test_deinterleave_and_spread_u32(void)
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_deinterleave_and_spread_u64);
-    RUN_TEST(test_deinterleave_and_spread_u32);
+    RUN_TEST(test_k_way_kernels_u64);
+    RUN_TEST(test_k_way_kernels_u32);
     return UNITY_END();
 }

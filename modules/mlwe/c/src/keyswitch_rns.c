@@ -235,29 +235,55 @@ void mlwe_project_subring(MLWE out, MLWE in)
     claim_rows(out, out_mask);
 }
 
-void mlwe_embed_subring(MLWE out, MLWE in)
+// The k inputs of an interleave: row `ii` of each sample's element `e`, NULL
+// past `count`.
+#define INTERLEAVE_ROW(W, dst, oi, in, count, e, ii, k, n)                                         \
+    do                                                                                             \
+    {                                                                                              \
+        const uint##W##_t **rows_ =                                                                \
+            (const uint##W##_t **)safe_malloc((k) * sizeof(uint##W##_t *));                        \
+        for (size_t j_ = 0; j_ < (k); j_++)                                                        \
+            rows_[j_] = j_ < (count) ? rns_row##W(element_rows((in)[j_], (e)), (ii)) : NULL;       \
+        vec_interleave_k_u##W(rns_row##W((dst), (oi)), rows_, (k), (n));                           \
+        free(rows_);                                                                               \
+    } while (0)
+
+static RNS_Polynomial element_rows(MLWE c, size_t e)
 {
-    assert(mlwe_domain(in) == ARITH_DOMAIN_CANONICAL);
-    const uint64_t n = in->ring->N;
+    return arith_rns_polynomial(e < c->r ? &c->a[e] : &c->b);
+}
+
+void mlwe_embed_subring(MLWE out, MLWE *in, uint64_t count)
+{
+    const uint64_t n = in[0]->ring->N;
     assert(out->ring->N % n == 0);
     const uint64_t k = out->ring->N / n;
-    assert(out->r == in->r);
-    RNS_Polynomial in_b = arith_rns_polynomial(&in->b);
-    RNS_Polynomial out_b = arith_rns_polynomial(&out->b);
+    assert(count >= 1 && count <= k);
+    for (size_t i = 0; i < count; i++)
+    {
+        assert(mlwe_domain(in[i]) == ARITH_DOMAIN_CANONICAL);
+        assert(in[i]->ring == in[0]->ring && in[i]->r == out->r);
+    }
+    RNS_Polynomial in_b = arith_rns_polynomial(&in[0]->b);
     const uint64_t out_mask = arith_rns_ring_mask(out->ring);
-    uint64_t *row = rows_by_prime(in_b->base, in_b->rns_mask, out_b->base, out_mask);
+    uint64_t *row =
+        rows_by_prime(in_b->base, in_b->rns_mask, arith_rns_polynomial(&out->b)->base, out_mask);
     for (size_t i = 0; i < in_b->base->l; i++)
     {
         if (!(in_b->rns_mask & (1ULL << i)))
             continue;
-        for (size_t e = 0; e <= in->r; e++)
+        const bool narrow = rns_row_is_narrow(in_b->base, i);
+        for (size_t e = 0; e <= out->r; e++)
         {
-            RNS_Polynomial src = e < in->r ? arith_rns_polynomial(&in->a[e]) : in_b;
-            RNS_Polynomial dst = e < in->r ? arith_rns_polynomial(&out->a[e]) : out_b;
-            if (rns_row_is_narrow(in_b->base, i))
-                vec_spread_u32(rns_row32(dst, row[i]), rns_row32(src, i), k, n);
+            RNS_Polynomial dst = element_rows(out, e);
+            if (count == 1 && narrow)
+                vec_spread_u32(rns_row32(dst, row[i]), rns_row32(element_rows(in[0], e), i), k, n);
+            else if (count == 1)
+                vec_spread_u64(rns_row64(dst, row[i]), rns_row64(element_rows(in[0], e), i), k, n);
+            else if (narrow)
+                INTERLEAVE_ROW(32, dst, row[i], in, count, e, i, k, n);
             else
-                vec_spread_u64(rns_row64(dst, row[i]), rns_row64(src, i), k, n);
+                INTERLEAVE_ROW(64, dst, row[i], in, count, e, i, k, n);
         }
     }
     free(row);

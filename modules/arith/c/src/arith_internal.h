@@ -18,6 +18,10 @@ void vec_interleave_u64(uint64_t *out, const uint64_t *even, const uint64_t *odd
 // alias neither one another nor `in`.
 void vec_deinterleave_u64(uint64_t *const *out, const uint64_t *in, uint64_t k, uint64_t n);
 void vec_deinterleave_u32(uint32_t *const *out, const uint32_t *in, uint64_t k, uint64_t n);
+// k-way interleave, the inverse of the deinterleave: out[j + k * m] =
+// in[j][m] for j < k and m < n, a NULL in[j] reading as n zeros.
+void vec_interleave_k_u64(uint64_t *out, const uint64_t *const *in, uint64_t k, uint64_t n);
+void vec_interleave_k_u32(uint32_t *out, const uint32_t *const *in, uint64_t k, uint64_t n);
 // k-way spread, out[k * m] = in[m] for m < n and the other words of out's
 // k * n zero. `out` does not alias `in`.
 void vec_spread_u64(uint64_t *out, const uint64_t *in, uint64_t k, uint64_t n);

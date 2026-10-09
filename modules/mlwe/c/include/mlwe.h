@@ -287,16 +287,20 @@ extern "C"
     // l + k * m of s_i -- is coefficients k * m of the linear decryption of
     // `in` under s: the subring part of the message, and the rest dropped.
     void mlwe_project_subring(MLWE out, MLWE in);
-    // mlwe_embed_subring: `in` over R_n, `out` over R_N, both of rank r; out
-    // is in with Y = X^k, so it decrypts under s(X^k) to m(X^k).
-    void mlwe_embed_subring(MLWE out, MLWE in);
-    // Ring switching: mlwe_project_subring (if `in`'s dimension is at least
-    // `out`'s) or mlwe_embed_subring into a sample over `out`'s ring, then a
-    // key switch with `ksk`, whose components switch from the key that map
-    // leaves the sample under (one per component it produces, r * k down and
-    // r up) to `out`'s key, at any rank. `ksk` belongs to the level of `out`'s
-    // ring.
-    void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk);
+    // mlwe_embed_subring: `count` <= k samples in[i] over R_n, one ring and
+    // rank r, and `out` over R_N of rank r: out = sum_i X^i in[i](X^k), so it
+    // decrypts under s(X^k) to sum_i X^i m_i(X^k) -- coefficient i + k * m
+    // holds coefficient m of m_i, and the coefficients of missing inputs are
+    // zero. With one input it is the embedding Y = X^k, and with k the inverse
+    // of mlwe_project_subring's split of the mask.
+    void mlwe_embed_subring(MLWE out, MLWE *in, uint64_t count);
+    // Ring switching: mlwe_project_subring of in[0] (if its dimension is at
+    // least `out`'s; `count` is then 1) or mlwe_embed_subring of the `count`
+    // inputs, into a sample over `out`'s ring, then a key switch with `ksk`,
+    // whose components switch from the key that map leaves the sample under
+    // (one per component it produces, r * k down and r up) to `out`'s key, at
+    // any rank. `ksk` belongs to the level of `out`'s ring.
+    void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE *in, uint64_t count, RNS_MLWE_KS_Key ksk);
 
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);
     // Reduces every component into `to`, a quotient of the sample's ring, in

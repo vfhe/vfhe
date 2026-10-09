@@ -20,10 +20,11 @@ FHE schemes built on `vfhe.mlwe`.
   binary input key.
 - `gp25.py`: `GP25`: the sparse-amortized bootstrap [GP25]: every
   coefficient of an RLWE sample over `R_n` at once, for a sparse input key
-  (ternary or binary, any rank), into `R_N` with `n <= N`. Input keys with
-  bounded gaps (`sample_input_key`), the blind rotation and its building
-  blocks (`rotate`, `multiply_by_signed_monomials`), and repacking by LWE
-  extraction and a packing key switch or by the trace.
+  (ternary or binary, any rank), rotating over `R_N` for any `n` and `N`.
+  Input keys with bounded gaps (`sample_input_key`), the blind rotation and
+  its building blocks (`rotate`, `multiply_by_signed_monomials`), and
+  repacking by LWE extraction and a packing key switch or by the trace and a
+  ring switch.
 
 `c/src/` holds `bfv.c` (an empty placeholder: the scheme needs no kernels of
 its own) and the CGGI16 and GP25 blind rotations (`cggi16.c`, `gp25.c`, both

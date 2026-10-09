@@ -422,16 +422,17 @@ void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_K
 // Ring switching: the subring map into the key ring's dimension, then a key
 // switch, which may change the rank, from the key the map leaves the sample
 // under.
-void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk)
+void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE *in, uint64_t count, RNS_MLWE_KS_Key ksk)
 {
-    const uint64_t N = in->ring->N, n = out->ring->N;
-    const uint64_t rank = N >= n ? in->r * (N / n) : in->r;
+    const uint64_t N = in[0]->ring->N, n = out->ring->N;
+    const uint64_t rank = N >= n ? in[0]->r * (N / n) : in[0]->r;
     assert(ksk->count == rank);
+    assert(N < n || count == 1);
     RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, rank);
     if (N >= n)
-        mlwe_project_subring(tmp, in);
+        mlwe_project_subring(tmp, in[0]);
     else
-        mlwe_embed_subring(tmp, in);
+        mlwe_embed_subring(tmp, in, count);
     mlwe_RNSc_GHS_hybrid_keyswitch(out, tmp, ksk, 0);
     free_mlwe_RNS_sample(tmp);
 }

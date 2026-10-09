@@ -165,7 +165,10 @@ def test_cggi16_unfolded_bootstrap_key_layout():
     assert (got.n, got.unfolding, got.bk) == (7, 3, [])
 
 
-@pytest.mark.parametrize(("trace_repack", "n"), [(False, N), (True, N), (False, 2 * N)])
+@pytest.mark.parametrize(
+    ("trace_repack", "n"),
+    [(False, N), (True, N), (False, 2 * N), (True, 2 * N)],
+)
 def test_gp25_bootstrap_key(deterministic_prng, trace_repack, n):
     # A loaded key bootstraps like the one it was saved from.
     deterministic_prng(0x5AB00004)
@@ -194,7 +197,7 @@ def test_gp25_bootstrap_key(deterministic_prng, trace_repack, n):
     assert (got.output_switch_key is None) != trace_repack
 
     q = rotation.rings[0].q_l
-    tv = gp25.test_vector([mod_switch(t, 16, q) for t in range(8)])
+    tv = gp25.test_vector([mod_switch(t, 16, q) for t in range(8)], n=n)
     msg = [k % 8 for k in range(n)]
     c = io.sample(
         Polynomial(io.rings[0]).from_bigint_array(

@@ -51,8 +51,10 @@ void vec_interleave_u64(uint64_t *out, const uint64_t *even, const uint64_t *odd
 // --- k-way: deinterleaving and spreading ---------------------------------
 //
 // vec_deinterleave_*: out[j][m] = in[j + k * m] for j < k, m < n -- the
-// transpose of `in` read as n rows of k. vec_spread_*: out[k * m] = in[m] and
-// every other word of out's k * n zero, written in one pass.
+// transpose of `in` read as n rows of k. vec_interleave_k_*, its inverse:
+// out[j + k * m] = in[j][m], a NULL in[j] reading as zeros. vec_spread_*:
+// out[k * m] = in[m] and every other word of out's k * n zero, written in one
+// pass -- the interleave of in alone, reading only it.
 //
 // The vector paths cover a power-of-two k up to a vector's lanes, and any k
 // that is a multiple of them, at n a multiple of the lanes; every other shape
@@ -67,6 +69,13 @@ void vec_interleave_u64(uint64_t *out, const uint64_t *even, const uint64_t *odd
         for (uint64_t m = 0; m < n; m++)                                                           \
             for (uint64_t j = 0; j < k; j++)                                                       \
                 out[j][m] = in[j + k * m];                                                         \
+    }                                                                                              \
+    static void interleave_k_scalar_u##W(uint##W##_t *out, const uint##W##_t *const *in,           \
+                                         uint64_t k, uint64_t n)                                   \
+    {                                                                                              \
+        for (uint64_t m = 0; m < n; m++)                                                           \
+            for (uint64_t j = 0; j < k; j++)                                                       \
+                out[j + k * m] = in[j] != NULL ? in[j][m] : 0;                                     \
     }                                                                                              \
     static void spread_scalar_u##W(uint##W##_t *out, const uint##W##_t *in, uint64_t k,            \
                                    uint64_t n)                                                     \
@@ -121,6 +130,38 @@ static inline __attribute__((always_inline)) void shuffle_level_u32(__m512i *v, 
         v[i] = t[i];
 }
 
+// The inverse of one shuffle level: the vectors at i and count / 2 + i
+// interleave back into the pair at 2i, 2i + 1. The levels are all the same
+// permutation, so log2(count) of these undo log2(count) shuffle levels.
+static inline __attribute__((always_inline)) void unshuffle_level_u64(__m512i *v, unsigned count)
+{
+    const __m512i lo = _mm512_setr_epi64(0, 8, 1, 9, 2, 10, 3, 11);
+    const __m512i hi = _mm512_setr_epi64(4, 12, 5, 13, 6, 14, 7, 15);
+    __m512i t[8];
+    for (unsigned i = 0; i < count / 2; i++)
+    {
+        t[2 * i] = _mm512_permutex2var_epi64(v[i], lo, v[count / 2 + i]);
+        t[2 * i + 1] = _mm512_permutex2var_epi64(v[i], hi, v[count / 2 + i]);
+    }
+    for (unsigned i = 0; i < count; i++)
+        v[i] = t[i];
+}
+
+static inline __attribute__((always_inline)) void unshuffle_level_u32(__m512i *v, unsigned count)
+{
+    const __m512i lo = _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+    const __m512i hi =
+        _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+    __m512i t[16];
+    for (unsigned i = 0; i < count / 2; i++)
+    {
+        t[2 * i] = _mm512_permutex2var_epi32(v[i], lo, v[count / 2 + i]);
+        t[2 * i + 1] = _mm512_permutex2var_epi32(v[i], hi, v[count / 2 + i]);
+    }
+    for (unsigned i = 0; i < count; i++)
+        v[i] = t[i];
+}
+
 // k <= lanes: each step loads the k vectors covering `lanes` rows of `in`
 // and stores one vector of every output.
 #define DEINTERLEAVE_SMALL(W, LANES)                                                               \
@@ -158,10 +199,81 @@ static inline __attribute__((always_inline)) void shuffle_level_u32(__m512i *v, 
             }                                                                                      \
     }
 
+// The interleave's two shapes, mirroring the deinterleave's: the inverse
+// network for k <= lanes, and the same square tiles (a transpose is its own
+// inverse) for k a multiple of the lanes.
+#define INTERLEAVE_K(W, LANES)                                                                     \
+    static inline __attribute__((always_inline)) __m512i load_or_zero_u##W(const uint##W##_t *row, \
+                                                                           uint64_t m)             \
+    {                                                                                              \
+        return row != NULL ? _mm512_loadu_si512((const void *)(row + m)) : _mm512_setzero_si512(); \
+    }                                                                                              \
+    static inline __attribute__((always_inline)) void interleave_small_u##W(                       \
+        uint##W##_t *out, const uint##W##_t *const *in, const unsigned k, uint64_t n)              \
+    {                                                                                              \
+        for (uint64_t m = 0; m < n; m += LANES)                                                    \
+        {                                                                                          \
+            __m512i v[LANES];                                                                      \
+            for (unsigned j = 0; j < k; j++)                                                       \
+                v[j] = load_or_zero_u##W(in[j], m);                                                \
+            for (unsigned c = 1; c < k; c *= 2)                                                    \
+                unshuffle_level_u##W(v, k);                                                        \
+            for (unsigned i = 0; i < k; i++)                                                       \
+                _mm512_storeu_si512((void *)(out + k * m + LANES * i), v[i]);                      \
+        }                                                                                          \
+    }                                                                                              \
+    static void interleave_tiles_u##W(uint##W##_t *out, const uint##W##_t *const *in, uint64_t k,  \
+                                      uint64_t n)                                                  \
+    {                                                                                              \
+        for (uint64_t m = 0; m < n; m += LANES)                                                    \
+            for (uint64_t j0 = 0; j0 < k; j0 += LANES)                                             \
+            {                                                                                      \
+                __m512i v[LANES];                                                                  \
+                for (unsigned j = 0; j < LANES; j++)                                               \
+                    v[j] = load_or_zero_u##W(in[j0 + j], m);                                       \
+                for (unsigned c = 1; c < LANES; c *= 2)                                            \
+                    shuffle_level_u##W(v, LANES);                                                  \
+                for (unsigned i = 0; i < LANES; i++)                                               \
+                    _mm512_storeu_si512((void *)(out + (m + i) * k + j0), v[i]);                   \
+            }                                                                                      \
+    }
+
 DEINTERLEAVE_SMALL(64, 8)
 DEINTERLEAVE_SMALL(32, 16)
 DEINTERLEAVE_TILES(64, 8)
 DEINTERLEAVE_TILES(32, 16)
+INTERLEAVE_K(64, 8)
+INTERLEAVE_K(32, 16)
+
+void vec_interleave_k_u64(uint64_t *out, const uint64_t *const *in, uint64_t k, uint64_t n)
+{
+    if (n % 8 != 0 || k == 1)
+        interleave_k_scalar_u64(out, in, k, n);
+    else if (k == 2)
+        interleave_small_u64(out, in, 2, n);
+    else if (k == 4)
+        interleave_small_u64(out, in, 4, n);
+    else if (k % 8 == 0)
+        interleave_tiles_u64(out, in, k, n);
+    else
+        interleave_k_scalar_u64(out, in, k, n);
+}
+
+void vec_interleave_k_u32(uint32_t *out, const uint32_t *const *in, uint64_t k, uint64_t n)
+{
+    if (n % 16 != 0 || k == 1)
+        interleave_k_scalar_u32(out, in, k, n);
+    else if (k == 2)
+        interleave_small_u32(out, in, 2, n);
+    else if (k == 4)
+        interleave_small_u32(out, in, 4, n);
+    else if (k == 8)
+        interleave_small_u32(out, in, 8, n);
+    else if (k % 16 == 0)
+        interleave_tiles_u32(out, in, k, n);
+    else
+        interleave_k_scalar_u32(out, in, k, n);
+}
 
 void vec_deinterleave_u64(uint64_t *const *out, const uint64_t *in, uint64_t k, uint64_t n)
 {
@@ -259,6 +371,16 @@ void vec_deinterleave_u64(uint64_t *const *out, const uint64_t *in, uint64_t k, 
 void vec_deinterleave_u32(uint32_t *const *out, const uint32_t *in, uint64_t k, uint64_t n)
 {
     deinterleave_scalar_u32(out, in, k, n);
+}
+
+void vec_interleave_k_u64(uint64_t *out, const uint64_t *const *in, uint64_t k, uint64_t n)
+{
+    interleave_k_scalar_u64(out, in, k, n);
+}
+
+void vec_interleave_k_u32(uint32_t *out, const uint32_t *const *in, uint64_t k, uint64_t n)
+{
+    interleave_k_scalar_u32(out, in, k, n);
 }
 
 void vec_spread_u64(uint64_t *out, const uint64_t *in, uint64_t k, uint64_t n)

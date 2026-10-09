@@ -138,15 +138,6 @@ def test_the_rotation_primes_must_be_a_level_of_the_output():
         )
 
 
-def test_trace_repacking_needs_equal_dimensions():
-    io, rotation = _schemes(16, 64)
-    input_key, rotation_key, output_key, bits = _keys(io, rotation)
-    with pytest.raises(ValueError, match="trace repacking needs"):
-        GP25(rotation, trace_repack=True).generate_bootstrap_key(
-            input_key, rotation_key, output_key, 4, bits
-        )
-
-
 # --- building blocks ---------------------------------------------------------
 
 
@@ -226,6 +217,16 @@ CASES = {
     "default": {},
     "trace_repack": {"trace": True},
     "trace_repack_one_key": {"trace": True, "same_key": True},
+    "trace_repack_smaller_input": {"trace": True, "n": 16},
+    "trace_repack_larger_input": {"trace": True, "n": 128},
+    "trace_repack_rank_change": {"trace": True, "rotation_rank": 2},
+    "trace_repack_radix_without_special_primes": {
+        "trace": True,
+        "n": 16,
+        "radix": 10,
+        "primes": (50, 50),
+        "special": 0,
+    },
     "binary": {"ternary": False},
     "input_rank_2": {"io_rank": 2},
     "rotation_rank_2": {"rotation_rank": 2},
@@ -267,7 +268,7 @@ def _bootstrap_case(
     q = rotation.rings[0].q_l
     size = 1 << (PRECISION - 1)
     table = [random.randrange(size) for _ in range(size)]  # noqa: S311 - test data
-    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in table])
+    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in table], n=n)
     msg = [random.randrange(size) for _ in range(n)]  # noqa: S311 - test data
     rlwe_in = _encrypt_at_the_bottom(io, msg, output_key)
     return gp25, key, tv, rlwe_in, io, output_key, table, msg
@@ -302,16 +303,23 @@ def test_bootstrap(deterministic_prng, case):
 
 
 @pytest.mark.parametrize(
-    ("n", "hybrid", "radix"),
-    [(16, True, None), (64, True, None), (128, True, None), (64, False, 10)],
+    ("n", "hybrid", "radix", "trace"),
+    [
+        (16, True, None, False),
+        (64, True, None, False),
+        (128, True, None, False),
+        (64, False, 10, False),
+        (16, True, None, True),
+        (128, True, None, True),
+    ],
 )
-def test_bootstraps_compose(deterministic_prng, n, hybrid, radix):
+def test_bootstraps_compose(deterministic_prng, n, hybrid, radix, trace):
     # The output is under the output key, as the input was: brought down to
     # the lowest level, it bootstraps again.
     deterministic_prng(0x5AB00005)
     random.seed(0x5AB00005)
     gp25, key, tv, rlwe_in, io, output_key, table, msg = _bootstrap_case(
-        n=n, hybrid=hybrid, radix=radix, primes=(50, 50, 50, 50)
+        n=n, hybrid=hybrid, radix=radix, trace=trace, primes=(50, 50, 50, 50)
     )
     last = len(io.rings) - 1
     assert key.hw_reducing_lvl == last
