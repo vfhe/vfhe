@@ -233,6 +233,16 @@ def test_centered_doubles_match_the_exact_crt(sizes, n):
         assert out[k] == pytest.approx(centered / 2, rel=1e-14, abs=0)
 
 
+def test_a_ring_from_its_primes_alone():
+    # One of the four documented ways to give the modulus, and the way to
+    # build rings of two dimensions over the same primes.
+    big = Ring(128, prime_size=[50, 45, 40], split_degree=1)
+    small = Ring(64, primes=list(big.primes), split_degree=1)
+    assert small.primes == big.primes
+    assert small.prime_size == [50, 45, 40]
+    assert small.base != big.base
+
+
 def test_short_arrays_are_padded_with_zeros():
     R = Ring(64, prime_size=[50, 50], split_degree=1)
     big = (1 << 90) + 7

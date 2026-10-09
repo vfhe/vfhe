@@ -239,35 +239,47 @@ versions may contain breaking changes.
 
 ### Changed
 
-- Rework GP25 (breaking). The blind rotation is one native call,
-  `gp25_blind_rotate`, with one parallel loop per layer on the library's
-  threads (`vfhe.engine.set_num_threads`); the signed monomial of each
-  accumulator runs inside the last layer of its gap. The building blocks are
-  public: `GP25.rotate` (`gp25_rotate`) and
-  `GP25.multiply_by_signed_monomials` (`gp25_multiply_by_signed_monomials`).
-  New surface: `GP25(scheme, gsw_ell=, radix_log_base=, trace_repack=)`
-  (the radix gadget on the MGSW, automorphism and packing keys);
+- Rework GP25 (breaking). Three keys take part, all required: the output key,
+  a dense key over `R_n` that inputs arrive under (at the lowest level of its
+  scheme) and outputs leave under, so bootstraps compose; the input key, a
+  sparse key of the same scheme, which inputs are switched to first (the
+  Hamming-weight-reducing key switch, generated for that one level, so the
+  sparse key only has to be secure at that modulus); and the rotation key,
+  over `R_N`, which the blind rotation runs under. Any `n` and `N`: the
+  accumulators are repacked into one sample over `R_n` by a packing key switch
+  (coefficient k at k), or through the trace when `n == N`. The two schemes
+  share primes by value: level 0 of the rotation scheme must be a level of
+  the output key's, which is where outputs land. The blind rotation is one
+  native call, `gp25_blind_rotate`, with one parallel loop per layer on the
+  library's threads; the signed monomial of each accumulator runs inside the
+  last layer of its gap. Surface: `GP25(rotation_scheme, gsw_ell=,
+  radix_log_base=, trace_repack=)` (the radix gadget on every key);
   `GP25.sample_input_key` (rejection sampling on every gap, the last
-  included) and `GP25.gaps`; `generate_bootstrap_key(input_key, output_key,
-  h, gap_bits, ternary=)`, where `ternary=False` takes a binary key without
-  sign keys; `test_vector(table)`
-  from exact integers mod q, with the rounding offset built in;
-  `blind_rotate` and `bootstrap`. Input keys of any rank, and inputs of any
-  dimension `n <= N`, whose coefficient k lands at `k * N / n`. Removed:
-  `threads=`, `generate_sparse_ternary_key`, `sab_LUT_packing`,
-  `sab_rlwe_bootstrap`, `setup_tv_xb`, `sab_blind_rotate`, `sparse_mul`,
-  `RGSW_monomial_mul`, `sub_a`, `CMUX`/`NCMUX`/`mul_by_xai*` wrappers,
-  `get_noise*`, `encrypt_bits`, `extract_lwe_key` (use
-  `MLWE_Key.extract_lwe_key`), and the `gp25_RGSW_monomial_mul(_mt)` and
-  `gp25_sub_a_mt` kernels; `gen_packing_ksk` and `packing_keyswitch` lost
-  `lvl` (level 0), and the latter takes `stride`. `SAB_Key` holds `gaps`,
-  `signs`, `gap_bits`, `n` and its own `automorphism_key`, in place of `s`,
-  `s_sign`, `r_prec`, `b_prec` and `hw_reducing_key`. At n = N = 512 and 1024 (h = 16, one 100-bit
-  level), a bootstrap takes 13-23% less time on one thread and 27-37% less on
-  eight (i7-1165G7, avx512ifma).
-- `mlwe_full_packing_keyswitch(out, in, size, stride, ksk)` places sample k
-  at coefficient `k * stride`, decomposes through the key's gadget (so it
-  takes radix keys), and no longer takes the unused `lvl`.
+  included) and `GP25.gaps`; `generate_bootstrap_key(input_key,
+  rotation_key, output_key, h, gap_bits, ternary=, hw_reducing_lvl=,
+  hw_reducing_hybrid=)`, where `ternary=False` takes a binary key without
+  sign keys; `test_vector(table)` from exact integers mod q, with the
+  rounding offset built in; `blind_rotate`, and `bootstrap(rlwe_in, tv, key)`,
+  which returns the output. The building blocks are public: `GP25.rotate`
+  (`gp25_rotate`, given the automorphism key) and
+  `GP25.multiply_by_signed_monomials` (`gp25_multiply_by_signed_monomials`).
+  Input keys of any rank. Removed: `threads=`, `generate_sparse_ternary_key`,
+  `sab_LUT_packing`, `sab_rlwe_bootstrap`, `setup_tv_xb`,
+  `sab_blind_rotate`, `sparse_mul`, `RGSW_monomial_mul`, `sub_a`,
+  `CMUX`/`NCMUX`/`mul_by_xai*` wrappers, `get_noise*`, `encrypt_bits`,
+  `extract_lwe_key` (use `MLWE_Key.extract_lwe_key`), and the
+  `gp25_RGSW_monomial_mul(_mt)` and `gp25_sub_a_mt` kernels. `SAB_Key`
+  holds `gaps`, `signs`, `gap_bits`, `n`, `automorphism_key`,
+  `hw_reducing_key` / `hw_reducing_lvl`, `output_lvl` and the packing or
+  trace keys, in place of `s`, `s_sign`, `r_prec` and `b_prec`; its
+  `hw_reducing_key` used to be applied after packing, at the bootstrapping
+  modulus, and only if a caller had set it. At n = N = 512 and 1024 (h = 16,
+  one 100-bit level), a bootstrap takes 13-23% less time on one thread and
+  27-37% less on eight (i7-1165G7, avx512ifma).
+- `mlwe_full_packing_keyswitch(out, in, size, ksk)` takes samples of another
+  ring dimension over the same primes (matched by value), decomposes through
+  the key's gadget (so it takes radix keys), and no longer takes the unused
+  `lvl`.
 - `mgsw_CMUX_to_coeff` and `mgsw_NCMUX_to_coeff` keep the external product
   canonical, skipping a transform pair per call.
 
@@ -421,6 +433,8 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix `Ring(N, primes=[...])`, one of the documented ways to give the
+  modulus, failing unless `prime_size=None` was passed too.
 - Fix GP25 on a scheme with several levels reading the automorphism key of
   the last level for gadget keys of level 0: an out-of-bounds read.
 - Fix GP25 rejecting every input key of rank above 1.

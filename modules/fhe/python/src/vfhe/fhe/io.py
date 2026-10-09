@@ -64,10 +64,24 @@ class CKKSCiphertextCodec(SampleCodec):
 class SABKeyCodec(Codec):
     tag = "fhe.gp25_sab_key"
     types = (SAB_Key,)
-    _fields = ("gaps", "signs", "automorphism_key", "packing_key", "trace_repack_key")
+    _fields = (
+        "gaps",
+        "signs",
+        "automorphism_key",
+        "packing_key",
+        "trace_repack_key",
+        "hw_reducing_key",
+        "output_switch_key",
+    )
 
     def encode(self, obj: SAB_Key, _ctx: WriteContext, /) -> Encoded:
-        meta = {"n": obj.n, "h": obj.h, "gap_bits": obj.gap_bits}
+        meta = {
+            "n": obj.n,
+            "h": obj.h,
+            "gap_bits": obj.gap_bits,
+            "hw_reducing_lvl": obj.hw_reducing_lvl,
+            "output_lvl": obj.output_lvl,
+        }
         return Encoded(meta, children=[getattr(obj, f) for f in self._fields])
 
     def decode(
@@ -77,6 +91,8 @@ class SABKeyCodec(Codec):
         for name, value in zip(self._fields, children, strict=True):
             setattr(out, name, value)
         out.n, out.h, out.gap_bits = meta["n"], meta["h"], meta["gap_bits"]
+        out.hw_reducing_lvl = meta["hw_reducing_lvl"]
+        out.output_lvl = meta["output_lvl"]
         return out
 
 

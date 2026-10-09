@@ -6,6 +6,13 @@ Every coefficient of an RLWE sample over ``R_n`` is bootstrapped at once, for
 the price of a key that grows with the input key's Hamming weight ``h``
 rather than with ``n``: one accumulator per coefficient, and a sparse input
 key consumed through the gaps between its non-zero coefficients.
+
+Three keys take part. The **output key** is a dense key over ``R_n``: inputs
+arrive under it, at the lowest level of its scheme, and outputs leave under
+it, so bootstraps compose. The **input key** is a sparse key of the same
+scheme, which the input is switched to first (the Hamming-weight-reducing key
+switch). The **rotation key** is the key over ``R_N`` the blind rotation runs
+under.
 """
 
 from __future__ import annotations
@@ -38,9 +45,12 @@ class SAB_Key:
     component: ``gaps[i][t]`` are the MGSW encryptions of the bits of gap
     ``t`` of component ``i``, least significant first, ``gap_bits`` of
     them; ``signs[i][t]`` encrypts whether its ``t``-th non-zero coefficient is
-    ``-1`` (``None`` for a binary key). ``automorphism_key`` switches
-    ``X -> X^-1``, and the packing or trace key brings the accumulators back
-    into one sample.
+    ``-1`` (``None`` for a binary key), all under the rotation key, as is
+    ``automorphism_key`` (``X -> X^-1``). ``hw_reducing_key`` switches the
+    input from the output key to the input key, at level ``hw_reducing_lvl``
+    of their scheme; ``packing_key`` repacks into the output key at level
+    ``output_lvl``, or ``trace_repack_key`` and ``output_switch_key`` (``None``
+    when the rotation and output keys are one) do it through the trace.
     """
 
     def __init__(self):
@@ -50,8 +60,12 @@ class SAB_Key:
         self.gaps: list[list[list[MGSW]]] = []
         self.signs: list[list[MGSW]] | None = None
         self.automorphism_key: MLWE_Set | None = None
+        self.hw_reducing_key: MLWE_Set | None = None
+        self.hw_reducing_lvl = 0
+        self.output_lvl = 0
         self.packing_key: MLWE_Set | None = None
         self.trace_repack_key: MLWE_Set | None = None
+        self.output_switch_key: MLWE_Set | None = None
         self._handles = None
 
     def native_handles(self) -> tuple:
@@ -88,19 +102,22 @@ class SAB_Key:
 
 
 class GP25:
-    """The sparse-amortized bootstrap [GP25] into ``scheme``'s level 0.
+    """The sparse-amortized bootstrap [GP25], rotating over ``scheme``.
 
-    An RLWE sample over ``R_n`` under a sparse key becomes ``n`` accumulators
-    over ``R_N`` (``N`` the scheme's dimension), one per coefficient, each
-    holding the test vector rotated by that coefficient's phase; they are then
-    packed back into one sample over ``R_N``, coefficient ``k`` of the input
-    landing at ``k * N / n``. Packing goes through LWE extraction and a
-    packing key switch, or, with ``trace_repack``, through the trace [CDKS21].
+    ``scheme`` is the rotation key's, over ``R_N``. An RLWE sample over
+    ``R_n`` (the input and output keys' scheme, any ``n``) becomes ``n``
+    accumulators at ``scheme``'s level 0, one per coefficient, each holding
+    the test vector rotated by that coefficient's phase; they are then
+    repacked into one sample over ``R_n`` under the output key, coefficient
+    ``k`` at coefficient ``k``. Repacking goes through LWE extraction and a
+    packing key switch, or, with ``trace_repack`` and ``n == N``, through the
+    trace [CDKS21]. Level 0 of ``scheme`` must have the primes of a level of
+    the output key's scheme (by value: the two rings have their own bases),
+    which is where outputs land.
 
     ``gsw_ell`` and ``radix_log_base`` choose the MGSW gadget as in
-    :class:`MGSW_Scheme`; the automorphism and packing keys use the same
-    radix. Everything runs on the library's threads
-    (``vfhe.engine.set_num_threads``).
+    :class:`MGSW_Scheme`; every other key uses the same radix. Everything
+    runs on the library's threads (``vfhe.engine.set_num_threads``).
     """
 
     def __init__(
@@ -188,24 +205,46 @@ class GP25:
     def generate_bootstrap_key(
         self,
         input_key: MLWE_Key,
+        rotation_key: MLWE_Key,
         output_key: MLWE_Key,
         h: int,
         gap_bits: int,
         ternary: bool = True,
+        hw_reducing_lvl: int | None = None,
+        hw_reducing_hybrid: bool = True,
         n_threads: int = 0,
     ) -> SAB_Key:
-        """The bootstrapping key from ``input_key`` to ``output_key``.
+        """The bootstrapping key: inputs under ``output_key`` (at
+        ``hw_reducing_lvl``) to outputs under ``output_key``, through the
+        sparse ``input_key`` and a rotation under ``rotation_key``.
 
-        ``input_key`` must have exactly ``h`` non-zero coefficients per
-        component, in ``{-1, 1}`` (``{1}`` unless ``ternary``), and every gap
-        must fit in ``gap_bits`` bits, with ``2^(gap_bits - 1) <= n``:
-        `sample_input_key` draws such keys, and
-        says why ``gap_bits`` must not come from the key. Errors about the
-        input key do not say which coefficient or gap failed. Every MGSW key is drawn in one batch, on ``n_threads`` (0: the library
-        limit), and so are the automorphism and packing keys.
+        ``input_key`` and ``output_key`` are keys of one scheme, over
+        ``R_n``; ``rotation_key`` is a key of this one. ``input_key`` must
+        have exactly ``h`` non-zero coefficients per component, in
+        ``{-1, 1}`` (``{1}`` unless ``ternary``), and every gap must fit in
+        ``gap_bits`` bits, with ``2^(gap_bits - 1) <= n``: `sample_input_key`
+        draws such keys, and says why ``gap_bits`` must not come from the key.
+        Errors about the input key do not say which coefficient or gap failed.
+
+        The Hamming-weight-reducing key switch, ``output_key -> input_key``,
+        is generated for one level only, ``hw_reducing_lvl`` (default: the
+        last, the lowest modulus), and inputs must arrive there. It encrypts
+        the dense key under the sparse one, so the sparse key only has to be
+        secure at that level's modulus: its special ring's, or with
+        ``hw_reducing_hybrid=False`` the level's own (a BV key switch; pair it
+        with ``radix_log_base``). Never generate it at a higher level.
+
+        Every MGSW key is drawn in one batch, on ``n_threads`` (0: the library
+        limit), and so are the other keys.
         """
-        n = input_key.scheme.N
+        io_scheme = input_key.scheme
+        if output_key.scheme is not io_scheme:
+            raise ValueError("the input and output keys must be keys of one scheme")
+        if rotation_key.scheme is not self.scheme:
+            raise ValueError("the rotation key must be a key of this GP25's scheme")
+        n = io_scheme.N
         self._check_gap_bits(gap_bits, n)
+        output_lvl = self._output_level(io_scheme)
 
         gap_values = self.gaps(input_key)
         signs: list[list[int]] = []
@@ -229,75 +268,127 @@ class GP25:
                 )
             signs.append([int(c == -1) for c in nonzero])
 
+        trace_switch = False
+        if self.trace_repack:
+            if n != self.ring.N:
+                raise ValueError(
+                    "trace repacking needs the input's dimension to be the "
+                    "rotation ring's; repack with the packing key instead"
+                )
+            trace_switch = rotation_key.key != output_key.key
+            if trace_switch and self.scheme.r != io_scheme.r:
+                raise ValueError(
+                    "trace repacking into another key needs the two keys' ranks "
+                    "to be equal; repack with the packing key instead"
+                )
+
         values = [x for gaps in gap_values for g in gaps for x in _bits(g, gap_bits)]
         if ternary:
             values += [x for row in signs for x in row]
         keys = iter(
-            self.mgsw_scheme.encrypt_constants(values, output_key, n_threads=n_threads)
+            self.mgsw_scheme.encrypt_constants(
+                values, rotation_key, n_threads=n_threads
+            )
         )
 
         sab = SAB_Key()
-        sab.n, sab.h, sab.gap_bits = n, h, gap_bits
+        sab.n, sab.h, sab.gap_bits, sab.output_lvl = n, h, gap_bits, output_lvl
         sab.gaps = [
             [[next(keys) for _ in range(gap_bits)] for _ in gaps] for gaps in gap_values
         ]
         sab.signs = [[next(keys) for _ in row] for row in signs] if ternary else None
 
-        two_n = 2 * self.ring.N
         # At one level these return one set.
         sab.automorphism_key = cast(
             "MLWE_Set",
             self.scheme.gen_ksk_automorphism(
-                output_key,
-                output_key,
-                two_n - 1,
+                rotation_key,
+                rotation_key,
+                2 * self.ring.N - 1,
                 lvl=0,
                 radix_log_base=self.radix_log_base,
                 n_threads=n_threads,
             ),
         )
+
+        lvl = len(io_scheme.rings) - 1 if hw_reducing_lvl is None else hw_reducing_lvl
+        if not 0 <= lvl < len(io_scheme.rings):
+            raise ValueError("hw_reducing_lvl is not a level of the keys' scheme")
+        sab.hw_reducing_lvl = lvl
+        sab.hw_reducing_key = cast(
+            "MLWE_Set",
+            io_scheme.gen_ksk(
+                input_key,
+                output_key,
+                lvl,
+                radix_log_base=self.radix_log_base,
+                n_threads=n_threads,
+                hybrid=hw_reducing_hybrid,
+            ),
+        )
+
         if self.trace_repack:
             log_N = self.ring.N.bit_length() - 1
             sab.trace_repack_key = cast(
                 "MLWE_Set",
                 self.scheme.gen_ksk_trace(
-                    output_key,
-                    output_key,
+                    rotation_key,
+                    rotation_key,
                     gens=[(1 << j) + 1 for j in range(1, log_N + 1)],
                     lvl=0,
                     radix_log_base=self.radix_log_base,
                     n_threads=n_threads,
                 ),
             )
+            if trace_switch:
+                sab.output_switch_key = cast(
+                    "MLWE_Set",
+                    io_scheme.gen_ksk(
+                        output_key,
+                        MLWE_Key(rotation_key.key, rotation_key.sigma_err, io_scheme),
+                        output_lvl,
+                        radix_log_base=self.radix_log_base,
+                        n_threads=n_threads,
+                    ),
+                )
         else:
             sab.packing_key = self.gen_packing_ksk(
-                output_key, output_key.extract_lwe_key(), n_threads
+                output_key, rotation_key.extract_lwe_key(), output_lvl, n_threads
             )
         return sab
 
+    def _output_level(self, io_scheme: MLWE_Scheme) -> int:
+        primes = sorted(self.ring.primes)
+        for lvl, ring in enumerate(io_scheme.rings):
+            if sorted(ring.primes) == primes:
+                return lvl
+        raise ValueError(
+            "level 0 of the rotation scheme must have the primes of a level of "
+            "the input and output keys' scheme"
+        )
+
     def gen_packing_ksk(
-        self, key_out: MLWE_Key, lwe_key: LWE_Key, n_threads: int = 0
+        self, key_out: MLWE_Key, lwe_key: LWE_Key, lvl: int = 0, n_threads: int = 0
     ) -> MLWE_Set:
         """The key `packing_keyswitch` takes: for every coefficient ``s_i`` of
         ``lwe_key``, encryptions of ``s_i`` times the gadget under
-        ``key_out``, at level 0.
+        ``key_out``, at level ``lvl`` of its scheme (any dimension).
         """
-        special_ring = self.scheme.special_rings[0]
-        gadget = self.scheme.gadget_scalars(0, self.radix_log_base)
+        scheme = key_out.scheme
+        special_ring = scheme.special_rings[lvl]
+        gadget = scheme.gadget_scalars(lvl, self.radix_log_base)
         key_out_special = MLWE_Key(
-            key_out.key, key_out.sigma_err, self.scheme, ring=special_ring
+            key_out.key, key_out.sigma_err, scheme, ring=special_ring
         )
         # s_i * g is 1 times the scalar s_i * g, so one message serves the key.
         one = Polynomial(special_ring).from_array([1])
         scalars = [[s_i * g_p for g_p in g] for s_i in lwe_key.get_s() for g in gadget]
-        samples = self.scheme.sample_scaled(
-            [one], scalars, key_out_special, 0, n_threads
-        )
+        samples = scheme.sample_scaled([one], scalars, key_out_special, lvl, n_threads)
         width = len(gadget)
         return MLWE_Set(
             [samples[i : i + width] for i in range(0, len(samples), width)],
             radix_log_base=self.radix_log_base,
-            balanced=self.scheme.balanced,
+            balanced=scheme.balanced,
         )
 
     # -- the bootstrap ------------------------------------------------------
@@ -352,8 +443,10 @@ class GP25:
         to ``Z_2N``. Their constant coefficients are what `test_vector`
         describes.
 
-        ``in_modulus`` is the modulus the input's phase is taken mod, by
-        default its ring's.
+        The input is under the output key, at the level of the key's
+        Hamming-weight-reducing switch, and is switched to the input key
+        first. ``in_modulus`` is the modulus the input's phase is taken mod
+        after that switch, by default its ring's.
         """
         n = rlwe_in.ring.N
         rank = rlwe_in.scheme.r
@@ -361,6 +454,14 @@ class GP25:
             raise ValueError(
                 "the bootstrapping key does not match the input's dimension and rank"
             )
+        if key.hw_reducing_key is None:
+            raise ValueError("the key has no Hamming-weight-reducing key switch")
+        if rlwe_in.lvl != key.hw_reducing_lvl:
+            raise ValueError(
+                "the input must be at level "
+                f"{key.hw_reducing_lvl}, where the key reduces its weight"
+            )
+        rlwe_in = rlwe_in.scheme.keyswitch(rlwe_in, key.hw_reducing_key)
         q = rlwe_in.ring.q_l if in_modulus is None else in_modulus
         rlwe_in.to_coeff()
         tv.to_coeff()
@@ -397,21 +498,20 @@ class GP25:
 
     def bootstrap(
         self,
-        out: MLWE,
         rlwe_in: MLWE,
         tv: MLWE,
         key: SAB_Key,
         in_modulus: int | None = None,
-    ) -> None:
-        """Bootstraps every coefficient of ``rlwe_in`` (over ``R_n``) into
-        ``out`` (level 0 over ``R_N``): coefficient ``k * N / n`` of ``out``
-        decrypts to what `test_vector` maps coefficient ``k``'s phase to, the
-        other coefficients to zero.
+    ) -> MLWE:
+        """Bootstraps every coefficient of ``rlwe_in`` (over ``R_n``, under the
+        output key, at the key's ``hw_reducing_lvl``): the result is a sample
+        of the same scheme at the key's ``output_lvl``, under the output key,
+        whose coefficient ``k`` decrypts to what `test_vector` maps
+        coefficient ``k``'s phase to.
         """
+        io_scheme = rlwe_in.scheme
         acc = self.blind_rotate(rlwe_in, tv, key, in_modulus)
-        n, N = len(acc), self.ring.N
-        if n > N:
-            raise ValueError("the input's dimension exceeds the bootstrapping ring's")
+        out = MLWE(io_scheme, lvl=key.output_lvl)
         if self.trace_repack:
             if key.trace_repack_key is None:
                 raise ValueError(
@@ -420,33 +520,17 @@ class GP25:
             packed = self.scheme.full_packing_keyswitch_scaled(
                 acc, key.trace_repack_key
             )
-            log_n = n.bit_length() - 1
-            remaining = key.trace_repack_key._children[log_n:]  # type: ignore[attr-defined]  # noqa: SLF001
-            if remaining:
-                traced = MLWE(self.scheme)
-                log_N = N.bit_length() - 1
-                lib_rlwe.lib.mlwe_partial_trace(
-                    traced.obj,
-                    packed.obj,
-                    ffi.new(
-                        "uint64_t[]",
-                        [(1 << j) + 1 for j in range(log_n + 1, log_N + 1)],
-                    ),
-                    ffi.new("void*[]", [ffi.cast("void *", k.obj) for k in remaining]),
-                    len(remaining),
-                    0,
-                )
-                traced.repr = repr.coeff
-                packed = traced
-        else:
-            if key.packing_key is None:
-                raise ValueError(
-                    "the key has no packing key; generate it without trace_repack"
-                )
-            packed = self.packing_keyswitch(
-                [self.rlwe_extract_lwe(c, 0) for c in acc], key.packing_key, N // n
+            out.copy_from(packed)
+            if key.output_switch_key is not None:
+                out = io_scheme.keyswitch(out, key.output_switch_key)
+            return out
+        if key.packing_key is None:
+            raise ValueError(
+                "the key has no packing key; generate it without trace_repack"
             )
-        out.copy_from(packed)
+        return self.packing_keyswitch(
+            [self.rlwe_extract_lwe(c, 0) for c in acc], key.packing_key, key.output_lvl
+        )
 
     # -- building blocks ----------------------------------------------------
 
@@ -459,11 +543,15 @@ class GP25:
     def _mgsw_arguments(self, mgsw: MGSW) -> tuple:
         return (mgsw.gadget_size, mgsw.scheme.radix_log_base or 0, mgsw.scheme.balanced)
 
-    def rotate(self, acc: list[MLWE], bits: list[MGSW], key: SAB_Key) -> None:
+    def rotate(
+        self, acc: list[MLWE], bits: list[MGSW], automorphism_key: MLWE_Set
+    ) -> None:
         """Rotates the accumulators in place by ``d``, given as the MGSW
         encryptions of its bits, least significant first (``2^(len(bits) - 1)
         <= len(acc)``): ``acc[k]`` takes ``acc[k - d]``, and for ``k < d``
-        ``sigma(acc[k - d + n])``, ``sigma`` the automorphism ``X -> X^-1``.
+        ``sigma(acc[k - d + n])``, ``sigma`` the automorphism ``X -> X^-1``
+        that ``automorphism_key`` switches back (an `SAB_Key`'s, or any
+        level-0 key for ``2N - 1``).
         """
         if not bits:
             return
@@ -480,7 +568,7 @@ class GP25:
             len(acc),
             ffi.new("void*[]", rows),
             len(bits),
-            self._automorphism_key(key).obj,
+            automorphism_key.obj,
             *self._mgsw_arguments(bits[0]),
             0,
         )
@@ -519,18 +607,25 @@ class GP25:
         return LWE(ring=rlwe.ring, obj=lwe_obj, n=rlwe.r * rlwe.ring.N)
 
     def packing_keyswitch(
-        self, extracted: list[LWE], packing_key: MLWE_Set, stride: int = 1
+        self, extracted: list[LWE], packing_key: MLWE_Set, lvl: int = 0
     ) -> MLWE:
-        """One level-0 sample whose coefficient ``k * stride`` decrypts to
-        what ``extracted[k]`` does, the others to zero."""
-        if len(extracted) * stride > self.ring.N:
-            raise ValueError("the samples do not fit the ring at this stride")
-        res = MLWE(self.scheme, lvl=0)
+        """One sample at level ``lvl`` of the packing key's scheme whose
+        coefficient ``k`` decrypts to what ``extracted[k]`` does. The samples
+        may come from a ring of another dimension, but must be over the primes
+        of that level.
+        """
+        first = next(x for x in packing_key.mlwe if x is not None)[0]
+        scheme = first.scheme
+        ring = scheme.rings[lvl]
+        if len(extracted) > ring.N:
+            raise ValueError("more samples than the ring has coefficients")
+        if sorted(extracted[0].ring.primes) != sorted(ring.primes):
+            raise ValueError("the samples are not over the primes of that level")
+        res = MLWE(scheme, lvl=lvl)
         lib_rlwe.lib.mlwe_full_packing_keyswitch(
             res.obj,
             ffi.new("void*[]", [c.obj for c in extracted]),
             len(extracted),
-            stride,
             packing_key.obj,
         )
         res.repr = repr.ntt

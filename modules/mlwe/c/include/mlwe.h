@@ -268,13 +268,13 @@ extern "C"
     void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                             uint64_t size, uint64_t lvl);
     void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl);
-    // Packs `size` LWE samples into one: out decrypts to sum_k m_k X^(k *
-    // stride), m_k what in[k] decrypts to (size * stride <= N). The samples
-    // live over exactly the primes of `out`'s ring, under a key whose
-    // coefficients `ksk` switches from: component i of `ksk` encrypts the
-    // i-th coefficient, against the key's gadget.
-    void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, uint64_t stride,
-                                     RNS_MLWE_KS_Key ksk);
+    // Packs `size` LWE samples into one: out decrypts to sum_k m_k X^k, m_k
+    // what in[k] decrypts to (size <= N). The samples live over the same
+    // primes as `out`'s ring -- by value: they may come from a ring of
+    // another dimension -- under a key whose coefficients `ksk` switches from:
+    // component i of `ksk` encrypts the i-th coefficient, against the key's
+    // gadget.
+    void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key ksk);
     void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
                                             uint64_t lvl);
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);

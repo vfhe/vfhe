@@ -147,7 +147,12 @@ class RNSRing(Ring):
             prime_size = [math.ceil(math.log2(p)) for p in active_primes]
             primes = active_primes
 
-        if primes is not None and prime_size is None:
+        # A pool given on its own fixes the sizes; with mod_size it is drawn
+        # from by size, as without it.
+        if primes is not None and (
+            prime_size is None
+            or (mod_size is None and not isinstance(prime_size, list))
+        ):
             prime_size = [math.ceil(math.log2(i)) for i in primes]
 
         if isinstance(prime_size, list):
