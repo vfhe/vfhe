@@ -40,12 +40,6 @@ extern "C"
         RNS_Base base;
     } *LWE;
 
-    typedef struct _LWE_KS_Key
-    {
-        LWE ***s;
-        uint64_t base_bit, t;
-    } *LWE_KS_Key;
-
     // mlwe rns
     /* MLWE RNS */
 
@@ -180,8 +174,6 @@ extern "C"
     // library limit, see vfhe_threads_for).
     void mlwe_RNS_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const ArithElement *coeff,
                                       uint64_t n_out, uint64_t n_in, uint64_t n_threads);
-    void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
-                                    uint64_t lvl);
     void mlwe_scale_RNSc_mlwe(RNSc_MLWE c, uint64_t scale);
     void mlwe_addto_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in);
     RNS_MLWE *mlwe_alloc_RNS_sample_array(uint64_t size, uint64_t N, uint64_t r, uint64_t mask,
@@ -191,7 +183,6 @@ extern "C"
     void free_mlwe_RNS_sample(void *p);
     void mlwe_scale_RNS_mlwe_addto(RNS_MLWE out, RNS_MLWE in, uint64_t scale);
     void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly);
-    void mlwe_RNSc_extract_lwe(uint64_t *out, RNSc_MLWE in, uint64_t idx);
     void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
     void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
     void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2);
@@ -220,6 +211,8 @@ extern "C"
     void mlwe_copy_array(RNS_MLWE *out, RNS_MLWE *in, uint64_t size);
     RNS_MLWE *mlwe_create_copy_array(RNS_MLWE *in, uint64_t size);
 
+    /* Key switching */
+
     // Wrap per-component gadget key arrays (borrowed, not deep-copied) into a
     // key-switch key, deriving the key's ring from its first real component.
     // `log_base` is the gadget the arrays were generated against (0 for the
@@ -230,6 +223,8 @@ extern "C"
     void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key);
     void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk,
                                         uint64_t lvl);
+    void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
+                                    uint64_t lvl);
     // Hoisted automorphisms: several automorphisms of one sample, decomposing
     // it only once. mlwe_hoist copies `in` and decomposes it for the gadget
     // and ring of `ksk`; each mlwe_automorphism_RNSc_GHS_hoisted then only
@@ -277,6 +272,7 @@ extern "C"
     void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key ksk);
     void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
                                             uint64_t lvl);
+
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);
     // Reduces every component into `to`, a quotient of the sample's ring, in
     // place and in either domain. Unlike mlwe_round_division, the value is not
@@ -393,8 +389,6 @@ extern "C"
     LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t mask, RNS_Base base);
     void lwe_linear_decrypt(uint64_t *out, LWE c, LWE_Key key);
     void lwe_subto(LWE out, LWE in);
-    LWE_KS_Key lwe_new_KS_key(LWE_Key out_key, LWE_Key in_key, uint64_t t, uint64_t base_bit);
-    void lwe_keyswitch(LWE out, LWE in, LWE_KS_Key ks_key);
 
 #ifdef __cplusplus
 }

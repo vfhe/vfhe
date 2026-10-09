@@ -10,7 +10,7 @@
 // its residues, one key-switch key per prime, and the products summed. That
 // makes the whole file RNS-specific by nature -- another representation
 // decomposes against a different gadget, or none. The signatures stay generic
-// so the key switch in mlwe.c can call it without knowing any of that.
+// so the key switch in keyswitch.c can call it without knowing any of that.
 //
 // `balanced` picks the RNS gadget's digit: the centered residue, in
 // (-p_j/2, p_j/2], or the residue as stored, in [0, p_j). Both are the same

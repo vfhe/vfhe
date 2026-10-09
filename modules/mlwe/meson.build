@@ -4,6 +4,8 @@
 module = {
     'sources': files(
         'c/src/gadget_rns.c',
+        'c/src/keyswitch.c',
+        'c/src/keyswitch_rns.c',
         'c/src/lwe.c',
         'c/src/mgsw.c',
         'c/src/mlwe.c',

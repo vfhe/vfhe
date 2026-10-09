@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, cast
 from vfhe.arith import Polynomial, repr
 from vfhe.crypto import entropy
 from vfhe.engine import ffi, lib
-from vfhe.mlwe.lwe import LWE, LWE_Key
 from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, lib_rlwe
 
@@ -352,8 +351,12 @@ class GP25:
                     ),
                 )
         else:
-            sab.packing_key = self.gen_packing_ksk(
-                output_key, rotation_key.extract_lwe_key(), output_lvl, n_threads
+            sab.packing_key = io_scheme.gen_packing_ksk(
+                output_key,
+                rotation_key.extract_lwe_key(),
+                output_lvl,
+                radix_log_base=self.radix_log_base,
+                n_threads=n_threads,
             )
         return sab
 
@@ -365,30 +368,6 @@ class GP25:
         raise ValueError(
             "level 0 of the rotation scheme must have the primes of a level of "
             "the input and output keys' scheme"
-        )
-
-    def gen_packing_ksk(
-        self, key_out: MLWE_Key, lwe_key: LWE_Key, lvl: int = 0, n_threads: int = 0
-    ) -> MLWE_Set:
-        """The key `packing_keyswitch` takes: for every coefficient ``s_i`` of
-        ``lwe_key``, encryptions of ``s_i`` times the gadget under
-        ``key_out``, at level ``lvl`` of its scheme (any dimension).
-        """
-        scheme = key_out.scheme
-        special_ring = scheme.special_rings[lvl]
-        gadget = scheme.gadget_scalars(lvl, self.radix_log_base)
-        key_out_special = MLWE_Key(
-            key_out.key, key_out.sigma_err, scheme, ring=special_ring
-        )
-        # s_i * g is 1 times the scalar s_i * g, so one message serves the key.
-        one = Polynomial(special_ring).from_array([1])
-        scalars = [[s_i * g_p for g_p in g] for s_i in lwe_key.get_s() for g in gadget]
-        samples = scheme.sample_scaled([one], scalars, key_out_special, lvl, n_threads)
-        width = len(gadget)
-        return MLWE_Set(
-            [samples[i : i + width] for i in range(0, len(samples), width)],
-            radix_log_base=self.radix_log_base,
-            balanced=scheme.balanced,
         )
 
     # -- the bootstrap ------------------------------------------------------
@@ -528,8 +507,10 @@ class GP25:
             raise ValueError(
                 "the key has no packing key; generate it without trace_repack"
             )
-        return self.packing_keyswitch(
-            [self.rlwe_extract_lwe(c, 0) for c in acc], key.packing_key, key.output_lvl
+        return io_scheme.packing_keyswitch(
+            [self.scheme.extract_lwe(c, 0) for c in acc],
+            key.packing_key,
+            key.output_lvl,
         )
 
     # -- building blocks ----------------------------------------------------
@@ -600,33 +581,3 @@ class GP25:
             *arguments,
             0,
         )
-
-    def rlwe_extract_lwe(self, rlwe: MLWE, idx: int) -> LWE:
-        rlwe.to_coeff()
-        lwe_obj = lib_rlwe.lib.mlwe_extract_LWE(rlwe.obj, idx)
-        return LWE(ring=rlwe.ring, obj=lwe_obj, n=rlwe.r * rlwe.ring.N)
-
-    def packing_keyswitch(
-        self, extracted: list[LWE], packing_key: MLWE_Set, lvl: int = 0
-    ) -> MLWE:
-        """One sample at level ``lvl`` of the packing key's scheme whose
-        coefficient ``k`` decrypts to what ``extracted[k]`` does. The samples
-        may come from a ring of another dimension, but must be over the primes
-        of that level.
-        """
-        first = next(x for x in packing_key.mlwe if x is not None)[0]
-        scheme = first.scheme
-        ring = scheme.rings[lvl]
-        if len(extracted) > ring.N:
-            raise ValueError("more samples than the ring has coefficients")
-        if sorted(extracted[0].ring.primes) != sorted(ring.primes):
-            raise ValueError("the samples are not over the primes of that level")
-        res = MLWE(scheme, lvl=lvl)
-        lib_rlwe.lib.mlwe_full_packing_keyswitch(
-            res.obj,
-            ffi.new("void*[]", [c.obj for c in extracted]),
-            len(extracted),
-            packing_key.obj,
-        )
-        res.repr = repr.ntt
-        return res

@@ -239,6 +239,14 @@ versions may contain breaking changes.
 
 ### Changed
 
+- Move LWE extraction and the packing key switch from GP25 to `MLWE_Scheme`
+  (breaking): `extract_lwe(c, idx)`, `gen_packing_ksk(key_out, lwe_key, lvl,
+  radix_log_base, n_threads)` and `packing_keyswitch(extracted, packing_key,
+  lvl)`. GP25's `rlwe_extract_lwe`, `gen_packing_ksk` and `packing_keyswitch`
+  are removed. The native key switching moved to its own sources
+  (`keyswitch.c`, `keyswitch_rns.c`), and the unimplemented LWE key switch
+  (`LWE_KS_Key`, `lwe_new_KS_key`, `lwe_keyswitch`) and the undefined
+  `mlwe_RNSc_extract_lwe` are removed from `mlwe.h`.
 - Rework GP25 (breaking). Three keys take part, all required: the output key,
   a dense key over `R_n` that inputs arrive under (at the lowest level of its
   scheme) and outputs leave under, so bootstraps compose; the input key, a

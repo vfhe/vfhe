@@ -20,5 +20,7 @@ on up to `n_threads` threads (0: the library limit). Each sample is drawn from
 seeds of its own, taken in order on the calling thread, so the keys do not
 depend on the thread count.
 
-`c/src/` holds the kernels (`gadget.c`, `lwe.c`, `mgsw.c`, `mlwe.c`); `python/cdef/mlwe.cdef`
-declares their ABI.
+`c/src/` holds the kernels -- samples (`mlwe.c`), key switching
+(`keyswitch.c`), the gadget (`gadget_rns.c`), MGSW (`mgsw.c`) and LWE
+(`lwe.c`), with the parts that reach into RNS residues in the `_rns` files;
+`python/cdef/mlwe.cdef` declares their ABI.

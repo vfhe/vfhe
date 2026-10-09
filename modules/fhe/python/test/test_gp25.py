@@ -233,7 +233,6 @@ def test_lwe_extraction():
     Rp = Rq.quotient_ring(ell=1)
     scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=1)
     key = scheme.key_gen_sparse(64, 3.2, ternary=True)
-    gp25 = GP25(scheme)
     lwe_key = key.extract_lwe_key()
 
     msg_coeffs = [((i + 1) * 123) % Rp.primes[0] for i in range(N)]
@@ -242,7 +241,7 @@ def test_lwe_extraction():
     rlwe_sample = scheme.sample(msg.scaled_lift(Rq, delta=delta), key)
 
     for idx in [0, 1, N // 2, N - 1]:
-        lwe_sample = gp25.rlwe_extract_lwe(rlwe_sample, idx)
+        lwe_sample = scheme.extract_lwe(rlwe_sample, idx)
         decryption = lwe_sample.linear_decrypt(lwe_key, recompose=True)
         res = mod_switch(decryption, Rq.q_l, Rp.primes[0])
         diff = (res - msg_coeffs[idx]) % Rp.primes[0]
@@ -256,7 +255,6 @@ def test_lwe_extraction_over_a_populated_base():
     Rq = scheme.rings[0]
     Rp = Rq.quotient_ring(ell=1)
     key = scheme.key_gen_sparse(64, 3.2, ternary=True)
-    gp25 = GP25(scheme)
     lwe_key = key.extract_lwe_key()
 
     msg_coeffs = [((i + 1) * 123) % Rp.primes[0] for i in range(N)]
@@ -265,23 +263,25 @@ def test_lwe_extraction_over_a_populated_base():
     rlwe_sample = scheme.sample(msg.scaled_lift(Rq, delta=delta), key)
 
     for idx in [0, 1, N // 2, N - 1]:
-        lwe_sample = gp25.rlwe_extract_lwe(rlwe_sample, idx)
+        lwe_sample = scheme.extract_lwe(rlwe_sample, idx)
         decryption = lwe_sample.linear_decrypt(lwe_key, recompose=True)
         res = mod_switch(decryption, Rq.q_l, Rp.primes[0])
         diff = (res - msg_coeffs[idx]) % Rp.primes[0]
         assert min(diff, Rp.primes[0] - diff) < 1000
 
 
-def _check_packing(out_scheme, gp25, output_key, count):
+def _check_packing(out_scheme, output_key, count, radix_log_base=None):
     Rq = out_scheme.rings[0]
     lwe_key = LWE_Key(ring=Rq, sec_sigma=3.2, err_sigma=3.2, n=Rq.N)
-    packing_key = gp25.gen_packing_ksk(output_key, lwe_key)
+    packing_key = out_scheme.gen_packing_ksk(
+        output_key, lwe_key, radix_log_base=radix_log_base
+    )
     extracted = []
     for i in range(count):
         m_i = mod_switch((i * 137), 2000, Rq.q_l)
         extracted.append(LWE(ring=Rq, m=[m_i % q for q in Rq.primes], key=lwe_key))
 
-    out_repacked = gp25.packing_keyswitch(extracted, packing_key)
+    out_repacked = out_scheme.packing_keyswitch(extracted, packing_key)
     out_coeffs = out_scheme.linear_decrypt(out_repacked, output_key).get_polynomial()
     for j in range(Rq.N):
         expected = (j * 137) % 2000 if j < count else 0
@@ -296,10 +296,9 @@ def test_packing_ksk(balanced, keygen_threads):
     Rq = Ring(256, prime_size=[50, 50, 50], split_degree=1)
     out_scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=4, balanced=balanced)
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
-    gp25 = GP25(out_scheme)
     engine.set_num_threads(keygen_threads)
     try:
-        _check_packing(out_scheme, gp25, output_key, 256)
+        _check_packing(out_scheme, output_key, 256)
     finally:
         engine.set_num_threads()
 
@@ -308,14 +307,13 @@ def test_packing_ksk_radix():
     Rq = Ring(256, prime_size=[50, 50], split_degree=1)
     out_scheme = MLWE_Scheme(Rq, special_primes=0, max_lvl=1)
     output_key = out_scheme.key_gen_sparse(64, 3.2)
-    gp25 = GP25(out_scheme, radix_log_base=10)
-    _check_packing(out_scheme, gp25, output_key, 256)
+    _check_packing(out_scheme, output_key, 256, radix_log_base=10)
 
 
 def test_packing_ksk_over_a_populated_base():
     out_scheme = _scheme_over_a_populated_base(256, module_rank=4)
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
-    _check_packing(out_scheme, GP25(out_scheme), output_key, 256)
+    _check_packing(out_scheme, output_key, 256)
 
 
 @pytest.mark.parametrize("n", [16, 128])
@@ -325,13 +323,12 @@ def test_packing_samples_of_another_dimension(n):
     N = 64
     io, rotation = _schemes(n, N, rotation_rank=2)
     _, rotation_key, output_key, _ = _keys(io, rotation)
-    gp25 = GP25(rotation)
     ring = rotation.rings[0]
     assert ring.base != io.rings[0].base
     delta = 1 << 70
     count = min(n, 40)
     extracted = [
-        gp25.rlwe_extract_lwe(
+        rotation.extract_lwe(
             rotation.sample(
                 Polynomial(ring).from_bigint_array([(k + 1) * delta]), rotation_key
             ),
@@ -339,8 +336,8 @@ def test_packing_samples_of_another_dimension(n):
         )
         for k in range(count)
     ]
-    packing_key = gp25.gen_packing_ksk(output_key, rotation_key.extract_lwe_key())
-    out = gp25.packing_keyswitch(extracted, packing_key)
+    packing_key = io.gen_packing_ksk(output_key, rotation_key.extract_lwe_key())
+    out = io.packing_keyswitch(extracted, packing_key)
     d = io.linear_decrypt(out, output_key).get_polynomial(signed=True)
     assert [round(x / delta) for x in d] == [k + 1 for k in range(count)] + [0] * (
         n - count

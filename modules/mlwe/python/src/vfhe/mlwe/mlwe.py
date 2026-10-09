@@ -23,7 +23,7 @@ from vfhe.engine import ffi, lib, local_num_threads
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from .lwe import LWE_Key
+    from .lwe import LWE, LWE_Key
 
 # Bytes of the seed a sample's mask is expanded from (`MLWE.seed`).
 SEED_BYTES = 32
@@ -730,6 +730,72 @@ class MLWE_Scheme:
         # The output is in vec[0]
         vec[0].repr = repr.coeff
         return vec[0]
+
+    def extract_lwe(self, c: MLWE, idx: int) -> LWE:
+        """The LWE sample of coefficient ``idx`` of ``c``, under the key
+        `MLWE_Key.extract_lwe_key` gives."""
+        from .lwe import LWE
+
+        c.to_coeff()
+        obj = lib_rlwe.lib.mlwe_extract_LWE(c.obj, idx)
+        return LWE(ring=c.ring, obj=obj, n=c.r * c.ring.N)
+
+    def gen_packing_ksk(
+        self,
+        key_out: MLWE_Key,
+        lwe_key: LWE_Key,
+        lvl: int = 0,
+        radix_log_base: int | None = None,
+        n_threads: int = 0,
+    ) -> MLWE_Set:
+        """The key `packing_keyswitch` takes: for every coefficient ``s_i`` of
+        ``lwe_key``, encryptions of ``s_i`` times the gadget under
+        ``key_out``, at level ``lvl`` (any dimension). ``radix_log_base`` is
+        as in `gen_ksk`.
+        """
+        if self != key_out.scheme:
+            raise ValueError("Scheme mismatch")
+        special_ring = self.special_rings[lvl]
+        gadget = self.gadget_scalars(lvl, radix_log_base)
+        key_out_special = MLWE_Key(
+            key_out.key, key_out.sigma_err, self, ring=special_ring
+        )
+        # s_i * g is 1 times the scalar s_i * g, so one message serves the key.
+        one = Polynomial(special_ring).from_array([1])
+        scalars = [[s_i * g_p for g_p in g] for s_i in lwe_key.get_s() for g in gadget]
+        samples = self.sample_scaled([one], scalars, key_out_special, lvl, n_threads)
+        width = len(gadget)
+        return MLWE_Set(
+            [samples[i : i + width] for i in range(0, len(samples), width)],
+            radix_log_base=radix_log_base,
+            balanced=self.balanced,
+        )
+
+    def packing_keyswitch(
+        self, extracted: list[LWE], packing_key: MLWE_Set, lvl: int = 0
+    ) -> MLWE:
+        """One sample at level ``lvl`` whose coefficient ``k`` decrypts to what
+        ``extracted[k]`` does, under the key ``packing_key`` was generated for
+        (by `gen_packing_ksk`). The samples may come from a ring of another
+        dimension, but must be over the primes of that level.
+        """
+        first = next(x for x in packing_key.mlwe if x is not None)[0]
+        if first.scheme != self:
+            raise ValueError("the packing key is not a key of this scheme")
+        ring = self.rings[lvl]
+        if len(extracted) > ring.N:
+            raise ValueError("more samples than the ring has coefficients")
+        if sorted(extracted[0].ring.primes) != sorted(ring.primes):
+            raise ValueError("the samples are not over the primes of that level")
+        res = MLWE(self, lvl=lvl)
+        lib_rlwe.lib.mlwe_full_packing_keyswitch(
+            res.obj,
+            ffi.new("void*[]", [c.obj for c in extracted]),
+            len(extracted),
+            packing_key.obj,
+        )
+        res.repr = repr.ntt
+        return res
 
     def sample(
         self,
