@@ -5,7 +5,7 @@ from __future__ import annotations
 from vfhe.arith import Polynomial, RNSPolynomial, domain_of, repr
 from vfhe.engine import ffi, lib
 
-from .mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
+from .mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, native_gadget_params
 
 
 # RNS MGSW scheme (similar to RGSW)
@@ -16,6 +16,7 @@ class MGSW_Scheme:
         ell: int | None = None,
         radix_log_base: int | None = None,
         balanced: bool | None = None,
+        digits: int | None = None,
     ):
         """MGSW over ``MLWE_scheme``, encrypting against one of the two gadgets.
 
@@ -26,12 +27,19 @@ class MGSW_Scheme:
         accumulates by the radix rather than by the primes. See
         :meth:`MLWE_Scheme.gadget_scalars`. ``balanced`` picks the RNS gadget's
         digit as in :class:`MLWE_Scheme`, and defaults to ``MLWE_scheme``'s.
+        ``digits`` is how many digits of each residue the radix gadget keeps
+        (all by default; fewer is the approximate decomposition, for keys of a
+        level over one prime, see :meth:`MLWE_Scheme.gadget_scalars`).
         """
         self.mlwe_scheme = MLWE_scheme
         self.ell = ell if ell else MLWE_scheme.rings[0].ell
         self.ring = MLWE_scheme.special_rings[0]
         self.radix_log_base = radix_log_base
         self.balanced = MLWE_scheme.balanced if balanced is None else balanced
+        self.digits = digits
+        self.native_gadget_params = native_gadget_params(
+            radix_log_base, digits, self.balanced
+        )
 
     def gadget_scalars(self, lvl: int = 0) -> list[list[int]]:
         """The gadget elements, as the per-prime scaling vectors to encrypt.
@@ -41,7 +49,11 @@ class MGSW_Scheme:
         follow ``lvl``, so the first ``ell - lvl`` primes carry it.
         """
         return self.mlwe_scheme.gadget_scalars(
-            lvl, self.radix_log_base, ring=self.ring, primes=self.ell - lvl
+            lvl,
+            self.radix_log_base,
+            ring=self.ring,
+            primes=self.ell - lvl,
+            digits=self.digits,
         )
 
     def gadget_size(self, lvl: int = 0) -> int:
@@ -51,7 +63,8 @@ class MGSW_Scheme:
         primes = self.ring.primes[: self.ell - lvl]
         if not self.radix_log_base:
             return len(primes)
-        return sum(lib.gadget_radix_digits(p, self.radix_log_base) for p in primes)
+        every = [lib.gadget_radix_digits(p, self.radix_log_base) for p in primes]
+        return sum(e if self.digits is None else min(self.digits, e) for e in every)
 
     def encrypt(
         self, msg: RNSPolynomial, key: MLWE_Key, lvl: int = 0, n_threads: int = 0
@@ -253,8 +266,7 @@ class MGSW:
             other.obj,
             self.gadget_size,
             self.scheme.mlwe_scheme.special_primes,
-            self.scheme.radix_log_base or 0,
-            self.scheme.balanced,
+            self.scheme.native_gadget_params,
         )
         res.repr = repr.ntt
 
@@ -295,8 +307,7 @@ class MGSW:
             self.gadget_size,
             ffi.new("void*[]", [c.obj for c in other.obj]),
             len(other.obj),
-            self.scheme.radix_log_base or 0,
-            self.scheme.balanced,
+            self.scheme.native_gadget_params,
             n_threads,
         )
         return MGSW(other.scheme, obj=other.scheme._rows(handles))  # noqa: SLF001
@@ -328,8 +339,7 @@ def CMUX(in1: MLWE, in2: MLWE, selector: MGSW) -> MLWE:
         mgsw_ptr_array,
         selector.gadget_size,
         in1.scheme.special_primes,
-        selector.scheme.radix_log_base or 0,
-        selector.scheme.balanced,
+        selector.scheme.native_gadget_params,
     )
     res.repr = repr.ntt
     return res
@@ -359,8 +369,7 @@ def NCMUX(
         aut_minus1.obj,
         selector.gadget_size,
         in1.scheme.special_primes,
-        selector.scheme.radix_log_base or 0,
-        selector.scheme.balanced,
+        selector.scheme.native_gadget_params,
     )
     res.repr = repr.ntt
     return res

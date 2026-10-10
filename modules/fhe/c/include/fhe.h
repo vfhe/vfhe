@@ -27,8 +27,8 @@ extern "C"
     // encrypting s_i.
     //
     // `bk` lists the keys step after step, each an MGSW key -- (r + 1) * `ell`
-    // samples in the mul domain over the key's ring, with `log_base` the gadget
-    // they were encrypted against and `balanced` the RNS gadget's digit, as in
+    // samples in the mul domain over the key's ring, with `gadget_params`
+    // those they were encrypted with, as in
     // `gadget_mul_addto_polynomial`. `acc` is canonical on entry and on return,
     // over the ring the products rescale to. `a` holds `n` exponents below 2N.
     //
@@ -36,7 +36,7 @@ extern "C"
     // them working on every step; the result does not depend on the thread
     // count. Reads `bk` and `a` only, so several calls may share a key.
     void cggi16_blind_rotate(RNSc_MLWE acc, const uint64_t *a, uint64_t n, RNS_MLWE *const *bk,
-                             uint64_t unfolding, uint64_t ell, uint64_t log_base, bool balanced,
+                             uint64_t unfolding, uint64_t ell, const GadgetParams *gadget_params,
                              uint64_t n_threads);
 
     // `count` independent blind rotations against one key, in parallel over
@@ -45,7 +45,7 @@ extern "C"
     // cggi16_blind_rotate.
     void cggi16_blind_rotate_batch(RNSc_MLWE *acc, const uint64_t *a, uint64_t count, uint64_t n,
                                    RNS_MLWE *const *bk, uint64_t unfolding, uint64_t ell,
-                                   uint64_t log_base, bool balanced, uint64_t n_threads);
+                                   const GadgetParams *gadget_params, uint64_t n_threads);
 
     // The sparse-amortized blind rotation [GP25]: n accumulators acc[0..n-1],
     // samples over one ring R_N, canonical on entry and on return, one per
@@ -55,7 +55,7 @@ extern "C"
     //
     // MGSW keys are passed as in `cggi16_blind_rotate`: each one (r + 1) *
     // `ell` samples in the mul domain over the key's ring, encrypting a bit,
-    // with `log_base` and `balanced` its gadget. Each call runs on up to
+    // with `gadget_params` its gadget's. Each call runs on up to
     // `n_threads` threads (0: the library limit), the result does not depend
     // on the thread count, and the keys are only read.
 
@@ -66,14 +66,14 @@ extern "C"
     //   acc[k] <- acc[k - d]                for k >= d,
     //   acc[k] <- sigma(acc[k - d + n])     for k <  d.
     void gp25_rotate(RNSc_MLWE *acc, uint64_t n, RNS_MLWE *const *bits, uint64_t n_bits,
-                     RNS_MLWE_KS_Key aut, uint64_t ell, uint64_t log_base, bool balanced,
+                     RNS_MLWE_KS_Key aut, uint64_t ell, const GadgetParams *gadget_params,
                      uint64_t n_threads);
 
     // acc[k] <- acc[k] * X^a[k] if `sign` encrypts 0, acc[k] * X^-a[k] if it
     // encrypts 1; with `sign` NULL, acc[k] * X^a[k]. a[k] < 2N.
     void gp25_multiply_by_signed_monomials(RNSc_MLWE *acc, uint64_t n, const uint64_t *a,
-                                           RNS_MLWE *sign, uint64_t ell, uint64_t log_base,
-                                           bool balanced, uint64_t n_threads);
+                                           RNS_MLWE *sign, uint64_t ell,
+                                           const GadgetParams *gadget_params, uint64_t n_threads);
 
     // The whole rotation, for an input key of `rank` components s_i with h
     // non-zero coefficients each, in {-1, 1}. `a` holds the input's masks
@@ -94,7 +94,7 @@ extern "C"
     // binary key, where every sign is +1.
     void gp25_blind_rotate(RNSc_MLWE *acc, uint64_t n, const uint64_t *a, uint64_t rank, uint64_t h,
                            uint64_t gap_bits, RNS_MLWE *const *gap_keys, RNS_MLWE *const *sign_keys,
-                           RNS_MLWE_KS_Key aut, uint64_t ell, uint64_t log_base, bool balanced,
+                           RNS_MLWE_KS_Key aut, uint64_t ell, const GadgetParams *gadget_params,
                            uint64_t n_threads);
 
 #ifdef __cplusplus

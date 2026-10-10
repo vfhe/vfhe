@@ -5,7 +5,7 @@
 
 // The external product, left canonical in `out`.
 static void external_product_canonical(RNSc_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
-                                       uint64_t log_base, bool balanced)
+                                       const GadgetParams *gadget_params)
 {
     const uint64_t r = in->r;
 
@@ -18,9 +18,9 @@ static void external_product_canonical(RNSc_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE 
 
     for (size_t j = 0; j < r; j++)
     {
-        gadget_mul_addto_polynomial(acc, &mgsw[j * ell], &in->a[j], log_base, balanced);
+        gadget_mul_addto_polynomial(acc, &mgsw[j * ell], &in->a[j], gadget_params);
     }
-    gadget_mul_addto_polynomial(acc, &mgsw[r * ell], &in->b, log_base, balanced);
+    gadget_mul_addto_polynomial(acc, &mgsw[r * ell], &in->b, gadget_params);
 
     mlwe_RNS_to_RNSc(acc, acc);
     mlwe_round_division(acc, out->ring);
@@ -29,15 +29,15 @@ static void external_product_canonical(RNSc_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE 
 }
 
 void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
-                           uint64_t special_primes, uint64_t log_base, bool balanced)
+                           uint64_t special_primes, const GadgetParams *gadget_params)
 {
     (void)special_primes;
-    external_product_canonical(out, mgsw, in, ell, log_base, balanced);
+    external_product_canonical(out, mgsw, in, ell, gadget_params);
     mlwe_RNSc_to_RNS(out, out);
 }
 
 void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
-               uint64_t special_primes, uint64_t log_base, bool balanced)
+               uint64_t special_primes, const GadgetParams *gadget_params)
 {
     const uint64_t r = in1->r;
     ArithRing ring = in1->ring;
@@ -45,7 +45,7 @@ void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint6
     RNSc_MLWE diff = mlwe_alloc_sample(ring, r);
     mlwe_sub_RNSc_sample(diff, in2, in1);
 
-    mgsw_external_product(out, mgsw, diff, ell, special_primes, log_base, balanced);
+    mgsw_external_product(out, mgsw, diff, ell, special_primes, gadget_params);
 
     RNS_MLWE in1_NTT = mlwe_alloc_sample(ring, r);
     mlwe_copy_RNS_sample(in1_NTT, in1);
@@ -57,7 +57,7 @@ void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint6
 }
 
 void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE_KS_Key ksk,
-                uint64_t ell, uint64_t special_primes, uint64_t log_base, bool balanced)
+                uint64_t ell, uint64_t special_primes, const GadgetParams *gadget_params)
 {
     const uint64_t r = in1->r;
     ArithRing ring = in1->ring;
@@ -67,7 +67,7 @@ void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_
 
     mlwe_automorphism_RNSc_GHS(tmp, in2, gen, ksk, ell);
 
-    mgsw_CMUX(out, in1, tmp, mgsw, ell, special_primes, log_base, balanced);
+    mgsw_CMUX(out, in1, tmp, mgsw, ell, special_primes, gadget_params);
 
     free_mlwe_RNS_sample(tmp);
 }
@@ -76,7 +76,7 @@ void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_
 // operand canonical. The external product's rescale already leaves it canonical, so neither it
 // nor `in1` passes through the mul domain.
 void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
-                        uint64_t special_primes, uint64_t log_base, bool balanced)
+                        uint64_t special_primes, const GadgetParams *gadget_params)
 {
     const uint64_t r = in1->r;
     ArithRing ring = in1->ring;
@@ -85,7 +85,7 @@ void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mg
     mlwe_sub_RNSc_sample(diff, in2, in1);
 
     (void)special_primes;
-    external_product_canonical(out, mgsw, diff, ell, log_base, balanced);
+    external_product_canonical(out, mgsw, diff, ell, gadget_params);
     mlwe_addto_RNSc_sample(out, in1);
 
     free_mlwe_RNS_sample(diff);
@@ -93,7 +93,7 @@ void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mg
 
 void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                          RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
-                         uint64_t log_base, bool balanced)
+                         const GadgetParams *gadget_params)
 {
     const uint64_t r = in1->r;
     ArithRing ring = in1->ring;
@@ -103,7 +103,7 @@ void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *m
 
     mlwe_automorphism_RNSc_GHS(tmp, in2, gen, ksk, ell);
 
-    mgsw_CMUX_to_coeff(out, in1, tmp, mgsw, ell, special_primes, log_base, balanced);
+    mgsw_CMUX_to_coeff(out, in1, tmp, mgsw, ell, special_primes, gadget_params);
 
     free_mlwe_RNS_sample(tmp);
 }
@@ -131,8 +131,8 @@ typedef struct
     RNS_MLWE *out;
     RNS_MLWE *a;
     RNS_MLWE *b;
-    uint64_t ell, log_base;
-    bool balanced;
+    uint64_t ell;
+    const GadgetParams *gadget_params;
 } InternalProduct;
 
 static void internal_product_row(void *ctx, uint64_t i)
@@ -142,14 +142,14 @@ static void internal_product_row(void *ctx, uint64_t i)
     RNSc_MLWE canonical = mlwe_alloc_sample(row->ring, row->r);
     mlwe_RNS_to_RNSc(canonical, row);
     p->out[i] = mlwe_alloc_sample(row->ring, row->r);
-    mgsw_external_product(p->out[i], p->a, canonical, p->ell, 0, p->log_base, p->balanced);
+    mgsw_external_product(p->out[i], p->a, canonical, p->ell, 0, p->gadget_params);
     free_mlwe_RNS_sample(canonical);
 }
 
 void mgsw_internal_product(RNS_MLWE *out, RNS_MLWE *a, uint64_t ell, RNS_MLWE *b, uint64_t rows,
-                           uint64_t log_base, bool balanced, uint64_t n_threads)
+                           const GadgetParams *gadget_params, uint64_t n_threads)
 {
-    InternalProduct p = {out, a, b, ell, log_base, balanced};
+    InternalProduct p = {out, a, b, ell, gadget_params};
     vfhe_parallel_for(rows, n_threads, internal_product_row, &p);
 }
 

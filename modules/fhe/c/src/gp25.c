@@ -27,13 +27,13 @@ typedef struct
     RNS_MLWE_KS_Key aut;
     const uint64_t *a; // NULL: no monomial
     RNS_MLWE *sign;    // MGSW of the sign bit; NULL: X^a_k whatever the sign
-    uint64_t ell, log_base;
-    bool balanced;
+    uint64_t ell;
+    const GadgetParams *gadget_params;
 } Layer;
 
 // acc <- acc * X^a if the sign is 0, acc * X^-a if it is 1: a CMUX between the two.
 static void signed_monomial(RNSc_MLWE acc, uint64_t a, RNS_MLWE *sign, uint64_t ell,
-                            uint64_t log_base, bool balanced)
+                            const GadgetParams *gadget_params)
 {
     const uint64_t two_n = 2 * acc->ring->N;
     RNSc_MLWE positive = mlwe_alloc_sample(acc->ring, acc->r);
@@ -46,7 +46,7 @@ static void signed_monomial(RNSc_MLWE acc, uint64_t a, RNS_MLWE *sign, uint64_t 
     }
     RNSc_MLWE negative = mlwe_alloc_sample(acc->ring, acc->r);
     mlwe_RNSc_mul_by_xai(negative, acc, (two_n - a % two_n) % two_n);
-    mgsw_CMUX_to_coeff(acc, positive, negative, sign, ell, 0, log_base, balanced);
+    mgsw_CMUX_to_coeff(acc, positive, negative, sign, ell, 0, gadget_params);
     free_mlwe_RNS_sample(positive);
     free_mlwe_RNS_sample(negative);
 }
@@ -60,13 +60,13 @@ static void layer_item(void *ctx, uint64_t k)
         acc = L->out[k];
         if (k < L->power)
             mgsw_NCMUX_to_coeff(acc, L->in[k], L->in[L->n - L->power + k], L->bit, L->aut, L->ell,
-                                0, L->log_base, L->balanced);
+                                0, L->gadget_params);
         else
-            mgsw_CMUX_to_coeff(acc, L->in[k], L->in[k - L->power], L->bit, L->ell, 0, L->log_base,
-                               L->balanced);
+            mgsw_CMUX_to_coeff(acc, L->in[k], L->in[k - L->power], L->bit, L->ell, 0,
+                               L->gadget_params);
     }
     if (L->a != NULL)
-        signed_monomial(acc, L->a[k], L->sign, L->ell, L->log_base, L->balanced);
+        signed_monomial(acc, L->a[k], L->sign, L->ell, L->gadget_params);
 }
 
 // The accumulators as a pair of arrays, `cur` holding the current values.
@@ -114,9 +114,10 @@ static void accumulators_finish(Accumulators *A, uint64_t n_threads)
 // the last bit.
 static void rotate_then_multiply(Accumulators *A, RNS_MLWE *const *bits, uint64_t n_bits,
                                  RNS_MLWE_KS_Key aut, const uint64_t *a, RNS_MLWE *sign,
-                                 uint64_t ell, uint64_t log_base, bool balanced, uint64_t n_threads)
+                                 uint64_t ell, const GadgetParams *gadget_params,
+                                 uint64_t n_threads)
 {
-    Layer L = {A->cur, NULL, A->n, 0, NULL, aut, NULL, sign, ell, log_base, balanced};
+    Layer L = {A->cur, NULL, A->n, 0, NULL, aut, NULL, sign, ell, gadget_params};
     for (uint64_t b = 0; b < n_bits; b++)
     {
         L.in = A->cur;
@@ -138,26 +139,26 @@ static void rotate_then_multiply(Accumulators *A, RNS_MLWE *const *bits, uint64_
 }
 
 void gp25_rotate(RNSc_MLWE *acc, uint64_t n, RNS_MLWE *const *bits, uint64_t n_bits,
-                 RNS_MLWE_KS_Key aut, uint64_t ell, uint64_t log_base, bool balanced,
+                 RNS_MLWE_KS_Key aut, uint64_t ell, const GadgetParams *gadget_params,
                  uint64_t n_threads)
 {
     Accumulators A;
     accumulators_init(&A, acc, n);
-    rotate_then_multiply(&A, bits, n_bits, aut, NULL, NULL, ell, log_base, balanced, n_threads);
+    rotate_then_multiply(&A, bits, n_bits, aut, NULL, NULL, ell, gadget_params, n_threads);
     accumulators_finish(&A, n_threads);
 }
 
 void gp25_multiply_by_signed_monomials(RNSc_MLWE *acc, uint64_t n, const uint64_t *a,
-                                       RNS_MLWE *sign, uint64_t ell, uint64_t log_base,
-                                       bool balanced, uint64_t n_threads)
+                                       RNS_MLWE *sign, uint64_t ell,
+                                       const GadgetParams *gadget_params, uint64_t n_threads)
 {
-    Layer L = {acc, NULL, n, 0, NULL, NULL, a, sign, ell, log_base, balanced};
+    Layer L = {acc, NULL, n, 0, NULL, NULL, a, sign, ell, gadget_params};
     vfhe_parallel_for(n, n_threads, layer_item, &L);
 }
 
 void gp25_blind_rotate(RNSc_MLWE *acc, uint64_t n, const uint64_t *a, uint64_t rank, uint64_t h,
                        uint64_t gap_bits, RNS_MLWE *const *gap_keys, RNS_MLWE *const *sign_keys,
-                       RNS_MLWE_KS_Key aut, uint64_t ell, uint64_t log_base, bool balanced,
+                       RNS_MLWE_KS_Key aut, uint64_t ell, const GadgetParams *gadget_params,
                        uint64_t n_threads)
 {
     const uint64_t two_n = 2 * acc[0]->ring->N;
@@ -174,7 +175,7 @@ void gp25_blind_rotate(RNSc_MLWE *acc, uint64_t n, const uint64_t *a, uint64_t r
         {
             rotate_then_multiply(&A, gap_keys, gap_bits, aut, t < h ? exponent : NULL,
                                  t < h && sign_keys != NULL ? sign_keys[i * h + t] : NULL, ell,
-                                 log_base, balanced, n_threads);
+                                 gadget_params, n_threads);
             gap_keys += gap_bits;
         }
     }

@@ -160,6 +160,18 @@ def test_key_switch_key_without_the_special_primes(ghs):
     assert same(scheme.keyswitch(c, ksk), scheme.keyswitch(c, back))
 
 
+def test_key_switch_key_with_fewer_digits(ghs):
+    _Rp, scheme, key = ghs
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    last = len(scheme.rings) - 1
+    ksk = scheme.gen_ksk(key2, key, lvl=last, radix_log_base=4, digits=8)
+    back = Serializer().loads(Serializer().dumps(ksk), schemes=scheme)
+    assert back.digits == 8
+    ring = scheme.rings[last]
+    c = scheme.sample(ring.random_element(), key.at_ring(ring), lvl=last)
+    assert same(scheme.keyswitch(c, ksk), scheme.keyswitch(c, back))
+
+
 def test_relinearization_key_keeps_its_pass_through_slots(ghs):
     Rp, scheme, key = ghs
     s_0 = key.poly[0]
@@ -198,6 +210,17 @@ def test_mgsw(ghs):
     m = Rp.random_element()
     c = enc(scheme, Rp, m, key)
     assert same(ct_id.external_product(c), back.external_product(c))
+
+
+def test_mgsw_scheme_with_fewer_digits():
+    scheme = MLWE_Scheme(Ring(N, prime_size=[50, 50], split_degree=1), special_primes=1)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    mgsw_scheme = MGSW_Scheme(scheme, radix_log_base=10, digits=3)
+    (one,) = mgsw_scheme.encrypt_constants([1], key)
+    back = Serializer().loads(Serializer().dumps(one), schemes=[scheme])
+    assert back.scheme.digits == 3
+    c = scheme.sample(scheme.rings[0].random_element(), key)
+    assert same(one.external_product(c), back.external_product(c))
 
 
 def test_secret_keys_only_through_dump_secret(ghs):

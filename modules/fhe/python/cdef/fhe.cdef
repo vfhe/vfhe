@@ -6,8 +6,8 @@
 // Handles/handle-matrices are passed as `void *` (cffi converts any pointer or
 // array cdata).
 
-void gp25_rotate(void *acc, uint64_t n, void *bits, uint64_t n_bits, void *aut, uint64_t ell, uint64_t log_base, bool balanced, uint64_t n_threads);
-void gp25_multiply_by_signed_monomials(void *acc, uint64_t n, uint64_t *a, void *sign, uint64_t ell, uint64_t log_base, bool balanced, uint64_t n_threads);
-void gp25_blind_rotate(void *acc, uint64_t n, uint64_t *a, uint64_t rank, uint64_t h, uint64_t gap_bits, void *gap_keys, void *sign_keys, void *aut, uint64_t ell, uint64_t log_base, bool balanced, uint64_t n_threads);
-void cggi16_blind_rotate(void *acc, uint64_t *a, uint64_t n, void *bk, uint64_t unfolding, uint64_t ell, uint64_t log_base, bool balanced, uint64_t n_threads);
-void cggi16_blind_rotate_batch(void *acc, uint64_t *a, uint64_t count, uint64_t n, void *bk, uint64_t unfolding, uint64_t ell, uint64_t log_base, bool balanced, uint64_t n_threads);
+void gp25_rotate(void *acc, uint64_t n, void *bits, uint64_t n_bits, void *aut, uint64_t ell, const void *gadget_params, uint64_t n_threads);
+void gp25_multiply_by_signed_monomials(void *acc, uint64_t n, uint64_t *a, void *sign, uint64_t ell, const void *gadget_params, uint64_t n_threads);
+void gp25_blind_rotate(void *acc, uint64_t n, uint64_t *a, uint64_t rank, uint64_t h, uint64_t gap_bits, void *gap_keys, void *sign_keys, void *aut, uint64_t ell, const void *gadget_params, uint64_t n_threads);
+void cggi16_blind_rotate(void *acc, uint64_t *a, uint64_t n, void *bk, uint64_t unfolding, uint64_t ell, const void *gadget_params, uint64_t n_threads);
+void cggi16_blind_rotate_batch(void *acc, uint64_t *a, uint64_t count, uint64_t n, void *bk, uint64_t unfolding, uint64_t ell, const void *gadget_params, uint64_t n_threads);

@@ -1203,6 +1203,31 @@ def test_mgsw_internal_product_refuses_rows_it_cannot_consume():
         b.internal_product(b)
 
 
+@pytest.mark.parametrize("module_rank", [1, 2])
+def test_mlwe_from_components(ghs, module_rank):
+    # Rebuilt from temporaries in either domain, a sample decrypts as the
+    # original; its components come back as they went in.
+    _Rq, Rp, scheme = ghs
+    scheme = MLWE_Scheme(scheme.rings[0], special_primes=0, module_rank=module_rank)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    m = Rp.random_element()
+    c = enc(scheme, Rp, m, key)
+    c.to_coeff()
+    a = [c.get_a_poly(j) for j in range(module_rank)]
+    a[0].to_NTT()
+    rebuilt = MLWE.from_components(scheme, a, c.get_b_poly())
+    assert rebuilt.lvl == 0 and rebuilt.r == module_rank
+    assert scheme.linear_decrypt(rebuilt, key).round_division(Rp) == m
+    rebuilt.to_coeff()
+    for j in range(module_rank):
+        assert (
+            rebuilt.get_a_poly(j).get_coeff_matrix()
+            == c.get_a_poly(j).get_coeff_matrix()
+        )
+    with pytest.raises(ValueError, match="body's ring"):
+        MLWE.from_components(scheme, [Polynomial(Rp).from_array([1])], c.get_b_poly())
+
+
 def test_keyswitch_radix_single_component():
     # One prime left in the ciphertext ring: each residue is the value itself,
     # so the gadget degenerates to the plain powers of 2^w. The level has no
@@ -1284,6 +1309,139 @@ def test_keyswitch_without_the_special_primes_at_one_prime(ghs):
         scheme.linear_decrypt(c, key)
     )
     assert max(abs(x) for x in diff.get_polynomial(signed=True)) < 2**20
+
+
+# --- the approximate gadget decomposition (fewer digits) ---------------------
+#
+# Over one prime the radix gadget may keep only its top digits: the residue
+# is rounded to a multiple of 2^(w d), d the digits left out, which adds at
+# most 2^(w d - 1) per coefficient times the key switched from (N/8
+# coefficients in {-1, 0, 1}).
+
+
+def _every_digit(prime, w):
+    return -(-prime.bit_length() // w)
+
+
+def _one_prime_switch_error(scheme, key, key2, lvl, switch):
+    ring = scheme.rings[lvl]
+    c = scheme.sample(ring.random_element(), key.at_ring(ring), lvl=lvl)
+    diff = scheme.linear_decrypt(switch(c), key2) - scheme.linear_decrypt(c, key)
+    return max(abs(x) for x in diff.get_polynomial(signed=True))
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_keyswitch_with_fewer_digits(ghs, hybrid):
+    _Rq, _Rp, scheme = ghs
+    lvl = len(scheme.rings) - 1
+    assert scheme.rings[lvl].ell == 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    w = 4
+    every = _every_digit(scheme.rings[lvl].primes[0], w)
+    key_ring = (scheme.special_rings if hybrid else scheme.rings)[lvl]
+    errors = []
+    for dropped in (0, 3, 6):
+        digits = every - dropped
+        ksk = scheme.gen_ksk(
+            key2, key, lvl=lvl, radix_log_base=w, hybrid=hybrid, digits=digits
+        )
+        assert ksk.digits == digits
+        # Every prime of the key's ring keeps that many, at most what it has.
+        assert len(ksk.mlwe[0]) == sum(
+            min(digits, _every_digit(p, w)) for p in key_ring.primes
+        )
+        errors.append(
+            _one_prime_switch_error(
+                scheme, key, key2, lvl, lambda c, k=ksk: scheme.keyswitch(c, k)
+            )
+        )
+        rounding = (N // 8) * (1 << (w * dropped - 1)) if dropped else 0
+        assert errors[-1] < rounding + 2**20
+    # The error is the dropped part's: it grows with it.
+    assert errors[2] > 1 << (w * 6 - 2)
+
+
+def test_fewer_digits_are_rounded(ghs):
+    # Switching away from the key 1, the error is the dropped part itself,
+    # coefficient by coefficient: at most half a step when rounded, where
+    # truncating would reach a whole one.
+    _Rq, _Rp, scheme = ghs
+    lvl = len(scheme.rings) - 1
+    one = MLWE_Key([[1] + [0] * (N - 1)], 3.2, scheme)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    w, dropped = 4, 6
+    digits = _every_digit(scheme.rings[lvl].primes[0], w) - dropped
+    ksk = scheme.gen_ksk(
+        key2, one, lvl=lvl, radix_log_base=w, hybrid=False, digits=digits
+    )
+    error = _one_prime_switch_error(
+        scheme, one, key2, lvl, lambda c: scheme.keyswitch(c, ksk)
+    )
+    assert error < (1 << (w * dropped - 1)) + 2**14
+    assert error > 1 << (w * dropped - 2)
+
+
+def test_automorphism_with_fewer_digits(ghs):
+    _Rq, _Rp, scheme = ghs
+    lvl = len(scheme.rings) - 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    g = 5
+    digits = _every_digit(scheme.rings[lvl].primes[0], 4) - 3
+    ksk = scheme.gen_ksk_automorphism(
+        key, key, g, lvl=lvl, radix_log_base=4, digits=digits
+    )
+    ring = scheme.rings[lvl]
+    c = scheme.sample(ring.random_element(), key.at_ring(ring), lvl=lvl)
+    out = scheme.automorphism(c, g, ksk)
+    diff = scheme.linear_decrypt(out, key) - scheme.linear_decrypt(c, key).automorphism(
+        g
+    )
+    assert (
+        max(abs(x) for x in diff.get_polynomial(signed=True)) < (N // 8) * 2**11 + 2**20
+    )
+
+
+def test_mgsw_with_fewer_digits():
+    # A scheme whose level 0 is one prime: 5 radix-2^10 digits, 3 kept.
+    scheme = MLWE_Scheme(Ring(N, prime_size=[50, 50], split_degree=1), special_primes=1)
+    assert scheme.rings[0].ell == 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    mgsw = MGSW_Scheme(scheme, radix_log_base=10, digits=3)
+    assert mgsw.gadget_size(0) == 3
+    three = Polynomial(scheme.rings[0]).from_array([0, 0, 0, 1])
+    (one,) = mgsw.encrypt_constants([1], key)
+    x3 = mgsw.encrypt(three, key)
+    assert x3.gadget_size == 3
+    ring = scheme.rings[0]
+    c = scheme.sample(ring.random_element(), key)
+    phase = scheme.linear_decrypt(c, key)
+    bound = (N // 8) * 2**19 * 4 + 2**20
+    for selector, expected in ((one, phase), (x3, phase * three)):
+        diff = scheme.linear_decrypt(selector.external_product(c), key) - expected
+        assert max(abs(x) for x in diff.get_polynomial(signed=True)) < bound
+
+
+def test_digits_are_checked(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    last = len(scheme.rings) - 1
+    with pytest.raises(ValueError, match="one prime"):
+        scheme.gen_ksk(key, key, lvl=0, radix_log_base=4, digits=1)
+    with pytest.raises(ValueError, match="radix gadget"):
+        scheme.gen_ksk(key, key, lvl=last, digits=1)
+    with pytest.raises(ValueError, match="at least one"):
+        scheme.gen_ksk(key, key, lvl=last, radix_log_base=25, digits=0)
+    # As many digits as every prime has is the exact decomposition, at any
+    # level.
+    exact = scheme.gen_ksk(key, key, lvl=0, radix_log_base=10)
+    every = scheme.gen_ksk(key, key, lvl=0, radix_log_base=10, digits=6)
+    assert len(every.mlwe[0]) == len(exact.mlwe[0])
+    m = Rp.random_element()
+    c = enc(scheme, Rp, m, key)
+    assert (
+        scheme.linear_decrypt(scheme.keyswitch(c, every), key).round_division(Rp) == m
+    )
 
 
 def test_round_division_moves_the_native_ring(ghs):

@@ -32,7 +32,7 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
     {
         if (ksk->s[i] != NULL)
         {
-            gadget_mul_subto_polynomial(acc, ksk->s[i], &in->a[i], ksk->log_base, ksk->balanced);
+            gadget_mul_subto_polynomial(acc, ksk->s[i], &in->a[i], &ksk->gadget_params);
         }
     }
     // convert to RNSc and rescale to in's ring
@@ -80,7 +80,7 @@ struct _MLWE_Hoisted
     // One per component; empty for a component the key passes through.
     GadgetDigits *digits;
     ArithRing key_ring;
-    uint64_t log_base;
+    GadgetParams gadget_params;
 };
 
 MLWE_Hoisted mlwe_hoist(RNSc_MLWE in, RNS_MLWE_KS_Key ksk)
@@ -90,14 +90,14 @@ MLWE_Hoisted mlwe_hoist(RNSc_MLWE in, RNS_MLWE_KS_Key ksk)
     h->in = mlwe_alloc_sample(in->ring, in->r);
     mlwe_copy_RNSc_sample(h->in, in);
     h->key_ring = ksk->ring;
-    h->log_base = ksk->log_base;
+    h->gadget_params = ksk->gadget_params;
     h->digits = (GadgetDigits *)safe_malloc(in->r * sizeof(GadgetDigits));
     for (size_t i = 0; i < in->r; i++)
     {
         if (ksk->s[i] == NULL)
             h->digits[i] = (GadgetDigits){NULL, 0};
         else
-            gadget_decompose(&h->digits[i], ksk->s[i], &in->a[i], ksk->log_base, ksk->balanced);
+            gadget_decompose(&h->digits[i], ksk->s[i], &in->a[i], &ksk->gadget_params);
     }
     return h;
 }
@@ -113,7 +113,8 @@ void free_mlwe_hoisted(MLWE_Hoisted h)
 
 static int mlwe_hoisted_fits(MLWE_Hoisted h, RNS_MLWE_KS_Key ksk)
 {
-    if (ksk->ring != h->key_ring || ksk->log_base != h->log_base || ksk->count != h->in->r)
+    if (ksk->ring != h->key_ring || ksk->gadget_params.log_base != h->gadget_params.log_base ||
+        ksk->gadget_params.digits != h->gadget_params.digits || ksk->count != h->in->r)
         return 0;
     for (size_t i = 0; i < h->in->r; i++)
     {
@@ -276,8 +277,7 @@ static void automorphism_sum_job(void *ctx, uint64_t k)
         for (size_t j = 0; j < r; j++)
         {
             if (ksk->s[j] != NULL)
-                gadget_mul_subto_polynomial(acc, ksk->s[j], &permuted->a[j], ksk->log_base,
-                                            ksk->balanced);
+                gadget_mul_subto_polynomial(acc, ksk->s[j], &permuted->a[j], &ksk->gadget_params);
             else
             {
                 arith_add(sum->ring, &kept->a[keep_idx], &kept->a[keep_idx], &permuted->a[j]);

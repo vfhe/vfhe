@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
+// Row width and accessors, for the rounding before dropped digits.
+#include "arith_internal.h"
 #include "rns_rows.h"
 #include "util.h"
 
@@ -35,7 +37,11 @@
 // gadget that carries the idempotent, so nothing here ever reconstructs x.
 // The cost of that is exactness: unlike a radix decomposition of x itself,
 // this one cannot drop its low digits for a controlled error, because the
-// error would be multiplied by an idempotent, which is not small mod Q.
+// error would be multiplied by an idempotent, which is not small mod Q --
+// except over a single prime, where the idempotent is 1. There the gadget may
+// keep only its top `digits`: the residue is first rounded to the nearest
+// multiple of 2^(log_base * dropped), dropped the digits left out, by adding
+// half of that mod p, and the digits kept are those of the sum.
 
 uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base)
 {
@@ -44,23 +50,71 @@ uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base)
     return (bits + log_base - 1) / log_base;
 }
 
-// Digit `d` of residue `j` of `source`, lifted to `tmp`'s ring: the whole
-// residue for the RNS gadget, centered if `balanced`, one base-2^log_base digit
-// of it for the radix one.
-static void gadget_digit(RNSc_Polynomial tmp, RNSc_Polynomial source, size_t j, uint64_t log_base,
-                         uint64_t d, bool balanced)
+// How many of prime `j`'s lowest radix digits the parameters leave out.
+static uint64_t dropped_of(RNS_Base base, size_t j, const GadgetParams *gadget_params)
 {
-    if (log_base)
-        polynomial_RNSc_decompose_digit(tmp, source, j, log_base, d);
-    else if (balanced)
+    if (!gadget_params->log_base || !gadget_params->digits)
+        return 0;
+    const uint64_t all = gadget_radix_digits(base->mods[j]->q, gadget_params->log_base);
+    return gadget_params->digits < all ? all - gadget_params->digits : 0;
+}
+
+// Kept digit `d` of residue `j` of `source`, lifted to `tmp`'s ring: the
+// whole residue for the RNS gadget, centered if `balanced`, one
+// base-2^log_base digit of it for the radix one, counted from the first kept.
+static void gadget_digit(RNSc_Polynomial tmp, RNSc_Polynomial source, size_t j,
+                         const GadgetParams *gadget_params, uint64_t d)
+{
+    if (gadget_params->log_base)
+        polynomial_RNSc_decompose_digit(tmp, source, j, gadget_params->log_base,
+                                        d + dropped_of(source->base, j, gadget_params));
+    else if (gadget_params->balanced)
         polynomial_RNSc_mod_reduce_lifted_centered(tmp, source, j);
     else
         polynomial_RNSc_mod_reduce_lifted(tmp, source, j);
 }
 
-static uint64_t gadget_digits_of(RNS_Base base, size_t j, uint64_t log_base)
+static uint64_t gadget_digits_of(RNS_Base base, size_t j, const GadgetParams *gadget_params)
 {
-    return log_base ? gadget_radix_digits(base->mods[j]->q, log_base) : 1;
+    if (!gadget_params->log_base)
+        return 1;
+    return gadget_radix_digits(base->mods[j]->q, gadget_params->log_base) -
+           dropped_of(base, j, gadget_params);
+}
+
+// What the digits are taken of: `source` itself, or when digits are left out
+// a copy of its one residue rounded as above (the caller frees it).
+static RNS_Polynomial rounded_source(RNS_Polynomial source, const GadgetParams *gadget_params)
+{
+    RNS_Base base = source->base;
+    uint64_t dropped = 0;
+    int j = -1;
+    for (size_t i = 0; i < base->l; i++)
+        if ((source->rns_mask & (1ULL << i)) && dropped_of(base, i, gadget_params))
+        {
+            dropped = dropped_of(base, i, gadget_params);
+            j = (int)i;
+        }
+    if (dropped == 0)
+        return source;
+    assert(__builtin_popcountll(source->rns_mask) == 1);
+    const uint64_t q = base->mods[j]->q, N = base->N;
+    const uint64_t half = 1ULL << (gadget_params->log_base * dropped - 1);
+    assert(half < q);
+    RNS_Polynomial out = polynomial_new_RNS_polynomial(N, source->rns_mask, base);
+    if (rns_row_is_narrow(base, (size_t)j))
+        for (uint64_t i = 0; i < N; i++)
+        {
+            const uint64_t v = source->rows32[j][i] + half;
+            out->rows32[j][i] = (uint32_t)(v >= q ? v - q : v);
+        }
+    else
+        for (uint64_t i = 0; i < N; i++)
+        {
+            const uint64_t v = source->rows64[j][i] + half;
+            out->rows64[j][i] = v >= q ? v - q : v;
+        }
+    return out;
 }
 
 typedef struct
@@ -68,8 +122,7 @@ typedef struct
     RNS_MLWE out;
     RNS_MLWE *ksk;
     RNS_Polynomial source, key;
-    uint64_t log_base;
-    bool balanced;
+    const GadgetParams *gadget_params;
     int subtract;
 } KeyProduct;
 
@@ -94,10 +147,10 @@ static void key_product_row(void *ctx, uint64_t row, uint64_t part)
     {
         if (!(p->source->rns_mask & (1ULL << j)))
             continue;
-        const uint64_t digits = gadget_digits_of(base, j, p->log_base);
+        const uint64_t digits = gadget_digits_of(base, j, p->gadget_params);
         for (uint64_t d = 0; d < digits; d++, ksk_idx++)
         {
-            gadget_digit(tmp, (RNSc_Polynomial)p->source, j, p->log_base, d, p->balanced);
+            gadget_digit(tmp, (RNSc_Polynomial)p->source, j, p->gadget_params, d);
             polynomial_RNSc_to_RNS((RNS_Polynomial)tmp, tmp);
             for (uint64_t k = 0; k < parts; k++)
             {
@@ -116,7 +169,7 @@ static void key_product_row(void *ctx, uint64_t row, uint64_t part)
 }
 
 static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
-                                  int subtract, uint64_t log_base, bool balanced)
+                                  int subtract, const GadgetParams *gadget_params)
 {
     // This file knows the representation, so it calls the RNS entry points
     // rather than routing through the dispatcher: nothing here would gain from
@@ -127,8 +180,11 @@ static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElemen
     RNS_Polynomial key = arith_rns_polynomial(&ksk[0]->b);
     if (source->rns_mask == 0)
         return;
-    KeyProduct p = {out, ksk, source, key, log_base, balanced, subtract};
+    RNS_Polynomial rounded = rounded_source(source, gadget_params);
+    KeyProduct p = {out, ksk, rounded, key, gadget_params, subtract};
     rns_rows_for(key->base->N, key->rns_mask, 1, key_product_row, &p);
+    if (rounded != source)
+        free_RNS_polynomial(rounded);
 
     // Each row's last product set that row's mask in its view; the mask of
     // the whole element is what that product gives on every row.
@@ -136,22 +192,22 @@ static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElemen
     for (size_t j = 0; j < key->base->l; j++)
     {
         if (source->rns_mask & (1ULL << j))
-            last += gadget_digits_of(key->base, j, log_base);
+            last += gadget_digits_of(key->base, j, gadget_params);
     }
     for (uint64_t k = 0; k <= out->r; k++)
         sample_part(out, k)->rns_mask = sample_part(ksk[last - 1], k)->rns_mask & key->rns_mask;
 }
 
 void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
-                                 uint64_t log_base, bool balanced)
+                                 const GadgetParams *gadget_params)
 {
-    gadget_mul_accumulate(out, ksk, poly, 0, log_base, balanced);
+    gadget_mul_accumulate(out, ksk, poly, 0, gadget_params);
 }
 
 void gadget_mul_subto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
-                                 uint64_t log_base, bool balanced)
+                                 const GadgetParams *gadget_params)
 {
-    gadget_mul_accumulate(out, ksk, poly, 1, log_base, balanced);
+    gadget_mul_accumulate(out, ksk, poly, 1, gadget_params);
 }
 
 // Digits stay in the mul domain on a fully split ring, where an automorphism
@@ -162,8 +218,7 @@ typedef struct
     GadgetDigits *out;
     RNS_Polynomial source;
     RNS_Base base;
-    uint64_t log_base;
-    bool balanced;
+    const GadgetParams *gadget_params;
     int mul_domain;
 } Decomposition;
 
@@ -177,20 +232,20 @@ static void decompose_row(void *ctx, uint64_t row, uint64_t part)
     {
         if (!(dec->source->rns_mask & (1ULL << j)))
             continue;
-        const uint64_t digits = gadget_digits_of(dec->base, j, dec->log_base);
+        const uint64_t digits = gadget_digits_of(dec->base, j, dec->gadget_params);
         for (uint64_t d = 0; d < digits; d++, i++)
         {
             RNSc_Polynomial digit = (RNSc_Polynomial)polynomial_RNS_view(
                 &storage, (RNS_Polynomial)dec->out->digit[i].handle, 1ULL << row);
-            gadget_digit(digit, (RNSc_Polynomial)dec->source, j, dec->log_base, d, dec->balanced);
+            gadget_digit(digit, (RNSc_Polynomial)dec->source, j, dec->gadget_params, d);
             if (dec->mul_domain)
                 polynomial_RNSc_to_RNS((RNS_Polynomial)digit, digit);
         }
     }
 }
 
-void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly, uint64_t log_base,
-                      bool balanced)
+void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly,
+                      const GadgetParams *gadget_params)
 {
     RNS_Polynomial source = arith_rns_polynomial(poly);
     RNS_Polynomial key = arith_rns_polynomial(&ksk[0]->b);
@@ -202,7 +257,7 @@ void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly
     for (size_t j = 0; j < base->l; j++)
     {
         if (mask & (1ULL << j))
-            n += gadget_digits_of(base, j, log_base);
+            n += gadget_digits_of(base, j, gadget_params);
     }
     out->n = n;
     out->digit = (ArithElement *)safe_malloc(n * sizeof(ArithElement));
@@ -213,12 +268,15 @@ void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly
     }
     // Each digit row is the residue lifted to that prime alone, so the rows
     // are independent tasks.
-    Decomposition dec = {out, source, base, log_base, balanced, mul_domain};
+    RNS_Polynomial rounded = rounded_source(source, gadget_params);
+    Decomposition dec = {out, rounded, base, gadget_params, mul_domain};
     rns_rows_for(base->N, key->rns_mask, 1, decompose_row, &dec);
+    if (rounded != source)
+        free_RNS_polynomial(rounded);
 }
 
 void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement *poly, uint64_t i,
-                            uint64_t log_base, bool balanced)
+                            const GadgetParams *gadget_params)
 {
     RNS_Polynomial source = arith_rns_polynomial(poly);
     RNS_Base base = arith_rns_polynomial(&ksk[0]->b)->base;
@@ -228,10 +286,13 @@ void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement
     {
         if (!(source->rns_mask & (1ULL << j)))
             continue;
-        const uint64_t digits = gadget_digits_of(base, j, log_base);
+        const uint64_t digits = gadget_digits_of(base, j, gadget_params);
         if (i < digits)
         {
-            gadget_digit(digit, (RNSc_Polynomial)source, j, log_base, i, balanced);
+            RNS_Polynomial rounded = rounded_source(source, gadget_params);
+            gadget_digit(digit, (RNSc_Polynomial)rounded, j, gadget_params, i);
+            if (rounded != source)
+                free_RNS_polynomial(rounded);
             if (mul_domain)
                 polynomial_RNSc_to_RNS((RNS_Polynomial)digit, digit);
             out->domain = mul_domain ? ARITH_DOMAIN_MUL : ARITH_DOMAIN_CANONICAL;

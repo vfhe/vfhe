@@ -147,8 +147,7 @@ class CGGI16:
             bk.native_handles(),
             bk.unfolding,
             first.gadget_size,
-            first.scheme.radix_log_base or 0,
-            first.scheme.balanced,
+            first.scheme.native_gadget_params,
         )
 
     def functional_bootstrap_wo_extract(

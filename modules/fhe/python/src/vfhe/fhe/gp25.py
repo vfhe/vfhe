@@ -13,6 +13,12 @@ it, so bootstraps compose. The **input key** is a sparse key of the same
 scheme, which the input is switched to first (the Hamming-weight-reducing key
 switch). The **rotation key** is the key over ``R_N`` the blind rotation runs
 under.
+
+The output key is optional. Without it nothing is switched: inputs come
+under the input key and the repacked result stays over ``R_N`` under the
+rotation key, for a caller that moves between keys and rings itself -- at a
+modulus of its choosing, since every switch key puts the key it switches to
+at the modulus it is generated for.
 """
 
 from __future__ import annotations
@@ -61,8 +67,8 @@ class SAB_Key:
         self.signs: list[list[MGSW]] | None = None
         self.automorphism_key: MLWE_Set | None = None
         self.hw_reducing_key: MLWE_Set | None = None
-        self.hw_reducing_lvl = 0
-        self.output_lvl = 0
+        self.hw_reducing_lvl: int | None = None
+        self.output_lvl: int | None = None
         self.packing_key: MLWE_Set | None = None
         self.trace_repack_key: MLWE_Set | None = None
         self.output_switch_key: MLWE_Set | None = None
@@ -123,9 +129,18 @@ class GP25:
     have the primes of a level of the output key's scheme (by value: the two
     rings have their own bases), which is where outputs land.
 
+    Without an output key (see the module), `bootstrap` is not available:
+    `repack` of `blind_rotate` gives the trace-packed samples over ``R_N``.
+    `blind_rotate_exponents` starts from the exponents, for a caller that
+    switches the input to ``Z_2N`` itself.
+
     ``gsw_ell`` and ``radix_log_base`` choose the MGSW gadget as in
-    :class:`MGSW_Scheme`; every other key uses the same radix. Everything
-    runs on the library's threads (``vfhe.engine.set_num_threads``).
+    :class:`MGSW_Scheme`; every other key uses the same radix unless told
+    otherwise. ``digits`` is how many digits of each residue the keys over
+    ``R_N`` (MGSW, automorphism, trace) keep: fewer than a prime has is the
+    approximate decomposition, for a rotation level 0 over one prime (see
+    :meth:`MLWE_Scheme.gadget_scalars`). Everything runs
+    on the library's threads (``vfhe.engine.set_num_threads``).
     """
 
     def __init__(
@@ -134,12 +149,17 @@ class GP25:
         gsw_ell: int | None = None,
         radix_log_base: int | None = None,
         trace_repack: bool = True,
+        digits: int | None = None,
     ):
         self.scheme = scheme
         self.ring = scheme.rings[0]
         self.radix_log_base = radix_log_base
+        self.digits = digits
         self.mgsw_scheme = MGSW_Scheme(
-            scheme, ell=gsw_ell, radix_log_base=radix_log_base
+            scheme,
+            ell=gsw_ell,
+            radix_log_base=radix_log_base,
+            digits=digits,
         )
         self.trace_repack = trace_repack
 
@@ -214,12 +234,14 @@ class GP25:
         self,
         input_key: MLWE_Key,
         rotation_key: MLWE_Key,
-        output_key: MLWE_Key,
+        output_key: MLWE_Key | None,
         h: int,
         gap_bits: int,
         ternary: bool = True,
         hw_reducing_lvl: int | None = None,
         hw_reducing_hybrid: bool = True,
+        hw_reducing_radix_log_base: int | None = None,
+        hw_reducing_digits: int | None = None,
         n_threads: int = 0,
     ) -> SAB_Key:
         """The bootstrapping key: inputs under ``output_key`` (at
@@ -240,19 +262,32 @@ class GP25:
         the dense key under the sparse one, so the sparse key only has to be
         secure at that level's modulus: its special ring's, or with
         ``hw_reducing_hybrid=False`` the level's own (a BV key switch; pair it
-        with ``radix_log_base``). Never generate it at a higher level.
+        with a radix). Never generate it at a higher level. Its gadget is
+        ``hw_reducing_radix_log_base``: by default this GP25's radix, and 0 for
+        the RNS gadget whatever that radix is; ``hw_reducing_digits`` is
+        how many digits it keeps (all by default; fewer at a level over one
+        prime only, see :meth:`MLWE_Scheme.gadget_scalars`).
+
+        With ``output_key=None`` there is neither that switch nor an output
+        switch (see the module); it needs ``trace_repack``, since the packing
+        key switch packs into the output key.
 
         Every MGSW key is drawn in one batch, on ``n_threads`` (0: the library
         limit), and so are the other keys.
         """
         io_scheme = input_key.scheme
-        if output_key.scheme is not io_scheme:
+        if output_key is not None and output_key.scheme is not io_scheme:
             raise ValueError("the input and output keys must be keys of one scheme")
         if rotation_key.scheme is not self.scheme:
             raise ValueError("the rotation key must be a key of this GP25's scheme")
+        if output_key is None and not self.trace_repack:
+            raise ValueError(
+                "the packing key switch packs into the output key; without one, "
+                "repack with the trace"
+            )
         n = io_scheme.N
         self._check_gap_bits(gap_bits, n)
-        output_lvl = self._output_level(io_scheme)
+        output_lvl = None if output_key is None else self._output_level(io_scheme)
 
         gap_values = self.gaps(input_key)
         signs: list[list[int]] = []
@@ -302,24 +337,34 @@ class GP25:
                 lvl=0,
                 radix_log_base=self.radix_log_base,
                 n_threads=n_threads,
+                digits=self.digits,
             ),
         )
 
-        lvl = len(io_scheme.rings) - 1 if hw_reducing_lvl is None else hw_reducing_lvl
-        if not 0 <= lvl < len(io_scheme.rings):
-            raise ValueError("hw_reducing_lvl is not a level of the keys' scheme")
-        sab.hw_reducing_lvl = lvl
-        sab.hw_reducing_key = cast(
-            "MLWE_Set",
-            io_scheme.gen_ksk(
-                input_key,
-                output_key,
-                lvl,
-                radix_log_base=self.radix_log_base,
-                n_threads=n_threads,
-                hybrid=hw_reducing_hybrid,
-            ),
-        )
+        if output_key is not None:
+            lvl = (
+                len(io_scheme.rings) - 1 if hw_reducing_lvl is None else hw_reducing_lvl
+            )
+            if not 0 <= lvl < len(io_scheme.rings):
+                raise ValueError("hw_reducing_lvl is not a level of the keys' scheme")
+            radix = (
+                self.radix_log_base
+                if hw_reducing_radix_log_base is None
+                else hw_reducing_radix_log_base or None
+            )
+            sab.hw_reducing_lvl = lvl
+            sab.hw_reducing_key = cast(
+                "MLWE_Set",
+                io_scheme.gen_ksk(
+                    input_key,
+                    output_key,
+                    lvl,
+                    radix_log_base=radix,
+                    n_threads=n_threads,
+                    hybrid=hw_reducing_hybrid,
+                    digits=hw_reducing_digits,
+                ),
+            )
 
         if self.trace_repack:
             # Packing `count` samples takes log2(count) automorphisms.
@@ -333,21 +378,24 @@ class GP25:
                     lvl=0,
                     radix_log_base=self.radix_log_base,
                     n_threads=n_threads,
+                    digits=self.digits,
                 ),
             )
-            if n != self.ring.N or rotation_key.key != output_key.key:
+            if output_key is not None and (
+                n != self.ring.N or rotation_key.key != output_key.key
+            ):
                 sab.output_switch_key = io_scheme.gen_ring_switch_key(
                     output_key,
                     rotation_key,
-                    output_lvl,
+                    cast("int", output_lvl),
                     radix_log_base=self.radix_log_base,
                     n_threads=n_threads,
                 )
         else:
             sab.packing_key = io_scheme.gen_packing_ksk(
-                output_key,
+                cast("MLWE_Key", output_key),
                 rotation_key.extract_lwe_key(),
-                output_lvl,
+                cast("int", output_lvl),
                 radix_log_base=self.radix_log_base,
                 n_threads=n_threads,
             )
@@ -413,10 +461,11 @@ class GP25:
         to ``Z_2N``. Their constant coefficients are what `test_vector`
         describes.
 
-        The input is under the output key, at the level of the key's
+        With an output key, the input is under it, at the level of the key's
         Hamming-weight-reducing switch, and is switched to the input key
-        first. ``in_modulus`` is the modulus the input's phase is taken mod
-        after that switch, by default its ring's.
+        first; without one, the input is under the input key. ``in_modulus``
+        is the modulus the input's phase is taken mod after that, by default
+        its ring's. `blind_rotate_exponents` is the rotation alone.
         """
         n = rlwe_in.ring.N
         rank = rlwe_in.scheme.r
@@ -424,23 +473,45 @@ class GP25:
             raise ValueError(
                 "the bootstrapping key does not match the input's dimension and rank"
             )
-        if key.hw_reducing_key is None:
-            raise ValueError("the key has no Hamming-weight-reducing key switch")
-        if rlwe_in.lvl != key.hw_reducing_lvl:
-            raise ValueError(
-                "the input must be at level "
-                f"{key.hw_reducing_lvl}, where the key reduces its weight"
-            )
-        rlwe_in = rlwe_in.scheme.keyswitch(rlwe_in, key.hw_reducing_key)
+        if key.hw_reducing_key is not None:
+            if rlwe_in.lvl != key.hw_reducing_lvl:
+                raise ValueError(
+                    "the input must be at level "
+                    f"{key.hw_reducing_lvl}, where the key reduces its weight"
+                )
+            rlwe_in = rlwe_in.scheme.keyswitch(rlwe_in, key.hw_reducing_key)
         q = rlwe_in.ring.q_l if in_modulus is None else in_modulus
         rlwe_in.to_coeff()
-        tv.to_coeff()
         b = self._exponents(rlwe_in.get_b_poly().get_polynomial(), q)
         a = [
-            e
+            self._exponents(rlwe_in.get_a_poly(j).get_polynomial(), q)
             for j in range(rank)
-            for e in self._exponents(rlwe_in.get_a_poly(j).get_polynomial(), q)
         ]
+        return self.blind_rotate_exponents(a, b, tv, key)
+
+    def blind_rotate_exponents(
+        self,
+        a: Sequence[Sequence[int]],
+        b: Sequence[int],
+        tv: MLWE,
+        key: SAB_Key,
+    ) -> list[MLWE]:
+        """The accumulators of `blind_rotate` for an input already switched to
+        ``Z_2N``: ``b`` its body's ``n`` exponents and ``a[i]`` component
+        ``i``'s mask, all in ``[0, 2N)``, under the input key. Nothing is
+        switched or rounded here.
+        """
+        n, two_n = key.n, 2 * self.ring.N
+        if len(b) != n or len(a) != len(key.gaps) or any(len(x) != n for x in a):
+            raise ValueError(
+                f"expected n = {n} exponents for the body and each of "
+                f"{len(key.gaps)} mask components"
+            )
+        if any(not 0 <= e < two_n for e in b) or any(
+            not 0 <= e < two_n for x in a for e in x
+        ):
+            raise ValueError(f"exponents must be in [0, 2N) (2N = {two_n})")
+        tv.to_coeff()
         acc = []
         for b_k in b:
             out = MLWE(self.scheme)
@@ -452,19 +523,53 @@ class GP25:
         lib.gp25_blind_rotate(
             ffi.new("void*[]", [c.obj for c in acc]),
             n,
-            ffi.new("uint64_t[]", a),
-            rank,
+            ffi.new("uint64_t[]", [e for x in a for e in x]),
+            len(a),
             key.h,
             key.gap_bits,
             gap_keys,
             sign_keys,
             self._automorphism_key(key).obj,
             self.mgsw_scheme.gadget_size(0),
-            self.radix_log_base or 0,
-            self.mgsw_scheme.balanced,
+            self.mgsw_scheme.native_gadget_params,
             0,
         )
         return acc
+
+    def repack(self, acc: list[MLWE], key: SAB_Key) -> list[MLWE]:
+        """The accumulators of `blind_rotate`, packed. With the trace: under
+        the rotation key over ``R_N``, one sample for ``n <= N`` (coefficient
+        ``k`` at ``k * N / n``, in the subring ``Z[X^(N/n)]``; the other
+        coefficients are not cleared, as a ring switch down drops them) and
+        ``n / N``
+        for ``n > N`` (sample ``i`` holding coefficients ``k = i mod n / N``,
+        coefficient ``k`` at ``k // (n / N)``). With the packing key: one
+        sample over ``R_n`` under the output key, at the key's output level.
+        """
+        if len(acc) != key.n:
+            raise ValueError("one accumulator per input coefficient")
+        if self.trace_repack:
+            if key.trace_repack_key is None:
+                raise ValueError(
+                    "the key has no trace key; generate it with trace_repack"
+                )
+            groups = max(key.n // self.ring.N, 1)
+            return [
+                self.scheme.trace_pack(acc[i::groups], key.trace_repack_key)
+                for i in range(groups)
+            ]
+        if key.packing_key is None or key.output_lvl is None:
+            raise ValueError(
+                "the key has no packing key; generate it without trace_repack"
+            )
+        io_scheme = next(x for x in key.packing_key.mlwe if x is not None)[0].scheme
+        return [
+            io_scheme.packing_keyswitch(
+                [self.scheme.extract_lwe(c, 0) for c in acc],
+                key.packing_key,
+                key.output_lvl,
+            )
+        ]
 
     def bootstrap(
         self,
@@ -477,36 +582,22 @@ class GP25:
         output key, at the key's ``hw_reducing_lvl``): the result is a sample
         of the same scheme at the key's ``output_lvl``, under the output key,
         whose coefficient ``k`` decrypts to what `test_vector` maps
-        coefficient ``k``'s phase to.
+        coefficient ``k``'s phase to. Needs a key with an output key.
         """
-        io_scheme = rlwe_in.scheme
-        acc = self.blind_rotate(rlwe_in, tv, key, in_modulus)
-        if self.trace_repack:
-            if key.trace_repack_key is None:
-                raise ValueError(
-                    "the key has no trace key; generate it with trace_repack"
-                )
-            # n <= N: one packing, into Z[X^(N/n)]; n > N: one per group of
-            # accumulators k = i mod n / N, each filling R_N.
-            groups = max(key.n // self.ring.N, 1)
-            packed = [
-                self.scheme.trace_pack(acc[i::groups], key.trace_repack_key)
-                for i in range(groups)
-            ]
-            if key.output_switch_key is None:
-                out = MLWE(io_scheme, lvl=key.output_lvl)
-                out.copy_from(packed[0])
-                return out
-            return io_scheme.ring_switch(packed, key.output_switch_key)
-        if key.packing_key is None:
+        if key.output_lvl is None:
             raise ValueError(
-                "the key has no packing key; generate it without trace_repack"
+                "the key has no output key: the result would stay over R_N under "
+                "the rotation key; use repack(blind_rotate(...))"
             )
-        return io_scheme.packing_keyswitch(
-            [self.scheme.extract_lwe(c, 0) for c in acc],
-            key.packing_key,
-            key.output_lvl,
-        )
+        io_scheme = rlwe_in.scheme
+        packed = self.repack(self.blind_rotate(rlwe_in, tv, key, in_modulus), key)
+        if not self.trace_repack:
+            return packed[0]
+        if key.output_switch_key is None:
+            out = MLWE(io_scheme, lvl=key.output_lvl)
+            out.copy_from(packed[0])
+            return out
+        return io_scheme.ring_switch(packed, key.output_switch_key)
 
     # -- building blocks ----------------------------------------------------
 
@@ -517,7 +608,7 @@ class GP25:
         return key.automorphism_key
 
     def _mgsw_arguments(self, mgsw: MGSW) -> tuple:
-        return (mgsw.gadget_size, mgsw.scheme.radix_log_base or 0, mgsw.scheme.balanced)
+        return (mgsw.gadget_size, mgsw.scheme.native_gadget_params)
 
     def rotate(
         self, acc: list[MLWE], bits: list[MGSW], automorphism_key: MLWE_Set
@@ -562,7 +653,7 @@ class GP25:
         if sign is None:
             handle, arguments = (
                 ffi.NULL,
-                (0, self.radix_log_base or 0, self.scheme.balanced),
+                (0, self.mgsw_scheme.native_gadget_params),
             )
         else:
             sign.to_NTT()

@@ -84,7 +84,7 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
     for (size_t i = 0; i < in_n; i++)
     {
         spread_lwe_values(tmp_poly, target_mask, in, size, row, lwe_l, &i);
-        gadget_mul_subto_polynomial(out, key->s[i], &column, key->log_base, key->balanced);
+        gadget_mul_subto_polynomial(out, key->s[i], &column, &key->gadget_params);
     }
 
     // body part: out->b += sum B_k X^k
@@ -109,14 +109,13 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
     free(row);
 }
 
-RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count, uint64_t log_base, bool balanced)
+RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count, const GadgetParams *gadget_params)
 {
     RNS_MLWE_KS_Key key = (RNS_MLWE_KS_Key)safe_malloc(sizeof(*key));
     key->s = (RNS_MLWE **)safe_malloc(count * sizeof(RNS_MLWE *));
     memcpy(key->s, s, count * sizeof(RNS_MLWE *));
     key->count = count;
-    key->log_base = log_base;
-    key->balanced = balanced;
+    key->gadget_params = *gadget_params;
 
     // The key's ring comes from its first real component; NULL components are
     // pass-throughs and carry no samples.

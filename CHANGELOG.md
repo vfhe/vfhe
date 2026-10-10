@@ -14,6 +14,22 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add the approximate gadget decomposition: the radix gadget may keep only
+  the top `digits` digits of each residue (all by default), rounding the
+  residue to a multiple of `2^(w * dropped)` first, which adds at most half
+  of that times the key and removes the keys and products of the digits left
+  out. Leaving digits out holds over one prime only (over several the error
+  is multiplied by a CRT idempotent), so it is refused at a level of more
+  than one; as many digits as every prime has is the exact decomposition at
+  any level. Every key generator that takes `radix_log_base` takes `digits`
+  (`gen_ksk`, `gen_rlk`, `gen_ksk_automorphism(_set)`, `gen_ksk_trace`,
+  `gen_ring_switch_key`, `gen_packing_ksk`, `gadget_scalars`), as do
+  `MGSW_Scheme`, `MLWE_Set`, `GP25` (its keys over `R_N`) and
+  `GP25.generate_bootstrap_key` (`hw_reducing_digits`); the serialized keys
+  and MGSW schemes carry it.
+- Add `MLWE.from_components(scheme, a, b, lvl=None)`: the sample with mask
+  `a` and body `b`, copied from the polynomials (which may be temporaries, in
+  either domain), over a level of the scheme or another of its rings.
 - Add `MLWE_Scheme.trace_pack(vec, ksk)` (`mlwe_trace_pack`): the trace
   packing of [CDKS21] with each level's difference halved (times `2^-1 mod
   q`) before its automorphism, after [LY26]'s reverse homomorphic trace. The
@@ -268,6 +284,29 @@ versions may contain breaking changes.
 
 ### Changed
 
+- The native gadget products take their parameters as one struct
+  (breaking, C): `GadgetParams {log_base, digits, balanced}`, passed by
+  pointer, replaces the `log_base, balanced` pair of
+  `gadget_mul_addto_polynomial`, `gadget_mul_subto_polynomial`,
+  `gadget_decompose`, `gadget_decompose_digit`, `mlwe_new_RNS_ks_key`, the
+  `mgsw_*` products, `cggi16_blind_rotate(_batch)` and the `gp25_*` kernels,
+  and `RNS_MLWE_KS_Key` holds one (`gadget_params`) in place of the two
+  fields. From Python, `native_gadget_params(radix_log_base, digits,
+  balanced)` builds it and `MGSW_Scheme.native_gadget_params` holds one.
+- GP25's output key is optional: `generate_bootstrap_key(input_key,
+  rotation_key, None, ...)` makes neither the Hamming-weight-reducing key nor
+  an output switch key, inputs come under the input key, and
+  `repack(blind_rotate(...))` leaves the result over `R_N` under the rotation
+  key (trace repacking only), for a caller that switches keys and rings at a
+  modulus of its own choosing: an output switch key at the output level puts
+  the output key at that modulus. The rotation splits in two:
+  `GP25.blind_rotate_exponents(a, b, tv, key)` rotates from exponents already
+  in `Z_2N`, and `blind_rotate` is the weight-reducing switch and the switch
+  to `Z_2N` in front of it. `GP25.repack(acc, key)` is public, and
+  `bootstrap` is `blind_rotate`, `repack` and the output switch. The
+  weight-reducing key takes its own gadget,
+  `generate_bootstrap_key(..., hw_reducing_radix_log_base=)` (by default
+  GP25's radix; 0 for the RNS gadget).
 - GP25 repacks through the trace by default (`trace_repack=True`); pass
   `trace_repack=False` for the packing key switch.
 - Remove `MLWE_Scheme.full_packing_keyswitch_scaled` and

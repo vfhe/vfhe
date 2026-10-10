@@ -179,6 +179,8 @@ class MLWE_Scheme:
         radix_log_base: int | None = None,
         ring: RNSRing | None = None,
         primes: int | None = None,
+        *,
+        digits: int | None = None,
     ) -> list[list[int]]:
         """The gadget a key at ``lvl`` must be generated against.
 
@@ -205,9 +207,22 @@ class MLWE_Scheme:
         index of their prime, ascending, over the primes of level ``lvl``'s
         ring, then the primes it does not carry (the special ones). That is
         not ``ring.primes`` order unless the ring's prime indices ascend.
+
+        ``digits`` keeps only the top ``digits`` digits of every residue (all
+        of them by default). Keeping fewer than a prime has is the approximate
+        gadget decomposition: a residue is rounded to a multiple of
+        ``2^(w * dropped)``, ``dropped`` the digits left out, which adds at most
+        half of that times the key. It needs the radix gadget, and a level
+        over one prime when the level's primes lose digits -- over several,
+        the error would be multiplied by a CRT idempotent, which is not small.
         """
         ring = ring if ring is not None else self.special_rings[lvl]
         primes = primes if primes is not None else ring.ell
+        if digits is not None:
+            if not radix_log_base:
+                raise ValueError("a number of digits needs the radix gadget")
+            if digits < 1:
+                raise ValueError("at least one digit must be kept")
         if radix_log_base:
             # A digit is broadcast to every prime of the key's ring unreduced,
             # so it has to fit in the smallest of them.
@@ -227,12 +242,19 @@ class MLWE_Scheme:
         scalars = []
         for i in order:
             prime = ring.primes[i]
-            digits = (
+            every = (
                 lib_rlwe.lib.gadget_radix_digits(prime, radix_log_base)
                 if radix_log_base
                 else 1
             )
-            for k in range(digits):
+            kept = every if digits is None else min(digits, every)
+            if kept < every and (source >> indices[i]) & 1 and self.rings[lvl].ell != 1:
+                raise ValueError(
+                    "keeping fewer digits than a prime has needs a level over one "
+                    "prime: over several, the rounding error is multiplied by a "
+                    "CRT idempotent"
+                )
+            for k in range(every - kept, every):
                 factor = scale << (radix_log_base * k) if radix_log_base else scale
                 scalars.append([0] * i + [factor % prime] + [0] * (ring.ell - 1 - i))
         return scalars
@@ -245,6 +267,7 @@ class MLWE_Scheme:
         radix_log_base: int | None = None,
         n_threads: int = 0,
         hybrid: bool = True,
+        digits: int | None = None,
     ) -> list[list[MLWE]]:
         """Sample the gadget ciphertexts for one key-switch key per key poly.
 
@@ -257,7 +280,7 @@ class MLWE_Scheme:
         if lvl is None:
             raise ValueError("Level must be specified")
         key_ring = self.special_rings[lvl] if hybrid else self.rings[lvl]
-        scalars = self.gadget_scalars(lvl, radix_log_base, ring=key_ring)
+        scalars = self.gadget_scalars(lvl, radix_log_base, ring=key_ring, digits=digits)
         key_out_special = MLWE_Key(key_out.key, key_out.sigma_err, self, ring=key_ring)
         msgs = [
             poly_j
@@ -281,12 +304,19 @@ class MLWE_Scheme:
         radix_log_base: int | None = None,
         n_threads: int = 0,
         hybrid: bool = True,
+        digits: int | None = None,
     ) -> list[MLWE_Set]:
         """One key-switch key per entry of ``key_polys``, at ``lvl``, all drawn
         in one batch so that a set of small keys still fills the threads."""
         flat = [poly for polys in key_polys for poly in polys]
         components = self._gen_ksk_components(
-            key_out, flat, lvl, radix_log_base, n_threads=n_threads, hybrid=hybrid
+            key_out,
+            flat,
+            lvl,
+            radix_log_base,
+            n_threads=n_threads,
+            hybrid=hybrid,
+            digits=digits,
         )
         sets, start = [], 0
         for polys in key_polys:
@@ -295,6 +325,7 @@ class MLWE_Scheme:
                     components[start : start + len(polys)],
                     radix_log_base,
                     self.balanced,
+                    digits=digits,
                 )
             )
             start += len(polys)
@@ -308,6 +339,7 @@ class MLWE_Scheme:
         radix_log_base: int | None = None,
         n_threads: int = 0,
         hybrid: bool = True,
+        digits: int | None = None,
     ):
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
         (ksk,) = self._gen_ksk_sets(
@@ -317,6 +349,7 @@ class MLWE_Scheme:
             radix_log_base,
             n_threads=n_threads,
             hybrid=hybrid,
+            digits=digits,
         )
         return ksk
 
@@ -327,14 +360,25 @@ class MLWE_Scheme:
         lvl: int,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        digits: int | None = None,
     ):
         # One real key-switch key per quadratic component (r*(r+1)/2 of them),
         # followed by r NULL slots for the linear components, which keep the
         # target key and are copied through by the key-switch.
         components = self._gen_ksk_components(
-            key_out, quad_polys, lvl, radix_log_base, n_threads
+            key_out,
+            quad_polys,
+            lvl,
+            radix_log_base,
+            n_threads,
+            digits=digits,
         )
-        return MLWE_Set(components + [None] * self.r, radix_log_base, self.balanced)
+        return MLWE_Set(
+            components + [None] * self.r,
+            radix_log_base,
+            self.balanced,
+            digits=digits,
+        )
 
     def quadratic_key_polys(self, key: MLWE_Key) -> list[RNSPolynomial]:
         """The quadratic key terms of the tensored product, in slot order.
@@ -357,6 +401,7 @@ class MLWE_Scheme:
         lvl: int | None = None,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        digits: int | None = None,
     ):
         """Relinearization key for the rank-r product.
 
@@ -367,7 +412,8 @@ class MLWE_Scheme:
         keys plus r NULL slots for the linear components, consumed by
         :meth:`relinearize`/:meth:`multiply`.
 
-        ``radix_log_base`` selects the radix gadget over the RNS one; see
+        ``radix_log_base`` selects the radix gadget over the RNS one, and
+        ``digits`` the digits kept (the approximate decomposition); see
         :meth:`gadget_scalars`.
         """
         quad_polys = (
@@ -377,14 +423,19 @@ class MLWE_Scheme:
         )
         if len(quad_polys) != self.r * (self.r + 1) // 2:
             raise ValueError("expected one quadratic key per pair of key components")
-        if lvl is not None:
-            return self.gen_rlk_for_level(
-                key_out, quad_polys, lvl, radix_log_base, n_threads
+        levels = range(len(self.rings)) if lvl is None else [lvl]
+        keys = [
+            self.gen_rlk_for_level(
+                key_out,
+                quad_polys,
+                level,
+                radix_log_base,
+                n_threads,
+                digits=digits,
             )
-        return [
-            self.gen_rlk_for_level(key_out, quad_polys, lvl, radix_log_base, n_threads)
-            for lvl in range(len(self.rings))
+            for level in levels
         ]
+        return keys if lvl is None else keys[0]
 
     def gen_ksk(
         self,
@@ -394,12 +445,14 @@ class MLWE_Scheme:
         radix_log_base: int | None = None,
         n_threads: int = 0,
         hybrid: bool = True,
+        digits: int | None = None,
     ):
         """Key-switch key from ``key_in`` to ``key_out``, for one level or all.
 
-        ``radix_log_base`` selects the radix gadget over the RNS one; see
-        :meth:`gadget_scalars`. The gadget is fixed here, travels with the key,
-        and is what :meth:`keyswitch` decomposes against.
+        ``radix_log_base`` selects the radix gadget over the RNS one, and
+        ``digits`` the digits kept (fewer than a prime has: the approximate
+        decomposition, at a level over one prime); see :meth:`gadget_scalars`. The gadget is fixed here, travels
+        with the key, and is what :meth:`keyswitch` decomposes against.
 
         By default the key lives in the level's special ring, and a key switch
         divides its products by the special primes. With ``hybrid=False`` it
@@ -411,26 +464,20 @@ class MLWE_Scheme:
         key_poly = key_in if isinstance(key_in, list) else key_in.poly
         if self != key_out.scheme:
             raise ValueError("Scheme mismatch")
-        if lvl is not None:
-            return self.gen_ksk_for_level(
-                key_out,
-                key_poly,
-                lvl,
-                radix_log_base,
-                n_threads=n_threads,
-                hybrid=hybrid,
-            )
-        return [
+        levels = range(len(self.rings)) if lvl is None else [lvl]
+        keys = [
             self.gen_ksk_for_level(
                 key_out,
                 key_poly,
-                lvl,
+                level,
                 radix_log_base,
                 n_threads=n_threads,
                 hybrid=hybrid,
+                digits=digits,
             )
-            for lvl in range(len(self.rings))
+            for level in levels
         ]
+        return keys if lvl is None else keys[0]
 
     def gen_ksk_automorphism(
         self,
@@ -440,9 +487,17 @@ class MLWE_Scheme:
         lvl: int | None = None,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        digits: int | None = None,
     ):
         key_perm = [i.automorphism(g) for i in key_in.poly]
-        return self.gen_ksk(key_out, key_perm, lvl, radix_log_base, n_threads)
+        return self.gen_ksk(
+            key_out,
+            key_perm,
+            lvl,
+            radix_log_base,
+            n_threads,
+            digits=digits,
+        )
 
     def gen_ksk_automorphism_set(
         self,
@@ -452,6 +507,7 @@ class MLWE_Scheme:
         lvl: int | None = None,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        digits: int | None = None,
     ):
         """One automorphism key per generator, shaped as
         :meth:`gen_ksk_automorphism` returns it. The keys of a level are drawn
@@ -459,11 +515,23 @@ class MLWE_Scheme:
         key_perms = [[p.automorphism(g) for p in key_in.poly] for g in generators]
         if lvl is not None:
             return self._gen_ksk_sets(
-                key_out, key_perms, lvl, radix_log_base, n_threads
+                key_out,
+                key_perms,
+                lvl,
+                radix_log_base,
+                n_threads,
+                digits=digits,
             )
         leveled = [
-            self._gen_ksk_sets(key_out, key_perms, lvl, radix_log_base, n_threads)
-            for lvl in range(len(self.rings))
+            self._gen_ksk_sets(
+                key_out,
+                key_perms,
+                level,
+                radix_log_base,
+                n_threads,
+                digits=digits,
+            )
+            for level in range(len(self.rings))
         ]
         return [[sets[i] for sets in leveled] for i in range(len(generators))]
 
@@ -486,6 +554,7 @@ class MLWE_Scheme:
         lvl: int | None = None,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        digits: int | None = None,
     ):
         log_N = int(math.log2(self.N))
         gens = (
@@ -494,7 +563,13 @@ class MLWE_Scheme:
             else [(1 << (log_N - i + 1)) + 1 for i in range(1, log_N + 1)]
         )
         result = self.gen_ksk_automorphism_set(
-            key_out, key_in, gens, lvl, radix_log_base, n_threads
+            key_out,
+            key_in,
+            gens,
+            lvl,
+            radix_log_base,
+            n_threads,
+            digits=digits,
         )
         # The lvl argument decides which shape gen_ksk_automorphism returned.
         if lvl is not None:
@@ -779,16 +854,17 @@ class MLWE_Scheme:
         lvl: int = 0,
         radix_log_base: int | None = None,
         n_threads: int = 0,
+        digits: int | None = None,
     ) -> MLWE_Set:
         """The key `packing_keyswitch` takes: for every coefficient ``s_i`` of
         ``lwe_key``, encryptions of ``s_i`` times the gadget under
-        ``key_out``, at level ``lvl`` (any dimension). ``radix_log_base`` is
-        as in `gen_ksk`.
+        ``key_out``, at level ``lvl`` (any dimension). ``radix_log_base`` and
+        ``digits`` are as in `gen_ksk`.
         """
         if self != key_out.scheme:
             raise ValueError("Scheme mismatch")
         special_ring = self.special_rings[lvl]
-        gadget = self.gadget_scalars(lvl, radix_log_base)
+        gadget = self.gadget_scalars(lvl, radix_log_base, digits=digits)
         key_out_special = MLWE_Key(
             key_out.key, key_out.sigma_err, self, ring=special_ring
         )
@@ -801,6 +877,7 @@ class MLWE_Scheme:
             [samples[i : i + width] for i in range(0, len(samples), width)],
             radix_log_base=radix_log_base,
             balanced=self.balanced,
+            digits=digits,
         )
 
     def packing_keyswitch(
@@ -846,6 +923,7 @@ class MLWE_Scheme:
         radix_log_base: int | None = None,
         n_threads: int = 0,
         hybrid: bool = True,
+        digits: int | None = None,
     ) -> MLWE_Set:
         """The key `ring_switch` [GHPS12] takes from ``key_in``, of a scheme
         over ``R_N``, to ``key_out``, of this one over ``R_n``, at level ``lvl``.
@@ -854,8 +932,8 @@ class MLWE_Scheme:
         Down (``N = k n``): for each component ``s_i`` of ``key_in``, keys for
         ``s_i^(0)`` and ``Y s_i^(k - j)``, ``j = 1, ..., k - 1``, where
         ``s_i^(l)`` holds coefficients ``l + k m`` of ``s_i``. Up (``n = k
-        N``): a key for ``s_i(X^k)``. ``radix_log_base``, ``n_threads`` and
-        ``hybrid`` are as in `gen_ksk`.
+        N``): a key for ``s_i(X^k)``. ``radix_log_base``, ``n_threads``,
+        ``hybrid`` and ``digits`` are as in `gen_ksk`.
         """
         N, n = key_in.scheme.N, self.N
         polys: list[list[int]] = []
@@ -884,6 +962,7 @@ class MLWE_Scheme:
             radix_log_base,
             n_threads=n_threads,
             hybrid=hybrid,
+            digits=digits,
         )
 
     def ring_switch(
@@ -1391,19 +1470,38 @@ class MLWE_Key:
         )
 
 
+def native_gadget_params(
+    radix_log_base: int | None, digits: int | None = None, balanced: bool = True
+):
+    """The gadget parameters as the native products take them (a
+    ``GadgetParams *``): the radix gadget's base and the digits kept, or the
+    RNS gadget's digit (see :meth:`MLWE_Scheme.gadget_scalars`)."""
+    return ffi.new(
+        "GadgetParams *",
+        {
+            "log_base": radix_log_base or 0,
+            "digits": digits or 0,
+            "balanced": balanced,
+        },
+    )
+
+
 class MLWE_Set:
     def __init__(
         self,
         mlwe: Sequence[list[MLWE] | None] | None = None,
         radix_log_base: int | None = None,
         balanced: bool = True,
+        *,
+        digits: int | None = None,
     ):
         """Wrap per-component gadget key arrays into a native key-switch key.
 
-        ``radix_log_base`` is the gadget the arrays were generated against (see
-        :meth:`MLWE_Scheme.gadget_scalars`); it travels with the key, since a
-        key switch has to decompose against the same one. ``balanced`` is the
-        RNS gadget's digit the key switch takes (see :class:`MLWE_Scheme`).
+        ``radix_log_base`` and ``digits`` are the gadget the arrays
+        were generated against (see :meth:`MLWE_Scheme.gadget_scalars`); it
+        travels with the key, since a key switch has to decompose against the
+        same one. ``balanced`` is the RNS gadget's digit the key switch takes
+        (see :class:`MLWE_Scheme`).
 
         The key uses the samples in place, converted to the NTT domain: the
         set keeps them in `mlwe`, and they must not be modified afterwards.
@@ -1432,8 +1530,11 @@ class MLWE_Set:
         # accumulator the key switch computes in, allocated in the key's ring.
         self.log_base = radix_log_base or 0
         self.balanced = balanced
+        self.digits = digits
         self.obj = lib_rlwe.lib.mlwe_new_RNS_ks_key(
-            result_obj, len(mlwe), self.log_base, balanced
+            result_obj,
+            len(mlwe),
+            native_gadget_params(radix_log_base, digits, balanced),
         )
 
     def __del__(self) -> None:
@@ -1450,6 +1551,7 @@ class MLWE_Set:
         out.dim = array[0].dim + 1
         out.log_base = array[0].log_base
         out.balanced = array[0].balanced
+        out.digits = array[0].digits
         result_obj = ffi.new("void*[]", len(array))
         out._children = array  # type: ignore  # keep child MLWE_Set buffers alive
         for j in range(len(array)):
@@ -1658,6 +1760,34 @@ class MLWE:
 
     def obj_b(self):
         return ffi.cast("MLWE", self.obj).b.handle
+
+    @classmethod
+    def from_components(  # noqa: PYI019 - Self needs 3.11
+        cls: type[CtT],
+        scheme: MLWE_Scheme,
+        a: Sequence[RNSPolynomial],
+        b: RNSPolynomial,
+        lvl: int | None = None,
+    ) -> CtT:
+        """The sample with mask ``a`` (one polynomial per component) and body
+        ``b``, all over one ring: a level of ``scheme``, or another ring of it
+        such as a special one. The polynomials are copied (into the NTT
+        domain), so they may be temporaries; the rank is ``len(a)``.
+        ``lvl`` defaults to the ring's level, ``-1`` for a ring that is none.
+        """
+        ring = b.ring
+        for p in a:
+            if p.ring.mask != ring.mask or p.ring.base != ring.base:
+                raise ValueError("every component must be over the body's ring")
+        out = cls(scheme, lvl=lvl, ring=ring, rank=len(a))
+        targets = [out.obj_a_i(j) for j in range(len(a))] + [out.obj_b()]
+        for target, p in zip(targets, [*a, b], strict=True):
+            if p.repr != repr.ntt:
+                p = p.copy()
+                p.to_NTT()
+            ring.lib.polynomial_copy_RNS_polynomial(target, p.obj)
+        out.repr = repr.ntt
+        return out
 
     def copy(self):
         res = self.new_like()
