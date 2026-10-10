@@ -1166,17 +1166,32 @@ void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in)
     }
 }
 
-void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
-                                     uint64_t log_base, uint64_t level)
+// Digit `level` of residue `idx` plus `offset` mod its prime, broadcast to
+// every active row of `out`.
+static void decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                            uint64_t log_base, uint64_t level, uint64_t offset)
 {
-    uint64_t *tmp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    const uint64_t N = out->base->N;
+    uint64_t *tmp = (uint64_t *)mempool_aligned_malloc(N * sizeof(uint64_t));
     const uint64_t mask = (1ULL << log_base) - 1;
     const uint64_t shift = log_base * level;
+    const uint64_t q = in->base->mods[idx]->q;
     assert(in->rns_mask & (1ULL << idx));
+    assert(offset < q);
     if (rns_row_is_narrow(in->base, (size_t)idx))
-        rns_row_digit_narrow(tmp, in->rows32[idx], shift, mask, out->base->N);
+    {
+        if (offset)
+            rns_row_digit_offset_narrow(tmp, in->rows32[idx], shift, mask, offset, q, N);
+        else
+            rns_row_digit_narrow(tmp, in->rows32[idx], shift, mask, N);
+    }
     else
-        rns_row_digit_wide(tmp, in->rows64[idx], shift, mask, out->base->N);
+    {
+        if (offset)
+            rns_row_digit_offset_wide(tmp, in->rows64[idx], shift, mask, offset, q, N);
+        else
+            rns_row_digit_wide(tmp, in->rows64[idx], shift, mask, N);
+    }
     /* The digit is below 2^log_base and so below every prime, which is why one
        array serves every row: no reduction, just a store at the row's width. */
     for (size_t i = 0; i < out->base->l; i++)
@@ -1185,12 +1200,25 @@ void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, ui
         {
             assert((1ULL << log_base) <= out->base->mods[i]->q);
             if (rns_row_is_narrow(out->base, i))
-                mod_narrow_w32(out->rows32[i], tmp, out->base->N);
+                mod_narrow_w32(out->rows32[i], tmp, N);
             else
-                memcpy(out->rows64[i], tmp, sizeof(uint64_t) * out->base->N);
+                memcpy(out->rows64[i], tmp, sizeof(uint64_t) * N);
         }
     }
-    free(tmp);
+    mempool_free(tmp, N * sizeof(uint64_t));
+}
+
+void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                                     uint64_t log_base, uint64_t level)
+{
+    decompose_digit(out, in, idx, log_base, level, 0);
+}
+
+void polynomial_RNSc_decompose_digit_rounded(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                                             uint64_t log_base, uint64_t level, uint64_t dropped)
+{
+    assert(level >= dropped);
+    decompose_digit(out, in, idx, log_base, level, dropped ? 1ULL << (log_base * dropped - 1) : 0);
 }
 
 void polynomial_RNSc_decompose_small(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t log_base,

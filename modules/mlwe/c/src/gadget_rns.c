@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
-// Row width and accessors, for the rounding before dropped digits.
-#include "arith_internal.h"
 #include "rns_rows.h"
 #include "util.h"
 
@@ -39,9 +37,10 @@
 // this one cannot drop its low digits for a controlled error, because the
 // error would be multiplied by an idempotent, which is not small mod Q --
 // except over a single prime, where the idempotent is 1. There the gadget may
-// keep only its top `digits`: the residue is first rounded to the nearest
-// multiple of 2^(log_base * dropped), dropped the digits left out, by adding
-// half of that mod p, and the digits kept are those of the sum.
+// keep only its top `digits`: the residue is rounded to the nearest multiple
+// of 2^(log_base * dropped), dropped the digits left out, and the digits kept
+// are those of the rounded residue (polynomial_RNSc_decompose_digit_rounded,
+// which rounds inside the digit extraction).
 
 uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base)
 {
@@ -66,8 +65,11 @@ static void gadget_digit(RNSc_Polynomial tmp, RNSc_Polynomial source, size_t j,
                          const GadgetParams *gadget_params, uint64_t d)
 {
     if (gadget_params->log_base)
-        polynomial_RNSc_decompose_digit(tmp, source, j, gadget_params->log_base,
-                                        d + dropped_of(source->base, j, gadget_params));
+    {
+        const uint64_t dropped = dropped_of(source->base, j, gadget_params);
+        polynomial_RNSc_decompose_digit_rounded(tmp, source, j, gadget_params->log_base,
+                                                d + dropped, dropped);
+    }
     else if (gadget_params->balanced)
         polynomial_RNSc_mod_reduce_lifted_centered(tmp, source, j);
     else
@@ -82,39 +84,17 @@ static uint64_t gadget_digits_of(RNS_Base base, size_t j, const GadgetParams *ga
            dropped_of(base, j, gadget_params);
 }
 
-// What the digits are taken of: `source` itself, or when digits are left out
-// a copy of its one residue rounded as above (the caller frees it).
-static RNS_Polynomial rounded_source(RNS_Polynomial source, const GadgetParams *gadget_params)
+// Digits are left out of a source over one prime only (see above).
+static void check_dropped_digits(RNS_Polynomial source, const GadgetParams *gadget_params)
 {
-    RNS_Base base = source->base;
-    uint64_t dropped = 0;
-    int j = -1;
-    for (size_t i = 0; i < base->l; i++)
-        if ((source->rns_mask & (1ULL << i)) && dropped_of(base, i, gadget_params))
-        {
-            dropped = dropped_of(base, i, gadget_params);
-            j = (int)i;
-        }
-    if (dropped == 0)
-        return source;
-    assert(__builtin_popcountll(source->rns_mask) == 1);
-    const uint64_t q = base->mods[j]->q, N = base->N;
-    const uint64_t half = 1ULL << (gadget_params->log_base * dropped - 1);
-    assert(half < q);
-    RNS_Polynomial out = polynomial_new_RNS_polynomial(N, source->rns_mask, base);
-    if (rns_row_is_narrow(base, (size_t)j))
-        for (uint64_t i = 0; i < N; i++)
-        {
-            const uint64_t v = source->rows32[j][i] + half;
-            out->rows32[j][i] = (uint32_t)(v >= q ? v - q : v);
-        }
-    else
-        for (uint64_t i = 0; i < N; i++)
-        {
-            const uint64_t v = source->rows64[j][i] + half;
-            out->rows64[j][i] = v >= q ? v - q : v;
-        }
-    return out;
+#ifndef NDEBUG
+    for (size_t i = 0; i < source->base->l; i++)
+        if ((source->rns_mask & (1ULL << i)) && dropped_of(source->base, i, gadget_params))
+            assert(__builtin_popcountll(source->rns_mask) == 1);
+#else
+    (void)source;
+    (void)gadget_params;
+#endif
 }
 
 typedef struct
@@ -180,11 +160,9 @@ static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElemen
     RNS_Polynomial key = arith_rns_polynomial(&ksk[0]->b);
     if (source->rns_mask == 0)
         return;
-    RNS_Polynomial rounded = rounded_source(source, gadget_params);
-    KeyProduct p = {out, ksk, rounded, key, gadget_params, subtract};
+    check_dropped_digits(source, gadget_params);
+    KeyProduct p = {out, ksk, source, key, gadget_params, subtract};
     rns_rows_for(key->base->N, key->rns_mask, 1, key_product_row, &p);
-    if (rounded != source)
-        free_RNS_polynomial(rounded);
 
     // Each row's last product set that row's mask in its view; the mask of
     // the whole element is what that product gives on every row.
@@ -268,11 +246,9 @@ void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly
     }
     // Each digit row is the residue lifted to that prime alone, so the rows
     // are independent tasks.
-    RNS_Polynomial rounded = rounded_source(source, gadget_params);
-    Decomposition dec = {out, rounded, base, gadget_params, mul_domain};
+    check_dropped_digits(source, gadget_params);
+    Decomposition dec = {out, source, base, gadget_params, mul_domain};
     rns_rows_for(base->N, key->rns_mask, 1, decompose_row, &dec);
-    if (rounded != source)
-        free_RNS_polynomial(rounded);
 }
 
 void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement *poly, uint64_t i,
@@ -289,10 +265,8 @@ void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement
         const uint64_t digits = gadget_digits_of(base, j, gadget_params);
         if (i < digits)
         {
-            RNS_Polynomial rounded = rounded_source(source, gadget_params);
-            gadget_digit(digit, (RNSc_Polynomial)rounded, j, gadget_params, i);
-            if (rounded != source)
-                free_RNS_polynomial(rounded);
+            check_dropped_digits(source, gadget_params);
+            gadget_digit(digit, (RNSc_Polynomial)source, j, gadget_params, i);
             if (mul_domain)
                 polynomial_RNSc_to_RNS((RNS_Polynomial)digit, digit);
             out->domain = mul_domain ? ARITH_DOMAIN_MUL : ARITH_DOMAIN_CANONICAL;

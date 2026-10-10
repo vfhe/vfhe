@@ -455,6 +455,57 @@ void test_from_int_array_zero_extends_a_short_array(void)
     arith_free(ring, &e);
 }
 
+/* A residue's digits after rounding it to a multiple of 2^(w d), against the
+ * definition, on every row width -- including residues near p, where adding
+ * half a step wraps -- and the kept digits rebuild the residue within half a
+ * step. Dropping none is the plain decomposition. */
+void test_decompose_digit_rounded_known_answers(void)
+{
+    const uint64_t w = 7, d = 2, half = 1ULL << (w * d - 1);
+    RNS_Polynomial in = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    RNS_Polynomial out = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    RNS_Polynomial plain = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    fill(in, 151);
+    for (uint64_t i = 0; i < TEST_L; i++)
+        for (uint64_t j = 0; j < 4; j++)
+            set_coeff(in, i, j, PRIMES[i] - 1 - j * (half / 2)); /* x + half >= p */
+
+    for (uint64_t i = 0; i < TEST_L; i++)
+    {
+        const uint64_t q = PRIMES[i], bits = 64 - (uint64_t)__builtin_clzll(q);
+        const uint64_t digits = (bits + w - 1) / w;
+        uint64_t rebuilt[TEST_N] = {0};
+        for (uint64_t level = d; level < digits; level++)
+        {
+            polynomial_RNSc_decompose_digit_rounded((RNSc_Polynomial)out, (RNSc_Polynomial)in, i, w,
+                                                    level, d);
+            for (uint64_t j = 0; j < TEST_N; j++)
+            {
+                const uint64_t x = coeff(in, i, j);
+                const uint64_t v = x + half >= q ? x + half - q : x + half;
+                const uint64_t want = (v >> (w * level)) & ((1ULL << w) - 1);
+                for (uint64_t k = 0; k < TEST_L; k++) /* broadcast to every row */
+                    TEST_ASSERT_EQUAL_UINT64(want, coeff(out, k, j));
+                rebuilt[j] += want << (w * level);
+            }
+        }
+        for (uint64_t j = 0; j < TEST_N; j++)
+        {
+            const uint64_t x = coeff(in, i, j);
+            /* rebuilt = (x + half mod p) - its low w d bits: x up to half, mod p */
+            const uint64_t diff = (rebuilt[j] % q + q - x) % q;
+            TEST_ASSERT_TRUE(diff <= half || q - diff <= half);
+        }
+        polynomial_RNSc_decompose_digit_rounded((RNSc_Polynomial)out, (RNSc_Polynomial)in, i, w, 3,
+                                                0);
+        polynomial_RNSc_decompose_digit((RNSc_Polynomial)plain, (RNSc_Polynomial)in, i, w, 3);
+        assert_same(plain, out);
+    }
+    free_RNS_polynomial(in);
+    free_RNS_polynomial(out);
+    free_RNS_polynomial(plain);
+}
+
 /* The tower slots take the destination ring, and the implementation derives
  * which primes leave. */
 void test_round_division_to_a_smaller_ring(void)
@@ -546,6 +597,7 @@ int main(void)
     RUN_TEST(test_sampling_lands_in_the_canonical_domain);
     RUN_TEST(test_from_int_array_reduces_per_prime);
     RUN_TEST(test_from_int_array_zero_extends_a_short_array);
+    RUN_TEST(test_decompose_digit_rounded_known_answers);
     RUN_TEST(test_round_division_to_a_smaller_ring);
     RUN_TEST(test_the_shared_ring_is_shared);
     RUN_TEST(test_an_unknown_tag_dispatches_through_the_table);

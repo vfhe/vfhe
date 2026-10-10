@@ -15,18 +15,15 @@ versions may contain breaking changes.
 ### Added
 
 - Add the approximate gadget decomposition: the radix gadget may keep only
-  the top `digits` digits of each residue (all by default), rounding the
-  residue to a multiple of `2^(w * dropped)` first, which adds at most half
-  of that times the key and removes the keys and products of the digits left
-  out. Leaving digits out holds over one prime only (over several the error
-  is multiplied by a CRT idempotent), so it is refused at a level of more
-  than one; as many digits as every prime has is the exact decomposition at
-  any level. Every key generator that takes `radix_log_base` takes `digits`
-  (`gen_ksk`, `gen_rlk`, `gen_ksk_automorphism(_set)`, `gen_ksk_trace`,
-  `gen_ring_switch_key`, `gen_packing_ksk`, `gadget_scalars`), as do
-  `MGSW_Scheme`, `MLWE_Set`, `GP25` (its keys over `R_N`) and
-  `GP25.generate_bootstrap_key` (`hw_reducing_digits`); the serialized keys
-  and MGSW schemes carry it.
+  the top `digits` digits of each residue (`GadgetParams(log_base,
+  digits)`; all by default), rounding the residue to a multiple of
+  `2^(w * dropped)` first, which adds at most half of that times the key and
+  removes the keys and products of the digits left out. Leaving digits out
+  holds over one prime only (over several the error is multiplied by a CRT
+  idempotent), so it is refused at a level of more than one; as many digits
+  as every prime has is the exact decomposition at any level. Every key
+  generator, `MGSW_Scheme`, `MLWE_Set` and `GP25` take it through their
+  `gadget_params`; the serialized keys and MGSW schemes carry it.
 - Add `MLWE.from_components(scheme, a, b, lvl=None)`: the sample with mask
   `a` and body `b`, copied from the polynomials (which may be temporaries, in
   either domain), over a level of the scheme or another of its rings.
@@ -291,8 +288,21 @@ versions may contain breaking changes.
   `gadget_decompose`, `gadget_decompose_digit`, `mlwe_new_RNS_ks_key`, the
   `mgsw_*` products, `cggi16_blind_rotate(_batch)` and the `gp25_*` kernels,
   and `RNS_MLWE_KS_Key` holds one (`gadget_params`) in place of the two
-  fields. From Python, `native_gadget_params(radix_log_base, digits,
-  balanced)` builds it and `MGSW_Scheme.native_gadget_params` holds one.
+  fields. The digit extraction rounds in place for the approximate
+  decomposition (`polynomial_RNSc_decompose_digit_rounded`), with no copy of
+  the residue.
+- Gadget parameters are one object in Python too (breaking):
+  `GadgetParams(log_base=None, digits=None)` (`vfhe.mlwe`; `None` is the RNS
+  gadget) replaces the `radix_log_base` (and `digits`) arguments of
+  `gadget_scalars`, `gen_ksk`, `gen_rlk`, `gen_ksk_automorphism(_set)`,
+  `gen_ksk_trace`, `gen_packing_ksk`, `gen_ring_switch_key`, `MLWE_Set`,
+  `MGSW_Scheme` and `GP25` (`gadget_params=`), and GP25's
+  `hw_reducing_radix_log_base` (`hw_reducing_gadget_params=`, by default
+  GP25's; `GadgetParams()` for the RNS gadget). `MLWE_Set` and
+  `MGSW_Scheme` expose `gadget_params` in place of `log_base` /
+  `radix_log_base` and `digits`; `GadgetParams.native(balanced)` builds the
+  native struct. The RNS digit's centering (`balanced`) stays on the scheme,
+  the key set and the MGSW scheme: keys do not depend on it.
 - GP25's output key is optional: `generate_bootstrap_key(input_key,
   rotation_key, None, ...)` makes neither the Hamming-weight-reducing key nor
   an output switch key, inputs come under the input key, and
@@ -305,8 +315,8 @@ versions may contain breaking changes.
   to `Z_2N` in front of it. `GP25.repack(acc, key)` is public, and
   `bootstrap` is `blind_rotate`, `repack` and the output switch. The
   weight-reducing key takes its own gadget,
-  `generate_bootstrap_key(..., hw_reducing_radix_log_base=)` (by default
-  GP25's radix; 0 for the RNS gadget).
+  `generate_bootstrap_key(..., hw_reducing_gadget_params=)` (by default
+  GP25's).
 - GP25 repacks through the trace by default (`trace_repack=True`); pass
   `trace_repack=False` for the packing key switch.
 - Remove `MLWE_Scheme.full_packing_keyswitch_scaled` and

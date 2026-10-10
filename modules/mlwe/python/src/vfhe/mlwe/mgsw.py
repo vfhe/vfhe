@@ -5,7 +5,7 @@ from __future__ import annotations
 from vfhe.arith import Polynomial, RNSPolynomial, domain_of, repr
 from vfhe.engine import ffi, lib
 
-from .mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, native_gadget_params
+from .mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set
 
 
 # RNS MGSW scheme (similar to RGSW)
@@ -14,32 +14,29 @@ class MGSW_Scheme:
         self,
         MLWE_scheme: MLWE_Scheme,
         ell: int | None = None,
-        radix_log_base: int | None = None,
+        gadget_params: GadgetParams | None = None,
         balanced: bool | None = None,
-        digits: int | None = None,
     ):
         """MGSW over ``MLWE_scheme``, encrypting against one of the two gadgets.
 
         ``ell`` is how many of the ring's primes the gadget covers (all of them
-        by default). ``radix_log_base`` selects the radix gadget over the RNS
-        one -- each prime contributing base-``2^radix_log_base`` digits instead
-        of a single residue -- which bounds the products an external product
-        accumulates by the radix rather than by the primes. See
-        :meth:`MLWE_Scheme.gadget_scalars`. ``balanced`` picks the RNS gadget's
-        digit as in :class:`MLWE_Scheme`, and defaults to ``MLWE_scheme``'s.
-        ``digits`` is how many digits of each residue the radix gadget keeps
-        (all by default; fewer is the approximate decomposition, for keys of a
-        level over one prime, see :meth:`MLWE_Scheme.gadget_scalars`).
+        by default). ``gadget_params`` choose the gadget (the RNS one by
+        default; see :class:`GadgetParams`): the radix gadget, each prime
+        contributing base-``2^log_base`` digits instead of a single residue,
+        bounds the products an external product accumulates by the radix
+        rather than by the primes, and keeping fewer digits is the approximate
+        decomposition, for keys of a level over one prime. ``balanced`` picks
+        the RNS gadget's digit as in :class:`MLWE_Scheme`, and defaults to
+        ``MLWE_scheme``'s.
         """
         self.mlwe_scheme = MLWE_scheme
         self.ell = ell if ell else MLWE_scheme.rings[0].ell
         self.ring = MLWE_scheme.special_rings[0]
-        self.radix_log_base = radix_log_base
-        self.balanced = MLWE_scheme.balanced if balanced is None else balanced
-        self.digits = digits
-        self.native_gadget_params = native_gadget_params(
-            radix_log_base, digits, self.balanced
+        self.gadget_params = (
+            gadget_params if gadget_params is not None else GadgetParams()
         )
+        self.balanced = MLWE_scheme.balanced if balanced is None else balanced
+        self.native_gadget_params = self.gadget_params.native(self.balanced)
 
     def gadget_scalars(self, lvl: int = 0) -> list[list[int]]:
         """The gadget elements, as the per-prime scaling vectors to encrypt.
@@ -49,11 +46,7 @@ class MGSW_Scheme:
         follow ``lvl``, so the first ``ell - lvl`` primes carry it.
         """
         return self.mlwe_scheme.gadget_scalars(
-            lvl,
-            self.radix_log_base,
-            ring=self.ring,
-            primes=self.ell - lvl,
-            digits=self.digits,
+            lvl, self.gadget_params, ring=self.ring, primes=self.ell - lvl
         )
 
     def gadget_size(self, lvl: int = 0) -> int:
@@ -61,10 +54,11 @@ class MGSW_Scheme:
         component: the length of :meth:`gadget_scalars`, without building them.
         """
         primes = self.ring.primes[: self.ell - lvl]
-        if not self.radix_log_base:
+        log_base, digits = self.gadget_params.log_base, self.gadget_params.digits
+        if not log_base:
             return len(primes)
-        every = [lib.gadget_radix_digits(p, self.radix_log_base) for p in primes]
-        return sum(e if self.digits is None else min(self.digits, e) for e in every)
+        every = [lib.gadget_radix_digits(p, log_base) for p in primes]
+        return sum(e if digits is None else min(digits, e) for e in every)
 
     def encrypt(
         self, msg: RNSPolynomial, key: MLWE_Key, lvl: int = 0, n_threads: int = 0

@@ -247,6 +247,18 @@ static void RNS_FN(rns_row_digit)(uint64_t *out, const RNS_W *in, uint64_t shift
         out[i] = (in[i] >> shift) & mask;
 }
 
+// The same digit of every coefficient plus `offset` mod q (offset < q).
+static void RNS_FN(rns_row_digit_offset)(uint64_t *out, const RNS_W *in, uint64_t shift,
+                                         uint64_t mask, uint64_t offset, uint64_t q, uint64_t N)
+{
+    for (uint64_t i = 0; i < N; i++)
+    {
+        uint64_t v = (uint64_t)in[i] + offset;
+        v -= q & (0 - (uint64_t)(v >= q));
+        out[i] = (v >> shift) & mask;
+    }
+}
+
 // Scatter a reduced 64-bit array into the split layout of one row.
 static void RNS_FN(rns_row_scatter_split)(RNS_W *out, const uint64_t *in, uint64_t N,
                                           uint64_t split_degree, uint64_t poly_size)

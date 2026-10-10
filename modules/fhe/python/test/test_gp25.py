@@ -10,7 +10,7 @@ import pytest
 from vfhe import engine
 from vfhe.arith import Polynomial, Ring
 from vfhe.fhe import GP25, mod_switch
-from vfhe.mlwe import MLWE_Key, MLWE_Scheme, MLWE_Set
+from vfhe.mlwe import GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set
 
 
 def _key_with(scheme, positions):
@@ -253,7 +253,7 @@ def _bootstrap_case(
     input_key, rotation_key, output_key, bits = _keys(
         io, rotation, h=h, ternary=ternary, same_key=same_key
     )
-    gp25 = GP25(rotation, radix_log_base=radix, trace_repack=trace)
+    gp25 = GP25(rotation, gadget_params=GadgetParams(radix), trace_repack=trace)
     key = gp25.generate_bootstrap_key(
         input_key,
         rotation_key,
@@ -444,26 +444,26 @@ def test_bootstrap_needs_an_output_key():
         )
 
 
-@pytest.mark.parametrize(("gp25_radix", "own", "log_base"), [(10, 0, 0), (None, 4, 4)])
-def test_the_weight_reduction_has_its_own_radix(
-    deterministic_prng, gp25_radix, own, log_base
-):
+@pytest.mark.parametrize(
+    ("gp25_radix", "own"), [(10, GadgetParams()), (None, GadgetParams(4))]
+)
+def test_the_weight_reduction_has_its_own_gadget(deterministic_prng, gp25_radix, own):
     deterministic_prng(0x5AB0000A)
     random.seed(0x5AB0000A)
     io, rotation = _schemes(64, 64, primes=(50, 50, 50, 50))
     input_key, rotation_key, output_key, bits = _keys(io, rotation)
-    gp25 = GP25(rotation, radix_log_base=gp25_radix)
+    gp25 = GP25(rotation, gadget_params=GadgetParams(gp25_radix))
     key = gp25.generate_bootstrap_key(
         input_key,
         rotation_key,
         output_key,
         4,
         bits,
-        hw_reducing_hybrid=log_base == 0,
-        hw_reducing_radix_log_base=own,
+        hw_reducing_hybrid=own.log_base is None,
+        hw_reducing_gadget_params=own,
     )
     assert key.hw_reducing_key is not None
-    assert key.hw_reducing_key.log_base == log_base
+    assert key.hw_reducing_key.gadget_params == own
     q = rotation.rings[0].q_l
     table = list(range(8))
     tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in table])
@@ -486,8 +486,7 @@ def test_fewer_digits_in_the_weight_reduction(deterministic_prng):
         4,
         bits,
         hw_reducing_hybrid=False,
-        hw_reducing_radix_log_base=4,
-        hw_reducing_digits=8,
+        hw_reducing_gadget_params=GadgetParams(4, 8),
     )
     assert key.hw_reducing_key is not None
     component = key.hw_reducing_key.mlwe[0]
@@ -508,7 +507,7 @@ def test_fewer_digits_in_the_rotation(deterministic_prng):
     io, rotation = _schemes(64, 64, primes=(50, 50))
     assert rotation.rings[0].ell == 1
     input_key, rotation_key, output_key, bits = _keys(io, rotation)
-    gp25 = GP25(rotation, radix_log_base=10, digits=4)
+    gp25 = GP25(rotation, gadget_params=GadgetParams(10, 4))
     key = gp25.generate_bootstrap_key(input_key, rotation_key, output_key, 4, bits)
     assert gp25.mgsw_scheme.gadget_size(0) == 4
     q = rotation.rings[0].q_l

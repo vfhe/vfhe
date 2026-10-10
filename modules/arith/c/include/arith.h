@@ -1004,6 +1004,14 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
        a wider base than `in`. */
     void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
                                          uint64_t log_base, uint64_t level);
+    /* The same digit of the residue rounded to the nearest multiple of
+       2^(log_base * dropped) first -- of (x + 2^(log_base * dropped - 1)) mod
+       p_idx -- so digits `dropped` and up are an approximate decomposition of
+       x whose error is at most half of that. `level` >= `dropped`; 0 dropped
+       is polynomial_RNSc_decompose_digit. */
+    void polynomial_RNSc_decompose_digit_rounded(RNSc_Polynomial out, RNSc_Polynomial in,
+                                                 uint64_t idx, uint64_t log_base, uint64_t level,
+                                                 uint64_t dropped);
     void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in);
     void polynomial_RNS_broadcast_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t slot_idx);
     void polynomial_RNS_rotate_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t rot);

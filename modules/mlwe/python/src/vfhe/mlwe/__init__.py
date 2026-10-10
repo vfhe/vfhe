@@ -5,7 +5,7 @@
 from . import io as _io  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from .lwe import LWE, LWE_Key
 from .mgsw import CMUX, MGSW, NCMUX, MGSW_Scheme
-from .mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, PlaintextMatrix
+from .mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set, PlaintextMatrix
 
 __all__ = [
     "CMUX",
@@ -13,6 +13,7 @@ __all__ = [
     "MGSW",
     "MLWE",
     "NCMUX",
+    "GadgetParams",
     "LWE_Key",
     "MGSW_Scheme",
     "MLWE_Key",

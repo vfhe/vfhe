@@ -29,7 +29,7 @@ from vfhe.arith import Polynomial, repr
 from vfhe.crypto import entropy
 from vfhe.engine import ffi, lib
 from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
-from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, lib_rlwe
+from vfhe.mlwe.mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set, lib_rlwe
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -134,32 +134,28 @@ class GP25:
     `blind_rotate_exponents` starts from the exponents, for a caller that
     switches the input to ``Z_2N`` itself.
 
-    ``gsw_ell`` and ``radix_log_base`` choose the MGSW gadget as in
-    :class:`MGSW_Scheme`; every other key uses the same radix unless told
-    otherwise. ``digits`` is how many digits of each residue the keys over
-    ``R_N`` (MGSW, automorphism, trace) keep: fewer than a prime has is the
-    approximate decomposition, for a rotation level 0 over one prime (see
-    :meth:`MLWE_Scheme.gadget_scalars`). Everything runs
-    on the library's threads (``vfhe.engine.set_num_threads``).
+    ``gsw_ell`` and ``gadget_params`` choose the MGSW gadget as in
+    :class:`MGSW_Scheme`, and every other key uses the same parameters
+    unless told otherwise (:class:`GadgetParams`; fewer digits than a prime
+    has, the approximate decomposition, needs a rotation level 0 over one
+    prime). Everything runs on the library's threads
+    (``vfhe.engine.set_num_threads``).
     """
 
     def __init__(
         self,
         scheme: MLWE_Scheme,
         gsw_ell: int | None = None,
-        radix_log_base: int | None = None,
+        gadget_params: GadgetParams | None = None,
         trace_repack: bool = True,
-        digits: int | None = None,
     ):
         self.scheme = scheme
         self.ring = scheme.rings[0]
-        self.radix_log_base = radix_log_base
-        self.digits = digits
+        self.gadget_params = (
+            gadget_params if gadget_params is not None else GadgetParams()
+        )
         self.mgsw_scheme = MGSW_Scheme(
-            scheme,
-            ell=gsw_ell,
-            radix_log_base=radix_log_base,
-            digits=digits,
+            scheme, ell=gsw_ell, gadget_params=self.gadget_params
         )
         self.trace_repack = trace_repack
 
@@ -240,8 +236,7 @@ class GP25:
         ternary: bool = True,
         hw_reducing_lvl: int | None = None,
         hw_reducing_hybrid: bool = True,
-        hw_reducing_radix_log_base: int | None = None,
-        hw_reducing_digits: int | None = None,
+        hw_reducing_gadget_params: GadgetParams | None = None,
         n_threads: int = 0,
     ) -> SAB_Key:
         """The bootstrapping key: inputs under ``output_key`` (at
@@ -263,10 +258,10 @@ class GP25:
         secure at that level's modulus: its special ring's, or with
         ``hw_reducing_hybrid=False`` the level's own (a BV key switch; pair it
         with a radix). Never generate it at a higher level. Its gadget is
-        ``hw_reducing_radix_log_base``: by default this GP25's radix, and 0 for
-        the RNS gadget whatever that radix is; ``hw_reducing_digits`` is
-        how many digits it keeps (all by default; fewer at a level over one
-        prime only, see :meth:`MLWE_Scheme.gadget_scalars`).
+        ``hw_reducing_gadget_params``, by default this GP25's; pass
+        ``GadgetParams()`` for the RNS gadget whatever that is, and fewer
+        digits than a prime has only at a level over one prime (see
+        :meth:`MLWE_Scheme.gadget_scalars`).
 
         With ``output_key=None`` there is neither that switch nor an output
         switch (see the module); it needs ``trace_repack``, since the packing
@@ -335,9 +330,8 @@ class GP25:
                 rotation_key,
                 2 * self.ring.N - 1,
                 lvl=0,
-                radix_log_base=self.radix_log_base,
+                gadget_params=self.gadget_params,
                 n_threads=n_threads,
-                digits=self.digits,
             ),
         )
 
@@ -347,11 +341,6 @@ class GP25:
             )
             if not 0 <= lvl < len(io_scheme.rings):
                 raise ValueError("hw_reducing_lvl is not a level of the keys' scheme")
-            radix = (
-                self.radix_log_base
-                if hw_reducing_radix_log_base is None
-                else hw_reducing_radix_log_base or None
-            )
             sab.hw_reducing_lvl = lvl
             sab.hw_reducing_key = cast(
                 "MLWE_Set",
@@ -359,10 +348,13 @@ class GP25:
                     input_key,
                     output_key,
                     lvl,
-                    radix_log_base=radix,
+                    gadget_params=(
+                        self.gadget_params
+                        if hw_reducing_gadget_params is None
+                        else hw_reducing_gadget_params
+                    ),
                     n_threads=n_threads,
                     hybrid=hw_reducing_hybrid,
-                    digits=hw_reducing_digits,
                 ),
             )
 
@@ -376,9 +368,8 @@ class GP25:
                     rotation_key,
                     gens=[(1 << j) + 1 for j in range(1, levels + 1)],
                     lvl=0,
-                    radix_log_base=self.radix_log_base,
+                    gadget_params=self.gadget_params,
                     n_threads=n_threads,
-                    digits=self.digits,
                 ),
             )
             if output_key is not None and (
@@ -388,7 +379,7 @@ class GP25:
                     output_key,
                     rotation_key,
                     cast("int", output_lvl),
-                    radix_log_base=self.radix_log_base,
+                    gadget_params=self.gadget_params,
                     n_threads=n_threads,
                 )
         else:
@@ -396,7 +387,7 @@ class GP25:
                 cast("MLWE_Key", output_key),
                 rotation_key.extract_lwe_key(),
                 cast("int", output_lvl),
-                radix_log_base=self.radix_log_base,
+                gadget_params=self.gadget_params,
                 n_threads=n_threads,
             )
         return sab
