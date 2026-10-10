@@ -233,6 +233,7 @@ CASES = {
         "special": 0,
     },
     "several_levels": {"primes": (50, 50, 50, 50)},
+    "grouped_digits": {"primes_per_digit": 2, "primes": (50, 50, 50, 50), "special": 2},
 }
 
 
@@ -244,6 +245,7 @@ def _bootstrap_case(
     trace=True,
     same_key=False,
     radix=None,
+    primes_per_digit=1,
     hybrid=True,
     **scheme_options,
 ):
@@ -253,7 +255,11 @@ def _bootstrap_case(
     input_key, rotation_key, output_key, bits = _keys(
         io, rotation, h=h, ternary=ternary, same_key=same_key
     )
-    gp25 = GP25(rotation, gadget_params=GadgetParams(radix), trace_repack=trace)
+    gp25 = GP25(
+        rotation,
+        gadget_params=GadgetParams(radix, primes_per_digit=primes_per_digit),
+        trace_repack=trace,
+    )
     key = gp25.generate_bootstrap_key(
         input_key,
         rotation_key,

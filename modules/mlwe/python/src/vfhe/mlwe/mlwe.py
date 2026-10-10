@@ -39,16 +39,19 @@ class GadgetParams:
     """How a gadget product decomposes an element, which is what its keys are
     generated for.
 
-    ``log_base`` ``None`` is the RNS gadget: one digit per prime, the residue.
-    ``log_base`` ``w`` is the radix gadget: each residue split into
-    base-``2^w`` digits, of which the top ``digits`` are kept (all by
-    default). Keeping fewer than a prime has is the approximate decomposition,
-    over one prime only; see :meth:`MLWE_Scheme.gadget_scalars`. The RNS
-    digit's centering (``balanced``) is not here: keys do not depend on it.
+    ``log_base`` ``None`` is the RNS gadget: one digit per prime, the residue,
+    or with ``primes_per_digit`` ``a`` one per group of ``a`` primes, the value
+    modulo their product. ``log_base`` ``w`` is the radix gadget: each residue
+    split into base-``2^w`` digits, of which the top ``digits`` are kept (all
+    by default). Keeping fewer than a prime has is the approximate
+    decomposition, over one prime only; see :meth:`MLWE_Scheme.gadget_scalars`.
+    Whether the digits are balanced (``balanced``) is not here: keys do not
+    depend on it.
     """
 
     log_base: int | None = None
     digits: int | None = None
+    primes_per_digit: int = 1
 
     def __post_init__(self) -> None:
         if self.log_base is not None and self.log_base < 1:
@@ -58,15 +61,20 @@ class GadgetParams:
                 raise ValueError("a number of digits needs the radix gadget")
             if self.digits < 1:
                 raise ValueError("at least one digit must be kept")
+        if self.primes_per_digit < 1:
+            raise ValueError("a digit covers at least one prime")
+        if self.primes_per_digit > 1 and self.log_base is not None:
+            raise ValueError("primes are grouped for the RNS gadget only")
 
     def native(self, balanced: bool = True):
         """The parameters as the native products take them (a
-        ``GadgetParams *``), with the RNS digit centered if ``balanced``."""
+        ``GadgetParams *``), with balanced digits if ``balanced``."""
         return ffi.new(
             "GadgetParams *",
             {
                 "log_base": self.log_base or 0,
                 "digits": self.digits or 0,
+                "primes_per_digit": self.primes_per_digit,
                 "balanced": balanced,
             },
         )
@@ -102,7 +110,7 @@ class MLWE_Scheme:
 
         - Single ``RNSRing``: the level chain is derived automatically by dropping the top prime one at a time. ``special_primes`` reserves that many top
           primes as the special (key-switching) primes, and ``max_lvl`` caps the
-          number of levels.
+          number of levels, by default every one down to a single prime.
         - List of ``RNSRing``: the levels are given explicitly. ``rings[i]`` is
           level ``i`` and ``special_rings[i]`` its special-prime-extended ring
           (required when ``special_primes > 0``; defaults to ``rings``
@@ -110,16 +118,32 @@ class MLWE_Scheme:
           rescaling.
 
         ``balanced`` decomposes against the RNS gadget into centered digits, in
-        ``(-p_j/2, p_j/2]``, rather than into residues in ``[0, p_j)``. The keys
-        are the same either way, and the centered digits add about one bit less
-        noise standard deviation at the same cost. The key-switch keys the
-        scheme generates carry the choice, and :class:`MGSW_Scheme` follows it.
+        ``(-p_j/2, p_j/2]``, rather than into residues in ``[0, p_j)``, and
+        against the radix gadget into balanced base-``2^w`` digits of the
+        centered residue, in ``[-2^(w-1), 2^(w-1))`` but the top one, rather
+        than into the residue's unsigned digits (``w = 1`` always takes the
+        unsigned ones, which are no larger). The keys are the same either way,
+        and the balanced digits add about one bit less noise standard deviation
+        at the same cost. The key-switch keys the scheme generates carry the
+        choice, and :class:`MGSW_Scheme` follows it.
         """
         first = rings if isinstance(rings, ArithParent) else rings[0]
         first.require(Capability.QUOTIENT_POLY_RING | Capability.TOWER)
 
         if isinstance(rings, RNSRing):
-            max_lvl = max_lvl if max_lvl is not None else len(rings.primes) - 1
+            levels = len(rings.primes) - special_primes
+            if special_primes < 0 or levels < 1:
+                raise ValueError(
+                    f"{special_primes} special primes leave no level in a ring "
+                    f"of {len(rings.primes)} primes"
+                )
+            max_lvl = max_lvl if max_lvl is not None else levels
+            if not 1 <= max_lvl <= levels:
+                raise ValueError(
+                    f"max_lvl must be between 1 and {levels}, the levels a ring "
+                    f"of {len(rings.primes)} primes has with {special_primes} "
+                    "special primes"
+                )
             if special_primes == 0:
                 self.rings = [
                     rings.quotient_ring(ell=rings.ell - i) for i in range(max_lvl)
@@ -222,8 +246,9 @@ class MLWE_Scheme:
         """The gadget a key at ``lvl`` must be generated against.
 
         One entry per gadget element, each a per-prime scaling vector to
-        multiply a key polynomial by (zero in every slot but one, so the
-        product is that multiple of the slot's CRT idempotent).
+        multiply a key polynomial by (zero in every slot but one, or but a
+        group's, so the product is that multiple of the slots' CRT
+        idempotent).
 
         The default gadget is the RNS one: element ``i`` is ``P * e_i``, one
         per prime, and a key switch decomposes an element into its residues.
@@ -236,6 +261,16 @@ class MLWE_Scheme:
         ``ceil(log2(p_i) / w)`` times the keys and the work. ``w`` must be
         below the bit size of every prime of the key's ring.
 
+        With ``gadget_params.primes_per_digit`` ``a`` (RNS gadget only), the
+        primes form groups of ``a`` (the last may be smaller) and element ``J``
+        is ``P * e_J``, the idempotent of group ``J``: a key switch decomposes
+        an element into its values modulo each group's product ``Q_J``, lifted
+        by the fast base conversion, about ``a`` times fewer keys and products.
+        A digit is then
+        up to about ``a * Q_J / 2``, which ``P`` must make up for: the key
+        switch's noise is about ``Q_J / P`` times the error of the keys,
+        scaled as for the per-prime gadget. Nothing checks that ``P`` does.
+
         The key ring is level ``lvl``'s special ring and every one of its
         primes carries a gadget element; ``ring`` and ``primes`` override that,
         for a key that lives in a fixed ring while the ciphertexts it consumes
@@ -245,6 +280,8 @@ class MLWE_Scheme:
         index of their prime, ascending, over the primes of level ``lvl``'s
         ring, then the primes it does not carry (the special ones). That is
         not ``ring.primes`` order unless the ring's prime indices ascend.
+        Groups follow the same order, the level's primes and the others
+        grouped apart.
 
         ``gadget_params.digits`` keeps only the top ``digits`` digits of every
         residue (all of them by default). Keeping fewer than a prime has is the
@@ -270,12 +307,17 @@ class MLWE_Scheme:
         scale = ring.modulus_ratio(self.rings[lvl])
         source = self.rings[lvl].mask
         indices = ring.prime_indices
-        order = sorted(
-            range(primes),
-            key=lambda i: (not (source >> indices[i]) & 1, indices[i]),
-        )
         scalars = []
-        for i in order:
+        for group in self._gadget_groups(lvl, ring, primes, params.primes_per_digit):
+            if len(group) > 1:
+                scalars.append(
+                    [
+                        scale % prime if i in group else 0
+                        for i, prime in enumerate(ring.primes[: ring.ell])
+                    ]
+                )
+                continue
+            i = group[0]
             prime = ring.primes[i]
             every = (
                 lib_rlwe.lib.gadget_radix_digits(prime, radix_log_base)
@@ -293,6 +335,25 @@ class MLWE_Scheme:
                 factor = scale << (radix_log_base * k) if radix_log_base else scale
                 scalars.append([0] * i + [factor % prime] + [0] * (ring.ell - 1 - i))
         return scalars
+
+    def _gadget_groups(
+        self, lvl: int, ring: RNSRing, primes: int, per_digit: int
+    ) -> list[list[int]]:
+        """The positions in ``ring`` of the first ``primes`` primes, grouped
+        ``per_digit`` at a time in the order of :meth:`gadget_scalars`: the
+        primes of level ``lvl`` by ascending base index, then the others."""
+        source = self.rings[lvl].mask
+        indices = ring.prime_indices
+        order = sorted(range(primes), key=lambda i: indices[i])
+        parts = (
+            [i for i in order if (source >> indices[i]) & 1],
+            [i for i in order if not (source >> indices[i]) & 1],
+        )
+        return [
+            part[start : start + per_digit]
+            for part in parts
+            for start in range(0, len(part), per_digit)
+        ]
 
     def _gen_ksk_components(
         self,
@@ -1490,8 +1551,8 @@ class MLWE_Set:
 
         ``gadget_params`` are those the arrays were generated with (see
         :class:`GadgetParams`, the RNS gadget by default); they travel with the
-        key, since a key switch has to decompose the same way. ``balanced`` is
-        the RNS gadget's digit the key switch takes (see :class:`MLWE_Scheme`).
+        key, since a key switch has to decompose the same way. ``balanced`` picks
+        the digit the key switch takes (see :class:`MLWE_Scheme`).
 
         The key uses the samples in place, converted to the NTT domain: the
         set keeps them in `mlwe`, and they must not be modified afterwards.
@@ -1547,6 +1608,19 @@ class MLWE_Set:
             result_obj[j] = ffi.cast("void *", array[j].obj)
         out.obj = result_obj
         return out
+
+
+def _monomial(ring: RNSRing, exponent: int, minus_one: bool = False) -> RNSPolynomial:
+    """``X^exponent`` (minus 1 with ``minus_one``) over ``ring``, transformed."""
+    n = ring.N
+    exponent %= 2 * n
+    coeffs = [0] * n
+    coeffs[exponent % n] = 1 if exponent < n else -1
+    if minus_one:
+        coeffs[0] -= 1
+    monomial = Polynomial(ring).from_bigint_array(coeffs)
+    monomial.to_NTT()
+    return monomial
 
 
 class MLWE:
@@ -1673,6 +1747,30 @@ class MLWE:
             raise ValueError("failed: not (in_rlwe.repr == in_poly.repr == repr.ntt)")
         lib_rlwe.lib.mlwe_RNS_mul_by_poly(self.obj, in_rlwe.obj, in_poly.as_element())
         self.repr = repr.ntt
+
+    def multiply_by_monomial(  # noqa: PYI019 - Self needs 3.11
+        self: CtT, exponent: int, minus_one: bool = False
+    ) -> CtT:
+        """``self * X^exponent``, or ``self * (X^exponent - 1)`` with
+        ``minus_one``, for any integer ``exponent`` (``X^N = -1``).
+
+        The result has ``self``'s ring (special primes included), level, type
+        and representation. In the coefficient domain the product is a signed
+        shift, adding no noise beyond permuting it; in the NTT domain it is the
+        pointwise product with the monomial's transform, which saves the two
+        transforms a shift would need there.
+        """
+        out = self.new_like()
+        if self.repr == repr.ntt:
+            out.multiply_poly(self, _monomial(self.ring, exponent, minus_one))
+            return out
+        exponent %= 2 * self.ring.N
+        if minus_one:
+            lib_rlwe.lib.mlwe_RNSc_mul_by_xai_minus1(out.obj, self.obj, exponent)
+        else:
+            lib_rlwe.lib.mlwe_RNSc_mul_by_xai(out.obj, self.obj, exponent)
+        out.repr = repr.coeff
+        return out
 
     def multiply_scalar(self, in_rlwe, pointer_to_int_list):
         if self is not in_rlwe:

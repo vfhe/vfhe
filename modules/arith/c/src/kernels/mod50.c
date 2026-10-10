@@ -201,6 +201,49 @@ void mod_eltwise_fma_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n,
     }
 }
 
+void mod_eltwise_lifted_combination_50(uint64_t *out, const uint64_t *const *in,
+                                       const uint64_t *q_in, const uint64_t *scale, uint64_t m,
+                                       bool centered, uint64_t n, Modulus mod)
+{
+    const uint64_t p = mod->q;
+    uint64_t s[MOD_COMBINATION_MAX_TERMS], sp[MOD_COMBINATION_MAX_TERMS];
+    uint64_t half[MOD_COMBINATION_MAX_TERMS], h[MOD_COMBINATION_MAX_TERMS];
+    assert(m <= MOD_COMBINATION_MAX_TERMS);
+    for (uint64_t t = 0; t < m; t++)
+    {
+        assert(q_in[t] < (1ULL << 52));
+        s[t] = modq(scale[t], mod);
+        sp[t] = (uint64_t)(((unsigned __int128)s[t] << 52) / p);
+        half[t] = centered ? q_in[t] >> 1 : UINT64_MAX;
+        h[t] = negate_modq(mul_modq(s[t], modq(q_in[t], mod), mod), p);
+    }
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i low52b_mask = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i neg_p = _mm512_set1_epi64(-(int64_t)p);
+    // A copy no store to `out` can alias, so its constants stay in registers.
+    struct _Modulus m_copy = *mod;
+    for (uint64_t j = 0; j < n; j += 8)
+    {
+        // Each term is a lazy Shoup product in [0, 2p) plus the centering
+        // correction, below 3p < 2^52, so the 64-bit lanes sum them all
+        // without reducing until the end.
+        __m512i acc = zero;
+        for (uint64_t t = 0; t < m; t++)
+        {
+            const __m512i v = _mm512_loadu_si512((const void *)(in[t] + j));
+            const __m512i q_hat = _mm512_madd52hi_epu64(zero, _mm512_set1_epi64(sp[t]), v);
+            const __m512i r = _mm512_and_epi64(
+                _mm512_madd52lo_epu64(_mm512_madd52lo_epu64(zero, _mm512_set1_epi64(s[t]), v),
+                                      q_hat, neg_p),
+                low52b_mask);
+            const __mmask8 above = _mm512_cmpgt_epu64_mask(v, _mm512_set1_epi64(half[t]));
+            acc = _mm512_add_epi64(acc, r);
+            acc = _mm512_mask_add_epi64(acc, above, acc, _mm512_set1_epi64(h[t]));
+        }
+        _mm512_storeu_si512((void *)(out + j), _mm512_hexl_reduce_64b_50(acc, &m_copy));
+    }
+}
+
 void mod_eltwise_add_scalar_50(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
                                Modulus mod)
 {

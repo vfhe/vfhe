@@ -78,6 +78,26 @@ def _mul_error(Rq, Rp, scheme, m_out, m1, m2):
     return max(abs(c) for c in diff)
 
 
+@pytest.mark.parametrize("special_primes", [0, 1, 2, 3])
+def test_level_chain_reaches_one_prime(special_primes):
+    ring = Ring(64, prime_size=[30] * 4, split_degree=1)
+    scheme = MLWE_Scheme(ring, special_primes=special_primes)
+    assert [r.ell for r in scheme.rings] == list(range(4 - special_primes, 0, -1))
+    assert scheme.special_primes == special_primes
+
+
+def test_level_chain_of_one_prime():
+    scheme = MLWE_Scheme(Ring(64, prime_size=[30], split_degree=1))
+    assert [r.ell for r in scheme.rings] == [1]
+
+
+@pytest.mark.parametrize("special_primes, max_lvl", [(4, None), (1, 4), (1, 0)])
+def test_level_chain_is_checked(special_primes, max_lvl):
+    ring = Ring(64, prime_size=[30] * 4, split_degree=1)
+    with pytest.raises(ValueError):
+        MLWE_Scheme(ring, special_primes=special_primes, max_lvl=max_lvl)
+
+
 def test_encrypt_decrypt_add_sub_mul(bv):
     _Rq, Rp, scheme = bv
     key = scheme.key_gen_sparse(N // 8, 3.2)
@@ -224,8 +244,38 @@ def test_balanced_is_the_default(bv):
     assert MGSW_Scheme(plain, balanced=True).balanced
 
 
-def _digits(poly, ring, balanced):
-    """The RNS gadget's digits of ``poly``, in the order it takes them, in ``ring``."""
+def _radix_digits(r, p, log_base, balanced):
+    """The base-``2^log_base`` digits of the residue ``r`` mod ``p``, lowest
+    first: of ``r`` itself, or balanced ones of its centered value, each
+    taken with a carry into the next, the top one taking what is left."""
+    count = -(-p.bit_length() // log_base)
+    if not balanced or log_base == 1:
+        return [(r >> (log_base * k)) % (1 << log_base) for k in range(count)]
+    base, x, digits = 1 << log_base, r - p if r > p // 2 else r, []
+    for _ in range(count - 1):
+        digit = (x + base // 2) % base - base // 2
+        digits.append(digit)
+        x = (x - digit) // base
+    return [*digits, x]
+
+
+def _group_digit(group, balanced):
+    """The fast base conversion out of the product of ``group``'s primes, one
+    value per coefficient: ``sum_k [x_k (Q/p_k)^-1]_{p_k} * Q/p_k``, each
+    bracket centered if ``balanced``."""
+    modulus = math.prod(p for p, _ in group)
+    terms = []
+    for p, row in group:
+        rest = modulus // p
+        scaled = [r * pow(rest, -1, p) % p for r in row]
+        if balanced:
+            scaled = [v - p if v > p // 2 else v for v in scaled]
+        terms.append([v * rest for v in scaled])
+    return [sum(column) for column in zip(*terms, strict=True)]
+
+
+def _digits(poly, ring, balanced, log_base=None, per_digit=1):
+    """The gadget's digits of ``poly``, in the order it takes them, in ``ring``."""
     poly.to_coeff()
     residues = sorted(
         zip(
@@ -235,6 +285,24 @@ def _digits(poly, ring, balanced):
             strict=True,
         )
     )
+    if per_digit > 1:
+        return [
+            Polynomial(ring).from_bigint_array(
+                _group_digit(
+                    [(p, row) for _, p, row in residues[start : start + per_digit]],
+                    balanced,
+                )
+            )
+            for start in range(0, len(residues), per_digit)
+        ]
+    if log_base:
+        return [
+            Polynomial(ring).from_bigint_array(list(column))
+            for _, p, row in residues
+            for column in zip(
+                *(_radix_digits(r, p, log_base, balanced) for r in row), strict=True
+            )
+        ]
     return [
         Polynomial(ring).from_bigint_array(
             [r - p if balanced and r > p // 2 else r for r in row]
@@ -243,12 +311,18 @@ def _digits(poly, ring, balanced):
     ]
 
 
-def _gadget_product(keys, polys, balanced):
+def _gadget_product(keys, polys, balanced, params):
     """``sum_i sum_j d_j(polys[i]) * keys[i][j]``, as its ``a`` and ``b``."""
     products = [
         (d * k.get_a_poly(0), d * k.get_b_poly())
         for row, poly in zip(keys, polys, strict=True)
-        for d, k in zip(_digits(poly, row[0].ring, balanced), row, strict=True)
+        for d, k in zip(
+            _digits(
+                poly, row[0].ring, balanced, params.log_base, params.primes_per_digit
+            ),
+            row,
+            strict=True,
+        )
     ]
     return [
         functools.reduce(operator.add, terms) for terms in zip(*products, strict=True)
@@ -260,26 +334,43 @@ def _coeffs(poly):
     return poly.get_polynomial()
 
 
+@pytest.mark.parametrize(
+    "params",
+    [
+        GadgetParams(),
+        GadgetParams(1),
+        GadgetParams(4),
+        GadgetParams(13),
+        GadgetParams(primes_per_digit=2),
+        GadgetParams(primes_per_digit=3),
+    ],
+    ids=["rns", "radix1", "radix4", "radix13", "groups2", "groups3"],
+)
 @pytest.mark.parametrize("balanced", [False, True])
-def test_gadget_products_take_the_chosen_digit(balanced):
+def test_gadget_products_take_the_chosen_digit(balanced, params):
     """A key switch and a CMUX, recomputed from their digits.
 
     Without special primes nothing is rounded, so both are exactly the gadget
     products of their digits -- with ``balanced=False``, of the ``[0, p_j)``
-    residues the RNS gadget took before it had the option.
+    residues (or their unsigned radix digits) the gadget took before it had
+    the option. Grouped digits are fast base conversions, which are exact
+    only up to a multiple of their group's modulus that the gadget element
+    removes: the product checks that the conversion is the centered (or
+    uncentered) one, not just some lift.
     """
     _Rq, Rp, scheme = _rank_scheme(N, 1, 0, balanced=balanced)
     key = scheme.key_gen_sparse(N // 8, SIGMA)
     key_out = scheme.key_gen_sparse(N // 8, SIGMA)
 
-    ksk = cast("MLWE_Set", scheme.gen_ksk(key_out, key, lvl=0))
+    ksk = cast("MLWE_Set", scheme.gen_ksk(key_out, key, lvl=0, gadget_params=params))
     c = enc(scheme, Rp, Rp.random_element(), key)
-    a, b = _gadget_product([ksk.mlwe[0]], [c.get_a_poly(0)], balanced)
+    a, b = _gadget_product([ksk.mlwe[0]], [c.get_a_poly(0)], balanced, params)
     out = scheme.keyswitch(c, ksk)
     assert _coeffs(out.get_a_poly(0)) == _coeffs(-a)
     assert _coeffs(out.get_b_poly()) == _coeffs(c.get_b_poly() - b)
 
-    selector = MGSW_Scheme(scheme).encrypt(Polynomial(Rp).from_array(ONE), key)
+    mgsw_scheme = MGSW_Scheme(scheme, gadget_params=params)
+    selector = mgsw_scheme.encrypt(Polynomial(Rp).from_array(ONE), key)
     c0, c1 = (enc(scheme, Rp, Rp.random_element(), key) for _ in range(2))
     diff = c1 - c0
     ell = selector.gadget_size
@@ -287,6 +378,7 @@ def test_gadget_products_take_the_chosen_digit(balanced):
         [selector.obj[:ell], selector.obj[ell:]],
         [diff.get_a_poly(0), diff.get_b_poly()],
         balanced,
+        params,
     )
     out = CMUX(c0, c1, selector)
     assert _coeffs(out.get_a_poly(0)) == _coeffs(c0.get_a_poly(0) + a)
@@ -375,6 +467,31 @@ def test_keyswitch_noise_of_either_digit(bv):
 
     measured = _added_noise(scheme, Rp, operations)
     _assert_balanced_saves_a_bit(measured, scheme.ring.primes, scheme.r)
+
+
+def test_keyswitch_noise_of_either_radix_digit(bv):
+    """The radix gadget's balanced digits, ``(2^(2w) + 2) / 12`` of second
+    moment against about ``2^(2w) / 3`` for the unsigned ones."""
+    _Rq, Rp, scheme = bv
+    params = GadgetParams(9)
+
+    def operations(key):
+        key_out = scheme.key_gen_sparse(N // 8, SIGMA)
+        ksk = scheme.gen_ksk(key_out, key, lvl=0, gadget_params=params)
+        plain = MLWE_Set(ksk.mlwe, gadget_params=params, balanced=False)
+        return key_out, [
+            functools.partial(scheme.keyswitch, ksk=k) for k in (ksk, plain)
+        ]
+
+    balanced, plain = _added_noise(scheme, Rp, operations)
+    spans = [
+        min(9, p.bit_length() - 9 * k)
+        for p in scheme.ring.primes
+        for k in range(-(-p.bit_length() // 9))
+    ]
+    variance = N * SIGMA**2 * sum((2 ** (2 * b) + 2) / 12 for b in spans)
+    assert abs(balanced - 0.5 * math.log2(variance)) < 0.25
+    assert abs(plain - balanced - 1) < 0.4
 
 
 def test_external_product_noise_of_either_digit(bv):
@@ -750,6 +867,161 @@ def test_mgsw_products_at_a_level(ghs, radix):
     ):
         assert out.lvl == 1
         assert out.ring == scheme.rings[1]
+        assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+
+
+def _phase(scheme, c, key):
+    phase = scheme.linear_decrypt(c, key)
+    phase.to_coeff()
+    return phase
+
+
+def _bits(before, after) -> float:
+    """log2 of the largest coefficient of ``after - before``."""
+    return math.log2(
+        max(1, *(abs(x) for x in (after - before).get_polynomial(signed=True)))
+    )
+
+
+@pytest.mark.parametrize("balanced", [False, True])
+def test_grouped_digits_at_every_level(balanced):
+    """Every gadget product over two primes per digit, at every level, with a
+    special modulus a little larger than a group: what each adds stays at the
+    rounding floor, as with a digit per prime, at half the keys (the last
+    group of an odd level has one prime)."""
+    Rq = Ring(N, prime_size=[45] * 4 + [50] * 2, split_degree=1)
+    scheme = MLWE_Scheme(Rq, special_primes=2, balanced=balanced)
+    params = GadgetParams(primes_per_digit=2)
+    key, key_out = (scheme.key_gen_sparse(N // 8, SIGMA) for _ in range(2))
+    ksk = scheme.gen_ksk(key_out, key, gadget_params=params)
+    aut = scheme.gen_ksk_automorphism(key, key, 5, gadget_params=params)
+    mgsw_scheme = MGSW_Scheme(scheme, gadget_params=params)
+    scheme.rlk = scheme.gen_rlk(key, key, gadget_params=params)
+
+    for lvl, ring in enumerate(scheme.rings):
+        assert _keys_per_component(ksk, lvl) == -(-ring.ell // 2) + 1
+        c = scheme.sample(ring.random_element(), key, lvl=lvl)
+        before = _phase(scheme, c, key)
+        rotated = before.automorphism(5)
+        one, zero = mgsw_scheme.encrypt_constants([1, 0], key, lvl=lvl)
+        assert one.gadget_size == -(-ring.ell // 2)
+        other = scheme.sample(ring.random_element(), key, lvl=lvl)
+        product = before * _phase(scheme, other, key)
+        product.to_coeff()
+        for out, out_key, expected in (
+            (c * other, key, product),
+            (scheme.keyswitch(c, ksk), key_out, before),
+            (scheme.automorphism(c, 5, aut), key, rotated),
+            (scheme.automorphisms(c, [5], [aut])[0], key, rotated),
+            (one.external_product(c), key, before),
+            (CMUX(other, c, one), key, before),
+            (CMUX(c, other, zero), key, before),
+        ):
+            assert out.lvl == lvl
+            assert _bits(expected, _phase(scheme, out, out_key)) < 8
+
+
+def test_grouped_digits_need_a_large_enough_special_modulus():
+    """Three 45-bit primes per digit against 100 bits of special modulus: a
+    digit of about the group's 135 bits leaves about 2^35 times the keys'
+    error after the division by P, and nothing stops it."""
+    Rq = Ring(N, prime_size=[45] * 3 + [50] * 2, split_degree=1)
+    scheme = MLWE_Scheme(Rq, special_primes=2)
+    key, key_out = (scheme.key_gen_sparse(N // 8, SIGMA) for _ in range(2))
+    c = scheme.sample(scheme.rings[0].random_element(), key)
+    before = _phase(scheme, c, key)
+    noise = [
+        _bits(
+            before,
+            _phase(
+                scheme,
+                scheme.keyswitch(
+                    c,
+                    scheme.gen_ksk(
+                        key_out,
+                        key,
+                        lvl=0,
+                        gadget_params=GadgetParams(primes_per_digit=a),
+                    ),
+                ),
+                key_out,
+            ),
+        )
+        for a in (1, 3)
+    ]
+    assert noise[0] < 8
+    assert noise[1] - noise[0] > 30
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"primes_per_digit": 0}, {"log_base": 4, "primes_per_digit": 2}],
+)
+def test_grouped_digits_are_checked(kwargs):
+    with pytest.raises(ValueError):
+        GadgetParams(**kwargs)
+
+
+def _monomial_poly(ring, exponent, minus_one=False):
+    """``X^exponent`` (minus 1) over ``ring``, from the definition."""
+    n, e = ring.N, exponent % (2 * ring.N)
+    coeffs = [0] * n
+    coeffs[e % n] = 1 if e < n else -1
+    if minus_one:
+        coeffs[0] -= 1
+    return Polynomial(ring).from_bigint_array(coeffs)
+
+
+@pytest.mark.parametrize("minus_one", [False, True])
+@pytest.mark.parametrize("ntt", [False, True])
+def test_multiply_by_monomial(ghs, ntt, minus_one):
+    """Every component times the monomial, for exponents in and outside
+    [0, 2N), at a level and over the special ring; the result
+    keeps the input's ring, level and representation."""
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, SIGMA)
+    samples = [
+        scheme.sample(scheme.rings[0].random_element(), key),
+        scheme.sample(scheme.rings[1].random_element(), key, lvl=1),
+        MLWE.from_components(
+            scheme,
+            [scheme.special_rings[0].random_element()],
+            scheme.special_rings[0].random_element(),
+        ),
+    ]
+    for c in samples:
+        c.to_NTT() if ntt else c.to_coeff()
+        for exponent in (0, 1, N - 1, N, 2 * N - 1, 2 * N + 3, -5):
+            out = c.multiply_by_monomial(exponent, minus_one=minus_one)
+            assert (out.ring, out.lvl, out.repr) == (c.ring, c.lvl, c.repr)
+            monomial = _monomial_poly(c.ring, exponent, minus_one)
+            for got, x in (
+                (out.get_a_poly(0), c.get_a_poly(0)),
+                (out.get_b_poly(), c.get_b_poly()),
+            ):
+                assert _coeffs(got) == _coeffs(x * monomial)
+
+
+@pytest.mark.parametrize("minus_one", [False, True])
+def test_mgsw_multiply_by_monomial(ghs, minus_one):
+    """An MGSW of 1 times X^e is an MGSW of X^e (or X^e - 1): its external
+    product multiplies by that, from rows in either representation, and the
+    two give the same rows."""
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, SIGMA)
+    (one,) = MGSW_Scheme(scheme).encrypt_constants([1], key)
+    m = Rp.random_element()
+    c = enc(scheme, Rp, m, key)
+    for exponent in (3, N + 7, -1):
+        from_ntt = one.multiply_by_monomial(exponent, minus_one)
+        coeff_rows = MGSW(one.scheme, obj=[row.copy() for row in one.obj])
+        coeff_rows.to_coeff()
+        from_coeff = coeff_rows.multiply_by_monomial(exponent, minus_one)
+        from_coeff.to_NTT()
+        for a, b in zip(from_ntt.obj, from_coeff.obj, strict=True):
+            assert _coeffs(a.get_b_poly()) == _coeffs(b.get_b_poly())
+        out = from_ntt.external_product(c)
+        expected = m * _monomial_poly(Rp, exponent, minus_one)
         assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
 
 

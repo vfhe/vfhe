@@ -199,4 +199,12 @@ void mod_reduce_array_mp(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uin
     mod_reduce_array_mp_gen(out, in_high, in_low, n, mod);
 }
 
+bool mod_eltwise_lifted_combination(uint64_t *out, const uint64_t *const *in, const uint64_t *q_in,
+                                    const uint64_t *scale, uint64_t m, bool centered, uint64_t n,
+                                    Modulus mod)
+{
+    mod_eltwise_lifted_combination_gen(out, in, q_in, scale, m, centered, n, mod);
+    return true;
+}
+
 #endif

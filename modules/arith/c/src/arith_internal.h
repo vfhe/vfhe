@@ -43,6 +43,12 @@ void mod_eltwise_add_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n
 void mod_eltwise_sub_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_reduce_gen(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
 void mod_eltwise_reduce_signed_gen(uint64_t *out, int64_t *in, uint64_t n, Modulus mod);
+/* The terms a fused lifted combination takes at most (see
+   mod_eltwise_lifted_combination). */
+#define MOD_COMBINATION_MAX_TERMS 64
+void mod_eltwise_lifted_combination_gen(uint64_t *out, const uint64_t *const *in,
+                                        const uint64_t *q_in, const uint64_t *scale, uint64_t m,
+                                        bool centered, uint64_t n, Modulus mod);
 void mod_eltwise_reduce_centered_gen(uint64_t *out, uint64_t *in, uint64_t q_in, uint64_t n,
                                      Modulus mod);
 void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
@@ -313,6 +319,16 @@ static inline bool rns_row_is_narrow(RNS_Base base, size_t i)
                                         (mod));                                                    \
     } while (0)
 
+/* out[j] = sum_t scale[t] * [in[t][j]] mod `mod`, [v] the residue v of
+   modulus q_in[t] as stored or, if `centered`, read in (-q_in/2, q_in/2], in
+   one pass over the rows; `out` may be one of them. At most
+   MOD_COMBINATION_MAX_TERMS terms. Returns false, writing nothing, where this
+   engine has no body for the moduli given, and the caller combines the
+   terms another way. */
+bool mod_eltwise_lifted_combination(uint64_t *out, const uint64_t *const *in, const uint64_t *q_in,
+                                    const uint64_t *scale, uint64_t m, bool centered, uint64_t n,
+                                    Modulus mod);
+
 // A signed 64-bit array reduced into one row: the samplers and the permutation.
 #define RNS_ROW_REDUCE_SIGNED(out, src, i, n, mod)                                                 \
     do                                                                                             \
@@ -390,6 +406,10 @@ void mod_reduce_array_mp_32(uint64_t *out, uint64_t *in_high, uint64_t *in_low, 
 void ntt_forward_50(uint64_t *out, uint64_t *in, NTT_Plan plan);
 void ntt_reverse_50(uint64_t *out, uint64_t *in, NTT_Plan plan);
 void mod_eltwise_mul_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_lifted_combination_50(uint64_t *out, const uint64_t *const *in,
+                                       const uint64_t *q_in, const uint64_t *scale, uint64_t m,
+                                       bool centered, uint64_t n, Modulus mod);
+
 void mod_eltwise_mul_addto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_scale_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);

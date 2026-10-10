@@ -966,6 +966,20 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void polynomial_scale_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t scale);
     void polynomial_scale_RNS_polynomial_RNS(RNS_Polynomial out, RNS_Polynomial in1,
                                              uint64_t *scale);
+    /* The ModDown of hybrid key switching: division by P, the product of the
+       primes in `divide_mask`, through the fast base conversion of x mod P
+       (centered). `_prepare` scales the rows of `in` that leave, in place;
+       `_rows` then writes, on each of `rows` that stays, round(x / P) plus
+       an error of at most half the number of primes divided by -- plus
+       `addend`'s row if it is not NULL -- to that row of `out`, which may
+       be `in` (finish with polynomial_round_division_RNSc_finish) or another
+       polynomial over the same base (whose mask is the caller's to set).
+       Different rows may be written at the same time. Not an exact rounding,
+       which the round division is, but noise where it is used: after a
+       gadget product. `addend` is canonical. */
+    void polynomial_mod_down_RNSc_prepare(RNSc_Polynomial in, uint64_t divide_mask);
+    void polynomial_mod_down_RNSc_rows(RNSc_Polynomial out, RNSc_Polynomial in,
+                                       RNSc_Polynomial addend, uint64_t divide_mask, uint64_t rows);
     void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide_mask);
     /* polynomial_round_division_RNSc_wo_free in three steps, so the rows that
        stay can be divided independently: `_prepare` brings the rows that
@@ -994,6 +1008,21 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
        still x mod p_idx, with E[d^2] = p_idx^2/12 against p_idx^2/3. */
     void polynomial_RNSc_mod_reduce_lifted_centered(RNSc_Polynomial out, RNSc_Polynomial in,
                                                     uint64_t idx);
+    /* A linear combination of lifted residues, on every active row i of `out`:
+
+           out_i = sum_{k in mask} factors[k * l + i] * [in_k]   (mod p_i),
+
+       l the base's prime count and [in_k] residue k of `in` as stored, in
+       [0, p_k), or centered in (-p_k/2, p_k/2] if `centered`. Every residue
+       in `mask` must be active in `in`, which must be canonical and distinct
+       from `out`; each factor is reduced modulo its row's prime, and a zero
+       one costs nothing. With in_k = x_k (M/p_k)^-1 mod p_k and factors
+       (M/p_k) mod p_i, M the product of the primes in `mask`, this is the
+       fast base conversion of x mod M: x + u M on every row, for m primes in
+       `mask` with x centered and |u| <= m/2 when centered, and with x in
+       [0, M) and u in [0, m) otherwise. */
+    void polynomial_RNSc_lifted_combination(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t mask,
+                                            const uint64_t *factors, bool centered);
     /* Digit `level` of residue `idx` of `in`, in base 2^log_base, written to
        every active row of `out`.
        `in` is in the coefficient domain and its row `idx` must be active; the
@@ -1012,6 +1041,19 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void polynomial_RNSc_decompose_digit_rounded(RNSc_Polynomial out, RNSc_Polynomial in,
                                                  uint64_t idx, uint64_t log_base, uint64_t level,
                                                  uint64_t dropped);
+    /* Digit `level` of the balanced base-2^log_base representation of the
+       centered residue x in (-p_idx/2, p_idx/2]: every digit below the top
+       one in [-2^(log_base-1), 2^(log_base-1)), the top one (number
+       ceil(log2(p_idx)/log_base) - 1) taking what they leave, at most
+       2^(log_base-1) in absolute value, so the digits sum to x exactly and
+       have about a quarter of the unsigned ones' second moment. Digits
+       `dropped` and up are those of x rounded to the nearest multiple of
+       2^(log_base * dropped), as in polynomial_RNSc_decompose_digit_rounded.
+       A negative digit is written as its residue in each row of `out`; the
+       other preconditions are polynomial_RNSc_decompose_digit's. */
+    void polynomial_RNSc_decompose_digit_balanced(RNSc_Polynomial out, RNSc_Polynomial in,
+                                                  uint64_t idx, uint64_t log_base, uint64_t level,
+                                                  uint64_t dropped);
     void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in);
     void polynomial_RNS_broadcast_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t slot_idx);
     void polynomial_RNS_rotate_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t rot);

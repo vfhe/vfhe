@@ -665,3 +665,20 @@ void mlwe_round_division(RNSc_MLWE out, ArithRing to)
     arith_round_division(out->ring, &out->b, to);
     out->ring = to;
 }
+
+void mlwe_mod_down(RNSc_MLWE out, RNSc_MLWE in, const ArithElement *const *addend)
+{
+    if (in->ring != out->ring && in->ring->impl == ARITH_IMPL_RNS)
+    {
+        mlwe_rns_mod_down(out, in, addend);
+        return;
+    }
+    mlwe_round_division(in, out->ring);
+    mlwe_copy_RNSc_sample(out, in);
+    for (size_t k = 0; addend && k <= out->r; k++)
+    {
+        ArithElement *e = k < out->r ? &out->a[k] : &out->b;
+        if (addend[k])
+            arith_add(out->ring, e, e, addend[k]);
+    }
+}

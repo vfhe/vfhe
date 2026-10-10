@@ -239,6 +239,25 @@ def test_mgsw_scheme_with_fewer_digits():
     assert same(one.external_product(c), back.external_product(c))
 
 
+def test_grouped_digits_travel_with_keys_and_mgsw_schemes():
+    scheme = MLWE_Scheme(
+        Ring(N, prime_size=[45] * 3 + [50] * 2, split_degree=1), special_primes=2
+    )
+    key, key2 = (scheme.key_gen_sparse(N // 8, 3.2) for _ in range(2))
+    params = GadgetParams(primes_per_digit=2)
+    ksk = scheme.gen_ksk(key2, key, lvl=0, gadget_params=params)
+    mgsw_scheme = MGSW_Scheme(scheme, gadget_params=params)
+    (one,) = mgsw_scheme.encrypt_constants([1], key)
+    s = Serializer()
+    ksk_back = s.loads(s.dumps(ksk), schemes=scheme)
+    one_back = s.loads(s.dumps(one), schemes=[scheme])
+    assert ksk_back.gadget_params == params
+    assert one_back.scheme.gadget_params == params
+    c = scheme.sample(scheme.rings[0].random_element(), key)
+    assert same(scheme.keyswitch(c, ksk), scheme.keyswitch(c, ksk_back))
+    assert same(one.external_product(c), one_back.external_product(c))
+
+
 def test_secret_keys_only_through_dump_secret(ghs):
     Rp, scheme, key = ghs
     s = Serializer()

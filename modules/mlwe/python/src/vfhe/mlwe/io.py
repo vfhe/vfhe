@@ -155,6 +155,7 @@ class MGSWSchemeCodec(Codec):
                 "ell": obj.ell,
                 "log_base": obj.gadget_params.log_base,
                 "digits": obj.gadget_params.digits,
+                "primes_per_digit": obj.gadget_params.primes_per_digit,
                 "balanced": obj.balanced,
             }
         )
@@ -163,7 +164,11 @@ class MGSWSchemeCodec(Codec):
         self, meta: dict, _payload: Payload, _children: list, ctx: ReadContext, /
     ):
         inner = ctx.deref(meta["mlwe_scheme"])
-        params = GadgetParams(meta["log_base"] or None, meta.get("digits"))
+        params = GadgetParams(
+            meta["log_base"] or None,
+            meta.get("digits"),
+            meta.get("primes_per_digit", 1),
+        )
         ident = (codec_for(inner).identity(inner), meta["ell"], params)
         found = ctx.bound(self.tag, ident)
         if found is not None:
@@ -326,6 +331,7 @@ class KeySwitchKeyCodec(Codec):
                 {
                     "log_base": obj.gadget_params.log_base,
                     "digits": obj.gadget_params.digits,
+                    "primes_per_digit": obj.gadget_params.primes_per_digit,
                     "balanced": obj.balanced,
                 },
                 children=vars(obj)["_children"],
@@ -337,6 +343,7 @@ class KeySwitchKeyCodec(Codec):
             **batch.meta,
             "log_base": obj.gadget_params.log_base,
             "digits": obj.gadget_params.digits,
+            "primes_per_digit": obj.gadget_params.primes_per_digit,
             "balanced": obj.balanced,
             "lengths": lengths,
         }
@@ -352,7 +359,11 @@ class KeySwitchKeyCodec(Codec):
         ]
         return MLWE_Set(
             components,
-            GadgetParams(meta["log_base"] or None, meta.get("digits")),
+            GadgetParams(
+                meta["log_base"] or None,
+                meta.get("digits"),
+                meta.get("primes_per_digit", 1),
+            ),
             meta["balanced"],
         )
 

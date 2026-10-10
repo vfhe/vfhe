@@ -125,3 +125,36 @@ void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low,
     for (size_t i = 0; i < n; i++)
         out[i] = modq_wide(in_high[i], in_low[i], mod);
 }
+
+void mod_eltwise_lifted_combination_gen(uint64_t *out, const uint64_t *const *in,
+                                        const uint64_t *q_in, const uint64_t *scale, uint64_t m,
+                                        bool centered, uint64_t n, Modulus mod)
+{
+    const uint64_t p = mod->q, two_p = 2 * p;
+    uint64_t s[MOD_COMBINATION_MAX_TERMS], sp[MOD_COMBINATION_MAX_TERMS];
+    uint64_t half[MOD_COMBINATION_MAX_TERMS], h[MOD_COMBINATION_MAX_TERMS];
+    assert(m <= MOD_COMBINATION_MAX_TERMS);
+    for (uint64_t t = 0; t < m; t++)
+    {
+        s[t] = modq(scale[t], mod);
+        sp[t] = (uint64_t)(((unsigned __int128)s[t] << 64) / p);
+        half[t] = centered ? q_in[t] >> 1 : UINT64_MAX;
+        h[t] = negate_modq(mul_modq(s[t], modq(q_in[t], mod), mod), p);
+    }
+    for (uint64_t j = 0; j < n; j++)
+    {
+        // Every term is a Shoup product in [0, 2p) plus, for a value above
+        // half its modulus, the correction that centers it; the sum is kept
+        // in [0, 2p) and reduced once.
+        uint64_t acc = 0;
+        for (uint64_t t = 0; t < m; t++)
+        {
+            const uint64_t v = in[t][j];
+            acc += s[t] * v - (uint64_t)(((unsigned __int128)v * sp[t]) >> 64) * p;
+            acc -= two_p & (0 - (uint64_t)(acc >= two_p));
+            acc += h[t] & (0 - (uint64_t)(v > half[t]));
+            acc -= two_p & (0 - (uint64_t)(acc >= two_p));
+        }
+        out[j] = acc - (p & (0 - (uint64_t)(acc >= p)));
+    }
+}

@@ -40,6 +40,7 @@ typedef MLWE RNS_MLWE;
 typedef struct {
   uint64_t log_base;
   uint64_t digits;
+  uint64_t primes_per_digit;
   bool balanced;
 } GadgetParams;
 

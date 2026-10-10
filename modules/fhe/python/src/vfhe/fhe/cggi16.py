@@ -9,7 +9,7 @@ from vfhe.arith.number_theory import crt
 from vfhe.engine import ffi, lib
 from vfhe.mlwe.lwe import LWE, LWE_Key, lib_lwe
 from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
-from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, lib_rlwe
+from vfhe.mlwe.mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, lib_rlwe
 
 
 def unfolded_key_count(n: int, unfolding: int) -> int:
@@ -71,11 +71,15 @@ class CGGI16:
         scheme: MLWE_Scheme,
         gsw_ell: int | None = None,
         unfolding: int = 1,
+        gadget_params: GadgetParams | None = None,
     ):
+        """``gadget_params`` are the bootstrapping key's gadget (the RNS one by
+        default; see :class:`GadgetParams`), and the rotation decomposes
+        against it; the digits are balanced as ``scheme`` says."""
         if unfolding < 1:
             raise ValueError("unfolding must be at least 1")
         self.scheme = scheme
-        self.mgsw_scheme = MGSW_Scheme(scheme, ell=gsw_ell)
+        self.mgsw_scheme = MGSW_Scheme(scheme, ell=gsw_ell, gadget_params=gadget_params)
         self.ring = scheme.ring
         self.unfolding = unfolding
 

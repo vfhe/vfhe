@@ -93,13 +93,14 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
     mlwe_RNS_to_RNSc(out, out);
     if (divide_mask > 0)
     {
-        for (size_t j = 0; j < out->r; j++)
+        for (size_t j = 0; j <= out->r; j++)
         {
-            polynomial_round_division_RNSc_wo_free(
-                (RNSc_Polynomial)arith_rns_polynomial(&out->a[j]), divide_mask);
+            RNSc_Polynomial p =
+                (RNSc_Polynomial)arith_rns_polynomial(j < out->r ? &out->a[j] : &out->b);
+            polynomial_mod_down_RNSc_prepare(p, divide_mask);
+            polynomial_mod_down_RNSc_rows(p, p, NULL, divide_mask, p->rns_mask);
+            polynomial_round_division_RNSc_finish(p, divide_mask);
         }
-        polynomial_round_division_RNSc_wo_free((RNSc_Polynomial)arith_rns_polynomial(&out->b),
-                                               divide_mask);
     }
     polynomial_add_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(&out->b),
                                    (RNSc_Polynomial)arith_rns_polynomial(&out->b), tmp_poly);

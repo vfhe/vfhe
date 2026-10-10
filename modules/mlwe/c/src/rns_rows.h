@@ -24,6 +24,9 @@ void mlwe_rns_convert(MLWE out, MLWE in, ArithDomain to);
 void mlwe_rns_permute(MLWE out, MLWE in, uint64_t gen);
 // mlwe_round_division over an RNS ring: `out` moves to `to`, a quotient ring.
 void mlwe_rns_round_division(MLWE out, ArithRing to);
+// mlwe_mod_down over an RNS ring, where `in`'s ring has primes `out`'s does
+// not.
+void mlwe_rns_mod_down(MLWE out, MLWE in, const ArithElement *const *addend);
 // mlwe_tensor_product over an RNS ring. Returns -1, doing nothing, unless
 // every operand element is in the mul domain over the same primes.
 int mlwe_rns_tensor_product(ArithElement *out, MLWE in1, MLWE in2);

@@ -249,6 +249,32 @@ void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Mo
     }
 }
 
+bool mod_eltwise_lifted_combination(uint64_t *out, const uint64_t *const *in, const uint64_t *q_in,
+                                    const uint64_t *scale, uint64_t m, bool centered, uint64_t n,
+                                    Modulus mod)
+{
+    // The 52-bit body: an output modulus of that family, inputs IFMA can
+    // multiply, and few enough terms that their lazy sum stays in the range
+    // its final reduction takes.
+    if (mod_shoup_shift(mod->q) != MOD_SHIFT_50 || m > 16)
+        return false;
+    for (uint64_t t = 0; t < m; t++)
+        if (q_in[t] >= (1ULL << 52))
+            return false;
+    const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
+    if (head)
+        mod_eltwise_lifted_combination_50(out, in, q_in, scale, m, centered, head, mod);
+    if (head < n)
+    {
+        const uint64_t *tail[MOD_COMBINATION_MAX_TERMS];
+        for (uint64_t t = 0; t < m; t++)
+            tail[t] = in[t] + head;
+        mod_eltwise_lifted_combination_gen(out + head, tail, q_in, scale, m, centered, n - head,
+                                           mod);
+    }
+    return true;
+}
+
 void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n, Modulus mod)
 {
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;

@@ -83,7 +83,10 @@ extern "C"
     // `log_base` 0 is the RNS gadget: one digit per prime, the residue,
     // centered in (-p_j/2, p_j/2] if `balanced`. Otherwise each residue is
     // split into base-2^log_base digits (`gadget_radix_digits` of them), of
-    // which the top `digits` are kept (0: all). Keeping fewer is the
+    // which the top `digits` are kept (0: all), balanced digits of the
+    // centered residue if `balanced` and log_base > 1 (each in
+    // [-2^(log_base-1), 2^(log_base-1)), the top one taking the carry), the
+    // unsigned ones otherwise; the keys are the same. Keeping fewer is the
     // approximate decomposition: the residue is rounded to a multiple of
     // 2^(log_base * dropped), dropped the digits left out, which adds at most
     // half of that times the key. That error is small over one prime only
@@ -91,10 +94,19 @@ extern "C"
     // small), so an element decomposed with digits left out must be over one
     // prime. Keys hold one key per digit kept, prime-major, generated with the
     // same parameters.
+    //
+    // `primes_per_digit` a > 1 groups the RNS gadget's primes (it cannot be
+    // combined with `log_base`): the element's primes, by ascending base index,
+    // form groups of a (the last may be smaller), and the digit of group J,
+    // modulus Q_J, is x mod Q_J lifted to every prime of the key by the fast
+    // base conversion -- centered if `balanced`, then at most about a Q_J / 2
+    // -- against the gadget element P (Q/Q_J) [(Q/Q_J)^-1]_{Q_J}, one key per
+    // group. 0 and 1 are the digit per prime.
     typedef struct
     {
         uint64_t log_base;
         uint64_t digits;
+        uint64_t primes_per_digit;
         bool balanced;
     } GadgetParams;
 
@@ -341,6 +353,17 @@ extern "C"
     void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE *in, uint64_t count, RNS_MLWE_KS_Key ksk);
 
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);
+    // The ModDown of hybrid key switching, into `out`: `in`, over a ring with
+    // primes `out`'s ring does not have, divided by their product as
+    // mlwe_round_division would, up to an error of at most half their number
+    // per coefficient, at a cost linear in that number
+    // (polynomial_mod_down_RNSc_rows); then addend[k], when `addend` and it
+    // are not NULL, added to component k (the body last), in the same pass.
+    // For a sample a gadget product has just accumulated, where that error
+    // is noise. `in` is canonical and is overwritten; the addends are
+    // canonical over `out`'s ring. Over rings that are not RNS, or with
+    // nothing to divide by, it is mlwe_round_division, a copy and the adds.
+    void mlwe_mod_down(RNSc_MLWE out, RNSc_MLWE in, const ArithElement *const *addend);
     // Reduces every component into `to`, a quotient of the sample's ring, in
     // place and in either domain. Unlike mlwe_round_division, the value is not
     // divided: this is the CKKS level drop, and it is not valid for BFV.
@@ -364,6 +387,8 @@ extern "C"
     // How many base-2^log_base digits the radix gadget takes for one residue
     // modulo `prime`: enough to cover every value below it.
     uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base);
+    // How many primes one RNS digit covers: `primes_per_digit`, 1 when unset.
+    uint64_t gadget_primes_per_digit(const GadgetParams *gadget_params);
 
     // A stored gadget decomposition of one element: `n` digits over the key's
     // ring, in key order, ready to multiply (in the mul domain, or canonical

@@ -11,7 +11,7 @@ import math
 
 import pytest
 import vfhe.engine as engine
-from vfhe.arith import Ring
+from vfhe.arith import Polynomial, Ring
 from vfhe.arith.residue_selection import search_log_residues_minq0
 from vfhe.crypto import entropy
 from vfhe.engine import ffi
@@ -684,3 +684,42 @@ def test_decrypt_drops_to_the_lowest_level_that_holds_the_message():
     assert key.at_ring(scheme.rings[-1]) is key.at_ring(scheme.rings[-1])
     with pytest.raises(ValueError, match="quotient"):
         scheme.linear_decrypt(scheme.rescale(cx * cy), key, ring=scheme.rings[0])
+
+
+def test_decrypt_ignores_a_level_with_no_room_above_the_scale():
+    # The chain reaches one 49-bit prime, about the scale: no message fits
+    # there, so the default bound comes from the two-prime level.
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=1), scaling_factor=2**49, special_primes=0
+    )
+    assert scheme.rings[-1].ell == 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    v = rand_values(N // 2)
+    ct = scheme.encrypt(scheme.encode(v), key)
+    pt = scheme.decrypt(ct, key)
+    assert pt.ring.ell == 2
+    dec = scheme.decode(pt, scaling_factor=ct.delta)
+    assert all(abs(a - d) < 0.05 for a, d in zip(v, dec, strict=True))
+
+
+def test_multiply_by_monomial_keeps_the_ciphertext():
+    """A CKKS ciphertext times X^e is still one, at its level and scale, and
+    its linear decryption is exactly the input's times the monomial."""
+    scheme = CKKS_Scheme(
+        Ring(N, prime_size=[45, 45, 50], split_degree=1),
+        scaling_factor=2**30,
+        special_primes=1,
+    )
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ct = scheme.encrypt(scheme.encode(rand_values(N // 2)), key)
+    out = ct.multiply_by_monomial(N // 2)
+    assert isinstance(out, CKKS_Ciphertext)
+    assert (out.lvl, out.delta) == (ct.lvl, ct.delta)
+    monomial = Polynomial(ct.ring).from_bigint_array(
+        [0] * (N // 2) + [1] + [0] * (N // 2 - 1)
+    )
+    expected = scheme.decrypt(ct, key, drop=False) * monomial
+    got = scheme.decrypt(out, key, drop=False)
+    expected.to_coeff()
+    got.to_coeff()
+    assert not any((got - expected).get_polynomial(signed=True))

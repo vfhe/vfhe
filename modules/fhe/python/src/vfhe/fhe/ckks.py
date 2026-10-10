@@ -158,9 +158,11 @@ class CKKS_Scheme(MLWE_Scheme):
         To keep decoding cheap, the plaintext is returned over the fewest primes
         that hold it: the lowest level (a quotient of the ciphertext's ring) whose
         modulus exceeds ``2 * delta * message_bound``. ``message_bound`` bounds the
-        slots' magnitude; by default it is what the last level holds at the
-        scheme's scaling factor, so ordinary ciphertexts drop to the last level and
-        those with a larger ``delta`` (e.g. unrescaled products) stay higher.
+        slots' magnitude; by default it is what the smallest level holds at the
+        scheme's scaling factor, so ordinary ciphertexts drop to that level and
+        those with a larger ``delta`` (e.g. unrescaled products) stay higher. A
+        level with less than two bits above the scaling factor cannot hold a
+        message and does not count as the smallest.
         ``drop=False`` keeps every prime.
         """
         if not drop:
@@ -176,9 +178,11 @@ class CKKS_Scheme(MLWE_Scheme):
         whose modulus holds a plaintext of size ``delta * message_bound``.
         """
         if message_bound is None:
-            # What the last level holds at the scheme's scale, one bit spare.
-            last_bits = math.log2(math.prod(self.rings[-1].primes))
-            bound_bits = last_bits - math.log2(self.scaling_factor) - 2
+            # What the smallest level that has room holds at the scheme's
+            # scale, one bit spare.
+            scale_bits = math.log2(self.scaling_factor)
+            room = [math.log2(math.prod(r.primes)) - scale_bits - 2 for r in self.rings]
+            bound_bits = min((b for b in room if b >= 0), default=max(room))
         else:
             bound_bits = math.log2(message_bound)
         needed_bits = 1 + math.log2(delta) + bound_bits

@@ -35,24 +35,25 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
             gadget_mul_subto_polynomial(acc, ksk->s[i], &in->a[i], &ksk->gadget_params);
         }
     }
-    // convert to RNSc and rescale to in's ring
-    mlwe_RNS_to_RNSc(acc, acc);
-    mlwe_round_division(acc, target);
-
-    // Fold in the components that keep the target key. These stay in the base
-    // ring, so they are added *after* the rescale (never divided out). The k-th
-    // pass-through a-component lands in acc->a[k]; in->b always passes through.
+    // The components that keep the target key stay in the base ring, so they
+    // are added *after* the rescale (never divided out), in the same pass:
+    // the k-th pass-through a-component lands in out->a[k], and in->b always
+    // passes through.
+    const ArithElement *addend[out->r + 1];
+    for (size_t k = 0; k <= out->r; k++)
+        addend[k] = NULL;
     size_t keep_idx = 0;
     for (size_t i = 0; i < in->r; i++)
     {
         if (ksk->s[i] == NULL)
-        {
-            arith_add(acc->ring, &acc->a[keep_idx], &acc->a[keep_idx], &in->a[i]);
-            keep_idx++;
-        }
+            addend[keep_idx++] = &in->a[i];
     }
-    arith_add(acc->ring, &acc->b, &acc->b, &in->b);
-    mlwe_copy_RNSc_sample(out, acc);
+    addend[out->r] = &in->b;
+
+    // convert to RNSc and rescale into out, in in's ring
+    assert(out->ring == target);
+    mlwe_RNS_to_RNSc(acc, acc);
+    mlwe_mod_down(out, acc, addend);
     free_mlwe_RNS_sample(acc);
 }
 
@@ -114,7 +115,10 @@ void free_mlwe_hoisted(MLWE_Hoisted h)
 static int mlwe_hoisted_fits(MLWE_Hoisted h, RNS_MLWE_KS_Key ksk)
 {
     if (ksk->ring != h->key_ring || ksk->gadget_params.log_base != h->gadget_params.log_base ||
-        ksk->gadget_params.digits != h->gadget_params.digits || ksk->count != h->in->r)
+        ksk->gadget_params.digits != h->gadget_params.digits ||
+        gadget_primes_per_digit(&ksk->gadget_params) !=
+            gadget_primes_per_digit(&h->gadget_params) ||
+        ksk->count != h->in->r)
         return 0;
     for (size_t i = 0; i < h->in->r; i++)
     {
@@ -140,27 +144,35 @@ int mlwe_automorphism_RNSc_GHS_hoisted(RNSc_MLWE out, MLWE_Hoisted h, uint64_t g
             gadget_mul_subto_automorphism(acc, ksk->s[i], &h->digits[i], gen);
     }
     mlwe_RNS_to_RNSc(acc, acc);
-    mlwe_round_division(acc, in->ring);
 
-    // Add the pass-through components and b after the rescale, as the key
-    // switch does.
-    ArithElement permuted;
-    arith_new(in->ring, &permuted);
+    // The pass-through components and b, permuted, are added after the
+    // rescale, as the key switch does.
+    ArithElement permuted[out->r + 1];
+    const ArithElement *addend[out->r + 1];
+    for (size_t k = 0; k <= out->r; k++)
+        addend[k] = NULL;
     size_t keep_idx = 0;
     for (size_t i = 0; i < in->r; i++)
     {
         if (ksk->s[i] == NULL)
         {
-            arith_permute(in->ring, &permuted, &in->a[i], gen);
-            arith_add(acc->ring, &acc->a[keep_idx], &acc->a[keep_idx], &permuted);
+            arith_new(in->ring, &permuted[keep_idx]);
+            arith_permute(in->ring, &permuted[keep_idx], &in->a[i], gen);
+            addend[keep_idx] = &permuted[keep_idx];
             keep_idx++;
         }
     }
-    arith_permute(in->ring, &permuted, &in->b, gen);
-    arith_add(acc->ring, &acc->b, &acc->b, &permuted);
-    arith_free(in->ring, &permuted);
+    arith_new(in->ring, &permuted[out->r]);
+    arith_permute(in->ring, &permuted[out->r], &in->b, gen);
+    addend[out->r] = &permuted[out->r];
 
-    mlwe_copy_RNSc_sample(out, acc);
+    assert(out->ring == in->ring);
+    mlwe_mod_down(out, acc, addend);
+    for (size_t k = 0; k <= out->r; k++)
+    {
+        if (addend[k])
+            arith_free(in->ring, &permuted[k]);
+    }
     free_mlwe_RNS_sample(acc);
     return 0;
 }
@@ -334,9 +346,11 @@ int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *
         mlwe_add_RNS_sample(acc, acc, sum.acc[k]);
         mlwe_addto_RNSc_sample(kept, sum.kept[k]);
     }
+    const ArithElement *addend[out->r + 1];
+    for (size_t k = 0; k <= out->r; k++)
+        addend[k] = k < out->r ? &kept->a[k] : &kept->b;
     mlwe_RNS_to_RNSc(acc, acc);
-    mlwe_round_division(acc, out->ring);
-    mlwe_add_RNSc_sample(out, acc, kept);
+    mlwe_mod_down(out, acc, addend);
 
     for (uint64_t k = 0; k < n_ranges; k++)
     {

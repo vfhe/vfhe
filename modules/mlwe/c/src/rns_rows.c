@@ -177,6 +177,45 @@ void mlwe_rns_round_division(MLWE out, ArithRing to)
 
 typedef struct
 {
+    MLWE out, in;
+    const ArithElement *const *addend;
+    uint64_t divide_mask;
+} ModDown;
+
+static void mod_down_row(void *ctx, uint64_t row, uint64_t k)
+{
+    const ModDown *d = (const ModDown *)ctx;
+    const ArithElement *addend = d->addend ? d->addend[k] : NULL;
+    polynomial_mod_down_RNSc_rows((RNSc_Polynomial)arith_rns_polynomial(element_of(d->out, k)),
+                                  (RNSc_Polynomial)arith_rns_polynomial(element_of(d->in, k)),
+                                  addend ? (RNSc_Polynomial)arith_rns_polynomial(addend) : NULL,
+                                  d->divide_mask, 1ULL << row);
+}
+
+void mlwe_rns_mod_down(MLWE out, MLWE in, const ArithElement *const *addend)
+{
+    const uint64_t parts = in->r + 1;
+    const uint64_t staying = arith_rns_ring_mask(out->ring);
+    const uint64_t divide_mask = arith_rns_ring_mask(in->ring) & ~staying;
+    assert(out->r == in->r && (arith_rns_ring_mask(in->ring) & staying) == staying);
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        assert(element_of(in, k)->domain == ARITH_DOMAIN_CANONICAL);
+        assert(!addend || !addend[k] || addend[k]->domain == ARITH_DOMAIN_CANONICAL);
+        polynomial_mod_down_RNSc_prepare((RNSc_Polynomial)arith_rns_polynomial(element_of(in, k)),
+                                         divide_mask);
+    }
+    ModDown d = {out, in, addend, divide_mask};
+    rns_rows_for(out->ring->N, staying, parts, mod_down_row, &d);
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        arith_rns_polynomial(element_of(out, k))->rns_mask = staying;
+        element_of(out, k)->domain = ARITH_DOMAIN_CANONICAL;
+    }
+}
+
+typedef struct
+{
     ArithElement *out;
     MLWE in1, in2;
 } TensorProduct;

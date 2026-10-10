@@ -5,7 +5,7 @@ from __future__ import annotations
 from vfhe.arith import Polynomial, RNSPolynomial, domain_of, repr
 from vfhe.engine import ffi, lib
 
-from .mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set
+from .mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set, _monomial
 
 
 # RNS MGSW scheme (similar to RGSW)
@@ -26,7 +26,7 @@ class MGSW_Scheme:
         bounds the products an external product accumulates by the radix
         rather than by the primes, and keeping fewer digits is the approximate
         decomposition, for keys of a level over one prime. ``balanced`` picks
-        the RNS gadget's digit as in :class:`MLWE_Scheme`, and defaults to
+        the digit as in :class:`MLWE_Scheme`, and defaults to
         ``MLWE_scheme``'s.
         """
         self.mlwe_scheme = MLWE_scheme
@@ -53,11 +53,15 @@ class MGSW_Scheme:
         """How many gadget elements a key encrypted for ``lvl`` holds per
         component: the length of :meth:`gadget_scalars`, without building them.
         """
-        primes = self.ring.primes[: self.ell - lvl]
+        groups = self.mlwe_scheme._gadget_groups(  # noqa: SLF001 - same package
+            lvl, self.ring, self.ell - lvl, self.gadget_params.primes_per_digit
+        )
         log_base, digits = self.gadget_params.log_base, self.gadget_params.digits
         if not log_base:
-            return len(primes)
-        every = [lib.gadget_radix_digits(p, log_base) for p in primes]
+            return len(groups)
+        every = [
+            lib.gadget_radix_digits(self.ring.primes[g[0]], log_base) for g in groups
+        ]
         return sum(e if digits is None else min(digits, e) for e in every)
 
     def encrypt(
@@ -220,6 +224,25 @@ class MGSW:
     def to_coeff(self):
         for c in self.obj:
             c.to_coeff()
+
+    def multiply_by_monomial(self, exponent: int, minus_one: bool = False) -> MGSW:
+        """An MGSW of ``m * X^exponent`` (or ``m * (X^exponent - 1)`` with
+        ``minus_one``) from this MGSW of ``m``: every row multiplied as
+        :meth:`MLWE.multiply_by_monomial` does, the transformed monomial built
+        once for all of them. Rows keep their representation."""
+        rows = self.obj
+        if all(row.repr == repr.ntt for row in rows):
+            monomial = _monomial(rows[0].ring, exponent, minus_one)
+            out = []
+            for row in rows:
+                product = row.new_like()
+                product.multiply_poly(row, monomial)
+                out.append(product)
+            return MGSW(self.scheme, obj=out)
+        return MGSW(
+            self.scheme,
+            obj=[row.multiply_by_monomial(exponent, minus_one) for row in rows],
+        )
 
     @property
     def gadget_size(self) -> int:

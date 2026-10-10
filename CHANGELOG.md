@@ -14,6 +14,36 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add `MLWE.multiply_by_monomial(exponent, minus_one=False)`: the sample
+  times `X^exponent` (or `X^exponent - 1`), any integer exponent, keeping its
+  ring (special primes included), level, type (a CKKS ciphertext keeps its
+  `delta`) and representation: a signed shift in the coefficient domain, a
+  pointwise product with the monomial's transform in the NTT domain. And
+  `MGSW.multiply_by_monomial`, the same on every row, which turns an MGSW of
+  `m` into one of `m * X^exponent` with the rows left in the NTT domain.
+- `CGGI16(..., gadget_params=...)`: the bootstrapping key's gadget (the RNS
+  one by default), so the blind rotation can use the radix gadget, grouped
+  RNS digits or the approximate decomposition like every other gadget
+  product.
+- Add grouped RNS digits, the `dnum` of the hybrid key switch [HK20]:
+  `GadgetParams(primes_per_digit=a)` splits an element over its primes, by
+  ascending base index, into groups of `a` (the last may be smaller), and
+  takes as the digit of group `J` the value modulo the group's product `Q_J`,
+  lifted to every prime of the key by the fast base conversion (centered with
+  `balanced`), against the gadget element `P * e_J`. About `a` times fewer
+  keys and gadget products; the digits grow to about `a * Q_J / 2`, so the
+  special modulus `P` has to cover a group (documented, not checked: the
+  noise grows by about `Q_J / P`). Every key generator, `MLWE_Set`,
+  `MGSW_Scheme` and `GP25` take it through `gadget_params`, and the native
+  products through `GadgetParams.primes_per_digit` (0 or 1: a digit per
+  prime, unchanged bit for bit); serialized keys and MGSW schemes carry it.
+  The radix gadget does not combine with it (`ValueError`). Measured at
+  N = 2^14 over eight 45-bit primes, one thread, against a digit per prime
+  with one special prime: with groups of 4 (4 special primes, 3 keys
+  instead of 9) a key switch is 1.6x faster (avx512ifma; 1.7x portable)
+  and an MGSW external product 1.8x; over four primes 1.15-1.2x, where the
+  special primes' transforms take most of what the digits save. The
+  conversion is the new `polynomial_RNSc_lifted_combination` (arith).
 - Add the approximate gadget decomposition: the radix gadget may keep only
   the top `digits` digits of each residue (`GadgetParams(log_base,
   digits)`; all by default), rounding the residue to a multiple of
@@ -281,6 +311,52 @@ versions may contain breaking changes.
 
 ### Changed
 
+- The radix gadget decomposes into balanced digits by default, as the RNS
+  gadget already did: with `balanced` (the default of `MLWE_Scheme`, which
+  `MGSW_Scheme`, `MLWE_Set` and every key generator follow), each residue is
+  centered and split into base-`2^w` digits in `[-2^(w-1), 2^(w-1))`, the
+  top one taking the carry, instead of the unsigned digits of the residue.
+  The digit count and the keys are the same, and the decomposition stays
+  exact; the second moment is a quarter, so every radix product (key
+  switches, automorphisms, trace, ring-switch and packing keys, MGSW
+  products, GP25 and CGGI16) adds about one bit less noise standard
+  deviation, and the spread of that noise from one key to the next (the
+  unsigned digits' mean times the keys' errors) goes away. Measured at
+  N = 1024 over one 30-bit prime, `w = 4`: 2^10.97 to 2^10.30 against
+  2^10.30 predicted. The approximate decomposition rounds the same way. With
+  `w = 1` the balanced digits would be no smaller, so it keeps the unsigned
+  ones. Outputs change, what they decrypt to does not, and `balanced=False`
+  gives the previous ones bit for bit. The digit is the new
+  `polynomial_RNSc_decompose_digit_balanced`.
+- The division by the special primes after a gadget product (key switch,
+  automorphisms, hoisted and summed ones, trace, packing, MGSW products) is
+  the ModDown of hybrid key switching, `mlwe_mod_down(out, in, addend)`: the
+  fast base conversion of the value modulo P, in one fused pass per
+  remaining prime (`polynomial_mod_down_RNSc_prepare` / `_rows`), instead of
+  a rounding division by one special prime at a time, whose cost grew with
+  the square of their number. It writes straight into the output, with
+  what used to be added afterwards (the body, pass-through components, the
+  key-free terms of an automorphism sum) as one more term of the same pass,
+  so the accumulator is no longer copied out (about 0.1-0.3 ms of a key
+  switch at N = 2^14). It adds an error of at most half the number of special
+  primes: nothing with one special prime, about a bit at four. Measured at
+  N = 2^14, eight 45-bit primes, four special primes, avx512ifma: 1.6 ->
+  0.56 ms. The exact rounding division (`mlwe_round_division`:
+  rescale, level moves, decryption) is unchanged. Outputs change, what they
+  decrypt to does not.
+- `polynomial_RNSc_lifted_combination` sums its terms in one pass per row
+  (lazy Shoup products, one reduction at the end) where the rows are 64-bit:
+  an AVX-512 IFMA body for primes below 2^50, a scalar one on the portable
+  engine; elsewhere it takes the terms one at a time as before.
+- `MLWE_Scheme(ring, special_primes=k)` derives every level down to one
+  prime by default (`max_lvl` defaults to `len(ring.primes) - k`): with no
+  special primes the one-prime level used to be missing. `max_lvl` outside
+  `1 .. len(ring.primes) - k` raises `ValueError`.
+- `CKKS_Scheme.decrypt`'s default `message_bound` comes from the smallest
+  level with at least two bits above the scaling factor, rather than from the
+  last level whatever its size: a last level about as large as the scale
+  (one prime of the scale's size, as the default chain now reaches without
+  special primes) dropped decryptions to a modulus the message wraps around.
 - The native gadget products take their parameters as one struct
   (breaking, C): `GadgetParams {log_base, digits, balanced}`, passed by
   pointer, replaces the `log_base, balanced` pair of
@@ -539,6 +615,9 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix `MLWE_Scheme(ring, special_primes=k)` for `k >= 2`, and for a ring of
+  one prime: the default level chain was one level too long, and the
+  constructor raised `ValueError` (`IndexError` for one prime).
 - Fix `Ring(N, primes=[...])`, one of the documented ways to give the
   modulus, failing unless `prime_size=None` was passed too.
 - Fix GP25 on a scheme with several levels reading the automorphism key of

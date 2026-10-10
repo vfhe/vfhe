@@ -12,7 +12,7 @@ from vfhe import engine
 from vfhe.arith import Ring
 from vfhe.fhe import CGGI16, mod_switch
 from vfhe.fhe.cggi16 import unfolded_key_count
-from vfhe.mlwe import LWE, LWE_Key, MLWE_Scheme
+from vfhe.mlwe import LWE, GadgetParams, LWE_Key, MLWE_Scheme
 
 
 @pytest.mark.complete
@@ -128,6 +128,26 @@ class _Setup:
             )
             for o in outs
         ]
+
+
+@pytest.mark.parametrize("log_base", [10, 25])
+def test_functional_bootstrap_with_a_radix_gadget(deterministic_prng, log_base):
+    """The bootstrapping key takes the scheme's gadget parameters, and the
+    rotation decomposes against them."""
+    deterministic_prng(0xB007C0DE + log_base)
+    random.seed(0xB007C0DE + log_base)
+    setup = _Setup()
+    params = GadgetParams(log_base)
+    cggi16 = CGGI16(setup.out_scheme, gadget_params=params)
+    bk = cggi16.generate_bootstrap_key(setup.input_key, setup.output_key)
+    assert bk.bk[0].scheme.gadget_params == params
+    assert bk.bk[0].gadget_size == cggi16.mgsw_scheme.gadget_size(0)
+    msgs = [random.randrange(setup.lut_size) for _ in range(4)]  # noqa: S311 - test data
+    lut, tv, inputs = setup.lut_and_inputs(cggi16, msgs)
+    outs = setup.outputs(len(msgs))
+    for out, lwe_in in zip(outs, inputs, strict=True):
+        cggi16.functional_bootstrap(out, tv, lwe_in, bk, torus_base=setup.lut_size)
+    assert setup.decrypt(outs) == [lut[m] for m in msgs]
 
 
 @pytest.mark.complete

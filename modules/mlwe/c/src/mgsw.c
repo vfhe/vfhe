@@ -23,8 +23,7 @@ static void external_product_canonical(RNSc_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE 
     gadget_mul_addto_polynomial(acc, &mgsw[r * ell], &in->b, gadget_params);
 
     mlwe_RNS_to_RNSc(acc, acc);
-    mlwe_round_division(acc, out->ring);
-    mlwe_copy_RNSc_sample(out, acc);
+    mlwe_mod_down(out, acc, NULL);
     free_mlwe_RNS_sample(acc);
 }
 
