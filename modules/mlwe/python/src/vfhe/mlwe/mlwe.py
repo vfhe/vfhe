@@ -801,6 +801,100 @@ class MLWE_Scheme:
         out.repr = repr.coeff
         return out
 
+    def gen_automorphism_mux_keys(
+        self,
+        key: MLWE_Key,
+        selections: Sequence[tuple[int, int]],
+        lvl: int,
+        gadget_params: GadgetParams | None = None,
+        n_threads: int = 0,
+    ) -> list[MLWE_Set]:
+        """One :meth:`automorphism_mux` key per ``(gen, bit)`` in ``selections``,
+        for ciphertexts at ``lvl`` under ``key``.
+
+        Each key switches from ``(bit * Aut_gen(s), bit)`` to ``s``. Keys with
+        bit 0 are drawn like the others, so the keys do not reveal the bits. All
+        are drawn in one batch on ``n_threads`` (0: the library limit);
+        ``gadget_params`` is as for :meth:`gen_ksk`.
+        """
+        key_ring = self.special_rings[lvl]
+        key_at_ring = key.at_ring(key_ring)
+        one = Polynomial(key_ring).from_bigint_array([1] + [0] * (self.N - 1))
+        images: dict[int, list[RNSPolynomial]] = {}
+        key_polys = []
+        for gen, bit in selections:
+            if bit not in (0, 1):
+                raise ValueError("a multiplexer key selects with a bit")
+            self._check_generators([gen])
+            if gen not in images:
+                images[gen] = [p.automorphism(gen) for p in key_at_ring.poly]
+            key_polys.append([p * bit for p in images[gen]] + [one * bit])
+        return self._gen_ksk_sets(key, key_polys, lvl, gadget_params, n_threads)
+
+    def automorphism_mux(
+        self,
+        c: CtT,
+        gens: Sequence[int],
+        ksks: Sequence[MLWE_Set],
+        n_threads: int = 0,
+    ) -> CtT:
+        """``sum_d b_d * automorphism(c, gens[d])``, ``b_d`` the bit encrypted in
+        ``ksks[d]`` (:meth:`gen_automorphism_mux_keys`).
+
+        With exactly one bit set, this applies the selected automorphism without
+        revealing which: the B-to-1 mux-rotate of [CHKS25]. ``c`` is decomposed
+        once for all terms, and the sum is divided by the special primes once.
+        The keys must be for ``c``'s level and share a gadget. The result is in
+        the coefficient domain; ``c`` is not modified.
+        """
+        return self.automorphism_mux_batch([c], gens, [ksks], n_threads)[0]
+
+    def automorphism_mux_batch(
+        self,
+        cts: Sequence[CtT],
+        gens: Sequence[int],
+        ksks: Sequence[Sequence[MLWE_Set]],
+        n_threads: int = 0,
+        *,
+        in_place: bool = False,
+    ) -> list[CtT]:
+        """:meth:`automorphism_mux` of each ``cts[i]`` with keys ``ksks[i]``, all
+        over the same ``gens``, in one native call. With ``in_place``, the
+        results overwrite ``cts``.
+        """
+        if len(cts) != len(ksks):
+            raise ValueError("expected one list of keys per ciphertext")
+        if not gens or any(len(k) != len(gens) for k in ksks):
+            raise ValueError("expected one key per generator")
+        self._check_generators(gens)
+        if not cts:
+            return []
+        if in_place and len({id(c) for c in cts}) != len(cts):
+            raise ValueError("the ciphertexts must be distinct")
+        for c, keys in zip(cts, ksks, strict=True):
+            for k in keys:
+                key_ring = next(x for x in k.mlwe if x is not None)[0].ring
+                if key_ring not in (self.special_rings[c.lvl], self.rings[c.lvl]):
+                    raise ValueError("a key is not for the ciphertext's level")
+        outs = list(cts) if in_place else [c.new_like() for c in cts]
+        status = lib_rlwe.lib.mlwe_automorphism_mux_RNSc_GHS_batch(
+            ffi.new("void *[]", [out.obj for out in outs]),
+            ffi.new("void *[]", [c.obj for c in cts]),
+            ffi.new("uint64_t[]", list(gens)),
+            ffi.new("void *[]", [k.obj for keys in ksks for k in keys]),
+            len(cts),
+            len(gens),
+            n_threads,
+        )
+        if status != 0:
+            raise ValueError(
+                "the keys do not share one ring and gadget, or are not "
+                "multiplexer keys of the ciphertexts' rank"
+            )
+        for out in outs:
+            out.repr = repr.coeff
+        return outs
+
     def _check_generators(self, gens: Sequence[int]) -> None:
         for gen in gens:
             if not (0 < gen < 2 * self.N and gen % 2 == 1):

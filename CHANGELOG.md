@@ -14,6 +14,18 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add the SHIP bootstrap [CHKS25] (`vfhe.fhe.SHIP`, `SHIP_Key`): bootstraps
+  `N/2` real slots using only the `ceil(log2(h + 1))` levels of a product tree,
+  `h` the input key's Hamming weight. `SHIP.sample_input_key` draws the sparse
+  key (one coefficient per public window); `bootstrap` needs no secret key and
+  runs natively on the library's threads, with results independent of the
+  thread count. At the paper's LL13 parameters (N = 2^13): about 5.1 bits of
+  worst-slot precision.
+- Add the automorphism multiplexer (the B-to-1 mux-rotate of [CHKS25]):
+  `MLWE_Scheme.automorphism_mux(c, gens, ksks)` computes `sum_d b_d Aut_d(c)`
+  for bits `b_d` encrypted in the keys (`gen_automorphism_mux_keys`),
+  decomposing `c` once and dividing by the special primes once;
+  `automorphism_mux_batch` runs many. Also `gadget_mul_addto_automorphism`.
 - Add `MLWE.multiply_by_monomial(exponent, minus_one=False)`: the sample
   times `X^exponent` (or `X^exponent - 1`), any integer exponent, keeping its
   ring (special primes included), level, type (a CKKS ciphertext keeps its

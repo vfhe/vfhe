@@ -422,6 +422,7 @@ typedef struct
     uint64_t gen;
     const uint32_t *idx;
     int mul_domain;
+    int subtract;
 } AutomorphismProduct;
 
 // Row `row` of the product: every digit permuted on that prime alone, and
@@ -455,14 +456,18 @@ static void automorphism_product_row(void *ctx, uint64_t row, uint64_t part)
             RNS_Polynomial o = polynomial_RNS_view(&out_storage, sample_part(p->out, k), row_mask);
             RNS_Polynomial x =
                 polynomial_RNS_view(&key_storage, sample_part(p->ksk[i], k), row_mask);
-            polynomial_mul_subto_RNS_polynomial(o, x, factor);
+            if (p->subtract)
+                polynomial_mul_subto_RNS_polynomial(o, x, factor);
+            else
+                polynomial_mul_addto_RNS_polynomial(o, x, factor);
         }
     }
     free_RNS_polynomial(tmp);
 }
 
-void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
-                                   uint64_t gen)
+// out -= or += sum_i Aut_gen(digit_i) * ksk[i], one row task per prime.
+static void gadget_mul_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
+                                    uint64_t gen, int subtract)
 {
     if (digits->n == 0)
         return;
@@ -477,7 +482,7 @@ void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigi
         idx = (uint32_t *)safe_malloc(N * sizeof(uint32_t));
         polynomial_RNS_automorphism_index(idx, N, gen);
     }
-    AutomorphismProduct p = {out, ksk, digits, gen, idx, mul_domain};
+    AutomorphismProduct p = {out, ksk, digits, gen, idx, mul_domain, subtract};
     rns_rows_for(N, first->rns_mask, 1, automorphism_product_row, &p);
     free(idx);
 
@@ -485,4 +490,16 @@ void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigi
     for (uint64_t k = 0; k <= out->r; k++)
         sample_part(out, k)->rns_mask =
             sample_part(ksk[digits->n - 1], k)->rns_mask & first->rns_mask;
+}
+
+void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
+                                   uint64_t gen)
+{
+    gadget_mul_automorphism(out, ksk, digits, gen, 1);
+}
+
+void gadget_mul_addto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
+                                   uint64_t gen)
+{
+    gadget_mul_automorphism(out, ksk, digits, gen, 0);
 }

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 module = {
-    'sources': files('c/src/bfv.c', 'c/src/cggi16.c', 'c/src/gp25.c'),
+    'sources': files('c/src/bfv.c', 'c/src/cggi16.c', 'c/src/gp25.c', 'c/src/ship.c'),
     'includes': [include_directories('c/include')],
     'headers': files('c/include/fhe.h'),
     'cdefs': files('python/cdef/fhe.cdef'),

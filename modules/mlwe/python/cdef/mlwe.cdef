@@ -132,6 +132,10 @@ void mlwe_automorphism_RNSc_GHS_batch(void *out, void *in, const uint64_t *gens,
                                       uint64_t n, uint64_t lvl, uint64_t n_threads);
 int mlwe_automorphism_sum_RNSc_GHS(void *out, void *in, const uint64_t *gens, void *ksks,
                                    uint64_t n, uint64_t n_threads);
+int mlwe_automorphism_mux_RNSc_GHS(void *out, void *in, const uint64_t *gens, void *ksks,
+                                   uint64_t n);
+int mlwe_automorphism_mux_RNSc_GHS_batch(void *out, void *in, const uint64_t *gens, void *ksks,
+                                         uint64_t count, uint64_t n, uint64_t n_threads);
 void mlwe_partial_trace(void *out, void *in, uint64_t *gens, void *ksks, uint64_t size, uint64_t lvl);
 void mlwe_trace(void *out, void *in, void *ksks, uint64_t lvl);
 void mlwe_normalized_trace(void *out, void *in, uint64_t n, void *ksks);

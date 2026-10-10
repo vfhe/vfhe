@@ -289,6 +289,23 @@ extern "C"
     // over out's ring and rank, in either domain, and are not modified.
     int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *gens,
                                        RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
+    // The automorphism multiplexer: out = sum_d b_d Aut_gens[d](in) for d < n,
+    // b_d the bit encrypted in ksks[d]. With one bit set, it applies the selected
+    // automorphism without revealing which: the B-to-1 mux-rotate of [CHKS25].
+    // Key d has r + 1 components, each a gadget key array: component i < r
+    // encrypts b_d Aut_gens[d](s_i), component r encrypts b_d. `in` is decomposed
+    // once for all terms, and the sum is divided by the special primes once.
+    // `out` is over in's ring, canonical; `in` may be in either domain, is not
+    // modified, and may be `out`. Returns -1, leaving `out` untouched, if the
+    // keys do not share a ring and gadget or have a pass-through component.
+    int mlwe_automorphism_mux_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, const uint64_t *gens,
+                                       RNS_MLWE_KS_Key *ksks, uint64_t n);
+    // `count` multiplexers over the same automorphisms: out[i] is the above of
+    // in[i] with the keys ksks[i * n .. i * n + n - 1]. Up to `n_threads` threads
+    // (0: the library limit). Returns -1, writing nothing, if any keys do not fit.
+    int mlwe_automorphism_mux_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
+                                             RNS_MLWE_KS_Key *ksks, uint64_t count, uint64_t n,
+                                             uint64_t n_threads);
     void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                             uint64_t size, uint64_t lvl);
     // The trace Tr_(K/Q) of in's message (canonical): `out` decrypts to N times
@@ -416,6 +433,9 @@ extern "C"
     // permuted element (equal to decomposing Aut_gen(poly) up to the choice of
     // digit representatives). `gen` is odd and below 2N; 1 is the identity.
     void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
+                                       uint64_t gen);
+    // The same, adding: out += sum_i Aut_gen(digit_i) * ksk[i].
+    void gadget_mul_addto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
                                        uint64_t gen);
 
     // `ell` is the number of gadget keys per component of the MGSW key -- one

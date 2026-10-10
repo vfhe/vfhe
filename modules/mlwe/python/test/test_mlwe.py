@@ -1997,6 +1997,124 @@ def test_automorphism_sum_refusals(ghs):
         scheme.automorphism_sum([cts[0], lower], [5, 25], [ksk5, ksk25])
 
 
+def _check_automorphism_mux(scheme, Rp, key, gens, bits, radix=None, lvl=0):
+    m0 = Rp.random_element()
+    c = enc(scheme, Rp, m0, key)
+    if lvl:
+        c.round_division(lvl=lvl)
+    ksks = scheme.gen_automorphism_mux_keys(
+        key, list(zip(gens, bits, strict=True)), lvl, GadgetParams(radix)
+    )
+    out = scheme.automorphism_mux(c, gens, ksks)
+    assert out.repr == repr.coeff and out.lvl == c.lvl and out.ring == c.ring
+    expected = sum(
+        (m0.automorphism(g) for g, b in zip(gens, bits, strict=True) if b),
+        start=Polynomial(Rp).from_array([0] * Rp.N),
+    )
+    assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+    return c, ksks, out
+
+
+@pytest.mark.parametrize("radix", [None, RADIX_LOG_BASE])
+@pytest.mark.parametrize(
+    "bits", [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0], [1, 0, 1, 0]]
+)
+def test_automorphism_mux(ghs, radix, bits):
+    # The sum of the automorphisms whose bits are set: one, none, or several.
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    _check_automorphism_mux(scheme, Rp, key, [5, 1, 25, 2 * N - 1], bits, radix)
+
+
+def test_automorphism_mux_costs_an_automorphism_in_noise(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    gens = [25, 5, 1, 125]
+    c, _ksks, out = _check_automorphism_mux(scheme, Rp, key, gens, [0, 1, 0, 0])
+    alone = scheme.automorphism(c, 5, scheme.gen_ksk_automorphism(key, key, 5))
+    assert (
+        _log2_noise(scheme, out, c, 5, key) <= _log2_noise(scheme, alone, c, 5, key) + 2
+    )
+
+
+def test_automorphism_mux_at_a_level(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    _check_automorphism_mux(scheme, Rp, key, [1, 5, 25], [0, 0, 1], lvl=1)
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+def test_automorphism_mux_module_rank(r, N_r):
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    key = _rank_key(scheme, N_r, r)
+    _check_automorphism_mux(scheme, Rp, key, [5, 1, 25], [0, 0, 1])
+
+
+@pytest.mark.parametrize("n_threads", [1, 0])
+@pytest.mark.usefixtures("threads")
+def test_automorphism_mux_batch(ghs, n_threads):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    gens = [1, 5, 25]
+    choices = [0, 2, 1, 2]
+    ms = [Rp.random_element() for _ in choices]
+    cts = [enc(scheme, Rp, m, key) for m in ms]
+    flat = scheme.gen_automorphism_mux_keys(
+        key, [(g, int(d == x)) for x in choices for d, g in enumerate(gens)], 0
+    )
+    ksks = [flat[i * 3 : i * 3 + 3] for i in range(len(choices))]
+    # NTT-domain inputs are accepted and not modified.
+    cts[0].to_NTT()
+    outs = scheme.automorphism_mux_batch(cts, gens, ksks, n_threads)
+    assert cts[0].repr == repr.ntt
+    for m, x, out in zip(ms, choices, outs, strict=True):
+        assert out.repr == repr.coeff
+        expected = m.automorphism(gens[x])
+        assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+    # Each item runs on one worker, so the batch matches single calls, in
+    # place or not.
+    for c, keys, out in zip(cts, ksks, outs, strict=True):
+        assert _same_sample(scheme.automorphism_mux(c, gens, keys), out)
+    scheme.automorphism_mux_batch(cts, gens, ksks, n_threads, in_place=True)
+    for c, out in zip(cts, outs, strict=True):
+        assert _same_sample(c, out)
+
+
+def test_automorphism_mux_keys_are_drawn_alike(ghs):
+    # Keys with bit 0 are fresh, distinct samples, like the others.
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ksks = scheme.gen_automorphism_mux_keys(key, [(5, 0), (5, 1), (5, 0)], 0)
+    samples = [x for k in ksks for component in k.mlwe for x in component]
+    assert len({x.seed for x in samples}) == len(samples)
+    digests = [_ksk_digests(k) for k in ksks]
+    assert digests[0] != digests[1] != digests[2] != digests[0]
+    with pytest.raises(ValueError, match="bit"):
+        scheme.gen_automorphism_mux_keys(key, [(5, 2)], 0)
+
+
+def test_automorphism_mux_refusals(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    c = enc(scheme, Rp, Rp.random_element(), key)
+    (k0,) = scheme.gen_automorphism_mux_keys(key, [(5, 1)], 0)
+    (k1,) = scheme.gen_automorphism_mux_keys(key, [(5, 1)], 1)
+    (radix,) = scheme.gen_automorphism_mux_keys(
+        key, [(25, 0)], 0, GadgetParams(RADIX_LOG_BASE)
+    )
+    with pytest.raises(ValueError, match="level"):
+        scheme.automorphism_mux(c, [5], [k1])
+    with pytest.raises(ValueError, match="gadget"):
+        scheme.automorphism_mux(c, [5, 25], [k0, radix])
+    # An automorphism key passes the body through: not a multiplexer key.
+    with pytest.raises(ValueError, match="multiplexer"):
+        scheme.automorphism_mux(c, [5], [scheme.gen_ksk_automorphism(key, key, 5, 0)])
+    with pytest.raises(ValueError, match="generator"):
+        scheme.automorphism_mux(c, [4], [k0])
+    with pytest.raises(ValueError, match="one key per generator"):
+        scheme.automorphism_mux(c, [5, 25], [k0])
+
+
 @pytest.mark.parametrize("n_threads", [1, 0])
 @pytest.mark.usefixtures("threads")
 def test_linear_combinations(bv, n_threads):

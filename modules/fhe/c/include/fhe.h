@@ -97,6 +97,24 @@ extern "C"
                            RNS_MLWE_KS_Key aut, uint64_t ell, const GadgetParams *gadget_params,
                            uint64_t n_threads);
 
+    // Encoders for the SHIP bootstrap [CHKS25, Alg. 1]. The input polynomial is
+    // canonical, over a ring of modulus Q; omega = exp(2 pi i / Q) and
+    // M = N/2 = 2^log_prec. Each output is a vector of M slots encoded at `scale`
+    // into the ring `out` was allocated over, in the NTT domain, as
+    // complex_values_ifft_scale_round_to_RNS_batch does with the complex ring's
+    // `gs_ws`.
+
+    // The plaintexts of the column step for a sample with mask `a` (linear
+    // decryption b - a s): out[4 i + k - 1] = Rot_i(pi_k) for i < theta and
+    // k = 1..4, with (Rot_i v)_t = v_(t - i mod M), pi_1 = (omega^(-a_t))_(t < M),
+    // pi_3 = (omega^(-a_(M + t)))_(t < M), and pi_2, pi_4 their conjugates.
+    // Up to `n_threads` threads (0: the library limit).
+    void ship_encode_pi(RNS_Polynomial *out, RNSc_Polynomial a, uint64_t theta, double scale,
+                        double **gs_ws, uint32_t log_prec, uint64_t n_threads);
+    // `out` encodes (c omega^(b_t))_(t < M), with c = coefficient_re + i coefficient_im.
+    void ship_encode_pt0(RNS_Polynomial out, RNSc_Polynomial b, double coefficient_re,
+                         double coefficient_im, double scale, double **gs_ws, uint32_t log_prec);
+
 #ifdef __cplusplus
 }
 #endif

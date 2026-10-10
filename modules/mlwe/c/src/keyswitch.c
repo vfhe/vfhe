@@ -362,6 +362,113 @@ int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *
     return 0;
 }
 
+// Whether `ksk` is a multiplexer key for rank `r` that can share an
+// accumulator and a decomposition with `first`.
+static int automorphism_mux_fits(RNS_MLWE_KS_Key first, RNS_MLWE_KS_Key ksk, uint64_t r)
+{
+    if (ksk == NULL || ksk->count != r + 1 || ksk->ring != first->ring ||
+        ksk->gadget_params.log_base != first->gadget_params.log_base ||
+        ksk->gadget_params.digits != first->gadget_params.digits ||
+        gadget_primes_per_digit(&ksk->gadget_params) !=
+            gadget_primes_per_digit(&first->gadget_params))
+        return 0;
+    for (size_t i = 0; i <= r; i++)
+    {
+        if (ksk->s[i] == NULL)
+            return 0;
+    }
+    return 1;
+}
+
+// Whether the n keys of one multiplexer fit each other.
+static int automorphism_mux_keys_fit(RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t r)
+{
+    if (n == 0)
+        return 0;
+    for (uint64_t d = 0; d < n; d++)
+    {
+        if (!automorphism_mux_fits(ksks[0], ksks[d], r))
+            return 0;
+    }
+    return 1;
+}
+
+// Key d switches from (b_d Aut_d(s), b_d) to s, so its product with the
+// permuted digits decrypts to b_d (Aut_d(b) - <Aut_d(a), Aut_d(s)>): the mask
+// components are subtracted, as in a key switch, and the body added.
+static void automorphism_mux(RNSc_MLWE out, RNSc_MLWE in, const uint64_t *gens,
+                             RNS_MLWE_KS_Key *ksks, uint64_t n)
+{
+    const uint64_t r = in->r;
+    RNSc_MLWE canonical = NULL;
+    if (mlwe_domain(in) == ARITH_DOMAIN_MUL)
+    {
+        canonical = mlwe_alloc_sample(in->ring, r);
+        mlwe_RNS_to_RNSc(canonical, in);
+        in = canonical;
+    }
+    const GadgetParams *gadget_params = &ksks[0]->gadget_params;
+    GadgetDigits digits[r + 1];
+    for (size_t i = 0; i <= r; i++)
+        gadget_decompose(&digits[i], ksks[0]->s[i], i < r ? &in->a[i] : &in->b, gadget_params);
+    if (canonical != NULL)
+        free_mlwe_RNS_sample(canonical);
+
+    RNS_MLWE acc = mlwe_alloc_sample(ksks[0]->ring, r);
+    mlwe_RNS_trivial_sample_of_zero(acc);
+    for (uint64_t d = 0; d < n; d++)
+    {
+        for (size_t i = 0; i < r; i++)
+            gadget_mul_subto_automorphism(acc, ksks[d]->s[i], &digits[i], gens[d]);
+        gadget_mul_addto_automorphism(acc, ksks[d]->s[r], &digits[r], gens[d]);
+    }
+    for (size_t i = 0; i <= r; i++)
+        gadget_digits_free(&digits[i]);
+    mlwe_RNS_to_RNSc(acc, acc);
+    mlwe_mod_down(out, acc, NULL);
+    free_mlwe_RNS_sample(acc);
+}
+
+// One multiplexer, after checking its keys.
+int mlwe_automorphism_mux_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, const uint64_t *gens,
+                                   RNS_MLWE_KS_Key *ksks, uint64_t n)
+{
+    if (!automorphism_mux_keys_fit(ksks, n, in->r))
+        return -1;
+    automorphism_mux(out, in, gens, ksks, n);
+    return 0;
+}
+
+typedef struct
+{
+    RNSc_MLWE *out, *in;
+    const uint64_t *gens;
+    RNS_MLWE_KS_Key *ksks;
+    uint64_t n;
+} AutomorphismMuxes;
+
+// Item i of the batch: one multiplexer on one worker.
+static void automorphism_mux_job(void *ctx, uint64_t i)
+{
+    const AutomorphismMuxes *jobs = (const AutomorphismMuxes *)ctx;
+    automorphism_mux(jobs->out[i], jobs->in[i], jobs->gens, jobs->ksks + i * jobs->n, jobs->n);
+}
+
+// Checks every item's keys first, so a refusal writes nothing.
+int mlwe_automorphism_mux_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
+                                         RNS_MLWE_KS_Key *ksks, uint64_t count, uint64_t n,
+                                         uint64_t n_threads)
+{
+    for (uint64_t i = 0; i < count; i++)
+    {
+        if (!automorphism_mux_keys_fit(ksks + i * n, n, in[i]->r))
+            return -1;
+    }
+    AutomorphismMuxes jobs = {out, in, gens, ksks, n};
+    vfhe_parallel_for(count, n_threads, automorphism_mux_job, &jobs);
+    return 0;
+}
+
 void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                         uint64_t size, uint64_t lvl)
 {
