@@ -23,6 +23,8 @@ from vfhe.engine import ffi, lib
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+_NOT_FINITE = "a value to round is NaN or infinite (a non-finite input or scale)"
+
 
 class ComplexRing:
     #: The (implementation, backend) this parent was built for.
@@ -57,7 +59,7 @@ class ComplexRing:
             "void*[]", [ffi.cast("void *", e_polys[i].obj) for i in range(n)]
         )
         outs = ffi.new("void*[]", [ffi.cast("void *", res[i].obj) for i in range(n)])
-        self.lib.complex_polys_ifft_scale_round_to_RNS_batch(
+        finite = self.lib.complex_polys_ifft_scale_round_to_RNS_batch(
             rows,
             outs,
             n,
@@ -65,6 +67,8 @@ class ComplexRing:
             self.slot_positions,
             temp_delta,
         )
+        if not finite:
+            raise ValueError(_NOT_FINITE)
         for p in res:
             p.repr = repr.ntt
         return res
@@ -98,7 +102,7 @@ class ComplexRing:
                     f"Expected a number of values dividing {self.N}, got {n}"
                 )
         res = [Polynomial(ring) for _ in range(count)]
-        self.lib.complex_values_ifft_scale_round_to_RNS_batch(
+        finite = self.lib.complex_values_ifft_scale_round_to_RNS_batch(
             ffi.new(
                 "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", p.obj) for p in res]
             ),
@@ -116,6 +120,8 @@ class ComplexRing:
             scale,
             n_threads,
         )
+        if not finite:
+            raise ValueError(_NOT_FINITE)
         for p in res:
             p.repr = repr.ntt
         return res
@@ -209,7 +215,8 @@ class ComplexPolynomial:
     # Duplicate of round_to_RNS with no Python per-coefficient overhead (C rounding + int_array_to_RNS).
     def round_to_RNS_cpp(self, ring: RNSRing) -> RNSPolynomial:
         res = Polynomial(ring)
-        self.ring.lib.complex_poly_round_to_RNS(res.obj, self.obj, ring.N)
+        if not self.ring.lib.complex_poly_round_to_RNS(res.obj, self.obj, ring.N):
+            raise ValueError(_NOT_FINITE)
         res.repr = repr.ntt
         return res
 

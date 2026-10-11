@@ -27,6 +27,12 @@ void vec_interleave_k_u32(uint32_t *out, const uint32_t *const *in, uint64_t k, 
 void vec_spread_u64(uint64_t *out, const uint64_t *in, uint64_t k, uint64_t n);
 void vec_spread_u32(uint32_t *out, const uint32_t *in, uint64_t k, uint64_t n);
 
+// As int_array_to_RNS, for coefficients given in `count` signed limbs:
+// coefficient k is the sum over j of limbs[j][k] 2^(j limb_bits), reduced
+// exactly. Each limb is an array of N int64_t values.
+void int_limbs_to_RNS(RNS_Polynomial out, int64_t *const *limbs, uint64_t count,
+                      uint64_t limb_bits);
+
 void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
                                Modulus mod);

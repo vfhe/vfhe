@@ -674,6 +674,17 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix CKKS encoding at a scale that takes a coefficient to 2^63 or beyond
+  (`encode`, `encode_batch`, `ComplexRing.values_ifft_scale_round_to_RNS_batch`
+  and the other rounding paths): the rounding went through an `int64_t` and
+  wrapped silently. A value that large is reduced exactly now, as the
+  integer the double holds, so any scale works; values below 2^63 take the
+  same path as before. This broke SHIP whenever the special modulus `P` was
+  above 2^63, since its column keys are encoded at scale `P`. A NaN or
+  infinite value to round (a non-finite input or scale) now raises
+  `ValueError`; the native `complex_poly_round_to_RNS`,
+  `complex_*_ifft_scale_round_to_RNS_batch` and `ship_encode_*` return
+  `false` for it.
 - Fix `Ring(N, prime_size=[...])` searching forever when no prime of a
   requested size is `1 mod 2N / split_degree` with an odd multiplier (17 bits
   at N = 2^13, for one). The odd multiplier makes the factors

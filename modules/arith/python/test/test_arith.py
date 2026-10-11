@@ -272,6 +272,47 @@ def test_encode_rounding_is_round_half_to_even():
     assert native.get_polynomial(signed=True) == [round(v) for v in values]
 
 
+@pytest.mark.parametrize("n, split_degree", [(64, 1), (64, 2), (4, 1)])
+def test_encode_rounding_is_exact_beyond_64_bits(n, split_degree):
+    # Doubles of 2^63 and up are integers that no int64_t holds: they are
+    # reduced exactly, in limbs, up to the largest double. One large value
+    # sits alone in a vector of eight; the small values next to the large ones
+    # still round to nearest even. n = 4 is shorter than a vector.
+    cring = ComplexRing(n // 2)
+    R = Ring(n, prime_size=[30, 60, 50], split_degree=split_degree)
+    Q = math.prod(R.primes)
+    large = [2.0**63, 2.0**124, math.nextafter(2.0**124, 0), 2.0**186, 1.5 * 2.0**1000]
+    large += [math.nextafter(math.inf, 0)]  # the largest double: 17 limbs
+    large += [rng.uniform(1, 2) * 2.0 ** rng.randrange(53, 1023) for _ in range(20)]
+    if n == 4:
+        values = [-large[-1], 2.5, -3.5, large[5]]
+    else:
+        values = [rng.uniform(-(2**40), 2**40) for _ in range(n)]
+        values[0:6] = [k + 0.5 for k in range(-3, 3)]  # ties
+        values[13] = -large[0]
+        for i, v in zip(range(16, n, 2), large, strict=False):
+            values[i] = rng.choice([-1, 1]) * v
+    cp = ComplexPolynomial(cring)
+    for i in range(n):
+        cp.obj[i] = values[i]
+    native = cp.round_to_RNS_cpp(R)
+    assert native.get_polynomial() == [round(v) % Q for v in values]
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_encode_refuses_a_non_finite_value(bad):
+    cring = ComplexRing(32)
+    R = Ring(64, prime_size=[60], split_degree=1)
+    cp = ComplexPolynomial(cring)
+    cp.obj[5] = bad
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        cp.round_to_RNS_cpp(R)
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        cring.values_ifft_scale_round_to_RNS_batch([[1.0] * 32, [bad] * 32], R, 2.0**20)
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        cring.values_ifft_scale_round_to_RNS_batch([[1.0] * 32], R, bad)
+
+
 def _complex_fft_oracle(v, n, inverse):
     """The canonical embedding by its definition, in Python. Coefficient form
     holds c_k = a_k + i a_(k+n), a the 2n real coefficients; slot j is the

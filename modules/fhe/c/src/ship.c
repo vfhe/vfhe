@@ -26,7 +26,7 @@ static double *angles_of(RNSc_Polynomial in)
     return angles;
 }
 
-void ship_encode_pi(RNS_Polynomial *out, RNSc_Polynomial a, uint64_t theta, double scale,
+bool ship_encode_pi(RNS_Polynomial *out, RNSc_Polynomial a, uint64_t theta, double scale,
                     FFT_Plan plan, const uint32_t *slots, uint64_t n_threads)
 {
     const uint64_t N = a->base->N, M = N / 2;
@@ -62,16 +62,17 @@ void ship_encode_pi(RNS_Polynomial *out, RNSc_Polynomial a, uint64_t theta, doub
             shifts[4 * i + k] = (M - i % M) % M;
         }
     }
-    complex_values_ifft_scale_round_to_RNS_batch(out, values, lengths, shifts, count, plan, slots,
-                                                 scale, n_threads);
+    const bool finite = complex_values_ifft_scale_round_to_RNS_batch(
+        out, values, lengths, shifts, count, plan, slots, scale, n_threads);
     free(values);
     free(lengths);
     free(shifts);
     for (int k = 0; k < 4; k++)
         free(pi[k]);
+    return finite;
 }
 
-void ship_encode_pt0(RNS_Polynomial out, RNSc_Polynomial b, double coefficient_re,
+bool ship_encode_pt0(RNS_Polynomial out, RNSc_Polynomial b, double coefficient_re,
                      double coefficient_im, double scale, FFT_Plan plan, const uint32_t *slots)
 {
     const uint64_t M = b->base->N / 2;
@@ -87,7 +88,8 @@ void ship_encode_pt0(RNS_Polynomial out, RNSc_Polynomial b, double coefficient_r
     free(angles);
     const double *rows[1] = {values};
     uint64_t length = M, shift = 0;
-    complex_values_ifft_scale_round_to_RNS_batch(&out, rows, &length, &shift, 1, plan, slots, scale,
-                                                 1);
+    const bool finite = complex_values_ifft_scale_round_to_RNS_batch(&out, rows, &length, &shift, 1,
+                                                                     plan, slots, scale, 1);
     free(values);
+    return finite;
 }

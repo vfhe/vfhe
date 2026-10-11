@@ -295,6 +295,24 @@ def test_special_prime_of_a_ring_that_is_not_the_first_of_its_base():
     assert _max_error(_slots(scheme, out, dense), mu) < TOLERANCE
 
 
+def test_special_modulus_beyond_64_bits():
+    # The column keys are encoded at scale P, here about 2^66.
+    ring = Ring(
+        N, prime_size=[25, 20, 20] + [25] * H.bit_length() + [33, 33], split_degree=1
+    )
+    scheme = CKKS_Scheme(ring, scaling_factor=2.0**25, special_primes=2)
+    assert int(scheme.special_rings[0].modulus_ratio(scheme.rings[0])).bit_length() > 64
+    ship = _ship(scheme)
+    dense = scheme.key_gen_sparse(M, 3.2)
+    scheme.rlk = scheme.gen_rlk(dense, dense)
+    key = ship.generate_bootstrap_key(dense, ship.sample_input_key(3.2))
+    mu = _values(5)
+    out = ship.half_bootstrap(
+        _coefficient_input(scheme, ship, dense, mu, ship.input_scale), key
+    )
+    assert _max_error(_slots(scheme, out, dense), mu) < TOLERANCE
+
+
 def test_inputs_are_checked(setup):
     scheme, ship, dense, _sparse, key = setup
     ct = scheme.encrypt(scheme.encode([0.5] * M), dense)

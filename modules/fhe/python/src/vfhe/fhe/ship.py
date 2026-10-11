@@ -433,7 +433,7 @@ class SHIP:
         cr = scheme.complex_ring
         pt0 = Polynomial(scheme.rings[0])
         sparse.to_coeff()
-        lib.ship_encode_pt0(
+        if not lib.ship_encode_pt0(
             pt0.obj,
             sparse.obj_b(),
             0.0,
@@ -441,7 +441,10 @@ class SHIP:
             scheme.scaling_factor,
             cr.plan,
             cr.slot_positions,
-        )
+        ):
+            raise ValueError(
+                f"the input's scale {ciphertext.delta} gives no finite gamma"
+            )
         pt0.repr = repr.ntt
         _restrict(pt0, scheme.rings[0].mask)
         first = CKKS_Ciphertext(scheme, lvl=0)
@@ -473,7 +476,7 @@ class SHIP:
         cr = scheme.complex_ring
         pis = [Polynomial(special) for _ in range(count)]
         sparse.to_coeff()
-        lib.ship_encode_pi(
+        if not lib.ship_encode_pi(
             ffi.new("void *[]", [p.obj for p in pis]),
             sparse.obj_a_i(0),
             theta,
@@ -481,7 +484,10 @@ class SHIP:
             cr.plan,
             cr.slot_positions,
             n_threads,
-        )
+        ):
+            raise ValueError(
+                f"the scaling factor {scheme.scaling_factor} is not finite"
+            )
         for p in pis:
             p.repr = repr.ntt
             _restrict(p, special.mask)

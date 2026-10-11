@@ -364,18 +364,37 @@ void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in)
 
 void int_array_to_RNS(RNS_Polynomial out, uint64_t *in)
 {
-    const uint64_t poly_size = out->base->N / out->base->split_degree;
-    uint64_t *temp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    int64_t *limbs[1] = {(int64_t *)in};
+    int_limbs_to_RNS(out, limbs, 1, 0);
+}
+
+void int_limbs_to_RNS(RNS_Polynomial out, int64_t *const *limbs, uint64_t count, uint64_t limb_bits)
+{
+    const uint64_t N = out->base->N;
+    const uint64_t poly_size = N / out->base->split_degree;
+    uint64_t *acc = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    uint64_t *next = count > 1 ? (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t)) : NULL;
     for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
             Modulus mod = out->base->mods[i];
-            mod_eltwise_reduce_signed(temp, (int64_t *)in, out->base->N, mod);
-            RNS_ROW_SCATTER_SPLIT(out, temp, i, out->base->N, out->base->split_degree, poly_size);
+            // Horner from the top limb: acc = acc 2^limb_bits + limbs[j].
+            mod_eltwise_reduce_signed(acc, limbs[count - 1], N, mod);
+            const uint64_t radix = count > 1 ? power_mod(2, limb_bits, mod->q) : 0;
+            for (uint64_t j = count - 1; j-- > 0;)
+            {
+                mod_eltwise_reduce_signed(next, limbs[j], N, mod);
+                mod_eltwise_fma(next, acc, radix, N, mod);
+                uint64_t *t = acc;
+                acc = next;
+                next = t;
+            }
+            RNS_ROW_SCATTER_SPLIT(out, acc, i, N, out->base->split_degree, poly_size);
         }
     }
-    free(temp);
+    free(next);
+    free(acc);
     polynomial_RNSc_to_RNS(out, (RNSc_Polynomial)out);
 }
 

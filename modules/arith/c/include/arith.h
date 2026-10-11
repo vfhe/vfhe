@@ -842,23 +842,29 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void complex_poly_fft(double *x, FFT_Plan plan, const uint32_t *slots);
     void complex_poly_ifft(double *x, FFT_Plan plan, const uint32_t *slots);
     void complex_poly_scale_double(double *v, double scale, uint64_t N);
-    void complex_poly_round_to_RNS(RNS_Polynomial out, double *in, uint64_t N);
+    /* Rounds each of the N doubles of `in` to the nearest integer (ties to
+       even) and writes it, reduced, to `out` in the NTT domain. Exact at any
+       magnitude: a value beyond 64 bits is reduced as the integer it is.
+       Returns false, writing 0 for it, when a value is NaN or infinite. */
+    bool complex_poly_round_to_RNS(RNS_Polynomial out, double *in, uint64_t N);
     // Writes the N values as (real, imaginary) pairs, the layout of a C
     // `double _Complex` array. `out` holds 2N doubles.
     void complex_poly_to_interleaved(double *out, const double *in, uint64_t N);
     // For each k < count: the slot form rows_in[k] taken to coefficient form,
     // multiplied by temp_delta and rounded into outs_rns[k] as
-    // complex_poly_round_to_RNS does. rows_in is not modified.
-    void complex_polys_ifft_scale_round_to_RNS_batch(void **rows_in, void **outs_rns,
+    // complex_poly_round_to_RNS does. Returns false when a value to round is
+    // NaN or infinite. rows_in is not modified.
+    bool complex_polys_ifft_scale_round_to_RNS_batch(void **rows_in, void **outs_rns,
                                                      uint64_t count, FFT_Plan plan,
                                                      const uint32_t *slots, double temp_delta);
     // For each k < count: the n = lengths[k] complex values at values[k], as
     // (real, imaginary) pairs, rotated so that value shifts[k] mod n comes
     // first and repeated to N values (n a power of two dividing N), taken as
     // slots to coefficient form, multiplied by scale and rounded into outs[k]
-    // as complex_poly_round_to_RNS does. Runs on up to n_threads threads (0:
-    // the library limit).
-    void complex_values_ifft_scale_round_to_RNS_batch(RNS_Polynomial *outs,
+    // as complex_poly_round_to_RNS does. Returns false when a value to round
+    // is NaN or infinite. Runs on up to n_threads threads (0: the library
+    // limit).
+    bool complex_values_ifft_scale_round_to_RNS_batch(RNS_Polynomial *outs,
                                                       const double *const *values,
                                                       const uint64_t *lengths,
                                                       const uint64_t *shifts, uint64_t count,
