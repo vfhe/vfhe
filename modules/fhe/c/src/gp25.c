@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fhe.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <util.h>
 
@@ -15,7 +16,8 @@
  * so it runs inside the last layer of its gap, on the same item.
  *
  * Layers read one array of accumulators and write the other. The arrays alternate over the whole
- * rotation, and the result is copied back once at the end if it is not in the caller's.
+ * rotation; if the result ends in the scratch array, each accumulator exchanges its storage with
+ * the caller's, so nothing is copied.
  * ------------------------------------------------------------------------------------------------
  */
 
@@ -76,37 +78,45 @@ typedef struct
     uint64_t n;
 } Accumulators;
 
-static void accumulators_init(Accumulators *A, RNSc_MLWE *acc, uint64_t n)
+static void alloc_item(void *ctx, uint64_t k)
+{
+    const Accumulators *A = (const Accumulators *)ctx;
+    A->scratch[k] = mlwe_alloc_sample(A->caller[0]->ring, A->caller[0]->r);
+}
+
+static void accumulators_init(Accumulators *A, RNSc_MLWE *acc, uint64_t n, uint64_t n_threads)
 {
     A->caller = acc;
     A->n = n;
     A->scratch = (RNSc_MLWE *)safe_malloc(n * sizeof(RNSc_MLWE));
-    for (uint64_t k = 0; k < n; k++)
-        A->scratch[k] = mlwe_alloc_sample(acc[0]->ring, acc[0]->r);
+    vfhe_parallel_for(n, n_threads, alloc_item, A);
     A->cur = acc;
     A->next = A->scratch;
 }
 
-typedef struct
+// Accumulator k ends in the caller's sample: if it is in the scratch one, the two samples
+// exchange their components (they share a ring and a rank), and the scratch sample, which then
+// holds the caller's old components, is freed either way.
+static void finish_item(void *ctx, uint64_t k)
 {
-    RNSc_MLWE *out, *in;
-} Copy;
-
-static void copy_item(void *ctx, uint64_t k)
-{
-    const Copy *c = (const Copy *)ctx;
-    mlwe_copy_RNSc_sample(c->out[k], c->in[k]);
+    const Accumulators *A = (const Accumulators *)ctx;
+    RNSc_MLWE caller = A->caller[k], scratch = A->scratch[k];
+    if (A->cur != A->caller)
+    {
+        assert(caller->r == scratch->r);
+        ArithElement *a = caller->a;
+        caller->a = scratch->a;
+        scratch->a = a;
+        const ArithElement b = caller->b;
+        caller->b = scratch->b;
+        scratch->b = b;
+    }
+    free_mlwe_RNS_sample(scratch);
 }
 
 static void accumulators_finish(Accumulators *A, uint64_t n_threads)
 {
-    if (A->cur != A->caller)
-    {
-        Copy c = {A->caller, A->cur};
-        vfhe_parallel_for(A->n, n_threads, copy_item, &c);
-    }
-    for (uint64_t k = 0; k < A->n; k++)
-        free_mlwe_RNS_sample(A->scratch[k]);
+    vfhe_parallel_for(A->n, n_threads, finish_item, A);
     free(A->scratch);
 }
 
@@ -143,7 +153,7 @@ void gp25_rotate(RNSc_MLWE *acc, uint64_t n, RNS_MLWE *const *bits, uint64_t n_b
                  uint64_t n_threads)
 {
     Accumulators A;
-    accumulators_init(&A, acc, n);
+    accumulators_init(&A, acc, n, n_threads);
     rotate_then_multiply(&A, bits, n_bits, aut, NULL, NULL, ell, gadget_params, n_threads);
     accumulators_finish(&A, n_threads);
 }
@@ -163,7 +173,7 @@ void gp25_blind_rotate(RNSc_MLWE *acc, uint64_t n, const uint64_t *a, uint64_t r
 {
     const uint64_t two_n = 2 * acc[0]->ring->N;
     Accumulators A;
-    accumulators_init(&A, acc, n);
+    accumulators_init(&A, acc, n, n_threads);
     uint64_t *exponent = (uint64_t *)safe_malloc(n * sizeof(uint64_t));
     for (uint64_t i = 0; i < rank; i++)
     {

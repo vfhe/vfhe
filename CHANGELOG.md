@@ -338,6 +338,11 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `GP25.rotate` and the blind rotation (`gp25_rotate`, `gp25_blind_rotate`)
+  allocate and free their scratch accumulators in parallel, and no longer
+  copy the result back when it ends in the scratch array: each of the
+  caller's samples takes over the scratch sample's components instead. The
+  caller's samples stay the same objects. Results are unchanged.
 - GHS key switches fill more threads. A gadget product with fewer key
   primes than threads splits its digits into groups as well, each group
   accumulating apart and the groups added before the inverse transform
