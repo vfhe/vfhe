@@ -28,28 +28,16 @@ class ComplexRing:
     #: The (implementation, backend) this parent was built for.
     spec: ClassVar[Spec]
 
-    def __init__(self, N: int, special_rous: bool = True) -> None:
+    def __init__(self, N: int) -> None:
         self.lib = lib
         self.N = N
         self.logN = int(log2(N))
         self.N2 = 2 * N
-
-        if special_rous:
-            rous = self.gen_special_rous_hp(self.N2)
-            rous_real = [i.real for i in rous]
-            rous_imag = [i.imag for i in rous]
-            self.CT_rous = self.lib.load_rous_CT(
-                ffi.new("double[]", rous_real), ffi.new("double[]", rous_imag), self.N2
-            )
-            # inv rous
-            inv_rous = [i**-1 for i in rous]
-            rous_inv_real = [i.real for i in inv_rous]
-            rous_inv_imag = [i.imag for i in inv_rous]
-            self.GS_rous = self.lib.load_rous_GS(
-                ffi.new("double[]", rous_inv_real),
-                ffi.new("double[]", rous_inv_imag),
-                self.N2,
-            )
+        #: The negacyclic FFT of length 2N, and where each slot lands in its
+        #: output (see ``complex_slot_positions`` in arith.h).
+        self.plan = ffi.gc(self.lib.fft_new_plan(self.N2), self.lib.fft_free_plan)
+        self.slot_positions = ffi.new("uint32_t[]", N)
+        self.lib.complex_slot_positions(self.slot_positions, N)
 
     def alloc_polynomial(self):
         return _aligned64("double[]", self.N2)
@@ -73,9 +61,8 @@ class ComplexRing:
             rows,
             outs,
             n,
-            self.N,
-            self.logN,
-            self.GS_rous,
+            self.plan,
+            self.slot_positions,
             temp_delta,
         )
         for p in res:
@@ -124,47 +111,14 @@ class ComplexRing:
                 else [k % n for k, n in zip(shifts, lengths, strict=True)],
             ),
             count,
-            self.N,
-            self.logN,
-            self.GS_rous,
+            self.plan,
+            self.slot_positions,
             scale,
             n_threads,
         )
         for p in res:
             p.repr = repr.ntt
         return res
-
-    @staticmethod
-    # special RoUs for CKKS
-    def gen_special_rous(rou, N):
-        def brev(x, size):
-            return int(bin(x)[2:].rjust(size, "0")[::-1], 2)
-
-        result = [1] * N
-        for k in range(int(log2(N)) - 1, 0, -1):
-            for i in range(2 ** (k - 1)):
-                result[2 ** (k - 1) + i] = rou ** (
-                    (5 ** brev(i, k - 1)) * N // (2 ** (k + 1))
-                )
-        return result
-
-    @staticmethod
-    def gen_special_rous_hp(N):
-        N = int(N)
-        import mpmath as mp
-
-        mp.mp.prec = 100  # type: ignore
-        rou = mp.exp(2 * mp.pi * 1j / (2 * mp.mpf(N)))
-
-        def brev(x, size):
-            return int(bin(x)[2:].rjust(size, "0")[::-1], 2)
-
-        result = [1] * N
-        for k in range(int(log2(N)) - 1, 0, -1):
-            for i in range(2 ** (k - 1)):
-                expo = ((5 ** brev(i, k - 1)) * N // (2 ** (k + 1))) % (2 * N)
-                result[2 ** (k - 1) + i] = mp.power(rou, expo)
-        return [complex(i) for i in result]
 
 
 _BUILTIN_NUMBERS = frozenset((complex, float, int))
@@ -207,15 +161,16 @@ class ComplexPolynomial:
         return iter(array)
 
     def IFFT(self):
-        self.ring.lib.bit_reverse_array(self.obj, self.ring.N, self.ring.logN)
-        self.ring.lib.GS_RN(self.obj, self.ring.GS_rous, self.ring.N)
-        self.ring.lib.complex_poly_scale_double(
-            self.obj, 1.0 / self.ring.N, self.ring.N
+        """Slot form to coefficient form, in place."""
+        self.ring.lib.complex_poly_ifft(
+            self.obj, self.ring.plan, self.ring.slot_positions
         )
 
     def FFT(self):
-        self.ring.lib.CT_NR(self.obj, self.ring.CT_rous, self.ring.N)
-        self.ring.lib.bit_reverse_array(self.obj, self.ring.N, self.ring.logN)
+        """Coefficient form to slot form, in place."""
+        self.ring.lib.complex_poly_fft(
+            self.obj, self.ring.plan, self.ring.slot_positions
+        )
 
     def __imul__(self, other):
         if isinstance(other, numbers.Real):

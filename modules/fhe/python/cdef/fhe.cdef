@@ -12,5 +12,5 @@ void gp25_multiply_by_signed_monomials(void *acc, uint64_t n, uint64_t *a, void 
 void gp25_blind_rotate(void *acc, uint64_t n, uint64_t *a, uint64_t rank, uint64_t h, uint64_t gap_bits, void *gap_keys, void *sign_keys, void *aut, uint64_t ell, const void *gadget_params, uint64_t n_threads);
 void cggi16_blind_rotate(void *acc, uint64_t *a, uint64_t n, void *bk, uint64_t unfolding, uint64_t ell, const void *gadget_params, uint64_t n_threads);
 void cggi16_blind_rotate_batch(void *acc, uint64_t *a, uint64_t count, uint64_t n, void *bk, uint64_t unfolding, uint64_t ell, const void *gadget_params, uint64_t n_threads);
-void ship_encode_pi(void *out, void *a, uint64_t theta, double scale, void *gs_ws, uint32_t log_prec, uint64_t n_threads);
-void ship_encode_pt0(void *out, void *b, double coefficient_re, double coefficient_im, double scale, void *gs_ws, uint32_t log_prec);
+void ship_encode_pi(void *out, void *a, uint64_t theta, double scale, void *plan, const uint32_t *slots, uint64_t n_threads);
+void ship_encode_pt0(void *out, void *b, double coefficient_re, double coefficient_im, double scale, void *plan, const uint32_t *slots);

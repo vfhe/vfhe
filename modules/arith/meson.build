@@ -8,6 +8,8 @@ module = {
         'c/src/mle.c',
         'c/src/number_theory.c',
         # shared modular-arithmetic and transform kernels
+        'c/src/kernels/fft.c',
+        'c/src/kernels/fft_scalar.c',
         'c/src/kernels/interleave.c',
         'c/src/kernels/mod.c',
         'c/src/kernels/mod_basecvt.c',
@@ -49,6 +51,7 @@ module = {
     'fuzz': files('c/fuzz/fuzz_ntt.c'),
     'c_tests': files(
         'c/test/test_arith_generic.c',
+        'c/test/test_fft.c',
         'c/test/test_interleave.c',
         'c/test/test_mod.c',
         'c/test/test_ntt.c',

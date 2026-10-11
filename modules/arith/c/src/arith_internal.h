@@ -109,6 +109,11 @@ static inline __m512i centered_shift(__m512i x, __m512i half, __m512i neg_q_in)
 void ntt_w32_precompute(NTT_Plan plan);
 void ntt_w32_free(NTT_Plan plan);
 
+// The scalar FFT (fft_scalar.c): fft_forward / fft_inverse where the vector
+// transform does not run, on the same tables and layout.
+void fft_forward_scalar(double *x, const struct _FFT_Plan *plan);
+void fft_inverse_scalar(double *x, const struct _FFT_Plan *plan);
+
 void ntt_scalar_precompute(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t ***out_ws);
 void ntt_scalar_free_precompute(uint64_t **ws);
 // `ws` is the only thing the plan cannot supply: forward and inverse read

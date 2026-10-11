@@ -47,7 +47,7 @@ class CKKS_Scheme(MLWE_Scheme):
             balanced=balanced,
         )
         self.scaling_factor = scaling_factor
-        self.complex_ring = ComplexRing(self.ring.N // 2, True)
+        self.complex_ring = ComplexRing(self.ring.N // 2)
 
     def encode(
         self,

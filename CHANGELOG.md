@@ -338,6 +338,24 @@ versions may contain breaking changes.
 
 ### Changed
 
+- The CKKS encoder and decoder (`ComplexRing`) run on a new negacyclic FFT
+  kernel (`fft_new_plan` / `fft_forward` / `fft_inverse` /
+  `fft_pointwise_mul`, `vfhe.arith`'s native `FFT_Plan`), in place of the
+  special-root transforms `CT_NR` / `GS_RN` and their tables
+  (`load_rous_CT`, `load_rous_GS`, `bit_reverse_array`), which are removed.
+  Results agree to rounding (same error at every size), the slot order is one
+  table (`complex_slot_positions`) folded into the encoder's gather, and the
+  twiddles are built in C. **Breaking**: `ComplexRing(N)` no longer takes
+  `special_rous`, and loses `gen_special_rous`, `gen_special_rous_hp`,
+  `CT_rous` and `GS_rous` (it gains `plan` and `slot_positions`); the
+  native batch encoders and `ship_encode_pi` / `ship_encode_pt0` take
+  `(plan, slots)` in place of `(n_complex, log_prec, gs_ws)`.
+  `complex_polys_ifft_scale_round_to_RNS_batch` no longer overwrites its
+  input rows. At N = 2^16 (avx512ifma, laptop): `CKKS_Scheme` construction
+  3.9 s -> 9 ms, `decode` 1.54 -> 1.09 ms, `ComplexPolynomial.FFT()` 0.65 ->
+  0.23 ms.
+- `mpmath` is no longer a dependency: its only use was building the old
+  transform's root tables.
 - `MLWE_Scheme.trace_pack` runs the packings of each level in parallel and
   takes `n_threads`; the native `mlwe_trace_pack` takes it as a new last
   argument. Results do not depend on the thread count. 1024 samples at

@@ -787,33 +787,83 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void pmf_vec_ntt_forward(PMFVector a, PMFNTTPlan plan);
     void pmf_vec_ntt_inverse(PMFVector a, PMFNTTPlan plan);
 
-    // Complex polynomials: n real parts followed by n imaginary parts. Root
-    // tables are loaded from size = 2n roots.
-    double **load_rous_CT(double *rous_real, double *rous_imag, uint64_t size);
-    void CT_NR(double *x, double **ws, uint64_t n);
-    double **load_rous_GS(double *rous_real, double *rous_imag, uint64_t size);
-    void GS_RN(double *x, double **ws, uint64_t n);
-    void bit_reverse_array(double *v, uint64_t N, uint32_t prec);
+    /* The negacyclic FFT over R[X]/(X^n + 1), n a power of two in [2, 2^20].
+       With m = n/2 and zeta = exp(i pi / n), the forward transform evaluates
+       f(X) = sum_j a_j X^j at the m points zeta^(4k+1):
+
+           u_k = f(zeta^(4k+1)),   k < m.
+
+       The other m evaluations are their conjugates, since the coefficients
+       are real. Multiplication in the ring is the elementwise complex product
+       of the u_k (fft_pointwise_mul).
+
+       A buffer is n doubles. Coefficients are in natural order; evaluations
+       are split, real parts in [0, m) and imaginary parts in [m, n), with u_k
+       at position brv(k) of each half (log2(m) bits). Both transforms work in
+       place, and the inverse includes the 1/m normalisation. Buffers must be
+       64-byte aligned (safe_aligned_malloc).
+
+       A plan is read-only once built and may be shared between threads. The
+       tables are at most 15 m doubles, built with O(m) trigonometric evaluations. */
+    typedef struct _FFT_Plan
+    {
+        uint64_t n;
+        uint64_t m;
+        uint64_t leaf; // recursion cutover, in complex elements
+        // ws[h + i] = exp(i pi (4 brv(i) + 1) / (4h)) for group i of the h at
+        // one level; wsn_im is -ws_im. Index 0 unused.
+        double *ws_re, *ws_im, *wsn_im;
+        // The last four stages' twiddles, one 8-lane vector per vector of data
+        // (m doubles each); NULL where the vector transform does not run.
+        double *ct4_re, *ct4_im, *ct2_re, *ct2_im, *ct1_re, *ct1_im;
+        double *gs4_re, *gs4_im, *gs2_re, *gs2_im, *gs1_re, *gs1_im;
+        double inv_m;
+    } *FFT_Plan;
+
+    // Returns NULL, explaining on stderr, for an n out of range.
+    FFT_Plan fft_new_plan(uint64_t n);
+    void fft_free_plan(FFT_Plan plan);
+    void fft_forward(double *x, FFT_Plan plan);
+    void fft_inverse(double *x, FFT_Plan plan);
+    // out = a * b in the evaluation domain; out may alias a or b.
+    void fft_pointwise_mul(double *out, const double *a, const double *b, FFT_Plan plan);
+
+    /* Complex polynomials (the CKKS encoding): N complex values, real parts
+       followed by imaginary parts, over the FFT of length 2N. In coefficient
+       form value k is a_k + i a_(k+N), a the real coefficients of the
+       polynomial of degree < 2N; in slot form value j is the evaluation at
+       zeta^(5^j), zeta = exp(i pi / 2N).
+
+       complex_slot_positions writes the N positions, in fft_forward's
+       output, of the slots: out[j] is where zeta^(5^j) lands. */
+    void complex_slot_positions(uint32_t *out, uint64_t N);
+    // Coefficient form to slot form and back, in place. `slots` is
+    // complex_slot_positions(N) and `plan` the FFT of length 2N.
+    void complex_poly_fft(double *x, FFT_Plan plan, const uint32_t *slots);
+    void complex_poly_ifft(double *x, FFT_Plan plan, const uint32_t *slots);
     void complex_poly_scale_double(double *v, double scale, uint64_t N);
     void complex_poly_round_to_RNS(RNS_Polynomial out, double *in, uint64_t N);
     // Writes the N values as (real, imaginary) pairs, the layout of a C
     // `double _Complex` array. `out` holds 2N doubles.
     void complex_poly_to_interleaved(double *out, const double *in, uint64_t N);
+    // For each k < count: the slot form rows_in[k] taken to coefficient form,
+    // multiplied by temp_delta and rounded into outs_rns[k] as
+    // complex_poly_round_to_RNS does. rows_in is not modified.
     void complex_polys_ifft_scale_round_to_RNS_batch(void **rows_in, void **outs_rns,
-                                                     uint64_t count, uint64_t n_complex,
-                                                     uint32_t log_prec, double **gs_ws,
-                                                     double temp_delta);
+                                                     uint64_t count, FFT_Plan plan,
+                                                     const uint32_t *slots, double temp_delta);
     // For each k < count: the n = lengths[k] complex values at values[k], as
     // (real, imaginary) pairs, rotated so that value shifts[k] mod n comes
-    // first and repeated to n_complex values (n a power of two dividing
-    // n_complex = 2^log_prec), are bit-reversed, transformed by GS_RN,
-    // multiplied by scale / n_complex and rounded into outs[k] as
-    // complex_poly_round_to_RNS does. Runs on up to n_threads threads (0: the
-    // library limit).
-    void complex_values_ifft_scale_round_to_RNS_batch(
-        RNS_Polynomial *outs, const double *const *values, const uint64_t *lengths,
-        const uint64_t *shifts, uint64_t count, uint64_t n_complex, uint32_t log_prec,
-        double **gs_ws, double scale, uint64_t n_threads);
+    // first and repeated to N values (n a power of two dividing N), taken as
+    // slots to coefficient form, multiplied by scale and rounded into outs[k]
+    // as complex_poly_round_to_RNS does. Runs on up to n_threads threads (0:
+    // the library limit).
+    void complex_values_ifft_scale_round_to_RNS_batch(RNS_Polynomial *outs,
+                                                      const double *const *values,
+                                                      const uint64_t *lengths,
+                                                      const uint64_t *shifts, uint64_t count,
+                                                      FFT_Plan plan, const uint32_t *slots,
+                                                      double scale, uint64_t n_threads);
 
     // polynomial
     IntPolynomial polynomial_new_int_polynomial(uint64_t N);

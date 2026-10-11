@@ -439,8 +439,8 @@ class SHIP:
             0.0,
             -gamma / (4 * math.pi),
             scheme.scaling_factor,
-            cr.GS_rous,
-            cr.logN,
+            cr.plan,
+            cr.slot_positions,
         )
         pt0.repr = repr.ntt
         _restrict(pt0, scheme.rings[0].mask)
@@ -478,8 +478,8 @@ class SHIP:
             sparse.obj_a_i(0),
             theta,
             scheme.scaling_factor,
-            cr.GS_rous,
-            cr.logN,
+            cr.plan,
+            cr.slot_positions,
             n_threads,
         )
         for p in pis:

@@ -39,7 +39,6 @@ classifiers = [
 dependencies = [
     "cffi>=2.1.0",
     "protobuf>=7.35.1,<8",
-    "mpmath>=1.4.1",
     "setuptools>=66",
 ]
 
@@ -76,7 +75,6 @@ test = [
     "pytest>=9.1.1",
     "pytest-cov>=7",
     "gcovr>=8.3",
-    "mpmath>=1.4.1",
 ]
 lint = [
     { include-group = "test" },

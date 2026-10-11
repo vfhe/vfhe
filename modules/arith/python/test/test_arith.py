@@ -7,6 +7,7 @@ product, CRT for reconstruction. Also covers domain conversion, automorphism,
 slot inversion, the CKKS complex FFT roundtrip, and the multiprecision bridge.
 """
 
+import cmath
 import math
 import random
 from fractions import Fraction
@@ -271,36 +272,29 @@ def test_encode_rounding_is_round_half_to_even():
     assert native.get_polynomial(signed=True) == [round(v) for v in values]
 
 
-def _brv(x, bits):
-    return int(bin(x)[2:].rjust(bits, "0")[::-1], 2) if bits else 0
-
-
 def _complex_fft_oracle(v, n, inverse):
-    """The scalar CT_NR (forward) / GS_RN (inverse) transforms, in Python."""
-    rous = ComplexRing.gen_special_rous_hp(2 * n)
-    ws = [r**-1 for r in rous] if inverse else rous
-    logn = int(math.log2(n))
-    x = list(v)
+    """The canonical embedding by its definition, in Python. Coefficient form
+    holds c_k = a_k + i a_(k+n), a the 2n real coefficients; slot j is the
+    evaluation at zeta^(5^j), zeta = exp(i pi / 2n)."""
+    two_n = 2 * n
+    zeta = [cmath.exp(1j * math.pi * t / two_n) for t in range(2 * two_n)]
+    exponents = [pow(5, j, 2 * two_n) for j in range(n)]
     if inverse:
-        x = [x[_brv(i, logn)] for i in range(n)]
-        t, m = 1, n
-        while m > 1:
-            h = m >> 1
-            for i in range(h):
-                for j in range(2 * i * t, 2 * i * t + t):
-                    u, w = x[j], x[j + t]
-                    x[j], x[j + t] = u + w, (u - w) * ws[h + i]
-            t, m = t << 1, h
-        return [c / n for c in x]
-    t, m = n, 1
-    while m < n:
-        t >>= 1
-        for i in range(m):
-            for j in range(2 * i * t, 2 * i * t + t):
-                u, w = x[j], x[j + t] * ws[m + i]
-                x[j], x[j + t] = u + w, u - w
-        m <<= 1
-    return [x[_brv(i, logn)] for i in range(n)]
+        # The other n evaluations are the conjugates, at zeta^(-5^j).
+        a = [
+            2
+            / two_n
+            * sum(
+                s * zeta[(-e * k) % (2 * two_n)]
+                for s, e in zip(v, exponents, strict=True)
+            ).real
+            for k in range(two_n)
+        ]
+        return [complex(a[k], a[k + n]) for k in range(n)]
+    a = [c.real for c in v] + [c.imag for c in v]
+    return [
+        sum(a[k] * zeta[(e * k) % (2 * two_n)] for k in range(two_n)) for e in exponents
+    ]
 
 
 @pytest.mark.parametrize("cN", [1, 2, 4, 8, 16, 32])
