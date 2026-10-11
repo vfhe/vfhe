@@ -336,7 +336,9 @@ extern "C"
     // levels after it do not amplify. ksks[j] is the automorphism key for
     // 2^(j + 1) + 1 at the
     // samples' level, j < ell. The other samples of `vec` are overwritten.
-    void mlwe_trace_pack(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks);
+    // The 2^(ell - j) packings of level j are independent and run on up to
+    // `n_threads` threads (0: the library limit).
+    void mlwe_trace_pack(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks, uint64_t n_threads);
 
     // Subring maps between R_N = Z[X]/(X^N + 1) and R_n = Z[Y]/(Y^n + 1),
     // N = k * n, R_n embedded as Y = X^k. Both move coefficients only, so they
@@ -451,6 +453,11 @@ extern "C"
     void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                             uint64_t ell, uint64_t special_primes,
                             const GadgetParams *gadget_params);
+    // out[i] = mgsw_CMUX_to_coeff(in1[i], in2[i]) for i < n, all with the one
+    // selector `mgsw`: canonical inputs and outputs, every out[i] distinct
+    // from the inputs. Up to `n_threads` threads (0: the library limit).
+    void mgsw_CMUX_batch(RNSc_MLWE *out, RNSc_MLWE *in1, RNSc_MLWE *in2, uint64_t n, RNS_MLWE *mgsw,
+                         uint64_t ell, const GadgetParams *gadget_params, uint64_t n_threads);
     void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                              RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
                              const GadgetParams *gadget_params);

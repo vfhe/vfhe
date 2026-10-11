@@ -342,6 +342,146 @@ static void concurrent_use_hands_no_buffer_to_two_holders(void)
     TEST_ASSERT_EQUAL_UINT64(0, stats().retained_bytes);
 }
 
+typedef struct
+{
+    pthread_barrier_t *retained, *released;
+    size_t bytes;
+    int count;
+} Retainer;
+
+static void *retain_count_then_wait(void *arg)
+{
+    Retainer *r = (Retainer *)arg;
+    void *p[MANY];
+    for (int i = 0; i < r->count; i++)
+        p[i] = mempool_aligned_malloc(r->bytes);
+    for (int i = 0; i < r->count; i++)
+        mempool_free(p[i], r->bytes);
+    pthread_barrier_wait(r->retained);
+    pthread_barrier_wait(r->released);
+    return NULL;
+}
+
+// Threads retain on their own, yet together they stay within the capacity.
+static void a_fixed_capacity_bounds_what_all_threads_retain(void)
+{
+    enum
+    {
+        THREADS = 6
+    };
+    mempool_set_capacity(5 * SIZE);
+    pthread_barrier_t retained, released;
+    pthread_barrier_init(&retained, NULL, THREADS + 1);
+    pthread_barrier_init(&released, NULL, THREADS + 1);
+    Retainer r = {&retained, &released, SIZE, 2};
+    pthread_t t[THREADS];
+    for (int i = 0; i < THREADS; i++)
+        pthread_create(&t[i], NULL, retain_count_then_wait, &r);
+    pthread_barrier_wait(&retained);
+    TEST_ASSERT_EQUAL_UINT64(5 * SIZE, stats().retained_bytes);
+    pthread_barrier_wait(&released);
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], NULL);
+    pthread_barrier_destroy(&retained);
+    pthread_barrier_destroy(&released);
+}
+
+typedef struct
+{
+    pthread_barrier_t *step;
+    int rounds;
+} Cycler;
+
+// Holds MANY buffers at once, `rounds` times, in step with the other threads
+// and the test, which reads the statistics while every thread holds its
+// buffers and again once all have released them.
+static void *cycle_in_step(void *arg)
+{
+    Cycler *c = (Cycler *)arg;
+    void *p[MANY];
+    for (int round = 0; round < c->rounds; round++)
+    {
+        pthread_barrier_wait(c->step);
+        for (int i = 0; i < MANY; i++)
+            p[i] = mempool_aligned_malloc(SIZE);
+        pthread_barrier_wait(c->step);
+        for (int i = 0; i < MANY; i++)
+            mempool_free(p[i], SIZE);
+        pthread_barrier_wait(c->step);
+    }
+    return NULL;
+}
+
+// Several threads, each with a live set far below what a thread shares at
+// once, peak together: the automatic capacity must cover all of them, so the
+// second round is served entirely from the pool. The peak only grows, so the
+// test needs one so far below what the threads hold together, and runs before
+// the tests with larger working sets. The checks come after the join, so that
+// a failure leaves no thread waiting.
+static void auto_capacity_keeps_every_threads_live_set(void)
+{
+    enum
+    {
+        THREADS = 4
+    };
+    TEST_ASSERT_LESS_THAN_UINT64_MESSAGE(2 * MANY * SIZE, stats().peak_outstanding_bytes,
+                                         "an earlier test peaked too high for this one");
+    pthread_barrier_t step;
+    pthread_barrier_init(&step, NULL, THREADS + 1);
+    Cycler c = {&step, 2};
+    pthread_t t[THREADS];
+    for (int i = 0; i < THREADS; i++)
+        pthread_create(&t[i], NULL, cycle_in_step, &c);
+    pthread_barrier_wait(&step);
+    pthread_barrier_wait(&step);
+    const uint64_t peak = stats().peak_outstanding_bytes;
+    pthread_barrier_wait(&step);
+    const uint64_t retained = stats().retained_bytes;
+    const uint64_t misses_before = stats().misses;
+    for (int i = 0; i < 3; i++)
+        pthread_barrier_wait(&step);
+    const uint64_t misses_after = stats().misses;
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], NULL);
+    pthread_barrier_destroy(&step);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT64(THREADS * MANY * SIZE, peak);
+    TEST_ASSERT_EQUAL_UINT64(THREADS * MANY * SIZE, retained);
+    TEST_ASSERT_EQUAL_UINT64(misses_before, misses_after);
+}
+
+static void *retain_one_and_exit(void *arg)
+{
+    const size_t bytes = *(const size_t *)arg;
+    void *p = mempool_aligned_malloc(bytes);
+    mempool_free(p, bytes);
+    return NULL;
+}
+
+// Room a thread reserved under the capacity and never filled goes back when
+// it exits, so another thread can still retain up to the capacity.
+static void an_exited_thread_leaves_the_capacity_whole(void)
+{
+    enum
+    {
+        THREADS = 3,
+        BUFFERS = 16
+    };
+    const size_t big = 1u << 20;
+    mempool_set_capacity(BUFFERS * big);
+    for (int i = 0; i < THREADS; i++)
+    {
+        pthread_t t;
+        pthread_create(&t, NULL, retain_one_and_exit, (void *)&big);
+        pthread_join(t, NULL);
+    }
+    void *p[BUFFERS];
+    for (int i = 0; i < BUFFERS; i++)
+        p[i] = mempool_aligned_malloc(big);
+    for (int i = 0; i < BUFFERS; i++)
+        mempool_free(p[i], big);
+    TEST_ASSERT_EQUAL_UINT64(BUFFERS * big, stats().retained_bytes);
+}
+
 static void a_forked_child_uses_the_pool(void)
 {
     Holder h;
@@ -389,6 +529,7 @@ int main(void)
     RUN_TEST(a_fixed_capacity_bounds_what_is_retained);
     RUN_TEST(lowering_the_capacity_releases);
     RUN_TEST(auto_capacity_keeps_the_peak_live_set);
+    RUN_TEST(auto_capacity_keeps_every_threads_live_set);
     RUN_TEST(many_sizes_evict_the_least_recently_used);
     RUN_TEST(a_wiped_buffer_reaches_the_next_holder_without_its_contents);
     RUN_TEST(wipe_on_release_zeroes_every_released_buffer);
@@ -397,6 +538,8 @@ int main(void)
     RUN_TEST(a_buffer_released_on_another_thread_is_kept_there);
     RUN_TEST(a_thread_exit_returns_its_buffers);
     RUN_TEST(concurrent_use_hands_no_buffer_to_two_holders);
+    RUN_TEST(a_fixed_capacity_bounds_what_all_threads_retain);
+    RUN_TEST(an_exited_thread_leaves_the_capacity_whole);
     RUN_TEST(a_forked_child_uses_the_pool);
     return UNITY_END();
 }

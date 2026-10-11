@@ -140,6 +140,19 @@ def test_entropy_below_stays_in_range_and_spreads():
         entropy.below(0)
 
 
+def test_entropy_below_many_covers_its_range_evenly():
+    assert entropy.below_many(0, 3) == []
+    assert entropy.below_many(5, 1) == [0] * 5
+    values = entropy.below_many(30000, 3)
+    assert set(values) == {0, 1, 2}
+    # Each count is 10000 +- 82 (one standard deviation).
+    assert all(abs(values.count(v) - 10000) < 500 for v in range(3))
+    with pytest.raises(ValueError, match="bound"):
+        entropy.below_many(4, 0)
+    with pytest.raises(ValueError, match="count"):
+        entropy.below_many(-1, 3)
+
+
 def test_entropy_normal_is_centred_and_scaled():
     """Not a distribution test: 4096 draws at sigma=100 should have a mean
     near zero and a spread of the right order."""

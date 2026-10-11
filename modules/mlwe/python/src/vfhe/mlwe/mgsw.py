@@ -362,6 +362,40 @@ def CMUX(in1: MLWE, in2: MLWE, selector: MGSW) -> MLWE:
     return res
 
 
+def CMUX_batch(
+    in1: list[MLWE], in2: list[MLWE], selector: MGSW, n_threads: int = 0
+) -> list[MLWE]:
+    """``CMUX(in1[i], in2[i], selector)`` for every ``i``: one selector over
+    many pairs, the multiplexers run in parallel. Each pair is at one level,
+    which ``selector`` was encrypted for. The results are left canonical.
+    """
+    if len(in1) != len(in2):
+        raise ValueError("in1 and in2 must have the same length")
+    for a, b in zip(in1, in2, strict=True):
+        selector.check_level(a)
+        if b.lvl != a.lvl or b.r != a.r:
+            raise ValueError("the two inputs of a multiplexer must be at one level")
+    if not in1:
+        return []
+    for c in (*in1, *in2):
+        c.to_coeff()
+    selector.to_NTT()
+    out = [a.new_like(lvl=a.lvl) for a in in1]
+    lib.mgsw_CMUX_batch(
+        ffi.new("void*[]", [c.obj for c in out]),
+        ffi.new("void*[]", [c.obj for c in in1]),
+        ffi.new("void*[]", [c.obj for c in in2]),
+        len(in1),
+        ffi.new("void*[]", [c.obj for c in selector.obj]),
+        selector.gadget_size,
+        selector.scheme.native_gadget_params,
+        n_threads,
+    )
+    for c in out:
+        c.repr = repr.coeff
+    return out
+
+
 def NCMUX(
     in1: MLWE, in2: MLWE, selector: MGSW, aut_minus1: MLWE_Set | list[MLWE_Set]
 ) -> MLWE:

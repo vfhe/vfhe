@@ -324,17 +324,22 @@ class RNSRing(Ring):
             split_degree=self.split_degree,
         )
 
-    # generates the RNS primes of size prime_size
+    # The largest prime a * rou_order + 1 below 2^prime_size with a odd and
+    # not in exclude_list; raises when there is none.
     @staticmethod
     def gen_prime(rou_order, prime_size, exclude_list=None):
         exclude_list = exclude_list if exclude_list is not None else []
         a = ((2**prime_size - 1) // rou_order) | 1
         a -= 2
-        while True:
+        while a >= 1:
             candidate = a * rou_order + 1
             if candidate not in exclude_list and is_prime(candidate):
                 return candidate
             a -= 2
+        raise ValueError(
+            f"no prime p = 1 (mod {rou_order}) below 2^{prime_size} is left; "
+            "use larger primes or a smaller ring"
+        )
 
     def gen_primes(self):
         primes = []

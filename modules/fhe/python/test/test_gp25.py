@@ -401,6 +401,39 @@ def test_without_an_output_key_the_result_stays_in_the_rotation_ring(
             assert got == [table[msg[i + groups * j]] for j in range(N)]
 
 
+@pytest.mark.parametrize("n", [16, 128])
+def test_a_repacking_key_alone_repacks(deterministic_prng, n):
+    # The rotation is the caller's; the repacking key has only the keys
+    # `rotate` and `repack` read, from the same generators.
+    deterministic_prng(0x5AB0000A)
+    random.seed(0x5AB0000A)
+    N = 64
+    gp25, key, tv, rlwe_in, _, rotation, rotation_key, _, table, msg = _bare_case(n)
+    repacking = gp25.generate_repacking_key(rotation_key, n)
+    assert repacking.n == n and not repacking.gaps and repacking.signs is None
+    assert repacking.hw_reducing_key is None and repacking.output_switch_key is None
+    assert repacking.automorphism_key is not None
+    assert repacking.trace_repack_key is not None and key.trace_repack_key is not None
+    assert len(repacking.trace_repack_key.mlwe) == len(key.trace_repack_key.mlwe)
+    packed = gp25.repack(gp25.blind_rotate(rlwe_in, tv, key), repacking)
+    groups = max(n // N, 1)
+    for i, c in enumerate(packed):
+        got = _decrypt_messages(rotation, c, rotation_key)
+        if n <= N:
+            assert got[:: N // n] == [table[x] for x in msg]
+        else:
+            assert got == [table[msg[i + groups * j]] for j in range(N)]
+
+
+def test_a_repacking_key_needs_the_trace_and_a_power_of_two():
+    _, rotation = _schemes(64, 64)
+    rotation_key = rotation.key_gen_sparse(16, 3.2)
+    with pytest.raises(ValueError, match="trace_repack"):
+        GP25(rotation, trace_repack=False).generate_repacking_key(rotation_key, 64)
+    with pytest.raises(ValueError, match="power of two"):
+        GP25(rotation).generate_repacking_key(rotation_key, 48)
+
+
 def test_the_caller_switches_rings_at_the_lowest_level(deterministic_prng):
     # What the bare mode is for: the switch key from the rotation key to the
     # output key is generated at the lowest modulus only.

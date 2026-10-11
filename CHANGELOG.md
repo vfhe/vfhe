@@ -14,6 +14,21 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add `CMUX_batch(in1, in2, selector, n_threads=0)` (`vfhe.mlwe`): the
+  multiplexers of many pairs by one MGSW selector in one native call
+  (`mgsw_CMUX_batch`), in parallel, results left canonical, so no sample
+  passes through the NTT domain. At N = 2^13 over five 50-bit primes
+  (avx512ifma, 4-core laptop): 2.1 ms per pair on one thread against
+  2.7 ms for a `CMUX` loop, 0.50 ms against 1.9 ms on eight.
+- Add `GP25.generate_repacking_key(rotation_key, n)`: only the keys `rotate`
+  and `repack` read (the automorphism key for `X -> X^-1` and the trace
+  keys), from the generators `generate_bootstrap_key` uses, for a rotation
+  the caller schedules. Needs `trace_repack`.
+- Add `MLWE_Scheme.key_gen(sigma_err, distribution="ternary")`: a key with
+  every coefficient uniform in `{-1, 0, 1}`, drawn through
+  `entropy.below_many(count, bound)`, which is new too (`vfhe.crypto`; the
+  rejection sampler of `generate_uniform_below`, so a draw reveals only how
+  many values were redrawn).
 - Add the SHIP bootstrap [CHKS25] (`vfhe.fhe.SHIP`, `SHIP_Key`): bootstraps
   `N/2` real slots using only the `ceil(log2(h + 1))` levels of a product tree,
   `h` the input key's Hamming weight. `SHIP.sample_input_key` draws the sparse
@@ -323,6 +338,20 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `MLWE_Scheme.trace_pack` runs the packings of each level in parallel and
+  takes `n_threads`; the native `mlwe_trace_pack` takes it as a new last
+  argument. Results do not depend on the thread count. 1024 samples at
+  N = 2^13 (avx512ifma, 4-core laptop): 1.51 s on one thread, 0.48 s on four.
+- The memory pool keeps its counts per thread: a thread reserves room under
+  the capacity a few MiB at a time and shares its outstanding count in steps
+  of the same size, so taking and releasing buffers touches no shared cache
+  line once working sets stop growing. The capacity is still a strict bound;
+  `retained_bytes`, `outstanding_bytes`, `hits` and `misses` stay exact,
+  and `peak_outstanding_bytes` (which the automatic capacity follows) is
+  exact on one thread and otherwise may miss a short-lived peak by up to a
+  few MiB per thread. A take-and-release pair on eight threads of a 4-core
+  laptop went from about 1.7 us to 0.1 us per thread (one thread: 79 ns to
+  50 ns).
 - The radix gadget decomposes into balanced digits by default, as the RNS
   gadget already did: with `balanced` (the default of `MLWE_Scheme`, which
   `MGSW_Scheme`, `MLWE_Set` and every key generator follow), each residue is
@@ -627,6 +656,9 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix `Ring(N, prime_size=[...])` searching forever when no prime of a
+  requested size has the roots of unity the ring needs (17 bits at
+  N = 2^13, for one): `RNSRing.gen_prime` now raises `ValueError`.
 - Fix `MLWE_Scheme(ring, special_primes=k)` for `k >= 2`, and for a ring of
   one prime: the default level chain was one level too long, and the
   constructor raised `ValueError` (`IndexError` for one prime).

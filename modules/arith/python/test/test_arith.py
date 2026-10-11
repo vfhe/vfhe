@@ -682,6 +682,19 @@ def test_ring_follows_a_replaced_registry(monkeypatch):
     assert (a - a) == 0
 
 
+def test_a_prime_size_with_no_ntt_prime_is_refused():
+    # Below 2^17 the primes 1 mod 2^14 with an odd multiplier are 81921,
+    # 49153 and 16385, none of them prime.
+    from vfhe.arith.impl.rns.polynomial import RNSRing
+
+    with pytest.raises(ValueError, match="no prime"):
+        RNSRing.gen_prime(1 << 14, 17)
+    with pytest.raises(ValueError, match="no prime"):
+        Ring(1 << 13, prime_size=[17], split_degree=1)
+    first = RNSRing.gen_prime(1 << 14, 30)
+    assert first % (1 << 14) == 1 and first < 1 << 30
+
+
 def _cross_base_rings(n, plaintext_bits, other_bits, aux_bits):
     """A source and a destination ring sharing only their first prime.
 

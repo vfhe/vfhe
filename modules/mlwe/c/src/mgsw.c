@@ -90,6 +90,28 @@ void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mg
     free_mlwe_RNS_sample(diff);
 }
 
+typedef struct
+{
+    RNSc_MLWE *out, *in1, *in2;
+    RNS_MLWE *mgsw;
+    uint64_t ell;
+    const GadgetParams *gadget_params;
+} CMUXJobs;
+
+static void cmux_job(void *ctx, uint64_t i)
+{
+    const CMUXJobs *jobs = (const CMUXJobs *)ctx;
+    mgsw_CMUX_to_coeff(jobs->out[i], jobs->in1[i], jobs->in2[i], jobs->mgsw, jobs->ell, 0,
+                       jobs->gadget_params);
+}
+
+void mgsw_CMUX_batch(RNSc_MLWE *out, RNSc_MLWE *in1, RNSc_MLWE *in2, uint64_t n, RNS_MLWE *mgsw,
+                     uint64_t ell, const GadgetParams *gadget_params, uint64_t n_threads)
+{
+    CMUXJobs jobs = {out, in1, in2, mgsw, ell, gadget_params};
+    vfhe_parallel_for(n, n_threads, cmux_job, &jobs);
+}
+
 void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                          RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
                          const GadgetParams *gadget_params)

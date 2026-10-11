@@ -316,24 +316,12 @@ class GP25:
         )
 
         sab = SAB_Key()
-        sab.n, sab.h, sab.gap_bits, sab.output_lvl = n, h, gap_bits, output_lvl
+        self._generate_rotation_keys(sab, rotation_key, n, n_threads)
+        sab.h, sab.gap_bits, sab.output_lvl = h, gap_bits, output_lvl
         sab.gaps = [
             [[next(keys) for _ in range(gap_bits)] for _ in gaps] for gaps in gap_values
         ]
         sab.signs = [[next(keys) for _ in row] for row in signs] if ternary else None
-
-        # At one level these return one set.
-        sab.automorphism_key = cast(
-            "MLWE_Set",
-            self.scheme.gen_ksk_automorphism(
-                rotation_key,
-                rotation_key,
-                2 * self.ring.N - 1,
-                lvl=0,
-                gadget_params=self.gadget_params,
-                n_threads=n_threads,
-            ),
-        )
 
         if output_key is not None:
             lvl = (
@@ -359,19 +347,6 @@ class GP25:
             )
 
         if self.trace_repack:
-            # Packing `count` samples takes log2(count) automorphisms.
-            levels = min(n, self.ring.N).bit_length() - 1
-            sab.trace_repack_key = cast(
-                "MLWE_Set",
-                self.scheme.gen_ksk_trace(
-                    rotation_key,
-                    rotation_key,
-                    gens=[(1 << j) + 1 for j in range(1, levels + 1)],
-                    lvl=0,
-                    gadget_params=self.gadget_params,
-                    n_threads=n_threads,
-                ),
-            )
             if output_key is not None and (
                 n != self.ring.N or rotation_key.key != output_key.key
             ):
@@ -391,6 +366,62 @@ class GP25:
                 n_threads=n_threads,
             )
         return sab
+
+    def generate_repacking_key(
+        self, rotation_key: MLWE_Key, n: int, n_threads: int = 0
+    ) -> SAB_Key:
+        """The keys of a bootstrapping key that `rotate` and `repack` read,
+        for a rotation of ``n`` accumulators the caller schedules: the
+        automorphism key (``X -> X^-1``) and the trace keys, under
+        ``rotation_key``. No MGSW keys, no Hamming-weight-reducing or output
+        switch. Needs ``trace_repack``, since the packing key switch packs
+        into an output key.
+        """
+        if not self.trace_repack:
+            raise ValueError(
+                "the packing key switch packs into an output key; repacking "
+                "without one needs trace_repack"
+            )
+        if rotation_key.scheme is not self.scheme:
+            raise ValueError("the rotation key must be a key of this GP25's scheme")
+        if n < 1 or n & (n - 1):
+            raise ValueError("n must be a power of two")
+        sab = SAB_Key()
+        self._generate_rotation_keys(sab, rotation_key, n, n_threads)
+        return sab
+
+    def _generate_rotation_keys(
+        self, sab: SAB_Key, rotation_key: MLWE_Key, n: int, n_threads: int
+    ) -> None:
+        """Sets ``sab.n`` and the keys under ``rotation_key``: the automorphism
+        key, and with ``trace_repack`` the trace keys."""
+        sab.n = n
+        # At one level these return one set.
+        sab.automorphism_key = cast(
+            "MLWE_Set",
+            self.scheme.gen_ksk_automorphism(
+                rotation_key,
+                rotation_key,
+                2 * self.ring.N - 1,
+                lvl=0,
+                gadget_params=self.gadget_params,
+                n_threads=n_threads,
+            ),
+        )
+        if self.trace_repack:
+            # Packing `count` samples takes log2(count) automorphisms.
+            levels = min(n, self.ring.N).bit_length() - 1
+            sab.trace_repack_key = cast(
+                "MLWE_Set",
+                self.scheme.gen_ksk_trace(
+                    rotation_key,
+                    rotation_key,
+                    gens=[(1 << j) + 1 for j in range(1, levels + 1)],
+                    lvl=0,
+                    gadget_params=self.gadget_params,
+                    n_threads=n_threads,
+                ),
+            )
 
     def _output_level(self, io_scheme: MLWE_Scheme) -> int:
         primes = sorted(self.ring.primes)

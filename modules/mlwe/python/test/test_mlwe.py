@@ -25,6 +25,7 @@ from vfhe.mlwe import (
     LWE,
     MGSW,
     MLWE,
+    CMUX_batch,
     GadgetParams,
     LWE_Key,
     MGSW_Scheme,
@@ -212,6 +213,38 @@ def test_mgsw_cmux(bv, bit):
     m = [Rp.random_element() for _ in range(2)]
     out = CMUX(enc(scheme, Rp, m[0], key), enc(scheme, Rp, m[1], key), selector)
     assert scheme.linear_decrypt(out, key).round_division(Rp) == m[bit]
+
+
+@pytest.mark.parametrize("bit", [0, 1])
+@pytest.mark.parametrize("setup", ["bv", "ghs"])
+def test_cmux_batch_is_the_cmux_of_each_pair(request, setup, bit):
+    _Rq, Rp, scheme = request.getfixturevalue(setup)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    (selector,) = MGSW_Scheme(scheme).encrypt_constants([bit], key)
+    m = [[Rp.random_element() for _ in range(5)] for _ in range(2)]
+    c0 = [enc(scheme, Rp, x, key) for x in m[0]]
+    c1 = [enc(scheme, Rp, x, key) for x in m[1]]
+    expected = [CMUX(a, b, selector) for a, b in zip(c0, c1, strict=True)]
+    for n_threads in (1, 3, 0):
+        out = CMUX_batch(c0, c1, selector, n_threads)
+        assert all(_same_sample(x, y) for x, y in zip(out, expected, strict=True))
+    for x, want in zip(out, m[bit], strict=True):
+        assert scheme.linear_decrypt(x, key).round_division(Rp) == want
+    assert CMUX_batch([], [], selector) == []
+
+
+def test_cmux_batch_refuses_mismatched_inputs(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    (one,) = MGSW_Scheme(scheme).encrypt_constants([1], key)
+    c = enc(scheme, Rp, Rp.random_element(), key)
+    low = c.copy().round_division(lvl=1)
+    with pytest.raises(ValueError, match="same length"):
+        CMUX_batch([c, c], [c], one)
+    with pytest.raises(ValueError, match="one level"):
+        CMUX_batch([c], [low], one)
+    with pytest.raises(ValueError, match="level 1"):
+        CMUX_batch([low], [low], one)
 
 
 # --- the RNS gadget's digit -------------------------------------------------
@@ -524,6 +557,22 @@ def _rank_scheme(N_r, r, special_primes, balanced=True):
         Rq, special_primes=special_primes, module_rank=r, balanced=balanced
     )
     return Rq, Rp, scheme
+
+
+@pytest.mark.parametrize("r, N_r", [(1, N), *RANK_DIMS])
+def test_key_gen_draws_a_uniform_ternary_key(r, N_r):
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, 1)
+    key = scheme.key_gen(3.2)
+    assert len(key.key) == r and all(len(poly) == N_r for poly in key.key)
+    coeffs = [c for poly in key.key for c in poly]
+    assert set(coeffs) <= {-1, 0, 1}
+    # N * r = 256 coefficients: each value 85 +- 7.5 (one standard deviation).
+    assert all(abs(coeffs.count(v) - len(coeffs) / 3) < 40 for v in (-1, 0, 1))
+    m = Rp.random_element()
+    assert scheme.linear_decrypt(enc(scheme, Rp, m, key), key).round_division(Rp) == m
+    assert key.key != scheme.key_gen(3.2).key
+    with pytest.raises(ValueError, match="distribution"):
+        scheme.key_gen(3.2, distribution="binary")
 
 
 def _rank_key(scheme, N_r, r):
@@ -1068,6 +1117,25 @@ def test_trace_pack(ghs, count):
     # it, left 7-8 and 12.
     noise = max(abs(d[k * stride] - (k + 1) * delta) for k in range(count))
     assert noise.bit_length() <= (6 if count < N else 8)
+
+
+def test_trace_pack_does_not_depend_on_the_thread_count(ghs):
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    log_n = N.bit_length() - 1
+    ksk = scheme.gen_ksk_trace(
+        key, key, gens=[(1 << j) + 1 for j in range(1, log_n + 1)], lvl=0
+    )
+    vec = [
+        scheme.sample(Polynomial(scheme.rings[0]).from_array([k + 1]), key)
+        for k in range(N // 4)
+    ]
+    packed = [
+        scheme.trace_pack([c.copy() for c in vec], ksk, n_threads)
+        for n_threads in (1, 3, 0)
+    ]
+    assert _same_sample(packed[0], packed[1])
+    assert _same_sample(packed[0], packed[2])
 
 
 @pytest.mark.parametrize("n", [1, 4, N // 2])

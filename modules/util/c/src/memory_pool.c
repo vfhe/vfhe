@@ -23,6 +23,10 @@
 #define MEMPOOL_MIN_BYTES 4096u
 // Distinct buffer sizes one thread retains at a time.
 #define MEMPOOL_BUCKETS 32
+// A thread reserves room under the capacity, and adds its share of the
+// outstanding count, in steps of about this many bytes, so that taking and
+// releasing a working set below it touches no shared cache line.
+#define MEMPOOL_CHUNK_BYTES (4u << 20)
 
 // A retained buffer's first word links it to the next one of its size.
 typedef struct FreeBuffer
@@ -39,13 +43,19 @@ typedef struct
 
 // One per thread that has used the pool. Its owner is the only thread that
 // takes the lock in normal use; release_all, statistics and fork take it from
-// outside.
+// outside. Every field is read and written under the lock.
 typedef struct ThreadStorage
 {
     pthread_mutex_t lock;
     Bucket buckets[MEMPOOL_BUCKETS];
     uint64_t clock;
     uint64_t hits, misses;
+    // Bytes in this storage's free lists, and room this thread has reserved
+    // under the capacity that no buffer fills yet. Both count in `reserved`.
+    uint64_t retained, quota;
+    // Bytes this thread handed out minus bytes it took back, not yet added to
+    // `outstanding`.
+    int64_t unflushed;
     struct ThreadStorage *next;
 } ThreadStorage;
 
@@ -58,12 +68,24 @@ static struct
     uint64_t exited_hits, exited_misses;
 } registry = {PTHREAD_MUTEX_INITIALIZER, NULL, 0, 0};
 
-// Bytes sitting in free lists, over all threads; the capacity bounds it.
-static atomic_uint_fast64_t retained = 0;
-// Bytes handed out and not yet returned through mempool_free, and its highest
-// value so far, which the automatic capacity follows.
-static atomic_int_fast64_t outstanding = 0;
-static atomic_uint_fast64_t peak_outstanding = 0;
+// The shared counts, each on a cache line of its own.
+typedef struct
+{
+    _Alignas(64) atomic_uint_fast64_t value;
+} SharedCount;
+typedef struct
+{
+    _Alignas(64) atomic_int_fast64_t value;
+} SharedSignedCount;
+
+// Retained bytes plus unused reserved room, over all threads; the capacity
+// bounds it.
+static SharedCount reserved = {0};
+// Bytes handed out and not yet returned through mempool_free, less what the
+// threads have not added yet, and an estimate of the highest total so far,
+// which the automatic capacity follows.
+static SharedSignedCount outstanding = {0};
+static SharedCount peak_outstanding = {0};
 // MEMPOOL_CAPACITY_DEFAULT until first read or after a reset: the environment
 // is read on first use rather than at load.
 static atomic_uint_fast64_t capacity_setting = MEMPOOL_CAPACITY_DEFAULT;
@@ -87,9 +109,9 @@ static void wipe(void *ptr, size_t bytes)
     __asm__ __volatile__("" : : "r"(ptr) : "memory");
 }
 
-static uint64_t release_storage(ThreadStorage *s)
+// Frees every buffer the storage retains and gives up its reserved room.
+static void release_storage(ThreadStorage *s)
 {
-    uint64_t released = 0;
     for (int k = 0; k < MEMPOOL_BUCKETS; k++)
     {
         Bucket *b = &s->buckets[k];
@@ -98,11 +120,18 @@ static uint64_t release_storage(ThreadStorage *s)
             FreeBuffer *buffer = b->head;
             b->head = buffer->next;
             free(buffer);
-            released += b->bytes;
         }
     }
-    atomic_fetch_sub(&retained, released);
-    return released;
+    atomic_fetch_sub(&reserved.value, s->retained + s->quota);
+    s->retained = s->quota = 0;
+}
+
+static int_fast64_t flush_outstanding(ThreadStorage *s)
+{
+    const int_fast64_t now =
+        atomic_fetch_add(&outstanding.value, (int_fast64_t)s->unflushed) + s->unflushed;
+    s->unflushed = 0;
+    return now;
 }
 
 static void unlink_storage(ThreadStorage *s)
@@ -125,6 +154,7 @@ static void on_thread_exit(void *arg)
     registry.exited_misses += s->misses;
     pthread_mutex_unlock(&registry.lock);
     release_storage(s);
+    flush_outstanding(s);
     pthread_mutex_destroy(&s->lock);
     free(s);
     own_storage = NULL;
@@ -165,6 +195,7 @@ static void after_fork_in_child(void)
             registry.exited_hits += s->hits;
             registry.exited_misses += s->misses;
             release_storage(s);
+            flush_outstanding(s);
             free(s);
         }
         s = next;
@@ -227,39 +258,87 @@ uint64_t mempool_capacity(void)
 static uint64_t retention_limit(void)
 {
     const uint64_t setting = mempool_capacity();
-    return setting == MEMPOOL_CAPACITY_AUTO ? (uint64_t)atomic_load(&peak_outstanding) : setting;
+    return setting == MEMPOOL_CAPACITY_AUTO ? (uint64_t)atomic_load(&peak_outstanding.value)
+                                            : setting;
 }
 
 void mempool_set_capacity(uint64_t bytes)
 {
     atomic_store(&capacity_setting, bytes);
-    if (atomic_load(&retained) > retention_limit())
+    if (atomic_load(&reserved.value) > retention_limit())
         mempool_release_all();
 }
 
 // Reserves room for `bytes` more under the limit; false when there is none.
-static int reserve_retention(size_t bytes)
+static int reserve(uint64_t bytes)
 {
     const uint64_t limit = retention_limit();
-    uint_fast64_t current = atomic_load(&retained);
+    uint_fast64_t current = atomic_load(&reserved.value);
     do
     {
         if (current + bytes > limit)
             return 0;
-    } while (!atomic_compare_exchange_weak(&retained, &current, current + bytes));
+    } while (!atomic_compare_exchange_weak(&reserved.value, &current, current + bytes));
     return 1;
 }
 
-static void note_handed_out(size_t bytes)
+// Room for one more retained buffer of `bytes`, from the thread's reserved
+// room, topped up from the capacity by a chunk beyond the need, or failing
+// that by the need alone. False when the capacity has no room.
+static int take_room(ThreadStorage *s, size_t bytes)
 {
-    const int_fast64_t now =
-        atomic_fetch_add(&outstanding, (int_fast64_t)bytes) + (int_fast64_t)bytes;
-    if (now <= 0)
+    if (s->quota < bytes)
+    {
+        const uint64_t need = bytes - s->quota;
+        if (reserve(need + MEMPOOL_CHUNK_BYTES))
+            s->quota += need + MEMPOOL_CHUNK_BYTES;
+        else if (reserve(need))
+            s->quota += need;
+        else
+            return 0;
+    }
+    s->quota -= bytes;
+    s->retained += bytes;
+    return 1;
+}
+
+// `bytes` left the free lists: their room stays with the thread, up to two
+// chunks, and the rest goes back to the capacity.
+static void give_room(ThreadStorage *s, uint64_t bytes)
+{
+    s->retained -= bytes;
+    s->quota += bytes;
+    if (s->quota > 2 * (uint64_t)MEMPOOL_CHUNK_BYTES)
+    {
+        atomic_fetch_sub(&reserved.value, s->quota - MEMPOOL_CHUNK_BYTES);
+        s->quota = MEMPOOL_CHUNK_BYTES;
+    }
+}
+
+// A thread adds its part to `outstanding` once it reaches a chunk, or as soon
+// as the total it sees -- the shared value plus its own part -- passes the
+// peak, so that while working sets grow every thread's part is visible to the
+// others' estimates. In a steady state no thread passes the peak and nothing
+// shared is written. The peak is exact while one thread uses the pool and
+// otherwise off by at most a chunk per thread.
+static void note_handed_out(ThreadStorage *s, size_t bytes)
+{
+    s->unflushed += (int64_t)bytes;
+    uint_fast64_t peak = atomic_load(&peak_outstanding.value);
+    int_fast64_t now = atomic_load(&outstanding.value) + s->unflushed;
+    if (now <= (int_fast64_t)peak && s->unflushed < (int64_t)MEMPOOL_CHUNK_BYTES)
         return;
-    uint_fast64_t peak = atomic_load(&peak_outstanding);
-    while ((uint_fast64_t)now > peak &&
-           !atomic_compare_exchange_weak(&peak_outstanding, &peak, (uint_fast64_t)now))
+    now = flush_outstanding(s);
+    while (now > (int_fast64_t)peak &&
+           !atomic_compare_exchange_weak(&peak_outstanding.value, &peak, (uint_fast64_t)now))
         ;
+}
+
+static void note_taken_back(ThreadStorage *s, size_t bytes)
+{
+    s->unflushed -= (int64_t)bytes;
+    if (s->unflushed <= -(int64_t)MEMPOOL_CHUNK_BYTES)
+        flush_outstanding(s);
 }
 
 static Bucket *find_bucket(ThreadStorage *s, size_t bytes)
@@ -294,7 +373,7 @@ static Bucket *claim_bucket(ThreadStorage *s, size_t bytes)
         free(buffer);
         released += victim->bytes;
     }
-    atomic_fetch_sub(&retained, released);
+    give_room(s, released);
     victim->bytes = bytes;
     return victim;
 }
@@ -313,14 +392,14 @@ void *mempool_aligned_malloc(size_t bytes)
         b->head = buffer->next;
         b->last_use = ++s->clock;
         s->hits++;
+        give_room(s, bytes);
     }
     else
         s->misses++;
+    note_handed_out(s, bytes);
     pthread_mutex_unlock(&s->lock);
-    note_handed_out(bytes);
     if (buffer == NULL)
         return safe_aligned_malloc(bytes);
-    atomic_fetch_sub(&retained, bytes);
     if (perturb_byte)
         memset(buffer, perturb_byte ^ 0xff, bytes);
     return buffer;
@@ -333,16 +412,17 @@ static void release(void *ptr, size_t bytes)
         free(ptr);
         return;
     }
-    atomic_fetch_sub(&outstanding, (int_fast64_t)bytes);
-    if (!reserve_retention(bytes))
+    ThreadStorage *s = this_thread_storage();
+    pthread_mutex_lock(&s->lock);
+    note_taken_back(s, bytes);
+    if (!take_room(s, bytes))
     {
+        pthread_mutex_unlock(&s->lock);
         free(ptr);
         return;
     }
     if (perturb_byte)
         memset(ptr, perturb_byte, bytes);
-    ThreadStorage *s = this_thread_storage();
-    pthread_mutex_lock(&s->lock);
     Bucket *b = find_bucket(s, bytes);
     if (b == NULL)
         b = claim_bucket(s, bytes);
@@ -404,6 +484,7 @@ void mempool_release_all(void)
 void mempool_statistics(MempoolStatistics *out)
 {
     memset(out, 0, sizeof(*out));
+    int_fast64_t now = 0;
     pthread_mutex_lock(&registry.lock);
     out->hits = registry.exited_hits;
     out->misses = registry.exited_misses;
@@ -412,13 +493,15 @@ void mempool_statistics(MempoolStatistics *out)
         pthread_mutex_lock(&s->lock);
         out->hits += s->hits;
         out->misses += s->misses;
+        out->retained_bytes += s->retained;
+        now += s->unflushed;
         pthread_mutex_unlock(&s->lock);
     }
     pthread_mutex_unlock(&registry.lock);
-    const int_fast64_t now = atomic_load(&outstanding);
-    out->retained_bytes = (uint64_t)atomic_load(&retained);
+    now += atomic_load(&outstanding.value);
+    const uint64_t peak = (uint64_t)atomic_load(&peak_outstanding.value);
     out->outstanding_bytes = now > 0 ? (uint64_t)now : 0;
-    out->peak_outstanding_bytes = (uint64_t)atomic_load(&peak_outstanding);
+    out->peak_outstanding_bytes = peak > out->outstanding_bytes ? peak : out->outstanding_bytes;
     out->retention_limit_bytes = retention_limit();
 }
 

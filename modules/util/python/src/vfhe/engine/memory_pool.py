@@ -94,7 +94,10 @@ class MemoryPoolStatistics:
     outstanding_bytes: int
     """Handed out and not yet released to the pool."""
     peak_outstanding_bytes: int
-    """The most ever outstanding at once; the ``"auto"`` capacity."""
+    """The most ever outstanding at once; the ``"auto"`` capacity. Exact
+    while one thread uses the pool; with several it may miss a short-lived
+    peak by up to a few MiB per thread, as each thread shares its count in
+    steps."""
     retention_limit_bytes: int
     """What the capacity allows the pool to keep right now."""
     hits: int

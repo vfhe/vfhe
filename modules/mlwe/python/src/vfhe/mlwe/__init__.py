@@ -4,7 +4,7 @@
 # Registers the vfhe.io codecs.
 from . import io as _io  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from .lwe import LWE, LWE_Key
-from .mgsw import CMUX, MGSW, NCMUX, MGSW_Scheme
+from .mgsw import CMUX, MGSW, NCMUX, CMUX_batch, MGSW_Scheme
 from .mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set, PlaintextMatrix
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "MGSW",
     "MLWE",
     "NCMUX",
+    "CMUX_batch",
     "GadgetParams",
     "LWE_Key",
     "MGSW_Scheme",

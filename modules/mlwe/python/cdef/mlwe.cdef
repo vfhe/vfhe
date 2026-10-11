@@ -117,7 +117,7 @@ void *mlwe_extract_LWE(void *in, uint64_t idx);
 void *mlwe_new_RNS_ks_key(void *s, uint64_t count, const GadgetParams *gadget_params);
 void free_mlwe_RNS_ks_key(void *key);
 void mlwe_full_packing_keyswitch(void *out, void *in, uint64_t size, void *ksk);
-void mlwe_trace_pack(void *vec, uint64_t ell, void *ksks);
+void mlwe_trace_pack(void *vec, uint64_t ell, void *ksks, uint64_t n_threads);
 void mlwe_project_subring(void *out, void *in);
 void mlwe_embed_subring(void *out, void *in, uint64_t count);
 void mlwe_ring_switch(void *out, void *in, uint64_t count, void *ksk);
@@ -146,6 +146,7 @@ void mlwe_multiply(void *out, void *in1, void *in2, void *ksk);
 // --- mgsw ---
 void mgsw_external_product(void *out, void *mgsw, void *in, uint64_t ell, uint64_t special_primes, const GadgetParams *gadget_params);
 void mgsw_CMUX(void *out, void *in1, void *in2, void *mgsw, uint64_t ell, uint64_t special_primes, const GadgetParams *gadget_params);
+void mgsw_CMUX_batch(void *out, void *in1, void *in2, uint64_t n, void *mgsw, uint64_t ell, const GadgetParams *gadget_params, uint64_t n_threads);
 void mgsw_NCMUX(void *out, void *in1, void *in2, void *mgsw, void *ksk, uint64_t ell, uint64_t special_primes, const GadgetParams *gadget_params);
 uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base);
 void mgsw_trivial(void *out, void *ring, uint64_t r, ArithElement *msg, uint64_t **scales, uint64_t width);

@@ -531,36 +531,44 @@ void mlwe_normalized_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t n, RNS_MLWE_KS_
 // coefficient of the difference is odd and its half is near q/2. The packed
 // values keep their scale, and a level's key-switch noise is added once
 // instead of being doubled by every level above it.
-void mlwe_trace_pack(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks)
+// Level m of the recursion packs, for every r < 2^(ell - m), the class of
+// indices r mod 2^(ell - m): its even half is already packed into vec[r] and
+// its odd half into vec[r + 2^(ell - m)]. The classes of one level are
+// independent, so a level is one parallel loop over them.
+typedef struct
+{
+    RNSc_MLWE *vec;
+    RNS_MLWE_KS_Key *ksks;
+    uint64_t m, stride;
+} TracePackLevel;
+
+static void trace_pack_job(void *ctx, uint64_t r)
+{
+    const TracePackLevel *level = (const TracePackLevel *)ctx;
+    RNSc_MLWE packed = level->vec[r];
+    RNSc_MLWE odd = level->vec[r + level->stride];
+    RNSc_MLWE shifted = mlwe_alloc_sample(packed->ring, packed->r);
+    RNSc_MLWE image = mlwe_alloc_sample(packed->ring, packed->r);
+    mlwe_RNSc_mul_by_xai(shifted, odd, packed->ring->N >> level->m);
+    mlwe_sub_RNSc_sample(packed, packed, shifted);
+    mlwe_rns_halve(packed);
+    mlwe_automorphism_RNSc_GHS(image, packed, (1ULL << level->m) + 1, level->ksks[level->m - 1], 0);
+    mlwe_addto_RNSc_sample(packed, image);
+    mlwe_addto_RNSc_sample(packed, shifted);
+    free_mlwe_RNS_sample(shifted);
+    free_mlwe_RNS_sample(image);
+}
+
+void mlwe_trace_pack(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks, uint64_t n_threads)
 {
     if (ell == 0)
         return;
-    const uint64_t half = 1ULL << (ell - 1);
-    RNSc_MLWE *even = (RNSc_MLWE *)safe_malloc(half * sizeof(RNSc_MLWE));
-    RNSc_MLWE *odd = (RNSc_MLWE *)safe_malloc(half * sizeof(RNSc_MLWE));
-    for (size_t i = 0; i < half; i++)
+    assert(vec[0]->ring->impl == ARITH_IMPL_RNS);
+    for (uint64_t m = 1; m <= ell; m++)
     {
-        even[i] = vec[2 * i];
-        odd[i] = vec[2 * i + 1];
+        TracePackLevel level = {vec, ksks, m, 1ULL << (ell - m)};
+        vfhe_parallel_for(level.stride, n_threads, trace_pack_job, &level);
     }
-    mlwe_trace_pack(even, ell - 1, ksks);
-    mlwe_trace_pack(odd, ell - 1, ksks);
-
-    RNSc_MLWE packed = even[0];
-    RNSc_MLWE shifted = mlwe_alloc_sample(packed->ring, packed->r);
-    RNSc_MLWE image = mlwe_alloc_sample(packed->ring, packed->r);
-    mlwe_RNSc_mul_by_xai(shifted, odd[0], packed->ring->N >> ell);
-    mlwe_sub_RNSc_sample(packed, packed, shifted);
-    assert(packed->ring->impl == ARITH_IMPL_RNS);
-    mlwe_rns_halve(packed);
-    mlwe_automorphism_RNSc_GHS(image, packed, (1ULL << ell) + 1, ksks[ell - 1], 0);
-    mlwe_addto_RNSc_sample(packed, image);
-    mlwe_addto_RNSc_sample(packed, shifted);
-
-    free_mlwe_RNS_sample(shifted);
-    free_mlwe_RNS_sample(image);
-    free(even);
-    free(odd);
 }
 
 // Ring switching [GHPS12]: the subring map into the key ring's dimension,

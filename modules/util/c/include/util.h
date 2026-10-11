@@ -65,11 +65,16 @@ extern "C"
     {
         uint64_t retained_bytes;         // in free lists, all threads
         uint64_t outstanding_bytes;      // handed out, not yet released to the pool
-        uint64_t peak_outstanding_bytes; // highest outstanding_bytes so far
+        uint64_t peak_outstanding_bytes; // highest outstanding_bytes so far (estimated, see below)
         uint64_t retention_limit_bytes;  // what the capacity allows right now
         uint64_t hits;                   // requests served from a free list
         uint64_t misses;                 // requests passed to the C library
     } MempoolStatistics;
+    // retained_bytes, outstanding_bytes, hits and misses are exact. Threads
+    // track what they hand out locally and share it in steps of a few MiB, so
+    // peak_outstanding_bytes, which the automatic capacity follows, is exact
+    // while one thread uses the pool and may otherwise miss a short-lived
+    // peak by up to a few MiB per thread.
     void mempool_statistics(MempoolStatistics *out);
 
     // Parallelism. One library-wide limit caps the threads of every operation:

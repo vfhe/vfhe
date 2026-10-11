@@ -79,6 +79,23 @@ class EntropyPRNG:
             if value < bound:
                 return value
 
+    def below_many(self, count: int, bound: int) -> list[int]:
+        """`count` values uniform in `[0, bound)`, from fresh entropy.
+
+        Rejection sampling in C: each value is a fresh word masked to the bits
+        of `bound - 1`, redrawn while not below `bound`, so the redraws reveal
+        only how many were discarded.
+        """
+        if bound < 1:
+            raise ValueError(f"bound must be at least 1, got {bound}")
+        if count < 0:
+            raise ValueError(f"count must be non-negative, got {count}")
+        if count == 0:
+            return []
+        out = ffi.new("uint64_t[]", count)
+        lib.generate_uniform_below(out, count, bound)
+        return [out[i] for i in range(count)]
+
     def normal(self, sigma: float) -> float:
         """One sample from a zero-mean Gaussian with standard deviation
         `sigma` (Box-Muller over `bytes`).

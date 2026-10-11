@@ -220,6 +220,22 @@ class MLWE_Scheme:
             )
         return -1
 
+    def key_gen(self, sigma_err: float, distribution: str = "ternary") -> MLWE_Key:
+        """A secret key drawn from ``distribution`` over all ``N * r``
+        coefficients, with error parameter ``sigma_err``. ``"ternary"``, the
+        only one so far, draws every coefficient uniformly from ``{-1, 0,
+        1}``. For a key with a fixed number of non-zero coefficients, see
+        :meth:`key_gen_sparse`.
+        """
+        if distribution != "ternary":
+            raise ValueError(f"unknown key distribution {distribution!r}")
+        values = entropy.below_many(self.N * self.r, 3)
+        key = [
+            [v - 1 for v in values[i * self.N : (i + 1) * self.N]]
+            for i in range(self.r)
+        ]
+        return MLWE_Key(key, sigma_err, self)
+
     def key_gen_sparse(self, h, sigma_err, ternary=True):
         if self.N * self.r < h:
             raise ValueError("failed: self.N * self.r < h")
@@ -982,7 +998,9 @@ class MLWE_Scheme:
         out.repr = repr.coeff
         return out
 
-    def trace_pack(self, vec: list[MLWE], ksk: MLWE_Set | list[MLWE_Set]) -> MLWE:
+    def trace_pack(
+        self, vec: list[MLWE], ksk: MLWE_Set | list[MLWE_Set], n_threads: int = 0
+    ) -> MLWE:
         """Packs the constant coefficients of the ``len(vec)`` samples (a
         power of two, at one level) into one: it decrypts to the constant
         coefficient of ``vec[k]``'s message at ``k * N / len(vec)``, and to
@@ -992,7 +1010,9 @@ class MLWE_Scheme:
         with ``len(vec)^2``.
         ``ksk`` holds the automorphism keys for ``2^j + 1``, ``j = 1, ...``
         (:meth:`gen_ksk_trace` with those generators). The samples of
-        ``vec`` are overwritten; the result is ``vec[0]``.
+        ``vec`` are overwritten; the result is ``vec[0]``. The
+        ``len(vec) / 2^j`` packings of level ``j`` are independent and run in
+        parallel.
         """
         log_size = len(vec).bit_length() - 1
         if not vec or 1 << log_size != len(vec):
@@ -1001,7 +1021,7 @@ class MLWE_Scheme:
         for c in vec:
             c.to_coeff()
         lib_rlwe.lib.mlwe_trace_pack(
-            ffi.new("void*[]", [c.obj for c in vec]), log_size, ksk.obj
+            ffi.new("void*[]", [c.obj for c in vec]), log_size, ksk.obj, n_threads
         )
         vec[0].repr = repr.coeff
         return vec[0]
