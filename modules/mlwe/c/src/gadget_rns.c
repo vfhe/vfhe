@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <string.h>
 
+#include "gadget_rns.h"
 #include "mlwe.h"
 #include "rns_rows.h"
 #include "util.h"
@@ -85,7 +86,7 @@ static uint64_t dropped_of(RNS_Base base, size_t j, const GadgetParams *gadget_p
 }
 
 // The digits of one element, in key order, and what computing them needs.
-typedef struct
+struct ElementDecomposition
 {
     RNSc_Polynomial source;
     const GadgetParams *gadget_params;
@@ -99,7 +100,7 @@ typedef struct
     uint64_t *inverse;
     RNSc_Polynomial scaled;
     uint64_t *factors;
-} ElementDecomposition;
+};
 
 // The digits of `source` for a key over `key`'s primes. The scaled residues
 // are allocated but not computed: element_decomposition_scale does that.
@@ -252,41 +253,58 @@ static void check_dropped_digits(RNS_Polynomial source, const GadgetParams *gadg
 #endif
 }
 
-typedef struct
-{
-    RNS_MLWE out;
-    RNS_MLWE *ksk;
-    const ElementDecomposition *decomposition;
-    RNS_Polynomial key;
-    int subtract;
-} KeyProduct;
-
 static RNS_Polynomial sample_part(RNS_MLWE c, uint64_t k)
 {
     return arith_rns_polynomial(k < c->r ? &c->a[k] : &c->b);
 }
 
-// Row `row` of the product: every digit lifted to that prime alone,
-// transformed, and multiplied into the same row of every component of `out`.
-static void key_product_row(void *ctx, uint64_t row, uint64_t part)
+void gadget_sum_init(GadgetSum *s, RNS_MLWE *const *ksk, const ArithElement *const *poly,
+                     uint64_t n_terms, const GadgetParams *gadget_params, int subtract)
 {
-    (void)part;
-    const KeyProduct *p = (const KeyProduct *)ctx;
-    RNS_Base base = p->key->base;
-    const uint64_t row_mask = 1ULL << row, parts = p->out->r + 1;
+    RNS_Polynomial key = arith_rns_polynomial(&ksk[0][0]->b);
+    *s = (GadgetSum){n_terms, NULL, NULL, 0, NULL, NULL, key->rns_mask, ksk[0][0]->r + 1, subtract};
+    s->ksk = (RNS_MLWE **)safe_malloc(n_terms * sizeof(RNS_MLWE *));
+    memcpy(s->ksk, ksk, n_terms * sizeof(RNS_MLWE *));
+    s->terms = (ElementDecomposition *)safe_malloc(n_terms * sizeof(ElementDecomposition));
+    for (uint64_t k = 0; k < n_terms; k++)
+    {
+        RNS_Polynomial source = arith_rns_polynomial(poly[k]);
+        check_dropped_digits(source, gadget_params);
+        element_decomposition_init(&s->terms[k], source, key, gadget_params);
+        element_decomposition_scale(&s->terms[k], source->rns_mask);
+        s->n_digits += s->terms[k].n;
+    }
+    s->term_of = (uint64_t *)safe_malloc((s->n_digits + 1) * sizeof(uint64_t));
+    s->digit_of = (uint64_t *)safe_malloc((s->n_digits + 1) * sizeof(uint64_t));
+    for (uint64_t k = 0, d = 0; k < n_terms; k++)
+    {
+        for (uint64_t t = 0; t < s->terms[k].n; t++, d++)
+        {
+            s->term_of[d] = k;
+            s->digit_of[d] = t;
+        }
+    }
+}
+
+void gadget_sum_row(const GadgetSum *s, RNS_MLWE out, uint64_t group, uint64_t groups, uint64_t row)
+{
+    if (group >= s->n_digits)
+        return;
+    RNS_Base base = s->terms[0].source->base;
+    const uint64_t row_mask = 1ULL << row;
     RNSc_Polynomial tmp = (RNSc_Polynomial)polynomial_new_RNS_polynomial(base->N, row_mask, base);
     struct _RNS_Polynomial out_storage, key_storage;
-
-    for (uint64_t t = 0; t < p->decomposition->n; t++)
+    for (uint64_t d = group; d < s->n_digits; d += groups)
     {
-        gadget_digit(tmp, p->decomposition, t);
+        const uint64_t t = s->digit_of[d];
+        RNS_MLWE key = s->ksk[s->term_of[d]][t];
+        gadget_digit(tmp, &s->terms[s->term_of[d]], t);
         polynomial_RNSc_to_RNS((RNS_Polynomial)tmp, tmp);
-        for (uint64_t k = 0; k < parts; k++)
+        for (uint64_t k = 0; k < s->components; k++)
         {
-            RNS_Polynomial o = polynomial_RNS_view(&out_storage, sample_part(p->out, k), row_mask);
-            RNS_Polynomial x =
-                polynomial_RNS_view(&key_storage, sample_part(p->ksk[t], k), row_mask);
-            if (p->subtract)
+            RNS_Polynomial o = polynomial_RNS_view(&out_storage, sample_part(out, k), row_mask);
+            RNS_Polynomial x = polynomial_RNS_view(&key_storage, sample_part(key, k), row_mask);
+            if (s->subtract)
                 polynomial_mul_subto_RNS_polynomial(o, x, (RNS_Polynomial)tmp);
             else
                 polynomial_mul_addto_RNS_polynomial(o, x, (RNS_Polynomial)tmp);
@@ -295,30 +313,92 @@ static void key_product_row(void *ctx, uint64_t row, uint64_t part)
     free_RNS_polynomial(tmp);
 }
 
+uint64_t gadget_sum_mask(const GadgetSum *s, uint64_t k)
+{
+    // What the last product gives every row.
+    const uint64_t d = s->n_digits - 1;
+    return sample_part(s->ksk[s->term_of[d]][s->digit_of[d]], k)->rns_mask & s->key_mask;
+}
+
+void gadget_sum_free(GadgetSum *s)
+{
+    for (uint64_t k = 0; k < s->n_terms; k++)
+        element_decomposition_free(&s->terms[k]);
+    free(s->terms);
+    free(s->ksk);
+    free(s->term_of);
+    free(s->digit_of);
+}
+
+// A gadget sum into `out`, as tasks over (row of the key ring, digit group):
+// group 0 accumulates into `out` itself, group g > 0 into group_acc[g - 1],
+// which add_group_sums_row then adds to `out`.
+typedef struct
+{
+    const GadgetSum *sum;
+    RNS_MLWE out;
+    RNS_MLWE *group_acc;
+    uint64_t groups;
+} GroupedSum;
+
+static void grouped_sum_row(void *ctx, uint64_t row, uint64_t group)
+{
+    const GroupedSum *t = (const GroupedSum *)ctx;
+    RNS_MLWE acc = group == 0 ? t->out : t->group_acc[group - 1];
+    if (group > 0)
+    {
+        struct _RNS_Polynomial storage;
+        for (uint64_t k = 0; k < t->sum->components; k++)
+            polynomial_RNS_zero(polynomial_RNS_view(&storage, sample_part(acc, k), 1ULL << row));
+    }
+    gadget_sum_row(t->sum, acc, group, t->groups, row);
+}
+
+static void add_group_sums_row(void *ctx, uint64_t row, uint64_t k)
+{
+    const GroupedSum *t = (const GroupedSum *)ctx;
+    struct _RNS_Polynomial out_storage, storage;
+    RNS_Polynomial o = polynomial_RNS_view(&out_storage, sample_part(t->out, k), 1ULL << row);
+    for (uint64_t g = 1; g < t->groups; g++)
+        polynomial_add_RNS_polynomial(
+            o, o, polynomial_RNS_view(&storage, sample_part(t->group_acc[g - 1], k), 1ULL << row));
+}
+
 static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
                                   int subtract, const GadgetParams *gadget_params)
 {
     // This file knows the representation, so it calls the RNS entry points
     // rather than routing through the dispatcher: nothing here would gain from
     // a ring it cannot have. The product is formed prime by prime -- each row
-    // of `out` takes every digit, lifted to that prime alone -- so the rows
-    // are independent tasks.
-    RNS_Polynomial source = arith_rns_polynomial(poly);
-    RNS_Polynomial key = arith_rns_polynomial(&ksk[0]->b);
-    if (source->rns_mask == 0)
+    // of `out` takes the digits lifted to that prime alone -- so the rows are
+    // independent tasks; with more threads than rows, the digits of each row
+    // are split into groups as well.
+    if (arith_rns_polynomial(poly)->rns_mask == 0)
         return;
-    check_dropped_digits(source, gadget_params);
-    ElementDecomposition e;
-    element_decomposition_init(&e, source, key, gadget_params);
-    element_decomposition_scale(&e, source->rns_mask);
-    KeyProduct p = {out, ksk, &e, key, subtract};
-    rns_rows_for(key->base->N, key->rns_mask, 1, key_product_row, &p);
+    GadgetSum sum;
+    gadget_sum_init(&sum, &ksk, &poly, 1, gadget_params, subtract);
+    const uint64_t N = sample_part(out, 0)->base->N;
+    const uint64_t groups =
+        rns_rows_parts(N, (uint64_t)__builtin_popcountll(sum.key_mask), sum.n_digits, 0);
+    RNS_MLWE group_acc[groups > 1 ? groups - 1 : 1];
+    for (uint64_t g = 1; g < groups; g++)
+    {
+        group_acc[g - 1] = mlwe_alloc_sample(out->ring, out->r);
+        for (uint64_t k = 0; k <= out->r; k++)
+            sample_part(group_acc[g - 1], k)->rns_mask = sum.key_mask;
+    }
+    GroupedSum t = {&sum, out, group_acc, groups};
+    rns_rows_for(N, sum.key_mask, groups, grouped_sum_row, &t);
+    if (groups > 1)
+        rns_rows_for(N, sum.key_mask, out->r + 1, add_group_sums_row, &t);
+    for (uint64_t g = 1; g < groups; g++)
+        free_mlwe_RNS_sample(group_acc[g - 1]);
 
     // Each row's last product set that row's mask in its view; the mask of
     // the whole element is what that product gives on every row.
     for (uint64_t k = 0; k <= out->r; k++)
-        sample_part(out, k)->rns_mask = sample_part(ksk[e.n - 1], k)->rns_mask & key->rns_mask;
-    element_decomposition_free(&e);
+        sample_part(out, k)->rns_mask = gadget_sum_mask(&sum, k);
+    gadget_sum_free(&sum);
 }
 
 void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,

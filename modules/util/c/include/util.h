@@ -92,6 +92,10 @@ extern "C"
     // asked for (0: as many as allowed): never more than the limit, the
     // calling thread's local number of threads or the items.
     uint64_t vfhe_threads_for(uint64_t requested, uint64_t n_items);
+    // The local number of threads each body of vfhe_parallel_for(n_items,
+    // requested, ...) runs with: its share of the threads the loop was
+    // allowed, as described there.
+    uint64_t vfhe_share_for(uint64_t requested, uint64_t n_items);
     // Calls body(ctx, i) for every i < n on vfhe_threads_for(n_threads, n)
     // threads, the caller's included, and returns when all are done. Calls run
     // concurrently, in no particular order. The threads the loop was allowed

@@ -564,6 +564,11 @@ void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk
         return;
     }
 
+    if (mlwe_is_rns_hybrid_keyswitch(out, ksk))
+    {
+        mlwe_rns_multiply_batch(&out, &in1, &in2, ksk, NULL, true, 1, 0);
+        return;
+    }
     multiply_relinearized(out, in1, in2, ksk);
     // Restore the NTT representation callers expect from a product.
     mlwe_RNSc_to_RNS(out, out);
@@ -596,6 +601,11 @@ static void multiply_job(void *ctx, uint64_t i)
 void mlwe_multiply_batch(RNS_MLWE *out, RNS_MLWE *in1, RNS_MLWE *in2, RNS_MLWE_KS_Key ksk,
                          uint64_t n, uint64_t n_threads)
 {
+    if (n > 0 && ksk != NULL && mlwe_is_rns_hybrid_keyswitch(out[0], ksk))
+    {
+        mlwe_rns_multiply_batch(out, in1, in2, ksk, NULL, true, n, n_threads);
+        return;
+    }
     SampleJobs jobs = {out, in1, in2, ksk, NULL};
     vfhe_parallel_for(n, n_threads, multiply_job, &jobs);
 }
@@ -612,6 +622,11 @@ void mlwe_multiply_round_division_batch(RNSc_MLWE *out, RNS_MLWE *in1, RNS_MLWE 
                                         RNS_MLWE_KS_Key ksk, ArithRing to, uint64_t n,
                                         uint64_t n_threads)
 {
+    if (n > 0 && mlwe_is_rns_hybrid_keyswitch(out[0], ksk))
+    {
+        mlwe_rns_multiply_batch(out, in1, in2, ksk, to, false, n, n_threads);
+        return;
+    }
     SampleJobs jobs = {out, in1, in2, ksk, to};
     vfhe_parallel_for(n, n_threads, multiply_round_division_job, &jobs);
 }

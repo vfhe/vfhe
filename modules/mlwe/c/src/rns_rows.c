@@ -2,10 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "rns_rows.h"
 
-// Below this ring dimension a row is too little work to hand to another
-// thread: the hand-off costs more than the row.
-#define ROWS_MIN_N 4096
-
 typedef struct
 {
     uint64_t rows[64];
@@ -30,6 +26,62 @@ void rns_rows_for(uint64_t N, uint64_t mask, uint64_t parts,
             loop.rows[loop.n_rows++] = i;
     }
     vfhe_parallel_for(loop.n_rows * parts, N >= ROWS_MIN_N ? 0 : 1, row_loop_item, &loop);
+}
+
+uint64_t rns_rows_parts(uint64_t N, uint64_t rows, uint64_t items, uint64_t n_threads)
+{
+    const uint64_t threads = vfhe_threads_for(n_threads, UINT64_MAX);
+    if (N < ROWS_MIN_N || rows == 0 || threads <= rows || items <= 1)
+        return 1;
+    const uint64_t parts = (2 * threads + rows - 1) / rows;
+    return parts < items ? parts : items;
+}
+
+typedef struct
+{
+    uint64_t n;
+    const uint64_t *first; // [n + 1]: the first task of each item
+    uint64_t (*rows)[64];  // per item: its rows, in order
+    const uint64_t *parts;
+    void (*body)(void *ctx, uint64_t item, uint64_t row, uint64_t part);
+    void *ctx;
+} BatchRowLoop;
+
+static void batch_row_loop_item(void *ctx, uint64_t task)
+{
+    const BatchRowLoop *loop = (const BatchRowLoop *)ctx;
+    uint64_t lo = 0, hi = loop->n;
+    while (hi - lo > 1)
+    {
+        const uint64_t mid = (lo + hi) / 2;
+        if (loop->first[mid] <= task)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    const uint64_t k = task - loop->first[lo];
+    loop->body(loop->ctx, lo, loop->rows[lo][k / loop->parts[lo]], k % loop->parts[lo]);
+}
+
+void rns_rows_batch_for(uint64_t n, const uint64_t *masks, const uint64_t *parts,
+                        void (*body)(void *ctx, uint64_t item, uint64_t row, uint64_t part),
+                        void *ctx, uint64_t n_threads)
+{
+    uint64_t *first = (uint64_t *)safe_malloc((n + 1) * sizeof(uint64_t));
+    uint64_t (*rows)[64] = (uint64_t (*)[64])safe_malloc((n ? n : 1) * sizeof(*rows));
+    first[0] = 0;
+    for (uint64_t j = 0; j < n; j++)
+    {
+        uint64_t count = 0;
+        for (uint64_t i = 0; i < 64; i++)
+            if (masks[j] & (1ULL << i))
+                rows[j][count++] = i;
+        first[j + 1] = first[j] + count * parts[j];
+    }
+    BatchRowLoop loop = {n, first, rows, parts, body, ctx};
+    vfhe_parallel_for(first[n], n_threads, batch_row_loop_item, &loop);
+    free(rows);
+    free(first);
 }
 
 // The r + 1 elements of a sample: its mask components, then its body.

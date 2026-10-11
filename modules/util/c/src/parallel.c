@@ -74,6 +74,15 @@ uint64_t vfhe_threads_for(uint64_t requested, uint64_t n_items)
     return n < n_items ? n : n_items;
 }
 
+uint64_t vfhe_share_for(uint64_t requested, uint64_t n_items)
+{
+    const uint64_t budget = thread_budget(requested);
+    const uint64_t threads = n_items <= 1 ? 1 : (budget < n_items ? budget : n_items);
+    if (threads <= 1)
+        return budget;
+    return budget / threads >= MIN_LENT_SHARE ? budget / threads : 1;
+}
+
 typedef struct Worker Worker;
 
 typedef struct ParallelLoop
@@ -350,7 +359,7 @@ void vfhe_parallel_for(uint64_t n, uint64_t n_threads, void (*body)(void *ctx, u
         local_num_threads = caller_local;
         return;
     }
-    const uint64_t share = budget / threads >= MIN_LENT_SHARE ? budget / threads : 1;
+    const uint64_t share = vfhe_share_for(n_threads, n);
     ParallelLoop loop = {body, ctx, n, share, 0, 0};
     pthread_mutex_init(&loop.done_lock, NULL);
     pthread_cond_init(&loop.done_cond, NULL);

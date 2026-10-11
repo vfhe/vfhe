@@ -2465,6 +2465,56 @@ def test_single_operations_do_not_depend_on_the_thread_count(radix, r):
     ).round_division(Rp)
 
 
+@pytest.mark.parametrize(
+    "gadget", [GadgetParams(), GadgetParams(9), GadgetParams(primes_per_digit=2)]
+)
+@pytest.mark.parametrize("r", [1, 2])
+def test_batches_do_not_depend_on_the_thread_count(gadget, r):
+    """Batches of products (divided and not) and of automorphisms under
+    different keys, inputs in both domains, give the same samples on 1, 3
+    and 32 threads -- per sample, by rows, and with the digits split into
+    groups -- and the same as one operation at a time."""
+    n = 4096
+    Rq = Ring(n, prime_size=[45] * 5 + [50, 50], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=2, module_rank=r)
+    gens = [5, 25, 125]
+    with entropy.deterministic(0xBA7C):
+        key = scheme.key_gen_sparse(n * r // 8, 3.2)
+        auts = [
+            scheme.gen_ksk_automorphism(key, key, g, gadget_params=gadget) for g in gens
+        ]
+        rlk = scheme.gen_rlk(key, key, gadget_params=gadget)
+        cs = [enc(scheme, Rp, Rp.random_element(), key) for _ in gens]
+    cs[1].to_NTT()
+
+    def run(n_threads):
+        out = scheme.multiply_batch(
+            [c.copy() for c in cs], [c.copy() for c in cs[::-1]], rlk, n_threads, lvl=1
+        )
+        out += scheme.multiply_batch(
+            [cs[0].copy(), cs[1].copy()], [cs[2].copy(), cs[0].copy()], rlk, n_threads
+        )
+        out += scheme.automorphism_batch([c.copy() for c in cs], gens, auts, n_threads)
+        for x in out:
+            x.to_coeff()
+        return _digests(out)
+
+    engine.set_num_threads(32)
+    try:
+        runs = [run(n_threads) for n_threads in (1, 3, 0)]
+        single = [
+            scheme.multiply(cs[0].copy(), cs[2].copy(), rlk).round_division(lvl=1),
+            scheme.automorphism(cs[1].copy(), gens[1], auts[1]),
+        ]
+    finally:
+        engine.set_num_threads()
+    assert runs[0] == runs[1] == runs[2]
+    for x in single:
+        x.to_coeff()
+    assert _digests(single) == [runs[0][0], runs[0][6]]
+
+
 @pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])
 @pytest.mark.usefixtures("threads")
 def test_keys_drawn_on_several_threads_switch_keys(r, N_r):

@@ -338,6 +338,21 @@ versions may contain breaking changes.
 
 ### Changed
 
+- GHS key switches fill more threads. A gadget product with fewer key
+  primes than threads splits its digits into groups as well, each group
+  accumulating apart and the groups added before the inverse transform
+  (every `gadget_mul_*to_polynomial`, so the MGSW external product and
+  `CMUX` too). The batches -- `multiply_batch` with or without `lvl`,
+  `automorphism_batch`, and a single key switch, automorphism or product --
+  run each step of the key switch (digits, sum and inverse transform,
+  ModDown, rescale) as one parallel loop over all their samples' rows,
+  instead of one sample per task, unless one sample per task already keeps
+  three quarters of the threads busy. Results are bit-identical to before
+  for any thread count. On a 4-core laptop (avx512ifma, 4 threads, N = 2^14,
+  10 + 1 primes): a batch of 2 products with rescale 21.3 -> 12.8 ms, of 2
+  automorphisms 18.3 -> 11.1 ms; single operations 1.0-1.2x; batches as
+  wide as the threads unchanged. Adds `vfhe_share_for` to `util`: the
+  share of threads each body of a parallel loop is lent.
 - The CKKS encoder and decoder (`ComplexRing`) run on a new negacyclic FFT
   kernel (`fft_new_plan` / `fft_forward` / `fft_inverse` /
   `fft_pointwise_mul`, `vfhe.arith`'s native `FFT_Plan`), in place of the

@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
+//
+// Gadget products as row tasks, for callers that schedule the tasks
+// themselves (gadget_mul_*to_polynomial, and the batched key switches of
+// keyswitch_batch.c).
+#ifndef VFHE_MLWE_GADGET_RNS_H
+#define VFHE_MLWE_GADGET_RNS_H
+
+#include "mlwe.h"
+
+typedef struct ElementDecomposition ElementDecomposition;
+
+// A sum of gadget products, out -= sum_k <digits(poly[k]), ksk[k]> (or +=,
+// see `subtract`): every poly[k] is decomposed and each digit multiplied by
+// its key.
+//
+// The work is cut into tasks by row of the key ring and by digit group. All
+// the digits of all the terms are numbered in key order, and digit d belongs
+// to group d mod `groups`. gadget_sum_row does the digits of one group on
+// one row, into an accumulator the caller gives it; the caller then adds the
+// groups' accumulators. That sum is exact (it is modular addition), so the
+// result does not depend on how many groups there were.
+typedef struct
+{
+    uint64_t n_terms;
+    ElementDecomposition *terms;
+    RNS_MLWE **ksk; // a copy of the key arrays given
+    // Per digit, in order: its term and its index among the term's digits.
+    uint64_t n_digits;
+    uint64_t *term_of, *digit_of;
+    // The rows of the key ring, and the number of components of a sample.
+    uint64_t key_mask, components;
+    int subtract;
+} GadgetSum;
+
+// Prepares the sum of the n_terms products poly[k] x ksk[k]: ksk[k] is the
+// key array (one key per digit, as gadget_mul_addto_polynomial takes it) for
+// poly[k], all of them over one key ring and with `gadget_params`. Only what
+// the decomposition needs is computed here; the digits themselves are
+// computed row by row in gadget_sum_row. A poly[k] with no rows adds nothing.
+void gadget_sum_init(GadgetSum *s, RNS_MLWE *const *ksk, const ArithElement *const *poly,
+                     uint64_t n_terms, const GadgetParams *gadget_params, int subtract);
+// Computes digits group, group + groups, ... on row `row` of the key ring and
+// accumulates their products into that row of `out`, a sample over the key
+// ring with as many components as the keys.
+void gadget_sum_row(const GadgetSum *s, RNS_MLWE out, uint64_t group, uint64_t groups,
+                    uint64_t row);
+// The mask component k of an accumulator should be given once all its rows
+// are done (a row task works on a view, which leaves the mask alone).
+uint64_t gadget_sum_mask(const GadgetSum *s, uint64_t k);
+void gadget_sum_free(GadgetSum *s);
+
+#endif // VFHE_MLWE_GADGET_RNS_H

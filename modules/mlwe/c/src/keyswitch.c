@@ -19,6 +19,12 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
 {
     (void)lvl;
     assert(in != out);
+    if (mlwe_is_rns_hybrid_keyswitch(out, ksk))
+    {
+        KeySwitch ks = {out, in, ksk, NULL, false};
+        mlwe_rns_hybrid_keyswitch_batch(&ks, 1, 0);
+        return;
+    }
     // Scratch of its own: the key is shared across threads, so nothing
     // hanging off it may be written.
     RNSc_MLWE acc = mlwe_alloc_sample(ksk->ring, out->r);
@@ -60,6 +66,11 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
 void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                 uint64_t lvl)
 {
+    if (mlwe_is_rns_hybrid_keyswitch(out, ksk))
+    {
+        mlwe_rns_automorphism_batch(&out, &in, &gen, &ksk, 1, 0);
+        return;
+    }
     RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, out->r);
     if (out->ring->impl == ARITH_IMPL_RNS)
         mlwe_rns_permute(tmp, in, gen);
@@ -233,6 +244,17 @@ void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint6
                                       RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
                                       uint64_t n_threads)
 {
+    // Row by row over the whole batch when every sample is a hybrid key
+    // switch over RNS rings; a generator 1 (a copy, with no key) or another
+    // kind of key sends the batch through the sample-by-sample path instead.
+    bool batch = true;
+    for (uint64_t i = 0; i < n && batch; i++)
+        batch = gens[i] != 1 && mlwe_is_rns_hybrid_keyswitch(out[i], ksks[i]);
+    if (batch)
+    {
+        mlwe_rns_automorphism_batch(out, in, gens, ksks, n, n_threads);
+        return;
+    }
     AutomorphismJobs jobs = {out, NULL, in, gens, ksks, lvl};
     vfhe_parallel_for(n, n_threads, automorphism_job, &jobs);
 }
