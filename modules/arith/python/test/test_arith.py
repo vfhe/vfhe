@@ -682,17 +682,50 @@ def test_ring_follows_a_replaced_registry(monkeypatch):
     assert (a - a) == 0
 
 
-def test_a_prime_size_with_no_ntt_prime_is_refused():
-    # Below 2^17 the primes 1 mod 2^14 with an odd multiplier are 81921,
-    # 49153 and 16385, none of them prime.
+def test_a_fully_split_ring_prefers_a_full_size_even_multiplier():
+    # Below 2^17 the primes a * 2^14 + 1 with odd a are 81921, 49153 and 16385,
+    # none of them prime. Fully split, 65537 = 4 * 2^14 + 1 serves; split in
+    # degree-2 factors, a must be odd, so there is no prime.
     from vfhe.arith.impl.rns.polynomial import RNSRing
 
+    assert RNSRing.gen_prime(1 << 14, 17, split_degree=1) == 65537
     with pytest.raises(ValueError, match="no prime"):
-        RNSRing.gen_prime(1 << 14, 17)
-    with pytest.raises(ValueError, match="no prime"):
-        Ring(1 << 13, prime_size=[17], split_degree=1)
-    first = RNSRing.gen_prime(1 << 14, 30)
-    assert first % (1 << 14) == 1 and first < 1 << 30
+        RNSRing.gen_prime(1 << 14, 17, split_degree=2)
+    # Below 2^16 the only odd-multiplier prime 1 mod 2^12 is 12289, of 14
+    # bits; fully split, the full-size 40961 = 10 * 2^12 + 1 comes first.
+    assert RNSRing.gen_prime(1 << 12, 16, split_degree=1) == 40961
+    assert RNSRing.gen_prime(1 << 12, 16, split_degree=2) == 12289
+    # A ring that has a full-size odd-multiplier prime keeps it.
+    first = RNSRing.gen_prime(1 << 14, 30, split_degree=1)
+    assert first == RNSRing.gen_prime(1 << 14, 30, split_degree=2)
+    assert first % (1 << 15) == 1 << 14 | 1 and first < 1 << 30
+
+    ring = Ring(1 << 13, prime_size=[17], split_degree=1)
+    assert ring.primes == [65537]
+    # The transform is sound: a product by 1 + 5 X^3 is a shift and a scale.
+    N, q = ring.N, 65537
+    a = [random.randrange(q) for _ in range(N)]  # noqa: S311 - test data
+    b = [1, 0, 0, 5] + [0] * (N - 4)
+    product = (
+        Polynomial(ring).from_array(a) * Polynomial(ring).from_array(b)
+    ).get_polynomial()
+    shifted = [-a[N - 3 + i] for i in range(3)] + a[: N - 3]
+    assert product == [(x + 5 * y) % q for x, y in zip(a, shifted, strict=True)]
+
+
+def test_a_partially_split_ring_refuses_an_even_multiplier_prime():
+    # 40961 = 20 * 2^11 + 1: fine fully split at N = 2^11, but split in degree
+    # 2 the factors X^2 - zeta are not irreducible, since a = 20 is even.
+    from vfhe.arith.impl.rns.polynomial import RNSRing
+
+    N = 1 << 11
+    assert Ring(N, primes=[40961], split_degree=1).primes == [40961]
+    with pytest.raises(ValueError, match="a odd"):
+        Ring(N, primes=[40961], split_degree=2)
+    odd = RNSRing.gen_prime(N, 30, split_degree=2)
+    assert Ring(N, primes=[odd], split_degree=2).primes == [odd]
+    with pytest.raises(ValueError, match="a odd"):
+        Ring(N, primes=[odd, 40961], split_degree=2)
 
 
 def _cross_base_rings(n, plaintext_bits, other_bits, aux_bits):
@@ -707,7 +740,11 @@ def _cross_base_rings(n, plaintext_bits, other_bits, aux_bits):
     dst = Ring(n, prime_size=[plaintext_bits, *other_bits], split_degree=1)
     aux = []
     for bits in aux_bits:
-        aux.append(RNSRing.gen_prime(2 * n, bits, exclude_list=dst.primes + aux))
+        aux.append(
+            RNSRing.gen_prime(
+                2 * n, bits, exclude_list=dst.primes + aux, split_degree=1
+            )
+        )
     src = Ring(n, primes=aux, prime_size=aux_bits, split_degree=1).union(
         dst.quotient_ring(ell=1)
     )

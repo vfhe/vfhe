@@ -657,8 +657,19 @@ versions may contain breaking changes.
 ### Fixed
 
 - Fix `Ring(N, prime_size=[...])` searching forever when no prime of a
-  requested size has the roots of unity the ring needs (17 bits at
-  N = 2^13, for one): `RNSRing.gen_prime` now raises `ValueError`.
+  requested size is `1 mod 2N / split_degree` with an odd multiplier (17 bits
+  at N = 2^13, for one). The odd multiplier makes the factors
+  `X^split_degree - zeta` irreducible, so that a partially split ring's
+  residues are fields of size `p^split_degree` [CCCFGS25, Sec. 3.1]; it is
+  kept for `split_degree > 1`. A fully split ring (`split_degree=1`) now
+  takes full-size primes with an even multiplier too, after the odd ones
+  (65537 there), instead of falling back to a smaller prime: at N = 2^11 and
+  16 bits it gets 40961 instead of the 14-bit 12289. `RNSRing.gen_prime`
+  takes `split_degree` (required) and raises `ValueError` when no prime is
+  left. Rings that had a full-size prime keep the same primes. A ring given
+  its primes (`primes=` or `mask=`) with `split_degree > 1` now raises
+  `ValueError` for a prime with an even multiplier, which used to give
+  residues of size `p` only, silently.
 - Fix `MLWE_Scheme(ring, special_primes=k)` for `k >= 2`, and for a ring of
   one prime: the default level chain was one level too long, and the
   constructor raised `ValueError` (`IndexError` for one prime).

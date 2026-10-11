@@ -348,6 +348,7 @@ class BFV_Scheme(MLWE_Scheme):
                         2 * self.N // ring.split_degree,
                         max(ring.prime_size),
                         exclude_list=taken + auxiliary,
+                        split_degree=ring.split_degree,
                     )
                 )
             wide = ring.union(
