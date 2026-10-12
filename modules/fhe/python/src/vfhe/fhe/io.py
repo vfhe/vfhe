@@ -79,6 +79,7 @@ class SABKeyCodec(Codec):
             "n": obj.n,
             "h": obj.h,
             "gap_bits": obj.gap_bits,
+            "bits_per_layer": obj.bits_per_layer,
             "hw_reducing_lvl": obj.hw_reducing_lvl,
             "output_lvl": obj.output_lvl,
         }
@@ -91,6 +92,8 @@ class SABKeyCodec(Codec):
         for name, value in zip(self._fields, children, strict=True):
             setattr(out, name, value)
         out.n, out.h, out.gap_bits = meta["n"], meta["h"], meta["gap_bits"]
+        # A record without `bits_per_layer` holds one MGSW key per gap bit.
+        out.bits_per_layer = meta.get("bits_per_layer", 1)
         out.hw_reducing_lvl = meta["hw_reducing_lvl"]
         out.output_lvl = meta["output_lvl"]
         return out

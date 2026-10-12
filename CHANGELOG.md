@@ -14,6 +14,33 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add two-bit layers to the GP25 blind rotation, BatchBoot's multi-bit
+  rotation [LWZ+26]: `GP25(..., bits_per_layer=2)`. A pair of rotation bits
+  of value `d` takes three MGSW keys, of `[d = 1]`, `[d = 2]` and `[d = 3]`,
+  and each accumulator is decomposed once per pair instead of once per bit.
+  Bits pair while the pair's power `p` satisfies `4 p <= n`
+  (`GP25.rotation_layers`). `generate_bootstrap_key` and the new
+  `GP25.encrypt_rotations(values, n_bits, n, key)` make the keys, `rotate` and
+  the blind rotation take them, and `SAB_Key.bits_per_layer` records the
+  choice (serialized; older records read as 1). The cost is 1.5 times the
+  MGSW keys and, with the RNS gadget, about 0.8 bit more rotation noise (less
+  noise with a radix gadget). At N = 2^13 over five 50-bit primes
+  (avx512ifma, 4-core laptop), rotating 512 accumulators by 8 bits takes 5.8 s
+  instead of 8.4 s on one thread, 1.5 s instead of 2.1 s on eight. The default
+  stays one bit per layer.
+- Add `mgsw_shift_sequences` (C, `mlwe.h`): shifts sequences of samples by an
+  encrypted amount `d <= 3` given as one-hot MGSW keys, `y_i = x_(i+w-d)`.
+  Each input is decomposed once for every output that reads it, one row of
+  the key ring at a time.
+- Add `mod_eltwise_inner_product_addto` and
+  `polynomial_matrix_mul_addto_RNS_polynomial` (C, `arith.h`): element-wise
+  inner products with one reduction per element, and the product `a * b^T` of
+  matrices of ring elements, tiled so that each tile of `b` is read once for
+  all rows of `a`. For primes below 2^50 on avx512ifma the products are
+  summed unreduced (0.2 against 0.46 ns per product and coefficient in cache);
+  other moduli keep per-term products. Also
+  `polynomial_new_RNS_polynomial_rows`, a polynomial with only its mask's rows
+  allocated.
 - Add `CMUX_batch(in1, in2, selector, n_threads=0)` (`vfhe.mlwe`): the
   multiplexers of many pairs by one MGSW selector in one native call
   (`mgsw_CMUX_batch`), in parallel, results left canonical, so no sample
@@ -338,6 +365,10 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `gp25_rotate` and `gp25_blind_rotate` take `bits_per_layer` after the bit
+  count, and their keys are those of the layers of `gp25_rotation_layers` (one
+  per bit, as before, with `bits_per_layer` 1). `GP25.rotate`'s key list is
+  now named `keys`.
 - `GP25.rotate` and the blind rotation (`gp25_rotate`, `gp25_blind_rotate`)
   allocate and free their scratch accumulators in parallel, and no longer
   copy the result back when it ends in the scratch array: each of the

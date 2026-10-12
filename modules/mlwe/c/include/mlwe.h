@@ -458,6 +458,25 @@ extern "C"
     // from the inputs. Up to `n_threads` threads (0: the library limit).
     void mgsw_CMUX_batch(RNSc_MLWE *out, RNSc_MLWE *in1, RNSc_MLWE *in2, uint64_t n, RNS_MLWE *mgsw,
                          uint64_t ell, const GadgetParams *gadget_params, uint64_t n_threads);
+    // Shifts sequences of samples by an encrypted amount d in [0, width],
+    // 1 <= width <= 3, given one-hot: keys[t - 1] is an MGSW key (as mgsw_CMUX
+    // takes one) of the bit [d = t], so at most one of them encrypts 1. Sequence
+    // s has lengths[s] + width inputs x_0, x_1, ... and lengths[s] outputs,
+    //
+    //   y_i = x_(i+w) + sum_t keys[t - 1] (x) (x_(i+w-t) - x_(i+w)),  w = width,
+    //
+    // which decrypts to x_(i+w-d). The sequences' inputs follow each other in
+    // `in`, their outputs in `out`. Input q is Aut_gens[q](in[q]), switched back
+    // with `aut`, where gens[q] != 1 (gens NULL: no automorphisms), and one
+    // sample may be several inputs. Inputs and outputs are canonical, the
+    // outputs allocated by the caller and distinct from the inputs. Every input
+    // is decomposed once for all the outputs that read it. Up to `n_threads`
+    // threads (0: the library limit), one sequence per task; the result does
+    // not depend on their number.
+    void mgsw_shift_sequences(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
+                              RNS_MLWE_KS_Key aut, const uint64_t *lengths, uint64_t n_sequences,
+                              RNS_MLWE *const *keys, uint64_t width, uint64_t ell,
+                              const GadgetParams *gadget_params, uint64_t n_threads);
     void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                              RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
                              const GadgetParams *gadget_params);

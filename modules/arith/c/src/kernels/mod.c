@@ -183,6 +183,37 @@ void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
     }
 }
 
+void mod_eltwise_inner_product_addto(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                     uint64_t terms, uint64_t n, Modulus mod)
+{
+    const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
+    if (head < n)
+    {
+        uint64_t *at[terms > 0 ? terms : 1], *bt[terms > 0 ? terms : 1];
+        for (uint64_t t = 0; t < terms; t++)
+        {
+            at[t] = a[t] + head;
+            bt[t] = b[t] + head;
+        }
+        mod_eltwise_inner_product_addto_gen(out + head, at, bt, terms, n - head, mod);
+    }
+    if (head == 0)
+        return;
+    // One reduction per element needs the IFMA family and q > 2^26 (mod50.c); any other modulus
+    // takes per-term products.
+    if (mod_shoup_shift(mod->q) == MOD_SHIFT_50 && mod->q > (1ULL << 26))
+    {
+        for (uint64_t t = 0; t < terms; t += MOD_INNER_PRODUCT_MAX_TERMS)
+            mod_eltwise_inner_product_addto_50(
+                out, a + t, b + t,
+                terms - t < MOD_INNER_PRODUCT_MAX_TERMS ? terms - t : MOD_INNER_PRODUCT_MAX_TERMS,
+                head, mod);
+        return;
+    }
+    for (uint64_t t = 0; t < terms; t++)
+        mod_eltwise_mul_addto(out, a[t], b[t], head, mod);
+}
+
 void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;

@@ -211,6 +211,35 @@ def test_gp25_bootstrap_key(deterministic_prng, trace_repack, n):
         assert [mod_switch(v, q, 16) for v in d] == msg
 
 
+def test_gp25_bootstrap_key_with_two_bit_layers(deterministic_prng):
+    deterministic_prng(0x5AB0000E)
+    ring = Ring(N, prime_size=[50, 50, 50], split_degree=1)
+    io = MLWE_Scheme(ring, special_primes=1)
+    rotation = MLWE_Scheme(ring, special_primes=1, max_lvl=1)
+    input_key = GP25.sample_input_key(io, 3, 7, 3.2)
+    output_key = io.key_gen_sparse(16, 3.2)
+    rotation_key = rotation.key_gen_sparse(16, 3.2)
+    gp25 = GP25(rotation, bits_per_layer=2)
+    sab = gp25.generate_bootstrap_key(input_key, rotation_key, output_key, 3, 7)
+    got = Serializer().loads(
+        Serializer().dumps(sab), schemes=[io, rotation, gp25.mgsw_scheme]
+    )
+    assert (sab.bits_per_layer, got.bits_per_layer) == (2, 2)
+    assert len(got.gaps[0][0]) == 3 * 3 + 1  # three pairs and a single bit
+    q = rotation.rings[0].q_l
+    tv = gp25.test_vector([mod_switch(t, 16, q) for t in range(8)])
+    msg = [k % 8 for k in range(N)]
+    c = io.sample(
+        Polynomial(io.rings[0]).from_bigint_array(
+            [mod_switch(x, 16, io.rings[0].q_l) for x in msg]
+        ),
+        output_key,
+    ).round_division(lvl=len(io.rings) - 1)
+    out = gp25.bootstrap(c, tv, got)
+    d = io.linear_decrypt(out, output_key).get_polynomial()
+    assert [mod_switch(v, q, 16) for v in d] == msg
+
+
 def test_gp25_bootstrap_key_without_an_output_key(deterministic_prng):
     deterministic_prng(0x5AB0000B)
     ring = Ring(N, prime_size=[50, 50, 50], split_degree=1)

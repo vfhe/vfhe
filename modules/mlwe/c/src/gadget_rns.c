@@ -485,6 +485,31 @@ void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement
     element_decomposition_free(&e);
 }
 
+ElementDecomposition *gadget_decomposition_new(RNS_MLWE *ksk, const ArithElement *poly,
+                                               const GadgetParams *gadget_params)
+{
+    RNS_Polynomial source = arith_rns_polynomial(poly);
+    check_dropped_digits(source, gadget_params);
+    ElementDecomposition *e = (ElementDecomposition *)safe_malloc(sizeof(*e));
+    element_decomposition_init(e, source, arith_rns_polynomial(&ksk[0]->b), gadget_params);
+    element_decomposition_scale(e, source->rns_mask);
+    return e;
+}
+
+uint64_t gadget_decomposition_digits(const ElementDecomposition *e) { return e->n; }
+
+void gadget_decomposition_digit_row(RNS_Polynomial out, const ElementDecomposition *e, uint64_t t)
+{
+    gadget_digit((RNSc_Polynomial)out, e, t);
+    polynomial_RNSc_to_RNS(out, (RNSc_Polynomial)out);
+}
+
+void gadget_decomposition_free(ElementDecomposition *e)
+{
+    element_decomposition_free(e);
+    free(e);
+}
+
 void gadget_digits_free(GadgetDigits *digits)
 {
     for (uint64_t i = 0; i < digits->n; i++)

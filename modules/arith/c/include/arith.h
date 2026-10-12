@@ -237,6 +237,11 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
                                Modulus mod);
     void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
                                Modulus mod);
+    // out[i] += sum_(t < terms) a[t][i] * b[t][i] (mod q) for i < n: element-wise inner
+    // products, with one reduction per element where the kernel family allows. Every value is
+    // below q; `out` aliases no input.
+    void mod_eltwise_inner_product_addto(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                         uint64_t terms, uint64_t n, Modulus mod);
     void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
     void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
     void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
@@ -875,6 +880,9 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     IntPolynomial polynomial_new_int_polynomial(uint64_t N);
     IntPolynomial *polynomial_new_int_polynomial_array(uint64_t size, uint64_t N);
     RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, RNS_Base base);
+    // A polynomial with only the rows of `rns_mask` allocated, as scratch for row-by-row work.
+    // Its mask must not grow beyond them. Free it with free_RNS_polynomial.
+    RNS_Polynomial polynomial_new_RNS_polynomial_rows(uint64_t N, uint64_t rns_mask, RNS_Base base);
     void polynomial_RNS_zero(RNS_Polynomial p);
     RNS_Polynomial *polynomial_new_array_of_RNS_polynomials(uint64_t N, uint64_t rns_mask,
                                                             uint64_t size, RNS_Base base);
@@ -968,6 +976,15 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
                                     uint64_t l, uint64_t q, uint64_t bit_size, uint64_t i);
     void polynomial_mul_addto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
                                              RNS_Polynomial in2);
+    // out += a * b^T for matrices of ring elements in the mul domain, row-major: for r < rows
+    // and c < cols, out[r * cols + c] += sum_(t < inner) a[r * inner + t] * b[c * inner + t].
+    // It works on the rows of out[0]'s mask, which every out shares and keeps and every operand
+    // holds. On a fully split ring each element is one mod_eltwise_inner_product_addto, and the
+    // coefficients are taken in tiles so that each tile of b is read once for all rows of a. The
+    // outputs alias no operand.
+    void polynomial_matrix_mul_addto_RNS_polynomial(RNS_Polynomial *out, RNS_Polynomial const *a,
+                                                    RNS_Polynomial const *b, uint64_t rows,
+                                                    uint64_t inner, uint64_t cols);
 
     void free_polynomial(void *p);
     void array_to_RNS(RNS_Polynomial out, uint64_t **in);

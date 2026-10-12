@@ -51,4 +51,18 @@ void gadget_sum_row(const GadgetSum *s, RNS_MLWE out, uint64_t group, uint64_t g
 uint64_t gadget_sum_mask(const GadgetSum *s, uint64_t k);
 void gadget_sum_free(GadgetSum *s);
 
+// The gadget decomposition of one element, computed one digit and one row at a
+// time, for a caller that multiplies each digit row as soon as it has it.
+// gadget_decomposition_new prepares it for keys like `ksk` (one key per digit,
+// as gadget_mul_addto_polynomial takes them) and reads `poly` until freed;
+// gadget_decomposition_digit_row writes digit t < gadget_decomposition_digits
+// into `out`, a polynomial over one row of the key ring, lifted to that row
+// and in the domain gadget_sum_row multiplies digits in. An element with no
+// rows has no digits.
+ElementDecomposition *gadget_decomposition_new(RNS_MLWE *ksk, const ArithElement *poly,
+                                               const GadgetParams *gadget_params);
+uint64_t gadget_decomposition_digits(const ElementDecomposition *e);
+void gadget_decomposition_digit_row(RNS_Polynomial out, const ElementDecomposition *e, uint64_t t);
+void gadget_decomposition_free(ElementDecomposition *e);
+
 #endif // VFHE_MLWE_GADGET_RNS_H

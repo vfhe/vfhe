@@ -19,6 +19,10 @@ under the input key and the repacked result stays over ``R_N`` under the
 rotation key, for a caller that moves between keys and rings itself -- at a
 modulus of its choosing, since every switch key puts the key it switches to
 at the modulus it is generated for.
+
+[LWZ+26] Z. Li, H. Wang, Y. Zhao, L. Li, Z. Wang, J. He, C. Wei, Y. Yan,
+L. Guo. *BatchBoot: Fast Batched Bootstrapping for TFHE scheme and Practical
+Applications*. USENIX Security 2026.
 """
 
 from __future__ import annotations
@@ -39,17 +43,15 @@ def mod_switch(v, q, p):
     return round((v * p) / q) % p
 
 
-def _bits(value: int, count: int) -> list[int]:
-    return [(value >> b) & 1 for b in range(count)]
-
-
 class SAB_Key:
     """A GP25 bootstrapping key, made by `GP25.generate_bootstrap_key`.
 
     For an input key of rank ``r`` with ``h`` non-zero coefficients per
-    component: ``gaps[i][t]`` are the MGSW encryptions of the bits of gap
-    ``t`` of component ``i``, least significant first, ``gap_bits`` of
-    them; ``signs[i][t]`` encrypts whether its ``t``-th non-zero coefficient is
+    component: ``gaps[i][t]`` are the MGSW keys of the rotation by gap ``t``
+    of component ``i``, of ``gap_bits`` bits, in the layers that
+    `GP25.rotation_layers` gives for ``bits_per_layer`` (with one bit per
+    layer, the encryptions of its bits, least significant first);
+    ``signs[i][t]`` encrypts whether its ``t``-th non-zero coefficient is
     ``-1`` (``None`` for a binary key), all under the rotation key, as is
     ``automorphism_key`` (``X -> X^-1``). ``hw_reducing_key`` switches the
     input from the output key to the input key, at level ``hw_reducing_lvl``
@@ -63,6 +65,7 @@ class SAB_Key:
         self.n = 0
         self.h = 0
         self.gap_bits = 0
+        self.bits_per_layer = 1
         self.gaps: list[list[list[MGSW]]] = []
         self.signs: list[list[MGSW]] | None = None
         self.automorphism_key: MLWE_Set | None = None
@@ -140,6 +143,14 @@ class GP25:
     has, the approximate decomposition, needs a rotation level 0 over one
     prime). Everything runs on the library's threads
     (``vfhe.engine.set_num_threads``).
+
+    ``bits_per_layer`` is the number of rotation bits per layer of the blind
+    rotation. With 1, a layer is one CMUX per accumulator. With 2, BatchBoot's
+    multi-bit rotation [LWZ+26], a pair of bits of value ``d`` takes three
+    MGSW keys, of ``[d = 1]``, ``[d = 2]`` and ``[d = 3]``, and each
+    accumulator is decomposed once per pair rather than once per bit;
+    `rotation_layers` says which bits pair. That takes 1.5 times the MGSW
+    keys and, with the RNS gadget, adds about 0.8 bit of rotation noise.
     """
 
     def __init__(
@@ -148,7 +159,10 @@ class GP25:
         gsw_ell: int | None = None,
         gadget_params: GadgetParams | None = None,
         trace_repack: bool = True,
+        bits_per_layer: int = 1,
     ):
+        if bits_per_layer not in (1, 2):
+            raise ValueError("bits_per_layer must be 1 or 2")
         self.scheme = scheme
         self.ring = scheme.rings[0]
         self.gadget_params = (
@@ -158,6 +172,74 @@ class GP25:
             scheme, ell=gsw_ell, gadget_params=self.gadget_params
         )
         self.trace_repack = trace_repack
+        self.bits_per_layer = bits_per_layer
+
+    # -- rotations ----------------------------------------------------------
+
+    def rotation_layers(self, n: int, n_bits: int) -> list[int]:
+        """The number of bits of each layer of a rotation of ``n``
+        accumulators by ``n_bits`` bits, least significant first. With two
+        bits per layer, bits pair from the least significant while the pair's
+        power ``p = 2^b`` satisfies ``4 p <= n``; the remaining bits take one
+        layer each.
+        """
+        widths = ffi.new("uint64_t[]", max(n_bits, 1))
+        count = lib.gp25_rotation_layers(n, n_bits, self.bits_per_layer, widths)
+        return list(widths[0:count])
+
+    def _rotation_values(self, value: int, n_bits: int, n: int) -> list[int]:
+        """The values the MGSW keys of a rotation by ``value`` encrypt: per
+        layer, its bit, or the indicators ``[d = 1]``, ``[d = 2]``, ``[d = 3]``
+        of its pair's value ``d``."""
+        out, b = [], 0
+        for width in self.rotation_layers(n, n_bits):
+            if width == 2:
+                d = (value >> b) & 3
+                out += [int(d == 1), int(d == 2), int(d == 3)]
+            else:
+                out.append((value >> b) & 1)
+            b += width
+        return out
+
+    def encrypt_rotations(
+        self,
+        values: Sequence[int],
+        n_bits: int,
+        n: int,
+        key: MLWE_Key,
+        n_threads: int = 0,
+    ) -> list[list[MGSW]]:
+        """The MGSW keys, under ``key``, of rotations of ``n`` accumulators by
+        each of ``values``, as `rotate` takes them: one list per value, in this
+        GP25's layers. Values are in ``[0, 2^n_bits)``, with
+        ``2^(n_bits - 1) <= n``. All keys are drawn in one batch on
+        ``n_threads`` threads (0: the library limit).
+        """
+        self._check_gap_bits(n_bits, n)
+        if any(not 0 <= v < 1 << n_bits for v in values):
+            raise ValueError(f"rotation values must be in [0, 2^{n_bits})")
+        per_rotation = [self._rotation_values(v, n_bits, n) for v in values]
+        keys = iter(
+            self.mgsw_scheme.encrypt_constants(
+                [x for row in per_rotation for x in row], key, n_threads=n_threads
+            )
+        )
+        return [[next(keys) for _ in row] for row in per_rotation]
+
+    def _rotation_bits(self, n: int, n_keys: int) -> int:
+        """The number of bits of the rotation of ``n`` accumulators whose
+        layers have ``n_keys`` MGSW keys."""
+        n_bits = 0
+        while True:
+            count = sum(1 if w == 1 else 3 for w in self.rotation_layers(n, n_bits))
+            if count == n_keys:
+                return n_bits
+            if count > n_keys:
+                raise ValueError(
+                    f"{n_keys} MGSW keys are not the keys of a rotation of {n} "
+                    f"accumulators with {self.bits_per_layer} bit(s) per layer"
+                )
+            n_bits += 1
 
     # -- input keys ---------------------------------------------------------
 
@@ -306,7 +388,10 @@ class GP25:
                 )
             signs.append([int(c == -1) for c in nonzero])
 
-        values = [x for gaps in gap_values for g in gaps for x in _bits(g, gap_bits)]
+        per_gap = [
+            self._rotation_values(g, gap_bits, n) for gaps in gap_values for g in gaps
+        ]
+        values = [x for row in per_gap for x in row]
         if ternary:
             values += [x for row in signs for x in row]
         keys = iter(
@@ -318,8 +403,10 @@ class GP25:
         sab = SAB_Key()
         self._generate_rotation_keys(sab, rotation_key, n, n_threads)
         sab.h, sab.gap_bits, sab.output_lvl = h, gap_bits, output_lvl
+        sab.bits_per_layer = self.bits_per_layer
         sab.gaps = [
-            [[next(keys) for _ in range(gap_bits)] for _ in gaps] for gaps in gap_values
+            [[next(keys) for _ in range(len(per_gap[0]))] for _ in gaps]
+            for gaps in gap_values
         ]
         sab.signs = [[next(keys) for _ in row] for row in signs] if ternary else None
 
@@ -549,6 +636,7 @@ class GP25:
             len(a),
             key.h,
             key.gap_bits,
+            key.bits_per_layer,
             gap_keys,
             sign_keys,
             self._automorphism_key(key).obj,
@@ -633,21 +721,25 @@ class GP25:
         return (mgsw.gadget_size, mgsw.scheme.native_gadget_params)
 
     def rotate(
-        self, acc: list[MLWE], bits: list[MGSW], automorphism_key: MLWE_Set
+        self, acc: list[MLWE], keys: list[MGSW], automorphism_key: MLWE_Set
     ) -> None:
-        """Rotates the accumulators in place by ``d``, given as the MGSW
-        encryptions of its bits, least significant first (``2^(len(bits) - 1)
-        <= len(acc)``): ``acc[k]`` takes ``acc[k - d]``, and for ``k < d``
-        ``sigma(acc[k - d + n])``, ``sigma`` the automorphism ``X -> X^-1``
-        that ``automorphism_key`` switches back (an `SAB_Key`'s, or any
-        level-0 key for ``2N - 1``).
+        """Rotates the accumulators in place by ``d``: ``acc[k]`` takes
+        ``acc[k - d]``, and for ``k < d`` ``sigma(acc[k - d + n])``, ``sigma``
+        the automorphism ``X -> X^-1`` that ``automorphism_key`` switches back
+        (an `SAB_Key`'s, or any level-0 key for ``2N - 1``).
+
+        ``keys`` are the MGSW keys of the layers of ``d``, as
+        `encrypt_rotations` makes them; with one bit per layer, the
+        encryptions of the bits of ``d``, least significant first. ``d`` has
+        ``n_bits`` bits, ``2^(n_bits - 1) <= len(acc)``.
         """
-        if not bits:
+        if not keys:
             return
-        if 1 << (len(bits) - 1) > len(acc):
+        n_bits = self._rotation_bits(len(acc), len(keys))
+        if 1 << (n_bits - 1) > len(acc):
             raise ValueError("more bits than a rotation by at most len(acc) needs")
         rows = []
-        for m in bits:
+        for m in keys:
             m.to_NTT()
             rows.append(ffi.new("void*[]", [c.obj for c in m.obj]))
         for c in acc:
@@ -656,9 +748,10 @@ class GP25:
             ffi.new("void*[]", [c.obj for c in acc]),
             len(acc),
             ffi.new("void*[]", rows),
-            len(bits),
+            n_bits,
+            self.bits_per_layer,
             automorphism_key.obj,
-            *self._mgsw_arguments(bits[0]),
+            *self._mgsw_arguments(keys[0]),
             0,
         )
 

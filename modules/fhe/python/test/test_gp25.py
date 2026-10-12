@@ -162,21 +162,118 @@ def _constant_or_reflected(scheme, key, c, delta):
     return round(d[N - 1] / delta)
 
 
-@pytest.mark.parametrize("d", [0, 1, 5, 8, 15, 16])
-def test_rotate(d):
-    N, n = 64, 16
+def _rotation_setup(N=64, primes=(50, 50, 50), bits_per_layer=1):
     scheme = MLWE_Scheme(
-        Ring(N, prime_size=[50, 50, 50], split_degree=1), special_primes=1
+        Ring(N, prime_size=list(primes), split_degree=1), special_primes=1
     )
     key = scheme.key_gen_sparse(8, 3.2)
-    gp25 = GP25(scheme)
+    gp25 = GP25(scheme, bits_per_layer=bits_per_layer)
     automorphism_key = scheme.gen_ksk_automorphism(key, key, 2 * N - 1, lvl=0)
     assert isinstance(automorphism_key, MLWE_Set)
+    return scheme, key, gp25, automorphism_key
+
+
+def _rotated(d, n):
+    """What `_constant_or_reflected` reads after a rotation by ``d``: ``acc[k]`` takes
+    ``acc[k - d]``, through ``sigma`` once per wrap (``sigma`` twice is the identity)."""
+    out = []
+    for k in range(n):
+        j, wraps = k - d, 0
+        while j < 0:
+            j, wraps = j + n, wraps + 1
+        out.append(j + 1 if wraps % 2 == 0 else -(j + 1))
+    return out
+
+
+@pytest.mark.parametrize("bits_per_layer", [1, 2])
+@pytest.mark.parametrize("d", [0, 1, 5, 8, 15, 16])
+def test_rotate(d, bits_per_layer):
+    n = 16
+    scheme, key, gp25, automorphism_key = _rotation_setup(bits_per_layer=bits_per_layer)
+    acc, delta = _accumulators(scheme, key, n)
+    (keys,) = gp25.encrypt_rotations([d], 5, n, key)
+    gp25.rotate(acc, keys, automorphism_key)
+    got = [_constant_or_reflected(scheme, key, c, delta) for c in acc]
+    assert got == _rotated(d, n)
+
+
+def test_the_bits_of_a_one_bit_rotation_are_its_keys():
+    n, d = 16, 13
+    scheme, key, gp25, automorphism_key = _rotation_setup()
     acc, delta = _accumulators(scheme, key, n)
     bits = gp25.mgsw_scheme.encrypt_constants([(d >> b) & 1 for b in range(5)], key)
     gp25.rotate(acc, bits, automorphism_key)
-    got = [_constant_or_reflected(scheme, key, c, delta) for c in acc]
-    assert got == [k - d + 1 if k >= d else -(k - d + n + 1) for k in range(n)]
+    assert [_constant_or_reflected(scheme, key, c, delta) for c in acc] == _rotated(
+        d, n
+    )
+
+
+@pytest.mark.parametrize(
+    ("n", "d", "n_bits"),
+    [(12, 11, 4), (12, 12, 4), (5, 3, 3), (4, 4, 3), (40, 37, 6), (3, 2, 2)],
+)
+def test_two_bit_layers_rotate_any_number_of_accumulators(n, d, n_bits):
+    # n not a power of two, rotations by n (every accumulator wraps), and pairs
+    # whose three inputs back wrap more than once along a chain.
+    scheme, key, gp25, automorphism_key = _rotation_setup(bits_per_layer=2)
+    acc, delta = _accumulators(scheme, key, n)
+    (keys,) = gp25.encrypt_rotations([d], n_bits, n, key)
+    gp25.rotate(acc, keys, automorphism_key)
+    assert [_constant_or_reflected(scheme, key, c, delta) for c in acc] == _rotated(
+        d, n
+    )
+
+
+def test_rotation_layers():
+    scheme = MLWE_Scheme(
+        Ring(64, prime_size=[50, 50], split_degree=1), special_primes=1
+    )
+    one, two = GP25(scheme), GP25(scheme, bits_per_layer=2)
+    assert one.rotation_layers(16, 5) == [1, 1, 1, 1, 1]
+    # pairs while 4 * 2^b <= n
+    assert two.rotation_layers(16, 5) == [2, 2, 1]
+    assert two.rotation_layers(8, 4) == [2, 1, 1]
+    assert two.rotation_layers(2048, 12) == [2, 2, 2, 2, 2, 1, 1]
+    assert two.rotation_layers(3, 2) == [1, 1]
+    assert two.rotation_layers(64, 0) == []
+    with pytest.raises(ValueError, match="bits_per_layer"):
+        GP25(scheme, bits_per_layer=3)
+
+
+def test_rotation_keys_are_checked():
+    n = 16
+    scheme, key, gp25, automorphism_key = _rotation_setup(bits_per_layer=2)
+    acc, _ = _accumulators(scheme, key, n)
+    (keys,) = gp25.encrypt_rotations([7], 5, n, key)
+    assert len(keys) == 7  # two pairs and a single bit
+    with pytest.raises(ValueError, match="not the keys of a rotation"):
+        gp25.rotate(acc, keys[:5], automorphism_key)
+    with pytest.raises(ValueError, match="rotation values"):
+        gp25.encrypt_rotations([32], 5, n, key)
+    with pytest.raises(ValueError, match="gap_bits"):
+        gp25.encrypt_rotations([1], 6, n, key)
+
+
+@pytest.mark.parametrize("N", [64, 4096])
+def test_two_bit_layers_do_not_depend_on_the_threads(N):
+    # The chains are cut into segments by the thread count, and at N = 4096 a
+    # sequence's rows run on threads of their own.
+    n, d = 64, 45
+    scheme, key, gp25, automorphism_key = _rotation_setup(N=N, bits_per_layer=2)
+    acc, _ = _accumulators(scheme, key, n)
+    (keys,) = gp25.encrypt_rotations([d], 7, n, key)
+    results = []
+    for threads in (1, 3, 8):
+        out = [c.copy() for c in acc]
+        engine.set_num_threads(threads)
+        try:
+            gp25.rotate(out, keys, automorphism_key)
+        finally:
+            engine.set_num_threads()
+        for c in out:
+            c.to_coeff()
+        results.append([c.get_b_poly().get_coeff_matrix() for c in out])
+    assert results[0] == results[1] == results[2]
 
 
 @pytest.mark.parametrize("sign", [None, 0, 1])
@@ -234,6 +331,25 @@ CASES = {
     },
     "several_levels": {"primes": (50, 50, 50, 50)},
     "grouped_digits": {"primes_per_digit": 2, "primes": (50, 50, 50, 50), "special": 2},
+    "two_bit_layers": {"bits_per_layer": 2},
+    "two_bit_layers_binary": {"bits_per_layer": 2, "ternary": False},
+    "two_bit_layers_input_rank_2": {"bits_per_layer": 2, "io_rank": 2},
+    "two_bit_layers_rotation_rank_2": {"bits_per_layer": 2, "rotation_rank": 2},
+    "two_bit_layers_unbalanced": {"bits_per_layer": 2, "balanced": False},
+    "two_bit_layers_smaller_input": {"bits_per_layer": 2, "n": 16},
+    "two_bit_layers_larger_input": {"bits_per_layer": 2, "n": 128},
+    "two_bit_layers_radix_without_special_primes": {
+        "bits_per_layer": 2,
+        "radix": 10,
+        "primes": (50, 50),
+        "special": 0,
+    },
+    "two_bit_layers_grouped_digits": {
+        "bits_per_layer": 2,
+        "primes_per_digit": 2,
+        "primes": (50, 50, 50, 50),
+        "special": 2,
+    },
 }
 
 
@@ -247,6 +363,7 @@ def _bootstrap_case(
     radix=None,
     primes_per_digit=1,
     hybrid=True,
+    bits_per_layer=1,
     **scheme_options,
 ):
     """A GP25 with its keys, a test vector, an input under the output key at
@@ -259,6 +376,7 @@ def _bootstrap_case(
         rotation,
         gadget_params=GadgetParams(radix, primes_per_digit=primes_per_digit),
         trace_repack=trace,
+        bits_per_layer=bits_per_layer,
     )
     key = gp25.generate_bootstrap_key(
         input_key,
@@ -538,7 +656,8 @@ def test_fewer_digits_in_the_weight_reduction(deterministic_prng):
     assert _decrypt_messages(io, out, output_key) == msg
 
 
-def test_fewer_digits_in_the_rotation(deterministic_prng):
+@pytest.mark.parametrize("bits_per_layer", [1, 2])
+def test_fewer_digits_in_the_rotation(deterministic_prng, bits_per_layer):
     # A rotation ring whose level 0 is one prime: its MGSW, automorphism and
     # trace keys keep 4 of their 5 digits.
     deterministic_prng(0x5AB0000D)
@@ -546,7 +665,9 @@ def test_fewer_digits_in_the_rotation(deterministic_prng):
     io, rotation = _schemes(64, 64, primes=(50, 50))
     assert rotation.rings[0].ell == 1
     input_key, rotation_key, output_key, bits = _keys(io, rotation)
-    gp25 = GP25(rotation, gadget_params=GadgetParams(10, 4))
+    gp25 = GP25(
+        rotation, gadget_params=GadgetParams(10, 4), bits_per_layer=bits_per_layer
+    )
     key = gp25.generate_bootstrap_key(input_key, rotation_key, output_key, 4, bits)
     assert gp25.mgsw_scheme.gadget_size(0) == 4
     q = rotation.rings[0].q_l

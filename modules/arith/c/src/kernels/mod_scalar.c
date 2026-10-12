@@ -34,6 +34,27 @@ void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint
         out[i] = add_modq(out[i], mul_modq(in1[i], in2[i], mod), q);
 }
 
+// out += sum_t a[t] * b[t] (mod q): products of values below q < 2^62 are below 2^124, so 15 of
+// them are summed in 128 bits before each reduction.
+void mod_eltwise_inner_product_addto_gen(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                         uint64_t terms, uint64_t n, Modulus mod)
+{
+    const uint64_t q = mod->q;
+    for (size_t i = 0; i < n; i++)
+    {
+        uint64_t acc = out[i];
+        for (uint64_t t0 = 0; t0 < terms; t0 += 15)
+        {
+            const uint64_t t1 = terms - t0 < 15 ? terms : t0 + 15;
+            unsigned __int128 sum = 0;
+            for (uint64_t t = t0; t < t1; t++)
+                sum += (unsigned __int128)a[t][i] * b[t][i];
+            acc = add_modq(acc, modq_wide((uint64_t)(sum >> 64), (uint64_t)sum, mod), q);
+        }
+        out[i] = acc;
+    }
+}
+
 void mod_eltwise_mul_subto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const uint64_t q = mod->q;

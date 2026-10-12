@@ -38,6 +38,8 @@ void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint
                                Modulus mod);
 void mod_eltwise_mul_subto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
                                Modulus mod);
+void mod_eltwise_inner_product_addto_gen(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                         uint64_t terms, uint64_t n, Modulus mod);
 void mod_eltwise_scale_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_fma_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
@@ -423,6 +425,10 @@ void mod_eltwise_lifted_combination_50(uint64_t *out, const uint64_t *const *in,
 
 void mod_eltwise_mul_addto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+// The most terms mod_eltwise_inner_product_addto_50 takes: its low sums stay below 2^64.
+#define MOD_INNER_PRODUCT_MAX_TERMS 4096
+void mod_eltwise_inner_product_addto_50(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                        uint64_t terms, uint64_t n, Modulus mod);
 void mod_eltwise_scale_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_fma_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_50(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,

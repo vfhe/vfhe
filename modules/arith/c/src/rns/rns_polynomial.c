@@ -533,6 +533,126 @@ void polynomial_mul_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
     rns_product(out, in1, in2, RNS_BLOCK_SUBTO);
 }
 
+// out += sum_t a[t] * b[t] on the rows of out's mask, which it keeps.
+static void inner_product_addto(RNS_Polynomial out, RNS_Polynomial const *a,
+                                RNS_Polynomial const *b, uint64_t terms)
+{
+    RNS_Base base = out->base;
+    // Over a ring that does not split fully a product is a convolution of blocks: term by term.
+    if (base->split_degree != 1)
+    {
+        for (uint64_t t = 0; t < terms; t++)
+        {
+            const uint64_t mask = out->rns_mask;
+            polynomial_mul_addto_RNS_polynomial(out, a[t], b[t]);
+            out->rns_mask = mask;
+        }
+        return;
+    }
+    uint64_t **a_rows = (uint64_t **)safe_malloc((terms > 0 ? terms : 1) * 2 * sizeof(uint64_t *));
+    uint64_t **b_rows = a_rows + terms;
+    for (size_t i = 0; i < base->l; i++)
+    {
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        Modulus mod = base->mods[i];
+        if (rns_row_is_narrow(base, i)) // 32-bit rows: term by term
+        {
+            for (uint64_t t = 0; t < terms; t++)
+                mod_eltwise_mul_addto_w32(out->rows32[i], a[t]->rows32[i], b[t]->rows32[i], base->N,
+                                          mod);
+            continue;
+        }
+        for (uint64_t t = 0; t < terms; t++)
+        {
+            a_rows[t] = a[t]->rows64[i];
+            b_rows[t] = b[t]->rows64[i];
+        }
+        mod_eltwise_inner_product_addto(out->rows64[i], a_rows, b_rows, terms, base->N, mod);
+    }
+    free(a_rows);
+}
+
+// The size of one tile of all the b operands of polynomial_matrix_mul_addto_RNS_polynomial,
+// small enough to stay in cache while every row of a uses it.
+#define MATRIX_TILE_BYTES (1 << 17)
+
+void polynomial_matrix_mul_addto_RNS_polynomial(RNS_Polynomial *out, RNS_Polynomial const *a,
+                                                RNS_Polynomial const *b, uint64_t rows,
+                                                uint64_t inner, uint64_t cols)
+{
+    if (rows == 0 || cols == 0)
+        return;
+    RNS_Base base = out[0]->base;
+    const uint64_t N = base->N, mask = out[0]->rns_mask;
+    if (base->split_degree != 1 || inner == 0)
+    {
+        for (uint64_t r = 0; r < rows; r++)
+            for (uint64_t c = 0; c < cols; c++)
+                inner_product_addto(out[r * cols + c], a + r * inner, b + c * inner, inner);
+        return;
+    }
+    uint64_t tile = MATRIX_TILE_BYTES / (cols * inner * sizeof(uint64_t));
+    tile = tile < MOD_MIN_VECTOR_LEN ? MOD_MIN_VECTOR_LEN : tile - tile % MOD_MIN_VECTOR_LEN;
+    uint64_t **a_rows = (uint64_t **)safe_malloc(2 * inner * sizeof(uint64_t *));
+    uint64_t **b_rows = a_rows + inner;
+    for (size_t i = 0; i < base->l; i++)
+    {
+        if (!(mask & (1ULL << i)))
+            continue;
+        Modulus mod = base->mods[i];
+        if (rns_row_is_narrow(base, i)) // 32-bit rows: term by term
+        {
+            for (uint64_t r = 0; r < rows; r++)
+                for (uint64_t c = 0; c < cols; c++)
+                    for (uint64_t t = 0; t < inner; t++)
+                        mod_eltwise_mul_addto_w32(out[r * cols + c]->rows32[i],
+                                                  a[r * inner + t]->rows32[i],
+                                                  b[c * inner + t]->rows32[i], N, mod);
+            continue;
+        }
+        for (uint64_t start = 0; start < N; start += tile)
+        {
+            const uint64_t len = N - start < tile ? N - start : tile;
+            for (uint64_t r = 0; r < rows; r++)
+            {
+                for (uint64_t t = 0; t < inner; t++)
+                    a_rows[t] = a[r * inner + t]->rows64[i] + start;
+                for (uint64_t c = 0; c < cols; c++)
+                {
+                    for (uint64_t t = 0; t < inner; t++)
+                        b_rows[t] = b[c * inner + t]->rows64[i] + start;
+                    mod_eltwise_inner_product_addto(out[r * cols + c]->rows64[i] + start, a_rows,
+                                                    b_rows, inner, len, mod);
+                }
+            }
+        }
+    }
+    free(a_rows);
+}
+
+RNS_Polynomial polynomial_new_RNS_polynomial_rows(uint64_t N, uint64_t rns_mask, RNS_Base base)
+{
+    RNS_Polynomial res = (RNS_Polynomial)safe_malloc(sizeof(*res));
+    res->rows64 = (uint64_t **)safe_malloc(sizeof(uint64_t *) * base->l);
+    res->rows32 = (uint32_t **)safe_malloc(sizeof(uint32_t *) * base->l);
+    for (size_t i = 0; i < base->l; i++)
+    {
+        res->rows64[i] = NULL;
+        res->rows32[i] = NULL;
+        if (!(rns_mask & (1ULL << i)))
+            continue;
+        if (rns_row_is_narrow(base, i))
+            res->rows32[i] = (uint32_t *)mempool_aligned_malloc(sizeof(uint32_t) * base->N);
+        else
+            res->rows64[i] = (uint64_t *)mempool_aligned_malloc(sizeof(uint64_t) * base->N);
+    }
+    res->base = base;
+    res->rns_mask = rns_mask;
+    res->allocated_l = base->l;
+    return res;
+}
+
 /* out *= in. The element-wise kernels read a lane before writing it, so the
    unsplit case aliases safely; the block product does not, and there the row
    is copied first -- at its own width. */

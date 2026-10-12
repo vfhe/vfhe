@@ -820,9 +820,88 @@ void test_an_unknown_tag_dispatches_through_the_table(void)
     arith_free(ring, &fallback);
 }
 
+/* out += a * b^T against term-by-term products, over `over` and on the rows of `mask` only: the
+ * other rows must come back untouched. The a operands hold only their mask's rows, as row-by-row
+ * scratch does. */
+static void check_matrix_product(RNS_Base over, uint64_t mask)
+{
+    enum
+    {
+        ROWS = 3,
+        INNER = 5,
+        COLS = 2
+    };
+    RNS_Polynomial a[ROWS * INNER], b[COLS * INNER], out[ROWS * COLS], ref[ROWS * COLS];
+    for (uint64_t k = 0; k < ROWS * INNER; k++)
+    {
+        RNS_Polynomial full = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        fill(full, 100 + k);
+        a[k] = polynomial_new_RNS_polynomial_rows(TEST_N, mask, over);
+        for (uint64_t i = 0; i < TEST_L; i++)
+        {
+            TEST_ASSERT_EQUAL(!(mask & (1ULL << i)),
+                              a[k]->rows64[i] == NULL && a[k]->rows32[i] == NULL);
+            if (mask & (1ULL << i))
+                for (uint64_t j = 0; j < TEST_N; j++)
+                    set_coeff(a[k], i, j, coeff(full, i, j));
+        }
+        free_RNS_polynomial(full);
+    }
+    for (uint64_t k = 0; k < COLS * INNER; k++)
+    {
+        b[k] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        fill(b[k], 200 + k);
+    }
+    for (uint64_t k = 0; k < ROWS * COLS; k++)
+    {
+        out[k] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        ref[k] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        fill(out[k], 300 + k);
+        fill(ref[k], 300 + k);
+        out[k]->rns_mask = ref[k]->rns_mask = mask;
+    }
+    for (uint64_t r = 0; r < ROWS; r++)
+        for (uint64_t c = 0; c < COLS; c++)
+            for (uint64_t t = 0; t < INNER; t++)
+            {
+                polynomial_mul_addto_RNS_polynomial(ref[r * COLS + c], a[r * INNER + t],
+                                                    b[c * INNER + t]);
+                ref[r * COLS + c]->rns_mask = mask;
+            }
+    polynomial_matrix_mul_addto_RNS_polynomial(out, a, b, ROWS, INNER, COLS);
+    for (uint64_t k = 0; k < ROWS * COLS; k++)
+    {
+        TEST_ASSERT_EQUAL_UINT64(mask, out[k]->rns_mask);
+        out[k]->rns_mask = ref[k]->rns_mask = TEST_MASK;
+        assert_same(ref[k], out[k]);
+        free_RNS_polynomial(out[k]);
+        free_RNS_polynomial(ref[k]);
+    }
+    for (uint64_t k = 0; k < ROWS * INNER; k++)
+        free_RNS_polynomial(a[k]);
+    for (uint64_t k = 0; k < COLS * INNER; k++)
+        free_RNS_polynomial(b[k]);
+}
+
+void test_matrix_product_matches_the_term_by_term_products(void)
+{
+    check_matrix_product(base, TEST_MASK);
+    check_matrix_product(base, 1ULL << (TEST_L - 1)); // the narrow row alone
+    check_matrix_product(base, 0x5);
+}
+
+void test_matrix_product_over_a_ring_that_is_not_fully_split(void)
+{
+    RNS_Base split = new_rns_base(PRIMES, 2, TEST_N, TEST_L);
+    check_matrix_product(split, TEST_MASK);
+    check_matrix_product(split, 0x6);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_matrix_product_matches_the_term_by_term_products);
+    RUN_TEST(test_matrix_product_over_a_ring_that_is_not_fully_split);
     RUN_TEST(test_capabilities_and_names);
     RUN_TEST(test_new_starts_empty_and_zero_is_canonical);
     RUN_TEST(test_new_like_matches_the_model);

@@ -137,6 +137,12 @@ void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
     mod_eltwise_mul_addto_gen(out, in1, in2, n, mod);
 }
 
+void mod_eltwise_inner_product_addto(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                     uint64_t terms, uint64_t n, Modulus mod)
+{
+    mod_eltwise_inner_product_addto_gen(out, a, b, terms, n, mod);
+}
+
 void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     mod_eltwise_mul_subto_gen(out, in1, in2, n, mod);

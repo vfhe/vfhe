@@ -59,15 +59,27 @@ extern "C"
     // `n_threads` threads (0: the library limit), the result does not depend
     // on the thread count, and the keys are only read.
 
-    // Rotates the accumulators by d, 0 <= d <= n, given as the MGSW
-    // encryptions of its `n_bits` bits, least significant first
-    // (2^(n_bits - 1) <= n):
+    // The layers of a rotation of n accumulators by `n_bits` bits, least
+    // significant first: returns their number and, if `bits` is not NULL (room
+    // for n_bits values), writes each one's number of bits. With
+    // `bits_per_layer` 1 every layer takes one bit. With 2 the bits pair from
+    // the least significant while the pair's power p = 2^b has 4 p <= n, and the
+    // rest take one each.
+    //
+    // A rotation's MGSW keys are its layers' in order: a one-bit layer's is the
+    // MGSW of its bit, a two-bit layer's are the three of [d = 1], [d = 2],
+    // [d = 3], d = v_b + 2 v_(b+1) its value.
+    uint64_t gp25_rotation_layers(uint64_t n, uint64_t n_bits, uint64_t bits_per_layer,
+                                  uint64_t *bits);
+
+    // Rotates the accumulators by d, 0 <= d <= n, of `n_bits` bits
+    // (2^(n_bits - 1) <= n), given as the keys of its layers (gp25_rotation_layers):
     //
     //   acc[k] <- acc[k - d]                for k >= d,
     //   acc[k] <- sigma(acc[k - d + n])     for k <  d.
-    void gp25_rotate(RNSc_MLWE *acc, uint64_t n, RNS_MLWE *const *bits, uint64_t n_bits,
-                     RNS_MLWE_KS_Key aut, uint64_t ell, const GadgetParams *gadget_params,
-                     uint64_t n_threads);
+    void gp25_rotate(RNSc_MLWE *acc, uint64_t n, RNS_MLWE *const *keys, uint64_t n_bits,
+                     uint64_t bits_per_layer, RNS_MLWE_KS_Key aut, uint64_t ell,
+                     const GadgetParams *gadget_params, uint64_t n_threads);
 
     // acc[k] <- acc[k] * X^a[k] if `sign` encrypts 0, acc[k] * X^-a[k] if it
     // encrypts 1; with `sign` NULL, acc[k] * X^a[k]. a[k] < 2N.
@@ -89,13 +101,14 @@ extern "C"
     // `gp25_multiply_by_signed_monomials` by the mask, with the key of that
     // coefficient's sign (negated masks for odd i). Every gap is given
     // `gap_bits` bits (2^(gap_bits - 1) <= n); `gap_keys` lists their keys
-    // component after component, gap after gap, least significant bit first;
+    // component after component, gap after gap, in the layers of
+    // gp25_rotation_layers(n, gap_bits, bits_per_layer);
     // and `sign_keys` the h signs of each component in turn -- or NULL for a
     // binary key, where every sign is +1.
     void gp25_blind_rotate(RNSc_MLWE *acc, uint64_t n, const uint64_t *a, uint64_t rank, uint64_t h,
-                           uint64_t gap_bits, RNS_MLWE *const *gap_keys, RNS_MLWE *const *sign_keys,
-                           RNS_MLWE_KS_Key aut, uint64_t ell, const GadgetParams *gadget_params,
-                           uint64_t n_threads);
+                           uint64_t gap_bits, uint64_t bits_per_layer, RNS_MLWE *const *gap_keys,
+                           RNS_MLWE *const *sign_keys, RNS_MLWE_KS_Key aut, uint64_t ell,
+                           const GadgetParams *gadget_params, uint64_t n_threads);
 
     // Encoders for the SHIP bootstrap [CHKS25, Alg. 1]. The input polynomial is
     // canonical, over a ring of modulus Q; omega = exp(2 pi i / Q) and

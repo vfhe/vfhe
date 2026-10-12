@@ -709,6 +709,70 @@ void test_mod_w32_width_changes_match_the_wide_path(void)
     }
 }
 
+/* Element-wise inner products against a 128-bit oracle, for every kernel family (26 and 27
+   straddle the bound below which the IFMA family keeps per-term products), at vector lengths,
+   scalar lengths and with a tail, from no term to 100. Operands all q - 1 give the largest
+   unreduced sums, which pseudorandom operands do not reach. */
+static void check_inner_product(uint64_t q_bits, uint64_t n, uint64_t terms, int extreme)
+{
+    const uint64_t q = next_special_prime(1ULL << q_bits, 1024, true);
+    Modulus mod = mod_new(q);
+    uint64_t **a = malloc((terms + 1) * sizeof(uint64_t *));
+    uint64_t **b = malloc((terms + 1) * sizeof(uint64_t *));
+    for (uint64_t t = 0; t < terms; t++)
+    {
+        a[t] = safe_aligned_malloc(n * sizeof(uint64_t));
+        b[t] = safe_aligned_malloc(n * sizeof(uint64_t));
+        for (uint64_t i = 0; i < n; i++)
+        {
+            a[t][i] = extreme ? q - 1 : (0x9E3779B97F4A7C15ULL * (i + 1) ^ (t * 0x1337ULL)) % q;
+            b[t][i] = extreme ? q - 1 : (0xD1B54A32D192ED03ULL * (i + 7) ^ (t * 0xBEEFULL)) % q;
+        }
+    }
+    uint64_t *out = safe_aligned_malloc(n * sizeof(uint64_t));
+    uint64_t *ref = safe_aligned_malloc(n * sizeof(uint64_t));
+    for (uint64_t i = 0; i < n; i++)
+    {
+        out[i] = extreme ? q - 1 : i % q;
+        ref[i] = out[i];
+        for (uint64_t t = 0; t < terms; t++)
+            ref[i] = (uint64_t)((ref[i] + (unsigned __int128)a[t][i] * b[t][i]) % q);
+    }
+    mod_eltwise_inner_product_addto(out, a, b, terms, n, mod);
+    TEST_ASSERT_EQUAL_UINT64_ARRAY(ref, out, n);
+    for (uint64_t t = 0; t < terms; t++)
+    {
+        free(a[t]);
+        free(b[t]);
+    }
+    free(a);
+    free(b);
+    free(out);
+    free(ref);
+    mod_free(mod);
+}
+
+void test_mod_eltwise_inner_product_addto(void)
+{
+    const uint64_t bits[] = {10, 20, 26, 27, 29, 30, 31, 49, 50, 60, 61};
+    const uint64_t lengths[] = {1, 7, 8, 9, 40, 1023};
+    const uint64_t terms[] = {0, 1, 3, 32, 100};
+    for (unsigned i = 0; i < sizeof(bits) / sizeof(*bits); i++)
+        for (unsigned j = 0; j < sizeof(lengths) / sizeof(*lengths); j++)
+            for (unsigned k = 0; k < sizeof(terms) / sizeof(*terms); k++)
+                for (int extreme = 0; extreme < 2; extreme++)
+                    check_inner_product(bits[i], lengths[j], terms[k], extreme);
+}
+
+/* More terms than one unreduced sum may hold, which the dispatcher splits. */
+void test_mod_eltwise_inner_product_addto_past_its_term_limit(void)
+{
+    const uint64_t bits[] = {27, 49, 61};
+    for (unsigned i = 0; i < sizeof(bits) / sizeof(*bits); i++)
+        for (int extreme = 0; extreme < 2; extreme++)
+            check_inner_product(bits[i], 16, MOD_INNER_PRODUCT_MAX_TERMS + 5, extreme);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -716,6 +780,8 @@ int main(void)
     RUN_TEST(test_mod_eltwise_sweep);
     RUN_TEST(test_mod_eltwise_sweep_scalar_path);
     RUN_TEST(test_mod_eltwise_sweep_with_a_tail);
+    RUN_TEST(test_mod_eltwise_inner_product_addto);
+    RUN_TEST(test_mod_eltwise_inner_product_addto_past_its_term_limit);
     RUN_TEST(test_mod_new_refuses_a_modulus_no_family_can_hold);
     RUN_TEST(test_mod_eltwise_reduce_centered);
 #if VFHE_HAVE_AVX512IFMA

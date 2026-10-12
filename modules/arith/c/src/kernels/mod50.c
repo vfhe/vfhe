@@ -146,6 +146,52 @@ void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint6
     }
 }
 
+/* out += sum_t a[t] * b[t] (mod q), with one reduction per element. A product of two values below
+ * q < 2^50 has a low 52-bit half and a high half below q^2 / 2^52; madd52lo and madd52hi add them
+ * to two 64-bit sums, which hold up to MOD_INNER_PRODUCT_MAX_TERMS terms. With the low sum's carry
+ * moved up the total is H 2^52 + L, L < 2^52, reduced as (H mod q) (2^52 mod q) + (L mod q). Each
+ * of those three reductions takes a value below (q - 1)^2, as _mm512_hexl_reduce_prod_50
+ * requires; for L that needs q > 2^26, so the dispatcher keeps smaller moduli on per-term
+ * products. */
+
+// acc + (hi 2^52 + lo) mod q, for the two sums above.
+static inline __m512i inner_product_reduce_50(__m512i lo, __m512i hi, __m512i acc, Modulus mod)
+{
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i low52b_mask = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i w1 = _mm512_set1_epi64(mod->mp_w1); // 2^52 mod q
+    hi = _mm512_add_epi64(hi, _mm512_srli_epi64(lo, 52));
+    lo = _mm512_and_epi64(lo, low52b_mask);
+    const __m512i h = _mm512_hexl_reduce_prod_50(_mm512_srli_epi64(hi, 52),
+                                                 _mm512_and_epi64(hi, low52b_mask), mod);
+    const __m512i folded = _mm512_hexl_reduce_prod_50(_mm512_madd52hi_epu64(zero, h, w1),
+                                                      _mm512_madd52lo_epu64(zero, h, w1), mod);
+    __m512i res = _mm512_add_epi64(folded, _mm512_hexl_reduce_prod_50(zero, lo, mod));
+    res = _mm512_min_epu64(res, _mm512_sub_epi64(res, q_vec));
+    res = _mm512_add_epi64(res, acc);
+    return _mm512_min_epu64(res, _mm512_sub_epi64(res, q_vec));
+}
+
+void mod_eltwise_inner_product_addto_50(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                        uint64_t terms, uint64_t n, Modulus mod)
+{
+    __m512i *outv = (__m512i *)out;
+    const __m512i zero = _mm512_setzero_si512();
+    const size_t n_vec = n / 8;
+    for (size_t i = 0; i < n_vec; i++)
+    {
+        __m512i lo = zero, hi = zero;
+        for (uint64_t t = 0; t < terms; t++)
+        {
+            const __m512i x = ((const __m512i *)a[t])[i], y = ((const __m512i *)b[t])[i];
+            lo = _mm512_madd52lo_epu64(lo, x, y);
+            hi = _mm512_madd52hi_epu64(hi, x, y);
+        }
+        outv[i] = inner_product_reduce_50(lo, hi, outv[i], mod);
+    }
+}
+
 /* `scale` and `fma` multiply by a scalar that does not vary over the array,
    and a fixed operand is what Shoup's form needs: precompute
    s' = floor(s * 2^52 / q) once, and the reduction per element is a
