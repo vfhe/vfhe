@@ -87,7 +87,8 @@ class SHIP:
     ``ceil(log2(h + 1))`` levels of the product tree, any levels left to the
     application, the SlotToCoeff level, and the lowest level ``q0``.
     `bootstrap` takes ciphertexts at the SlotToCoeff level, encoded at
-    `input_scale` (``q0 / gamma``), and returns them at `output_lvl`.
+    `input_scale` (``q0 / gamma``), and returns them at `output_lvl` and
+    `output_scale`.
 
     ``theta`` and ``base`` are the paper's ``theta`` and ``B``: the sizes of the
     column and mux steps. ``window`` is the paper's ``w`` (default
@@ -96,6 +97,12 @@ class SHIP:
     ``c_k = floor(k N / h)``. The windows are public, which narrows the key
     distribution; its security estimate must account for that
     [CHKS25, Section 5.1].
+
+    ``output_scale`` is the scale of the output. By default it is the one
+    that comes back to `input_scale` at the SlotToCoeff level when every level
+    in between multiplies two ciphertexts at a common scale and rescales:
+    ``s_l = sqrt(p_l * s_(l+1))``, ``p_l`` the primes level ``l`` drops, so
+    that bootstrap, multiply, bootstrap needs no rescaling of its own.
 
     ``gadget_params`` is the gadget of every key-switch key. ``slot_to_coeff``
     defaults to `CKKS_LinearTransform.slot_to_coeff` at the SlotToCoeff level,
@@ -113,6 +120,7 @@ class SHIP:
         window: int | None = None,
         gadget_params: GadgetParams | None = None,
         slot_to_coeff: CKKS_LinearTransform | None = None,
+        output_scale: float | None = None,
     ) -> None:
         N = scheme.N
         M = N // 2
@@ -155,6 +163,13 @@ class SHIP:
             raise ValueError("SHIP needs nested levels")
         self.q0 = math.prod(scheme.rings[self.lowest_lvl].primes)
         self._slot_to_coeff = slot_to_coeff
+        if output_scale is None:
+            output_scale = self.input_scale
+            for lvl in range(self.slot_to_coeff_lvl - 1, self.output_lvl - 1, -1):
+                output_scale = math.sqrt(self._dropped(lvl) * output_scale)
+        if not 0 < output_scale < math.inf:
+            raise ValueError("the output scale must be positive and finite")
+        self.output_scale = output_scale
 
         # A window covers an arc of slots starting at its alignment; the mux
         # step's index ranges over ceil(span / theta) values.
@@ -177,17 +192,34 @@ class SHIP:
         """The scale `bootstrap`'s inputs are expected at, ``q0 / gamma``."""
         return self.q0 / self.gamma
 
+    def _dropped(self, lvl: int) -> int:
+        """The product of the primes level ``lvl`` has and the next does not."""
+        rings = self.scheme.rings
+        return math.prod(p for p in rings[lvl].primes if p not in rings[lvl + 1].primes)
+
+    def _pt0_scale(self) -> float:
+        """The scale that puts the product tree's output at `output_scale`.
+
+        Every other factor is at the scheme's scale ``Delta``, and a product
+        is rescaled by the primes its level drops, so the output's scale is
+        pt0's times ``Delta^h / prod_k p_k^(m_k)``, ``m_k`` the products of
+        tree level ``k``, whatever pairs they take.
+        """
+        ratio = 1.0
+        factors = self.h + 1
+        for k in range(self.depth):
+            products = factors // 2
+            ratio *= (self.scheme.scaling_factor / self._dropped(k)) ** products
+            factors -= products
+        return self.output_scale / ratio
+
     @property
     def slot_to_coeff(self) -> CKKS_LinearTransform:
         """The SlotToCoeff transform `bootstrap` applies first."""
         if self._slot_to_coeff is None:
             lvl = self.slot_to_coeff_lvl
-            rings = self.scheme.rings
-            dropped = math.prod(
-                p for p in rings[lvl].primes if p not in rings[lvl + 1].primes
-            )
             self._slot_to_coeff = CKKS_LinearTransform.slot_to_coeff(
-                self.scheme, lvl=lvl, scale=float(dropped)
+                self.scheme, lvl=lvl, scale=float(self._dropped(lvl))
             )
         return self._slot_to_coeff
 
@@ -394,7 +426,8 @@ class SHIP:
         self, ciphertext: CKKS_Ciphertext, key: SHIP_Key, n_threads: int = 0
     ) -> CKKS_Ciphertext:
         """Bootstraps the ``N/2`` real slots of ``ciphertext`` (at the
-        SlotToCoeff level, scale about `input_scale`) to `output_lvl`.
+        SlotToCoeff level, scale about `input_scale`) to `output_lvl` and
+        `output_scale`.
 
         The slots' imaginary parts must be zero. The product tree uses the
         scheme's relinearization key (`MLWE_Scheme.rlk`).
@@ -415,8 +448,8 @@ class SHIP:
     ) -> CKKS_Ciphertext:
         """[CHKS25, Alg. 1]: from a ciphertext at the lowest level whose
         coefficients ``t < N/2`` hold ``delta * mu_t`` (``delta`` its scale) to
-        one at `output_lvl` whose slots hold ``mu``. The other coefficients are
-        ignored.
+        one at `output_lvl` and `output_scale` whose slots hold ``mu``. The other
+        coefficients are ignored.
         """
         scheme = self.scheme
         if ciphertext.lvl != self.lowest_lvl:
@@ -428,8 +461,10 @@ class SHIP:
         )
         factors = self.blind_rotate(sparse, key, n_threads)
 
-        # pt0 = gamma / (4 pi i) * omega^b, gamma from the input's actual scale.
+        # pt0 = gamma / (4 pi i) * omega^b, gamma from the input's actual scale,
+        # at the scale that brings the product to the output scale.
         gamma = self.q0 / ciphertext.delta
+        scale = self._pt0_scale()
         cr = scheme.complex_ring
         pt0 = Polynomial(scheme.rings[0])
         sparse.to_coeff()
@@ -438,7 +473,7 @@ class SHIP:
             sparse.obj_b(),
             0.0,
             -gamma / (4 * math.pi),
-            scheme.scaling_factor,
+            scale,
             cr.plan,
             cr.slot_positions,
         ):
@@ -450,6 +485,7 @@ class SHIP:
         first = CKKS_Ciphertext(scheme, lvl=0)
         lib_rlwe.lib.mlwe_RNS_trivial_sample_of_zero(first.obj)
         first.repr = repr.ntt
+        first.delta = scale
         first += pt0
 
         z = scheme.product([first, *factors], n_threads)

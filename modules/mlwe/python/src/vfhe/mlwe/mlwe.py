@@ -355,12 +355,16 @@ class MLWE_Scheme:
     def _gadget_groups(
         self, lvl: int, ring: RNSRing, primes: int, per_digit: int
     ) -> list[list[int]]:
-        """The positions in ``ring`` of the first ``primes`` primes, grouped
+        """The positions in ``ring`` of ``primes`` of its primes, grouped
         ``per_digit`` at a time in the order of :meth:`gadget_scalars`: the
-        primes of level ``lvl`` by ascending base index, then the others."""
+        primes of level ``lvl`` by ascending base index, then the others, and
+        the first ``primes`` of that order kept, wherever they sit in ``ring``."""
         source = self.rings[lvl].mask
         indices = ring.prime_indices
-        order = sorted(range(primes), key=lambda i: indices[i])
+        order = sorted(
+            range(ring.ell),
+            key=lambda i: (not (source >> indices[i]) & 1, indices[i]),
+        )[:primes]
         parts = (
             [i for i in order if (source >> indices[i]) & 1],
             [i for i in order if not (source >> indices[i]) & 1],
@@ -1228,6 +1232,10 @@ class MLWE_Scheme:
         """
         if not out:
             out = self.ciphertext_type(self, lvl=lvl)
+        # Products run over the primes both operands hold, so the key must
+        # hold every prime of the sample's ring.
+        if key.ring.mask & out.ring.mask != out.ring.mask:
+            key = key.at_ring(out.ring)
         msg.to_coeff()
         if self.seeded_encryption if seeded is None else seeded:
             seed = entropy.bytes(32)

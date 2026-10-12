@@ -259,6 +259,46 @@ def test_bootstrap(setup):
     )
 
 
+def _slot_input(scheme, ship, dense, mu):
+    lvl = ship.slot_to_coeff_lvl
+    ct = CKKS_Ciphertext(scheme, lvl=lvl)
+    scheme.sample(
+        scheme.encode(mu, ring=scheme.rings[lvl], scale=ship.input_scale), dense, out=ct
+    )
+    ct.delta = ship.input_scale
+    return ct
+
+
+def test_bootstrap_multiply_bootstrap(setup):
+    # The default output scale brings one multiplication back to the input
+    # scale, so the square of an output bootstraps again.
+    scheme, ship, dense, _sparse, key = setup
+    ct = _slot_input(scheme, ship, dense, _values(4))
+    for _ in range(3):
+        out = ship.bootstrap(ct, key)
+        assert out.delta == pytest.approx(ship.output_scale)
+        assert _max_error(_slots(scheme, out, dense), _slots(scheme, ct, dense)) < (
+            TOLERANCE
+        )
+        ct = out * out
+        assert ct.lvl == ship.slot_to_coeff_lvl
+        assert ct.delta == pytest.approx(ship.input_scale)
+
+
+def test_output_scale_is_the_callers(setup):
+    scheme, _ship, dense, _sparse, key = setup
+    ship = SHIP(
+        scheme, h=H, theta=6, base=4, gamma=GAMMA, window=16, output_scale=2.0**25
+    )
+    mu = _values(5)
+    out = ship.bootstrap(_slot_input(scheme, ship, dense, mu), key)
+    assert out.delta == pytest.approx(2.0**25)
+    assert _max_error(_slots(scheme, out, dense), mu) < TOLERANCE
+    for bad in (0.0, -1.0, math.inf):
+        with pytest.raises(ValueError, match="output scale"):
+            SHIP(scheme, h=H, theta=6, output_scale=bad)
+
+
 def test_bootstrap_does_not_depend_on_the_thread_count(setup):
     scheme, ship, dense, _sparse, key = setup
     mu = _values(3)

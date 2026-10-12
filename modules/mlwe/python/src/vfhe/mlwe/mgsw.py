@@ -43,7 +43,8 @@ class MGSW_Scheme:
 
         The key lives in ``self.ring`` whatever the level; only how far the
         gadget reaches and what the external product's rescale divides by
-        follow ``lvl``, so the first ``ell - lvl`` primes carry it.
+        follow ``lvl``, so ``ell - lvl`` primes carry it, level ``lvl``'s
+        first, wherever they sit in ``self.ring``.
         """
         return self.mlwe_scheme.gadget_scalars(
             lvl, self.gadget_params, ring=self.ring, primes=self.ell - lvl

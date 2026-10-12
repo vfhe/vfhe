@@ -365,6 +365,16 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `SHIP.bootstrap` returns at `SHIP.output_scale`, a new parameter of `SHIP`,
+  by encoding the product tree's first factor at the scale that leads there.
+  By default it is the scale that comes back to `input_scale` at the
+  SlotToCoeff level when each level in between squares and rescales, so a
+  bootstrap's output, multiplied, bootstraps again; before, the output was at
+  whatever the product tree left with every factor at the scheme's scale,
+  which on chains whose application primes differ from that scale gave a
+  second bootstrap a wrong `gamma` and garbage. Over the levels the tests use
+  (N = 2^8, LL13's chain), bootstrap, square, bootstrap keeps 7.2-7.5 bits
+  over three rounds, and a single bootstrap's precision is unchanged.
 - `gp25_rotate` and `gp25_blind_rotate` take `bits_per_layer` after the bit
   count, and their keys are those of the layers of `gp25_rotation_layers` (one
   per bit, as before, with `bits_per_layer` 1). `GP25.rotate`'s key list is
@@ -725,6 +735,16 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix MGSW keys of a level whose primes do not come first in the MGSW ring
+  (a special prime with a lower index in the RNS base than the level's): the
+  gadget covered the ring's first primes rather than the level's, so every
+  external product, CMUX and GP25 rotation by a key encrypting anything but
+  0 returned garbage. The gadget now covers the level's primes, wherever they
+  sit; the keys of nested chains with the special primes last are unchanged.
+- Fix `MLWE_Scheme.sample` at a level holding primes the key's ring does not
+  (a level that shares no prime with level 0): the sample was drawn with no
+  key on those primes and did not decrypt. It now uses the key over the
+  sample's ring, as decryption already did.
 - Fix CKKS encoding at a scale that takes a coefficient to 2^63 or beyond
   (`encode`, `encode_batch`, `ComplexRing.values_ifft_scale_round_to_RNS_batch`
   and the other rounding paths): the rounding went through an `int64_t` and

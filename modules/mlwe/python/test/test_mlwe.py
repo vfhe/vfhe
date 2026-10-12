@@ -919,6 +919,65 @@ def test_mgsw_products_at_a_level(ghs, radix):
         assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
 
 
+def _subring(Rq, *positions):
+    """The quotient of ``Rq`` keeping the primes at the given positions."""
+    mask = 0
+    for i in positions:
+        mask |= 1 << Rq.prime_indices[i]
+    return Rq.quotient_ring(mask=mask)
+
+
+def _enc_at(scheme, lvl, Rp, m, key):
+    ring = scheme.rings[lvl]
+    delta = ring.modulus_ratio(Rp, return_pointer=True)
+    return scheme.sample(m.scaled_lift(ring, delta=delta), key, lvl=lvl)
+
+
+@pytest.mark.parametrize("special", [0, 1, 2])
+@pytest.mark.parametrize("radix", [None, RADIX_LOG_BASE])
+def test_mgsw_products_wherever_the_special_prime_sits(special, radix):
+    # The gadget covers the level's primes, wherever the special prime sits
+    # among them in the base.
+    Rq = Ring(N, prime_size=[45, 45, 45], split_degree=1)
+    level = [i for i in range(3) if i != special]
+    scheme = MLWE_Scheme([_subring(Rq, *level)], special_rings=[Rq], special_primes=1)
+    Rp = _subring(Rq, level[0])
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    one, zero = MGSW_Scheme(
+        scheme, gadget_params=GadgetParams(radix)
+    ).encrypt_constants([1, 0], key)
+    m = [Rp.random_element() for _ in range(2)]
+    c = [_enc_at(scheme, 0, Rp, x, key) for x in m]
+
+    for out, expected in (
+        (one.external_product(c[0]), m[0]),
+        (CMUX(c[0], c[1], one), m[1]),
+        (CMUX(c[0], c[1], zero), m[0]),
+    ):
+        assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+
+
+@pytest.mark.parametrize("levels", [((0, 1), (2, 3)), ((2, 3), (0, 1))])
+def test_samples_at_a_level_sharing_no_prime_with_level_0(levels):
+    Rq = Ring(N, prime_size=[45] * 5, split_degree=1)
+    scheme = MLWE_Scheme(
+        [_subring(Rq, *lv) for lv in levels],
+        special_rings=[_subring(Rq, *lv, 4) for lv in levels],
+        special_primes=1,
+    )
+    key = scheme.key_gen(3.2)
+    other = scheme.key_gen(3.2)
+    for lvl, lv in enumerate(levels):
+        Rp = _subring(Rq, lv[0])
+        m = Rp.random_element()
+        c = _enc_at(scheme, lvl, Rp, m, key)
+        assert scheme.linear_decrypt(c, key).round_division(Rp) == m
+        switched = scheme.keyswitch(
+            _enc_at(scheme, lvl, Rp, m, other), scheme.gen_ksk(key, other, lvl=lvl)
+        )
+        assert scheme.linear_decrypt(switched, key).round_division(Rp) == m
+
+
 def _phase(scheme, c, key):
     phase = scheme.linear_decrypt(c, key)
     phase.to_coeff()
