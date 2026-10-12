@@ -347,10 +347,10 @@ class RNSRing(Ring):
     # With split_degree d > 1, a must be odd. The point of d > 1 is soundness,
     # not the transform: X^N + 1 must split mod p into the N/d irreducible
     # factors X^d - zeta^(2j+1), zeta a primitive 2N/d-th root of unity, so
-    # that R_p is a product of fields of size p^d, large enough to serve as
-    # exceptional sets [CCCFGS25, Sec. 3.1]. That needs p - 1 of 2-adicity
-    # exactly log2(2N/d) -- a odd -- since otherwise zeta is a square and every
-    # factor splits further, leaving fields of size p only. An even a still
+    # that R_p is a product of fields of size p^d [CCCFGS25, Sec. 3.1]. That
+    # needs p - 1 of 2-adicity exactly log2(2N/d) -- a odd -- since otherwise
+    # zeta is a square and every factor splits further, leaving fields of size
+    # p only. An even a still
     # gives a correct incomplete transform; the residue fields are what is lost.
     #
     # With d = 1 the ring splits into F_p anyway and any a will do. Full-size

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Characterization tests for the (reverted) vfhe.arith over the cffi boundary.
+"""Characterization tests for vfhe.arith over the cffi boundary.
 
 Python big ints are the exact oracle: negacyclic schoolbook for the ring
 product, CRT for reconstruction. Also covers domain conversion, automorphism,
@@ -340,8 +340,8 @@ def _complex_fft_oracle(v, n, inverse):
 
 @pytest.mark.parametrize("cN", [1, 2, 4, 8, 16, 32])
 def test_complex_fft_matches_oracle(cN):
-    # Below 8 values the vectorized transform cannot run and its table
-    # loader cannot be built, so this length range crosses that cutover.
+    # Below 16 values the scalar FFT runs, so this range crosses the cutover
+    # to the vector one.
     cring = ComplexRing(cN)
     slots = [complex(rng.uniform(-5, 5), rng.uniform(-5, 5)) for _ in range(cN)]
     cp = ComplexPolynomial(cring).from_array(slots)

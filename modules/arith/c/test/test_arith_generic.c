@@ -685,7 +685,7 @@ void test_lifted_combination_kernel_known_answers(void)
                 }
 }
 
-/* The ModDown against the exact round division: on every row that stays the
+/* The approximate division (mod_down) against the exact round division: on every row that stays the
  * two differ by an integer of at most half the number of primes divided by,
  * the same integer on every row. Over wide rows only (the fused body) and
  * with the narrow row among those that leave (the term-by-term one); in

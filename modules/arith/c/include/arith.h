@@ -833,7 +833,7 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     // out = a * b in the evaluation domain; out may alias a or b.
     void fft_pointwise_mul(double *out, const double *a, const double *b, FFT_Plan plan);
 
-    /* Complex polynomials (the CKKS encoding): N complex values, real parts
+    /* Complex polynomials (the canonical embedding): N complex values, real parts
        followed by imaginary parts, over the FFT of length 2N. In coefficient
        form value k is a_k + i a_(k+N), a the real coefficients of the
        polynomial of degree < 2N; in slot form value j is the evaluation at
@@ -1039,17 +1039,16 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
     void polynomial_scale_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t scale);
     void polynomial_scale_RNS_polynomial_RNS(RNS_Polynomial out, RNS_Polynomial in1,
                                              uint64_t *scale);
-    /* The ModDown of hybrid key switching: division by P, the product of the
-       primes in `divide_mask`, through the fast base conversion of x mod P
+    /* Approximate division by P, the product of the primes in
+       `divide_mask`, through the fast base conversion of x mod P
        (centered). `_prepare` scales the rows of `in` that leave, in place;
        `_rows` then writes, on each of `rows` that stays, round(x / P) plus
        an error of at most half the number of primes divided by -- plus
        `addend`'s row if it is not NULL -- to that row of `out`, which may
        be `in` (finish with polynomial_round_division_RNSc_finish) or another
        polynomial over the same base (whose mask is the caller's to set).
-       Different rows may be written at the same time. Not an exact rounding,
-       which the round division is, but noise where it is used: after a
-       gadget product. `addend` is canonical. */
+       Different rows may be written at the same time. Unlike the round
+       division, not an exact rounding. `addend` is canonical. */
     void polynomial_mod_down_RNSc_prepare(RNSc_Polynomial in, uint64_t divide_mask);
     void polynomial_mod_down_RNSc_rows(RNSc_Polynomial out, RNSc_Polynomial in,
                                        RNSc_Polynomial addend, uint64_t divide_mask, uint64_t rows);

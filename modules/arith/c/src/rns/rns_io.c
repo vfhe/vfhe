@@ -13,8 +13,8 @@
 #error "the row encoding copies words as they are in memory, which assumes a little-endian host"
 #endif
 
-// The derive-key context of the seed expansion. Stored seeds depend on it:
-// never change it, define a new one.
+// The derive-key context of the seed expansion, part of the seeded-row
+// format: a stored seed expands to the same rows only under this context.
 static const char SEED_CONTEXT[] = "vfhe 2026-10-04 RNS polynomial mul-domain row from a seed";
 
 // Calls below these sizes run on one thread, where starting threads would

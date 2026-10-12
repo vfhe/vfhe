@@ -8,13 +8,15 @@
 // (a BV one when the key lives in the sample's own ring), automorphisms --
 // single, hoisted, batched and summed --, the trace, packing through the
 // trace, and ring switching. Everything here works one whole ring element at
-// a time through arith_*; the gadget products are gadget_rns.c's, and what
-// needs residues is in keyswitch_rns.c.
+// a time through arith_*, except that RNS hybrid key switches go to
+// keyswitch_batch.c and the halvings of the normalized trace and trace packing
+// to rns_rows.c; the gadget products are gadget_rns.c's, and what needs
+// residues is in keyswitch_rns.c.
 
 // GHS hybrid key switch. The product must accumulate in the ring the key
 // lives in: `out` is only guaranteed to be allocated for its own, narrower
-// ring, so the key carries an accumulator that is, and only the finished
-// result -- already back in `in`'s ring -- reaches `out`.
+// ring, so it accumulates in scratch over the key's ring, and only the
+// finished result -- already back in `in`'s ring -- reaches `out`.
 void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk, uint64_t lvl)
 {
     (void)lvl;

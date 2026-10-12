@@ -1262,9 +1262,7 @@ class MLWE_Scheme:
         Entry ``i * len(scalars) + k`` encrypts ``msgs[i] * scalars[k]`` under
         ``key`` and in its ring, where the messages must live. A scalar is one
         integer per prime of that ring, in ``ring.primes`` order, as
-        :meth:`gadget_scalars` gives them. Every key here, MGSW, and
-        bootstrapping key is a few polynomials times every gadget element, so
-        this is where key generation samples.
+        :meth:`gadget_scalars` gives them. Key generation samples through here.
 
         Each sample is a function of a mask seed, kept as `MLWE.seed` as
         :meth:`sample` keeps it, and a secret noise seed, all drawn in order on the
@@ -2046,9 +2044,8 @@ class MLWE:
         """Reduces the ciphertext into a smaller (quotient) ring, in place.
 
         Drops the primes the destination lacks without dividing the value, unlike
-        :meth:`round_division`: the CKKS level drop. Not valid for BFV, whose
-        scaling depends on the modulus. Give ``ring`` or ``lvl``; the domain is
-        kept.
+        :meth:`round_division`: the linear decryption is kept modulo the smaller
+        modulus only. Give ``ring`` or ``lvl``; the domain is kept.
         """
         if ring is None == lvl is None:
             raise ValueError("provide exactly one of ring or lvl")

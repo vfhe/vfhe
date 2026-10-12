@@ -14,8 +14,8 @@ project(
 
 fs = import('fs')
 m_dep = meson.get_compiler('c').find_library('m', required: false)
-# Kernels across the tree use pthreads: ntt_w32's one-time permutation build,
-# and the worker pools in complex.c and fhe's cggi16.c. glibc 2.34 merged the
+# Kernels across the tree use pthreads: util's thread and memory pools, and
+# locks or once-guards in arith, crypto and fhe. glibc 2.34 merged the
 # pthread symbols into libc, so a link that does not ask for threads still
 # resolves there and fails on anything older -- manylinux_2_28 included.
 threads_dep = dependency('threads')

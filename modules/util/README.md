@@ -18,9 +18,14 @@ questions and almost nobody needs the second.
   dependencies, so asking the question never loads an engine. Built twice: as
   the tiny `_vfhe_cpu` extension, and as the `vfhe-cpu` command the test runner
   uses.
+- `python/src/vfhe/io/`: `vfhe.io`, the serialization format: records,
+  checksums and the codec registry the other modules register their types
+  with.
 - `c/src/`: what the kernels share — allocation that aborts rather than
-  returning NULL (`alloc.c`), index and modulus helpers (`util.c`), and the
-  engine's own name (`build_info.c`). Randomness lives in `crypto`.
+  returning NULL (`alloc.c`), the library's thread pool and thread limits
+  (`parallel.c`), the per-thread memory pool (`memory_pool.c`), index and
+  modulus helpers (`util.c`), and the engine's own name (`build_info.c`).
+  Randomness lives in `crypto`.
 
 `util` depends on nothing above it: `util.h` includes only libc and
 `vfhe_cpu.h`. Anything needing an `arith` type belongs in `arith` — that is why

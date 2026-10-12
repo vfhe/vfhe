@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Characterization tests for the (reverted) vfhe.mlwe over the cffi boundary.
+"""Characterization tests for vfhe.mlwe over the cffi boundary.
 
 Encrypt/decrypt roundtrips, homomorphic add/sub/mul-by-poly, BV and GHS
 key-switching, automorphism, ciphertext multiplication (relinearization), the
@@ -12,6 +12,7 @@ import functools
 import math
 import operator
 import random
+from collections import Counter
 from typing import cast
 
 import pytest
@@ -762,6 +763,20 @@ def test_lwe_key_encrypts_with_its_noise_parameter_only():
     assert ffi.cast("LWE_Key", extracted.obj).sigma == 2.5
 
 
+def test_lwe_mask_is_uniform():
+    # 3 * 2^30 + 1 sits at 3/4 of 2^32: mapping 32 random bits onto it gives
+    # some values two preimages and others one.
+    q = 3 * 2**30 + 1
+    ring = Ring(4096, primes=[q], prime_size=[32], split_degree=1)
+    key = LWE_Key(ring, sec_sigma=3.2, err_sigma=3.2)
+    values = [v for _ in range(32) for v in LWE(ring=ring, m=[0], key=key).get_a()[0]]
+    assert all(v < q for v in values)
+    counts = Counter(v * 4 // q for v in values)
+    expected = len(values) / 4
+    assert len(counts) == 4
+    assert all(abs(c - expected) < 0.02 * expected for c in counts.values())
+
+
 def test_lwe_limbs_follow_the_ring_over_a_populated_base():
     # A ring built after another one holds primes the base registered first,
     # so its prime indices do not ascend and do not start at 0. Every limb has
@@ -978,10 +993,10 @@ def test_samples_at_a_level_sharing_no_prime_with_level_0(levels):
         assert scheme.linear_decrypt(switched, key).round_division(Rp) == m
 
 
-def _phase(scheme, c, key):
-    phase = scheme.linear_decrypt(c, key)
-    phase.to_coeff()
-    return phase
+def _linear_decryption(scheme, c, key):
+    decryption = scheme.linear_decrypt(c, key)
+    decryption.to_coeff()
+    return decryption
 
 
 def _bits(before, after) -> float:
@@ -1009,12 +1024,12 @@ def test_grouped_digits_at_every_level(balanced):
     for lvl, ring in enumerate(scheme.rings):
         assert _keys_per_component(ksk, lvl) == -(-ring.ell // 2) + 1
         c = scheme.sample(ring.random_element(), key, lvl=lvl)
-        before = _phase(scheme, c, key)
+        before = _linear_decryption(scheme, c, key)
         rotated = before.automorphism(5)
         one, zero = mgsw_scheme.encrypt_constants([1, 0], key, lvl=lvl)
         assert one.gadget_size == -(-ring.ell // 2)
         other = scheme.sample(ring.random_element(), key, lvl=lvl)
-        product = before * _phase(scheme, other, key)
+        product = before * _linear_decryption(scheme, other, key)
         product.to_coeff()
         for out, out_key, expected in (
             (c * other, key, product),
@@ -1026,7 +1041,7 @@ def test_grouped_digits_at_every_level(balanced):
             (CMUX(c, other, zero), key, before),
         ):
             assert out.lvl == lvl
-            assert _bits(expected, _phase(scheme, out, out_key)) < 8
+            assert _bits(expected, _linear_decryption(scheme, out, out_key)) < 8
 
 
 def test_grouped_digits_need_a_large_enough_special_modulus():
@@ -1037,11 +1052,11 @@ def test_grouped_digits_need_a_large_enough_special_modulus():
     scheme = MLWE_Scheme(Rq, special_primes=2)
     key, key_out = (scheme.key_gen_sparse(N // 8, SIGMA) for _ in range(2))
     c = scheme.sample(scheme.rings[0].random_element(), key)
-    before = _phase(scheme, c, key)
+    before = _linear_decryption(scheme, c, key)
     noise = [
         _bits(
             before,
-            _phase(
+            _linear_decryption(
                 scheme,
                 scheme.keyswitch(
                     c,
@@ -1171,9 +1186,8 @@ def test_trace_pack(ghs, count):
     stride = N // count
     for k in range(count):
         assert round(d[k * stride] / delta) == k + 1
-    # Measured at N = 256: 4 bits at 16 samples and 5 at 256, where the
-    # [CDKS21] packing, which doubles every level's noise at each level above
-    # it, left 7-8 and 12.
+    # Each of the log2(count) levels halves before it switches, so the noise
+    # stays a few bits of key switching rather than doubling level by level.
     noise = max(abs(d[k * stride] - (k + 1) * delta) for k in range(count))
     assert noise.bit_length() <= (6 if count < N else 8)
 
@@ -1220,8 +1234,8 @@ def test_normalized_trace(ghs, n):
     step = N // n
     expected = [msg[j] if j % step == 0 else 0 for j in range(N)]
     assert [round(x / delta) for x in d] == expected
-    # Measured at N = 256: 4 bits, where the scaled trace's constant carries
-    # 6-9 (the noise of its first levels doubled by every level after).
+    # Each level halves before it switches, so the noise stays a few bits of
+    # key switching rather than doubling level by level.
     noise = max(abs(x - e * delta) for x, e in zip(d, expected, strict=True))
     assert noise.bit_length() <= 6
 
@@ -1838,9 +1852,9 @@ def test_mgsw_with_fewer_digits():
     assert x3.gadget_size == 3
     ring = scheme.rings[0]
     c = scheme.sample(ring.random_element(), key)
-    phase = scheme.linear_decrypt(c, key)
+    decryption = scheme.linear_decrypt(c, key)
     bound = (N // 8) * 2**19 * 4 + 2**20
-    for selector, expected in ((one, phase), (x3, phase * three)):
+    for selector, expected in ((one, decryption), (x3, decryption * three)):
         diff = scheme.linear_decrypt(selector.external_product(c), key) - expected
         assert max(abs(x) for x in diff.get_polynomial(signed=True)) < bound
 

@@ -20,7 +20,7 @@
 #include <blake3.h>
 
 // --- Deterministic seed override (tests only) ----------------------------
-// Reproducible FHE-bootstrap tests need a fixed RNG. When a deterministic seed
+// Reproducible probabilistic tests need a fixed RNG. When a deterministic seed
 // is set (vfhe_prng_set_deterministic_seed), generate_rnd_seed yields a
 // reproducible, non-repeating stream via splitmix64 instead of hardware
 // entropy. Production never calls the setters, so it keeps using RDRAND /

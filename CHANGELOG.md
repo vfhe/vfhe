@@ -14,183 +14,10 @@ versions may contain breaking changes.
 
 ### Added
 
-- Add two-bit layers to the GP25 blind rotation, BatchBoot's multi-bit
-  rotation [LWZ+26]: `GP25(..., bits_per_layer=2)`. A pair of rotation bits
-  of value `d` takes three MGSW keys, of `[d = 1]`, `[d = 2]` and `[d = 3]`,
-  and each accumulator is decomposed once per pair instead of once per bit.
-  Bits pair while the pair's power `p` satisfies `4 p <= n`
-  (`GP25.rotation_layers`). `generate_bootstrap_key` and the new
-  `GP25.encrypt_rotations(values, n_bits, n, key)` make the keys, `rotate` and
-  the blind rotation take them, and `SAB_Key.bits_per_layer` records the
-  choice (serialized; older records read as 1). The cost is 1.5 times the
-  MGSW keys and, with the RNS gadget, about 0.8 bit more rotation noise (less
-  noise with a radix gadget). At N = 2^13 over five 50-bit primes
-  (avx512ifma, 4-core laptop), rotating 512 accumulators by 8 bits takes 5.8 s
-  instead of 8.4 s on one thread, 1.5 s instead of 2.1 s on eight. The default
-  stays one bit per layer.
-- Add `mgsw_shift_sequences` (C, `mlwe.h`): shifts sequences of samples by an
-  encrypted amount `d <= 3` given as one-hot MGSW keys, `y_i = x_(i+w-d)`.
-  Each input is decomposed once for every output that reads it, one row of
-  the key ring at a time.
-- Add `mod_eltwise_inner_product_addto` and
-  `polynomial_matrix_mul_addto_RNS_polynomial` (C, `arith.h`): element-wise
-  inner products with one reduction per element, and the product `a * b^T` of
-  matrices of ring elements, tiled so that each tile of `b` is read once for
-  all rows of `a`. For primes below 2^50 on avx512ifma the products are
-  summed unreduced (0.2 against 0.46 ns per product and coefficient in cache);
-  other moduli keep per-term products. Also
-  `polynomial_new_RNS_polynomial_rows`, a polynomial with only its mask's rows
-  allocated.
-- Add `CMUX_batch(in1, in2, selector, n_threads=0)` (`vfhe.mlwe`): the
-  multiplexers of many pairs by one MGSW selector in one native call
-  (`mgsw_CMUX_batch`), in parallel, results left canonical, so no sample
-  passes through the NTT domain. At N = 2^13 over five 50-bit primes
-  (avx512ifma, 4-core laptop): 2.1 ms per pair on one thread against
-  2.7 ms for a `CMUX` loop, 0.50 ms against 1.9 ms on eight.
-- Add `GP25.generate_repacking_key(rotation_key, n)`: only the keys `rotate`
-  and `repack` read (the automorphism key for `X -> X^-1` and the trace
-  keys), from the generators `generate_bootstrap_key` uses, for a rotation
-  the caller schedules. Needs `trace_repack`.
-- Add `MLWE_Scheme.key_gen(sigma_err, distribution="ternary")`: a key with
-  every coefficient uniform in `{-1, 0, 1}`, drawn through
-  `entropy.below_many(count, bound)`, which is new too (`vfhe.crypto`; the
-  rejection sampler of `generate_uniform_below`, so a draw reveals only how
-  many values were redrawn).
-- Add the SHIP bootstrap [CHKS25] (`vfhe.fhe.SHIP`, `SHIP_Key`): bootstraps
-  `N/2` real slots using only the `ceil(log2(h + 1))` levels of a product tree,
-  `h` the input key's Hamming weight. `SHIP.sample_input_key` draws the sparse
-  key (one coefficient per public window); `bootstrap` needs no secret key and
-  runs natively on the library's threads, with results independent of the
-  thread count. At the paper's LL13 parameters (N = 2^13): about 5.1 bits of
-  worst-slot precision.
-- Add the automorphism multiplexer (the B-to-1 mux-rotate of [CHKS25]):
-  `MLWE_Scheme.automorphism_mux(c, gens, ksks)` computes `sum_d b_d Aut_d(c)`
-  for bits `b_d` encrypted in the keys (`gen_automorphism_mux_keys`),
-  decomposing `c` once and dividing by the special primes once;
-  `automorphism_mux_batch` runs many. Also `gadget_mul_addto_automorphism`.
-- Add `MLWE.multiply_by_monomial(exponent, minus_one=False)`: the sample
-  times `X^exponent` (or `X^exponent - 1`), any integer exponent, keeping its
-  ring (special primes included), level, type (a CKKS ciphertext keeps its
-  `delta`) and representation: a signed shift in the coefficient domain, a
-  pointwise product with the monomial's transform in the NTT domain. And
-  `MGSW.multiply_by_monomial`, the same on every row, which turns an MGSW of
-  `m` into one of `m * X^exponent` with the rows left in the NTT domain.
-- `CGGI16(..., gadget_params=...)`: the bootstrapping key's gadget (the RNS
-  one by default), so the blind rotation can use the radix gadget, grouped
-  RNS digits or the approximate decomposition like every other gadget
-  product.
-- Add grouped RNS digits, the `dnum` of the hybrid key switch [HK20]:
-  `GadgetParams(primes_per_digit=a)` splits an element over its primes, by
-  ascending base index, into groups of `a` (the last may be smaller), and
-  takes as the digit of group `J` the value modulo the group's product `Q_J`,
-  lifted to every prime of the key by the fast base conversion (centered with
-  `balanced`), against the gadget element `P * e_J`. About `a` times fewer
-  keys and gadget products; the digits grow to about `a * Q_J / 2`, so the
-  special modulus `P` has to cover a group (documented, not checked: the
-  noise grows by about `Q_J / P`). Every key generator, `MLWE_Set`,
-  `MGSW_Scheme` and `GP25` take it through `gadget_params`, and the native
-  products through `GadgetParams.primes_per_digit` (0 or 1: a digit per
-  prime, unchanged bit for bit); serialized keys and MGSW schemes carry it.
-  The radix gadget does not combine with it (`ValueError`). Measured at
-  N = 2^14 over eight 45-bit primes, one thread, against a digit per prime
-  with one special prime: with groups of 4 (4 special primes, 3 keys
-  instead of 9) a key switch is 1.6x faster (avx512ifma; 1.7x portable)
-  and an MGSW external product 1.8x; over four primes 1.15-1.2x, where the
-  special primes' transforms take most of what the digits save. The
-  conversion is the new `polynomial_RNSc_lifted_combination` (arith).
-- Add the approximate gadget decomposition: the radix gadget may keep only
-  the top `digits` digits of each residue (`GadgetParams(log_base,
-  digits)`; all by default), rounding the residue to a multiple of
-  `2^(w * dropped)` first, which adds at most half of that times the key and
-  removes the keys and products of the digits left out. Leaving digits out
-  holds over one prime only (over several the error is multiplied by a CRT
-  idempotent), so it is refused at a level of more than one; as many digits
-  as every prime has is the exact decomposition at any level. Every key
-  generator, `MGSW_Scheme`, `MLWE_Set` and `GP25` take it through their
-  `gadget_params`; the serialized keys and MGSW schemes carry it.
-- Add `MLWE.from_components(scheme, a, b, lvl=None)`: the sample with mask
-  `a` and body `b`, copied from the polynomials (which may be temporaries, in
-  either domain), over a level of the scheme or another of its rings.
-- Add `MLWE_Scheme.trace_pack(vec, ksk)` (`mlwe_trace_pack`): the trace
-  packing of [CDKS21] with each level's difference halved (times `2^-1 mod
-  q`) before its automorphism, after [LY26]'s reverse homomorphic trace. The
-  packed values keep their scale (no `count^-1` to fold into the message),
-  and each level's key-switch noise is
-  added once instead of being doubled by every level above it: at N = 256,
-  4 vs 7-8 bits of noise packing 16 samples and 5 vs 12 packing 256. With an
-  odd modulus the halving is exact, so the method needs none of the
-  rounding a power-of-two modulus pays for it.
-- Add `MLWE_Scheme.normalized_trace(c, ksk, n=1)` (`mlwe_normalized_trace`):
-  the normalized trace onto the subring `Z[X^(N/n)]` [AP13], each level
-  halved before its automorphism as in [LY26]'s reverse homomorphic trace --
-  the coefficients at the multiples of `N / n` at their scale and zero
-  elsewhere, with the noise of `log2(N / n)` key switches. It takes the ascending automorphism keys of `trace_pack`;
-  `trace` keeps its factor `N` and its keys.
-- Add ring switching [GHPS12] between `R_N` and `R_n` when one dimension
-  divides the other, `R_n` being `Z[X^k]` inside `R_N`:
-  `MLWE_Scheme.ring_switch(c, ksk)` takes a sample of a scheme of the other
-  dimension to the level of this one with the same primes, and
-  `gen_ring_switch_key(key_out, key_in, lvl, radix_log_base, n_threads,
-  hybrid)` makes its key, between any two ranks. Down, the sample is read as
-  one of rank `r k` over `R_n` and key-switched (rather than key-switched
-  into the subring and traced, as in [GHPS12]), and decrypts to the
-  coefficients `k m` of the message; up, it is embedded with `Y = X^k` and
-  key-switched. The subring maps (`mlwe_project_subring`,
-  `mlwe_embed_subring`) only move coefficients, one pass per row (a k-way
-  deinterleave or spread, vectorized on AVX-512), so the noise is a key
-  switch's. Native `mlwe_ring_switch`; `MLWE_Scheme.level_with_primes(ring)`
-  finds the level over a ring's primes, by value.
-- Add MGSW internal products, automorphisms and noiseless keys:
-  `MGSW.internal_product(other)` (also `MGSW * MGSW`, native
-  `mgsw_internal_product`) is the external product of `self` with every row
-  of `other`, an MGSW of the product of the messages in `other`'s layout;
-  `MGSW_Scheme.automorphism(c, g, aut_key, relin_key)` (`mgsw_automorphism`)
-  is the MGSW of `m(X^g)`, its message rows key-switched and its `-s_j m`
-  rows rebuilt through a relinearization key; `MGSW_Scheme.trivial(msg)`
-  (`mgsw_trivial`) is the gadget matrix times `msg`. Without special primes
-  the keys are of level 0 (pair them with the radix gadget). With special
-  primes the rows live over the key ring, so the product key and the
-  automorphism keys come from a scheme with one more special prime, where that
-  ring is a level: a product then adds 5-7 bits of noise to the next external
-  product, against 39 for the radix route (N = 256, three 45-bit primes).
-- Add `CKKS_Scheme.encode_batch(values, ring=, scale=, n_threads=)`: encode
-  many vectors in one native call (`complex_values_ifft_scale_round_to_RNS_batch`,
-  on `vfhe_parallel_for`). `encode` is one such call, so the two agree bit
-  for bit. A contiguous buffer of complex doubles, such as a numpy
-  `complex128` array, is read in place; any other sequence is converted in
-  one pass. `CKKS_LinearTransform` encodes its diagonals this way, rotating
-  them by index rather than by copying, a chunk at a time, and takes
-  `n_threads`. At N = 2^15 over two primes, a diagonal costs 1.6 ms given as
-  a list and 1.0 ms as a buffer on one thread, and 0.21 ms on eight, where it
-  took 7.1 ms (i7-11850H, avx512ifma).
-- Generate keys on several threads. Every key generator samples through
-  `MLWE_Scheme.sample_scaled` (`mlwe_RNS_sample_scaled_batch`, on
-  `vfhe_parallel_for`): `gen_ksk`, `gen_rlk`, `gen_ksk_automorphism(_set)`,
-  `gen_ksk_trace`, `MGSW_Scheme.encrypt`, `CGGI16.generate_bootstrap_key`,
-  GP25's `generate_sparse_ternary_key` and `gen_packing_ksk`, and the CKKS and
-  BFV rotation and conjugation keys, each of which takes `n_threads` (0, the
-  default: the library limit, `vfhe.engine.set_num_threads`). A sample's mask
-  is expanded from a seed, kept as `MLWE.seed` as `sample` keeps it, and its
-  noise from a secret seed of its own (`prng_normal_seeded`); every seed is
-  drawn in order on the calling thread, so the keys do not depend on the
-  thread count, and under `entropy.deterministic` any count gives the same
-  keys. A bootstrapping key is one batch, its constants folded into the gadget
-  scalars, and `gen_ksk_automorphism_set` draws a level's keys in one batch.
-  At N = 2048 over five 42-bit primes, a CGGI bootstrapping key for n = 918
-  takes 1.05 s on one thread and 0.23 s on eight at rank 1, and 4.3 s and
-  0.87 s at rank 4, where it took 2.9 s and 11.2 s before (i7-11850H,
-  avx512ifma).
-- Add `MGSW_Scheme.encrypt_constants(values, key)`: MGSW encryptions of
-  constant polynomials as one batch, which is what a bootstrapping key is.
-- Add `prng_normal_seeded` (C): `generate_normal_random`'s rounded draw as a
-  function of a seed, for parallel kernels that must not depend on their
-  thread count.
-- Add `MLWE(..., obj=)`: adopt a native sample.
 - Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix` on an
   unsplit ring: a row is now read with `ffi.unpack` and written with one
   packed `ffi.memmove` instead of element by element. `BFV_Scheme.encode` /
-  `decode` at N=4096 go from 1.9 / 2.1 ms to 0.27 / 0.29 ms; CKKS `decode`
-  reads its coefficients through the same path.
+  `decode` at N=4096 go from 1.9 / 2.1 ms to 0.27 / 0.29 ms.
 - Correct `Polynomial.base_extend`'s documented contract: it returns a value
   congruent to this element modulo the ring's modulus, not the element
   itself. Behaviour is unchanged; the docstring claimed exactness the fast
@@ -201,23 +28,260 @@ versions may contain breaking changes.
   already behind `base_extend`, which writes `x + u * M`; `exact=True` removes
   that overflow, for about a tenth again of the cost, for a value the caller
   keeps clear of the ends of its range. Existing conversions are unchanged.
-- Add `fhe.BFV_Scheme`: BFV over `vfhe.mlwe`, with the plaintext modulus taken
-  from the ciphertext ring's lowest primes so that `Delta = q/t` is exact.
-  Batched encoding into `N` slots (two rows of `N/2`), encrypt/decrypt,
-  plaintext and ciphertext multiplication with relinearization, slot rotation
-  and conjugation, and modulus switching.
+- Add `Polynomial.rescale_to_power_of_two(k)`: `round(2^k * c / q)` for every
+  coefficient, on centered representatives, as `N` machine words. It is the
+  rescale for a target modulus that is not a product of base primes -- how an
+  element leaves for a scheme that works at a power of two -- which
+  `round_division` and `scaled_lift` between them cannot express. Exact, with
+  no floating point anywhere in the rounding.
 - Add `FieldVector.sample_random_at(seed, indices)`: the seeded elements at
   scattered positions of the sequence `sample_random` fills from, in one call.
 - Add `Field.digest_elements(elements)`: the digest of a few elements without
   building a vector to hold them.
 - Add `FieldVector.padding_unit`, the width `view`'s `start` and `length` must
   be multiples of -- stated by `view` before, but not obtainable.
-- Add `MerklePath.from_bytes(packed)`, and `FoldableRS.fold_pairs` /
-  `leaf_digests_of` for a set of positions rather than one.
 - Add `FieldVector.fma_interleave(a, b, c_even, c_odd)`: `a + b * c_even` and
   `a + b * c_odd` written straight into one vector of twice the length.
 - Add `FieldVector.fold_twisted(twist2_inv, twist, r)`: a vector of
   `(P(x), P(-x))` pairs folded to half its length in one call.
+- Add `layout=` to `ExtensionFieldNTT.pack` / `unpack`: a caller says
+  whether it holds a batch by blocks (the default, as before) or interleaved,
+  and the conversion to and from the plan's own layout follows from that and
+  the domain.
+- Add `FieldVector.lift_twisted(a, b, twist, out=None)`: `a + b * t` and
+  `a - b * t` interleaved into one vector of twice the length, as one kernel
+  call that forms the product once per pair and reads a table shorter than `a`
+  cyclically rather than tiled. The inverse move to `fold_twisted`.
+- Add prime-subfield tables to the extension field's vectors: `mul`, `fma`,
+  `fold_twisted` and `lift_twisted` take a vector over the degree-1 field with
+  the same prime and multiply plane-wise (`field_vec_mul_plane` /
+  `field_vec_fma_plane`: `d` prime-field products per element in place of the
+  extension product).
+- Add `mod_eltwise_inner_product_addto` and
+  `polynomial_matrix_mul_addto_RNS_polynomial` (C, `arith.h`): element-wise
+  inner products with one reduction per element, and the product `a * b^T` of
+  matrices of ring elements. Also `polynomial_new_RNS_polynomial_rows`, a
+  polynomial with only its mask's rows allocated.
+- Add `MerklePath.from_bytes(packed)`, and `FoldableRS.fold_pairs` /
+  `leaf_digests_of` for a set of positions rather than one.
+- Add `entropy.below_many(count, bound)` (`vfhe.crypto`; native
+  `generate_uniform_below`): values exactly uniform in `[0, bound)` by
+  rejection sampling, so a draw reveals only how many values were redrawn.
+- Add `prng_normal_seeded` (C): `generate_normal_random`'s rounded draw as a
+  function of a seed, for parallel kernels that must not depend on their
+  thread count.
+- Add seed expansion (`expand.c`): `prng_expand_key` derives a key from a seed
+  and a label, and `prng_expand_below` / `prng_expand_below32` expand it into
+  values below a bound by AES-128 in counter mode (`prng_aes128_ctr`), the
+  same sequence on every engine. It replaces `aes_rng.c` as the entropy
+  stream's AES-NI expander. Also `Blake3Stream` (`hash_stream_*`),
+  incremental BLAKE3.
+- Add `dynamic_extensions.compile(reuse=True)`: hand the process over to an
+  earlier build of the same inputs in `output_dir`, when one is there and
+  still newer than the `libvfhe_<engine>.a` it links, and compile only
+  otherwise. The same inputs means the same registered sources and
+  declarations, the same `extra_compile_args` / `extra_link_args`, the same
+  compiler at the same version, and the same engine -- all of which the
+  module's name now carries, so one set of sources built under two sets of
+  flags gives two modules and neither answers for the other. Reuse is the
+  library's to offer because that name is: a caller naming the module for
+  itself either rebuilds every time or loads a module built for other flags
+  or another ABI.
+- Add native multithreading under one library-wide limit:
+  `vfhe.engine.set_num_threads(n)` / `num_threads()` (C `vfhe_set_num_threads`
+  / `vfhe_num_threads`), defaulting to `VFHE_NUM_THREADS` or else 1 (single
+  threaded) and kept across `dynamic_extensions` reloads. Operations taking
+  `n_threads` use up to the limit by default and never exceed it: single
+  operations (key switch, automorphism, multiplication, relinearization,
+  round division and rescale, domain conversions) split over the ring's
+  primes from N = 4096 up, and batches over their items.
+  `vfhe.engine.local_num_threads(n)` (C `vfhe_set_local_num_threads` /
+  `vfhe_local_num_threads`) limits the threads of the calls one thread makes,
+  and a parallel call inside another gets only its share of the outer call's
+  threads (`vfhe_share_for`), so nesting never goes past the limit. Results
+  do not depend on the thread count. The native loop is `vfhe_parallel_for`
+  (util), with helper threads kept asleep between calls. The complex-FFT
+  batch, which always used 8 threads, follows the limit too. A CKKS rotation
+  at N = 2^14 over 17 primes runs about 6x faster on 96 cores than on one.
+- Add a memory pool for the buffers the library allocates and frees
+  repeatedly (`vfhe.engine.memory_pool`; C `mempool_*`): a released RNS
+  polynomial row, field or pseudo-Mersenne vector, or complex polynomial is
+  kept by the releasing thread and handed out again for the next request of
+  its size. At N = 2^14 the CKKS batch calls went from thousands of minor page
+  faults per call to none. `set_capacity(n_bytes | "auto" | None)` bounds what
+  it keeps: `"auto"` (the default) at most the library's peak use, so a
+  process keeps its peak working set resident; `0` turns it off.
+  `release_all()` hands back what it keeps, and `statistics()` reports it
+  (`peak_outstanding_bytes` may miss a short-lived peak by a few MiB per
+  thread). `set_wipe_on_release(True)` zeroes every buffer as it is released
+  (off by default). `VFHE_MEMPOOL_CAPACITY` and
+  `VFHE_MEMPOOL_WIPE_ON_RELEASE=1` set the defaults, and both settings survive
+  `dynamic_extensions` reloads. A sanitized build bypasses the pool.
+- Add serialization, `vfhe.io`: `Serializer.dump` / `dumps` write one value
+  per stream -- a vfhe object, `None`, a JSON scalar, or lists, tuples and
+  dicts of values -- and `load` / `loads` read it back, binding each scheme to
+  the caller's with the same primes and parameters (`schemes=`, `rings=`).
+  Shared objects such as rings and schemes are written once. Codecs cover RNS
+  rings and polynomials, MLWE and MGSW schemes, samples, key-switch keys, MGSW
+  ciphertexts, LWE samples and keys, the CKKS and BFV schemes, CKKS
+  ciphertexts, `SAB_Key`, `CGGI16_Key` and `CKKS_LinearTransform`; `register`
+  adds a `Codec`. Secret keys are written only by `dump_secret` /
+  `dumps_secret`. `Options` (presets in `PROFILES`: `"default"`, `"compact"`,
+  `"fast"`): `seeded` (default) stores a fresh sample or key as its 32-byte
+  mask seed and its body, halving its size; `packing="tight"` stores each
+  residue in exactly the bits its prime needs; `domain` picks the rows'
+  domain; `checksum` and `validate` (both default) check records and residues
+  on load.
+- Add `MLWE_Scheme.key_gen(sigma_err, distribution="ternary")`: a key with
+  every coefficient uniform in `{-1, 0, 1}`.
+- Add `MLWE(..., obj=)`: adopt a native sample.
+- Add `MLWE.from_components(scheme, a, b, lvl=None)`: the sample with mask
+  `a` and body `b`, copied from the polynomials (which may be temporaries, in
+  either domain), over a level of the scheme or another of its rings.
+- Add `MLWE.mod_reduce(ring | lvl)`: a ciphertext reduced into a smaller
+  level in place, the value kept rather than divided -- CKKS's level drop.
+- Add `MLWE.multiply_by_monomial(exponent, minus_one=False)`: the sample
+  times `X^exponent` (or `X^exponent - 1`), any integer exponent, keeping its
+  ring (special primes included), level, type (a CKKS ciphertext keeps its
+  `delta`) and representation. And `MGSW.multiply_by_monomial`, the same on
+  every row, which turns an MGSW of `m` into one of `m * X^exponent`.
+- Add hoisted automorphisms: `MLWE_Scheme.automorphisms(c, gens, ksks)`
+  applies several automorphisms to one ciphertext, decomposing it against the
+  gadget once for every key switch (both gadgets): 16 rotations at N = 2^14
+  are about 1.5x faster. Natively `mlwe_hoist` /
+  `mlwe_automorphism_RNSc_GHS_hoisted`, and the automorphism of a fully split
+  ring's NTT representation, `polynomial_RNS_automorphism_index` /
+  `polynomial_RNS_permute`.
+- Add `MLWE_Scheme.automorphism_batch(cts, gens, ksks)`, one automorphism
+  each on several ciphertexts in either domain, and
+  `MLWE_Scheme.automorphism_sum(cts, gens, ksks)`: `sum_i
+  Aut_gens[i](cts[i])` with a single division by the special primes for all
+  the key switches.
+- Add the automorphism multiplexer (the B-to-1 mux-rotate of [CHKS25]):
+  `MLWE_Scheme.automorphism_mux(c, gens, ksks)` computes `sum_d b_d Aut_d(c)`
+  for bits `b_d` encrypted in the keys (`gen_automorphism_mux_keys`),
+  decomposing `c` once and dividing by the special primes once;
+  `automorphism_mux_batch` runs many. Also `gadget_mul_addto_automorphism`.
+- Add `MLWE_Scheme.linear_combination(cts, coefficients)` /
+  `linear_combinations(cts, rows)`: ciphertexts combined with plaintext
+  coefficients in one pass, for one or several rows of coefficients, and
+  `mlwe.PlaintextMatrix`, such rows prepared once for reuse.
+- Add `MLWE_Scheme.multiply_batch(lhs, rhs, ksk, n_threads, *, lvl=None)`:
+  several products in one native call, each also round-divided to level
+  `lvl` when given; and `round_division_batch(cts, lvl)`.
+- Add `MLWE_Scheme.trace_pack(vec, ksk, n_threads=0)` (`mlwe_trace_pack`):
+  the trace packing of [CDKS21] with each level's difference halved before
+  its automorphism, after [LY26]'s reverse homomorphic trace. The packed
+  values keep their scale, and each level's key-switch noise is added once
+  instead of being doubled by every level above it: at N = 256, 5 instead of
+  12 bits of noise packing 256 samples. Each level's packings run in
+  parallel.
+- Add `MLWE_Scheme.normalized_trace(c, ksk, n=1)` (`mlwe_normalized_trace`):
+  the normalized trace onto the subring `Z[X^(N/n)]` [AP13], each level
+  halved before its automorphism as in [LY26] -- the coefficients at the
+  multiples of `N / n` at their scale and zero elsewhere, with the noise of
+  `log2(N / n)` key switches. It takes the ascending automorphism keys of
+  `trace_pack`; `trace` keeps its factor `N` and its keys.
+- Add ring switching [GHPS12] between `R_N` and `R_n` when one dimension
+  divides the other, `R_n` being `Z[X^k]` inside `R_N`:
+  `MLWE_Scheme.ring_switch(c, ksk)` takes a sample of a scheme of the other
+  dimension to the level of this one with the same primes, and
+  `gen_ring_switch_key(key_out, key_in, lvl, gadget_params=None,
+  n_threads=0, hybrid=True)` makes its key, between any two ranks. Down, the
+  sample is read as one of rank `r k` over `R_n` and decrypts to the
+  coefficients `k m` of the message; up, a list of up to `n / N` samples is
+  interleaved coefficient by coefficient. The noise is one key switch's.
+  Native `mlwe_ring_switch`, `mlwe_project_subring`, `mlwe_embed_subring`;
+  `MLWE_Scheme.level_with_primes(ring)` finds the level over a ring's primes.
+- Add LWE extraction and the packing key switch to `MLWE_Scheme`:
+  `extract_lwe(c, idx)`, `gen_packing_ksk(key_out, lwe_key, lvl=0,
+  gadget_params=None, n_threads=0)` and `packing_keyswitch(extracted,
+  packing_key, lvl=0)`, which takes samples of another ring dimension over
+  the same primes (matched by value) and keys of either gadget.
+- Add MGSW internal products, automorphisms and noiseless keys:
+  `MGSW.internal_product(other)` (also `MGSW * MGSW`, native
+  `mgsw_internal_product`), an MGSW of the product of the messages;
+  `MGSW_Scheme.automorphism(c, g, aut_key, relin_key)` (`mgsw_automorphism`),
+  the MGSW of `m(X^g)`; and `MGSW_Scheme.trivial(msg)` (`mgsw_trivial`), the
+  gadget matrix times `msg`. Without special primes the keys are of level 0
+  (pair them with the radix gadget); with special primes the product and
+  automorphism keys come from a scheme with one more special prime, and a
+  product adds 5-7 bits of noise to the next external product, against 39 for
+  the radix route.
+- Add `CMUX_batch(in1, in2, selector, n_threads=0)` (`vfhe.mlwe`): the
+  multiplexers of many pairs by one MGSW selector in one native call
+  (`mgsw_CMUX_batch`), in parallel, with the results left canonical.
+- Add `mgsw_shift_sequences` (C, `mlwe.h`): shifts sequences of samples by an
+  encrypted amount `d <= 3` given as one-hot MGSW keys, `y_i = x_(i+w-d)`.
+- Generate keys on several threads: every key generator samples through
+  `MLWE_Scheme.sample_scaled` (`mlwe_RNS_sample_scaled_batch`) and takes
+  `n_threads` -- the `gen_*` key-switch keys, `MGSW_Scheme.encrypt`, the CKKS
+  and BFV rotation and conjugation keys, and the bootstrapping keys of
+  `CGGI16`, `GP25` and `SHIP`. Each sample's mask comes from a seed, kept as
+  `MLWE.seed`, and its noise from a secret seed (`prng_normal_seeded`), all
+  drawn in order on the calling thread, so the keys do not depend on the
+  thread count. `MGSW_Scheme.encrypt_constants(values, key)` encrypts
+  constant polynomials as one batch, which is what a bootstrapping key is. A
+  CGGI16 bootstrapping key at N = 2048 for n = 918 is about 4.5x faster on
+  eight threads than on one.
+- Add `fhe.BFV_Scheme`: BFV over `vfhe.mlwe`, with the plaintext modulus taken
+  from the ciphertext ring's lowest primes so that `Delta = q/t` is exact.
+  Batched encoding into `N` slots (two rows of `N/2`), encrypt/decrypt,
+  plaintext and ciphertext multiplication with relinearization, slot rotation
+  and conjugation, and modulus switching.
+- Add `ring=` and `scale=` to `CKKS_Scheme.encode`: the ring the plaintext
+  lives in (default: level 0's) and the factor the values are scaled by
+  (default: `scaling_factor`), e.g. for a ciphertext further down the chain.
+  A contiguous buffer of complex doubles, such as a numpy `complex128` array,
+  is read in place.
+- Add `CKKS_Scheme.encode_batch(values, ring=, scale=, n_threads=)`: many
+  vectors encoded in one native call
+  (`complex_values_ifft_scale_round_to_RNS_batch`, also
+  `ComplexRing.values_ifft_scale_round_to_RNS_batch`). `encode` is one such
+  call, so the two agree bit for bit.
+- Add `CKKS_Scheme.multiply_plain(ciphertext, plaintext, scale)`: a plaintext
+  product without the rescale, with `delta` multiplied by the plaintext's
+  `scale` (default: `scaling_factor`; 1 for an unscaled plaintext), so
+  several products can be summed before one rescale. `ciphertext *
+  plaintext` is this followed by `rescale`.
+- Add `CKKS_Scheme.linear_combination(cts, coefficients, scale)` /
+  `linear_combinations(cts, rows)`, the `MLWE_Scheme` ones with `delta`
+  tracked, and `CKKS_Scheme.conjugate` / `gen_conjugation_key`.
+- Add `CKKS_Scheme.multiply_batch(lhs, rhs, ksk, n_threads, *, lvl=None)`,
+  which rescales each product to `lvl` in the same native call when given,
+  and `rescale_batch(cts)`.
+- Add `CKKS_Scheme.product(cts)`: the product of ciphertexts as a balanced
+  tree, `ceil(log2(n))` levels deep.
+- Add `fhe.CKKS_LinearTransform`: a slot matrix, given by its diagonals and
+  acting on every block of `n` slots, encoded once for a level (through
+  `encode_batch`) and applied by baby-step giant-step with hoisted baby
+  rotations and `automorphism_sum` for the giant steps; `rotations` lists the
+  keys it needs, and `apply` runs in parallel. `slot_to_coeff` /
+  `coeff_to_slot` build SlotToCoeff and its inverse, for any `n` dividing
+  `N/2`.
+- Add a native CGGI16 blind rotation (`cggi16_blind_rotate`, on the
+  library's threads) with an optionally unfolded loop [ZYL+17, BMMP18]:
+  `CGGI16(scheme, gsw_ell=None, unfolding=1, gadget_params=None)` consumes
+  `unfolding` input coefficients per step for one gadget decomposition, with
+  `2^u - 1` MGSW keys per step of `u` coefficients, which pays where the
+  synchronization between steps dominates (many threads).
+  `functional_bootstrap_batch(outs, tv, inputs, bk, torus_base)` runs one
+  rotation per thread (`cggi16_blind_rotate_batch`). `gadget_params` is the
+  bootstrapping key's gadget (the RNS one by default). `generate_bootstrap_key`
+  raises `ValueError` for a non-binary input key, and `CGGI16_Key` records `n`
+  and `unfolding`.
+- Add the SHIP bootstrap [CHKS25] (`vfhe.fhe.SHIP`, `SHIP_Key`): bootstraps
+  `N/2` real slots using only the `ceil(log2(h + 1))` levels of a product
+  tree, `h` the input key's Hamming weight. `SHIP.sample_input_key` draws the
+  sparse key (one coefficient per public window) and `generate_bootstrap_key`
+  the keys; `bootstrap` (also `half_bootstrap`, `blind_rotate`) runs natively
+  on the library's threads. Inputs come at the SlotToCoeff level at
+  `input_scale`, and outputs leave at `output_lvl` and `output_scale`, by
+  default the scale that comes back to `input_scale` when every level in
+  between multiplies and rescales, so bootstrap, multiply, bootstrap needs no
+  rescaling of its own. At the paper's LL13 parameters (N = 2^13): about 5.1
+  bits of worst-slot precision. Native encoders `ship_encode_pi` /
+  `ship_encode_pt0`.
 - Add `FoldableRS.relative_distance(security_bits)` /
   `FieldFoldableRS.relative_distance(security_bits)`: a lower bound on the
   code's relative minimum distance, which is the `delta`
@@ -233,419 +297,56 @@ versions may contain breaking changes.
 - Add `instantiation=` and `seed=` to `FoldableRS` / `FieldFoldableRS`, with
   `polycom.INSTANTIATIONS` and `polycom.DEFAULT_SEED`; and `twists_odd`, the
   odd-position twists `-T`, derived from `twists` on request.
-- Add `layout=` to `ExtensionFieldNTT.pack` / `unpack`: a caller says
-  whether it holds a batch by blocks (the default, as before) or interleaved,
-  and the conversion to and from the plan's own layout follows from that and
-  the domain.
-- Add `FieldVector.lift_twisted(a, b, twist, out=None)`: `a + b * t` and
-  `a - b * t` interleaved into one vector of twice the length, as one kernel
-  call that forms the product once per pair and reads a table shorter than `a`
-  cyclically rather than tiled. The inverse move to `fold_twisted`.
-- Add prime-subfield tables to the extension field's vectors: `mul`, `fma`,
-  `fold_twisted` and `lift_twisted` take a vector over the degree-1 field with
-  the same prime and multiply plane-wise (`field_vec_mul_plane` /
-  `field_vec_fma_plane`: `d` prime-field products per element in place of the
-  extension product).
-- Add `twist_field="field" | "prime"` to `FieldFoldableRS` (`polycom.TWIST_FIELDS`):
-  the general code's twists drawn from the whole field (the default) or from
-  its prime subfield, with `relative_distance` on the twists' field. Prime
-  twists make every lift and fold plane-wise, for more queries at the same
-  soundness.
+- Add `twist_field="field" | "prime"` to `FieldFoldableRS`
+  (`polycom.TWIST_FIELDS`): the general code's twists drawn from the whole
+  field (the default) or from its prime subfield, with `relative_distance` on
+  the twists' field. Prime twists make every lift and fold plane-wise, for
+  more queries at the same soundness.
 - Add `polycom.batch_inverse(values, p)`: modular inverses by Montgomery's
   trick, which is how `FoldableRS` now builds its fold tables (one
   exponentiation per level and prime rather than one per entry).
 
-- Add `Polynomial.rescale_to_power_of_two(k)`: `round(2^k * c / q)` for every
-  coefficient, on centered representatives, as `N` machine words. It is the
-  rescale for a target modulus that is not a product of base primes -- how an
-  element leaves for a scheme that works at a power of two -- which
-  `round_division` and `scaled_lift` between them cannot express. Exact, with
-  no floating point anywhere in the rounding.
-- Add `dynamic_extensions.compile(reuse=True)`: hand the process over to an
-  earlier build of the same inputs in `output_dir`, when one is there and
-  still newer than the `libvfhe_<engine>.a` it links, and compile only
-  otherwise. The same inputs means the same registered sources and
-  declarations, the same `extra_compile_args` / `extra_link_args`, the same
-  compiler at the same version, and the same engine -- all of which the
-  module's name now carries,
-  so one set of sources built under two sets of flags gives two modules and
-  neither answers for the other. Reuse is the library's to offer because that
-  name is: a caller naming the module for itself either rebuilds every time or
-  loads a module built for other flags or another ABI.
-- Add `ring=` and `scale=` to `CKKS_Scheme.encode`: the ring the plaintext
-  lives in (default: level 0's) and the factor the values are scaled by
-  (default: `scaling_factor`), e.g. for a ciphertext further down the chain.
-- Add `CKKS_Scheme.multiply_plain(ciphertext, plaintext, scale)`: a plaintext
-  product without the rescale, with `delta` multiplied by the plaintext's
-  `scale` (default: `scaling_factor`; 1 for an unscaled plaintext), so
-  several products can be summed before one rescale. `ciphertext *
-  plaintext` is this followed by `rescale`.
-- Add hoisted automorphisms: `MLWE_Scheme.automorphisms(c, gens, ksks)`
-  applies several automorphisms to one ciphertext, decomposing it against the
-  gadget once and reusing the digits for every key switch (each automorphism
-  permutes them instead of recomputing them). Both gadgets are supported. 16
-  rotations at N=2^14 over nine primes: 1.4-1.6x faster on avx512ifma, 2.4x
-  on portable. Natively, `mlwe_hoist` / `mlwe_automorphism_RNSc_GHS_hoisted`,
-  and the automorphism on the NTT representation of a fully split ring,
-  `polynomial_RNS_automorphism_index` / `polynomial_RNS_permute`.
+### Changed
+
+- **Breaking:** The CKKS encoder and decoder (`ComplexRing`) run on a new
+  negacyclic FFT kernel (`fft_new_plan` / `fft_forward` / `fft_inverse` /
+  `fft_pointwise_mul`, native `FFT_Plan`) in place of the special-root
+  transforms; results agree to rounding. `ComplexRing(N)` no longer takes
+  `special_rous` and gains `plan` and `slot_positions`
+  (`complex_slot_positions`); the native
+  `complex_polys_ifft_scale_round_to_RNS_batch` takes `(plan, slots)` in
+  place of `(n_complex, log_prec, gs_ws)` and no longer overwrites its input.
+  Building a `CKKS_Scheme` at N = 2^16 takes milliseconds instead of seconds.
 - `Polynomial.automorphism` of an NTT-domain element on a fully split ring
   stays in the NTT domain (a reordering of the transform's points) instead of
   converting the element to coefficients first.
-- Add `fhe.CKKS_LinearTransform`: a slot matrix, given by its diagonals and
-  acting on every block of `n` slots, encoded once for a level and applied by
-  baby-step giant-step with hoisted baby rotations; `rotations` lists the keys
-  it needs, and `apply` runs the rotations and products in parallel.
-  `slot_to_coeff` / `coeff_to_slot` build SlotToCoeff and its inverse, for
-  any `n` dividing `N/2`. Full-packing SlotToCoeff at N=2^13: 0.57 s on one
-  thread, 0.18 s on eight (avx512ifma).
-- Add `CKKS_Scheme.linear_combination(cts, coefficients, scale)` /
-  `MLWE_Scheme.linear_combination`: ciphertexts combined with plaintext
-  coefficients in one pass, and `linear_combinations(cts, rows)` for several
-  rows of coefficients at once; `MLWE_Scheme.automorphism_batch`, one
-  automorphism each on several ciphertexts; and `CKKS_Scheme.conjugate` /
-  `gen_conjugation_key`.
-- Add `CKKS_Scheme.product(cts)`: the product of ciphertexts as a balanced
-  tree, `ceil(log2(n))` levels deep.
-- Add `MLWE_Scheme.automorphism_sum(cts, gens, ksks)`: `sum_i
-  Aut_gens[i](cts[i])` with a single division by the special primes for all
-  the key switches (one inverse transform, one round division, one rounding
-  error). Bit-identical for any thread count. `CKKS_LinearTransform.apply`
-  uses it for its giant steps.
-- Add `mlwe.PlaintextMatrix`: the coefficients of `linear_combinations`,
-  prepared once for reuse. `CKKS_LinearTransform` keeps one, so `apply` does
-  no per-diagonal work in Python.
-- `MLWE_Scheme.multiply_batch` / `CKKS_Scheme.multiply_batch` take `lvl=` to
-  also round-divide (CKKS: rescale) each product to that level in the same
-  native call, skipping a transform pair. `CKKS_Scheme.product` uses it on
-  nested chains. A 64-factor product at N=2^14 over 7 primes goes from 241
-  to 196 ms on 8 threads (avx512ifma; 2.8 to 2.3 s portable).
-- `MLWE_Scheme.automorphism_batch` accepts inputs in either domain and no
-  longer converts them in place. With the items above, full-packing
-  SlotToCoeff on 8 threads goes from 82 to 69 ms at N=2^13 and from 304 to
-  272 ms at N=2^14 (avx512ifma; 679 to 548 ms portable at 2^13).
-- `MLWE_Scheme.gen_ksk(..., hybrid=False)`: a key-switch key in the level's
-  own ring rather than its special ring, so the key switch divides by no
-  special prime (BV). For an output key that must stay at a small modulus,
-  such as a sparse one; pair it with a small `radix_log_base`.
-- `CKKS_Scheme.encode` takes any number of values dividing `N/2` and packs
-  fewer than `N/2` sparsely (repeated across the slots, so the plaintext is a
-  polynomial in `X^(N/2n)`); `decode(..., slots=n)` reads them back.
-- Add `MLWE.mod_reduce(ring | lvl)`: a ciphertext reduced into a smaller
-  level in place, the value kept rather than divided -- CKKS's level drop.
-- Add a library-wide limit on parallelism: `vfhe.engine.set_num_threads(n)` /
-  `num_threads()`, defaulting to `VFHE_NUM_THREADS` or else 1 (single
-  threaded), and kept across `dynamic_extensions` reloads. Every parallel operation
-  stays within it, and those taking `n_threads` (`automorphisms`,
-  `automorphism_batch`, `linear_combinations`, `CKKS_LinearTransform.apply`)
-  use all of it by default; gp25's `threads` is capped by it, so gp25 too is
-  single-threaded until the limit is raised. The threads are
-  native (`vfhe_parallel_for` in util), and a parallel operation started
-  inside another gets that operation's spare threads, so nesting never goes
-  past the limit. The complex-FFT batch, which
-  always used 8 threads, now follows the limit too.
-- Add a memory pool for the buffers the library allocates and frees
-  repeatedly (`vfhe.engine.memory_pool`). A released RNS polynomial row, field
-  or pseudo-Mersenne vector, or complex polynomial is kept by the thread that
-  released it and handed out again for the next request of its size, instead
-  of going back to the C library and being faulted in afresh. At N=2^14 the
-  CKKS batch calls (`multiply_batch`, `automorphism_batch`, hoisted
-  `automorphisms`) went from 1,700-3,500 minor page faults per call to none;
-  an allocating add of 128 MiB field vectors from about 1,100 to none; a
-  basefold evaluation proof over 2^20 coefficients from about 26,000 to 2,700.
-  What the pool keeps is bounded by `set_capacity(n_bytes | "auto" | None)`:
-  `"auto"` (the default) keeps at most the most the library ever had in use at
-  once, so a process keeps its peak working set resident -- about 280 MiB more
-  for that basefold proof. `0` turns the pool off, `release_all()` hands back
-  what it keeps, and `statistics()` reports it. `set_wipe_on_release(True)`
-  zeroes every buffer as it is released; off by default, as it costs a pass
-  over each buffer (estimated at 3-11% of a CKKS evaluation call).
-  `VFHE_MEMPOOL_CAPACITY`
-  and `VFHE_MEMPOOL_WIPE_ON_RELEASE=1` set the defaults, and both settings are
-  kept across `dynamic_extensions` reloads. An ASan build bypasses the pool.
-
-### Changed
-
-- `SHIP.bootstrap` returns at `SHIP.output_scale`, a new parameter of `SHIP`,
-  by encoding the product tree's first factor at the scale that leads there.
-  By default it is the scale that comes back to `input_scale` at the
-  SlotToCoeff level when each level in between squares and rescales, so a
-  bootstrap's output, multiplied, bootstraps again; before, the output was at
-  whatever the product tree left with every factor at the scheme's scale,
-  which on chains whose application primes differ from that scale gave a
-  second bootstrap a wrong `gamma` and garbage. Over the levels the tests use
-  (N = 2^8, LL13's chain), bootstrap, square, bootstrap keeps 7.2-7.5 bits
-  over three rounds, and a single bootstrap's precision is unchanged.
-- `gp25_rotate` and `gp25_blind_rotate` take `bits_per_layer` after the bit
-  count, and their keys are those of the layers of `gp25_rotation_layers` (one
-  per bit, as before, with `bits_per_layer` 1). `GP25.rotate`'s key list is
-  now named `keys`.
-- `GP25.rotate` and the blind rotation (`gp25_rotate`, `gp25_blind_rotate`)
-  allocate and free their scratch accumulators in parallel, and no longer
-  copy the result back when it ends in the scratch array: each of the
-  caller's samples takes over the scratch sample's components instead. The
-  caller's samples stay the same objects. Results are unchanged.
-- GHS key switches fill more threads. A gadget product with fewer key
-  primes than threads splits its digits into groups as well, each group
-  accumulating apart and the groups added before the inverse transform
-  (every `gadget_mul_*to_polynomial`, so the MGSW external product and
-  `CMUX` too). The batches -- `multiply_batch` with or without `lvl`,
-  `automorphism_batch`, and a single key switch, automorphism or product --
-  run each step of the key switch (digits, sum and inverse transform,
-  ModDown, rescale) as one parallel loop over all their samples' rows,
-  instead of one sample per task, unless one sample per task already keeps
-  three quarters of the threads busy. Results are bit-identical to before
-  for any thread count. On a 4-core laptop (avx512ifma, 4 threads, N = 2^14,
-  10 + 1 primes): a batch of 2 products with rescale 21.3 -> 12.8 ms, of 2
-  automorphisms 18.3 -> 11.1 ms; single operations 1.0-1.2x; batches as
-  wide as the threads unchanged. Adds `vfhe_share_for` to `util`: the
-  share of threads each body of a parallel loop is lent.
-- The CKKS encoder and decoder (`ComplexRing`) run on a new negacyclic FFT
-  kernel (`fft_new_plan` / `fft_forward` / `fft_inverse` /
-  `fft_pointwise_mul`, `vfhe.arith`'s native `FFT_Plan`), in place of the
-  special-root transforms `CT_NR` / `GS_RN` and their tables
-  (`load_rous_CT`, `load_rous_GS`, `bit_reverse_array`), which are removed.
-  Results agree to rounding (same error at every size), the slot order is one
-  table (`complex_slot_positions`) folded into the encoder's gather, and the
-  twiddles are built in C. **Breaking**: `ComplexRing(N)` no longer takes
-  `special_rous`, and loses `gen_special_rous`, `gen_special_rous_hp`,
-  `CT_rous` and `GS_rous` (it gains `plan` and `slot_positions`); the
-  native batch encoders and `ship_encode_pi` / `ship_encode_pt0` take
-  `(plan, slots)` in place of `(n_complex, log_prec, gs_ws)`.
-  `complex_polys_ifft_scale_round_to_RNS_batch` no longer overwrites its
-  input rows. At N = 2^16 (avx512ifma, laptop): `CKKS_Scheme` construction
-  3.9 s -> 9 ms, `decode` 1.54 -> 1.09 ms, `ComplexPolynomial.FFT()` 0.65 ->
-  0.23 ms.
-- `mpmath` is no longer a dependency: its only use was building the old
-  transform's root tables.
-- `MLWE_Scheme.trace_pack` runs the packings of each level in parallel and
-  takes `n_threads`; the native `mlwe_trace_pack` takes it as a new last
-  argument. Results do not depend on the thread count. 1024 samples at
-  N = 2^13 (avx512ifma, 4-core laptop): 1.51 s on one thread, 0.48 s on four.
-- The memory pool keeps its counts per thread: a thread reserves room under
-  the capacity a few MiB at a time and shares its outstanding count in steps
-  of the same size, so taking and releasing buffers touches no shared cache
-  line once working sets stop growing. The capacity is still a strict bound;
-  `retained_bytes`, `outstanding_bytes`, `hits` and `misses` stay exact,
-  and `peak_outstanding_bytes` (which the automatic capacity follows) is
-  exact on one thread and otherwise may miss a short-lived peak by up to a
-  few MiB per thread. A take-and-release pair on eight threads of a 4-core
-  laptop went from about 1.7 us to 0.1 us per thread (one thread: 79 ns to
-  50 ns).
-- The radix gadget decomposes into balanced digits by default, as the RNS
-  gadget already did: with `balanced` (the default of `MLWE_Scheme`, which
-  `MGSW_Scheme`, `MLWE_Set` and every key generator follow), each residue is
-  centered and split into base-`2^w` digits in `[-2^(w-1), 2^(w-1))`, the
-  top one taking the carry, instead of the unsigned digits of the residue.
-  The digit count and the keys are the same, and the decomposition stays
-  exact; the second moment is a quarter, so every radix product (key
-  switches, automorphisms, trace, ring-switch and packing keys, MGSW
-  products, GP25 and CGGI16) adds about one bit less noise standard
-  deviation, and the spread of that noise from one key to the next (the
-  unsigned digits' mean times the keys' errors) goes away. Measured at
-  N = 1024 over one 30-bit prime, `w = 4`: 2^10.97 to 2^10.30 against
-  2^10.30 predicted. The approximate decomposition rounds the same way. With
-  `w = 1` the balanced digits would be no smaller, so it keeps the unsigned
-  ones. Outputs change, what they decrypt to does not, and `balanced=False`
-  gives the previous ones bit for bit. The digit is the new
-  `polynomial_RNSc_decompose_digit_balanced`.
-- The division by the special primes after a gadget product (key switch,
-  automorphisms, hoisted and summed ones, trace, packing, MGSW products) is
-  the ModDown of hybrid key switching, `mlwe_mod_down(out, in, addend)`: the
-  fast base conversion of the value modulo P, in one fused pass per
-  remaining prime (`polynomial_mod_down_RNSc_prepare` / `_rows`), instead of
-  a rounding division by one special prime at a time, whose cost grew with
-  the square of their number. It writes straight into the output, with
-  what used to be added afterwards (the body, pass-through components, the
-  key-free terms of an automorphism sum) as one more term of the same pass,
-  so the accumulator is no longer copied out (about 0.1-0.3 ms of a key
-  switch at N = 2^14). It adds an error of at most half the number of special
-  primes: nothing with one special prime, about a bit at four. Measured at
-  N = 2^14, eight 45-bit primes, four special primes, avx512ifma: 1.6 ->
-  0.56 ms. The exact rounding division (`mlwe_round_division`:
-  rescale, level moves, decryption) is unchanged. Outputs change, what they
-  decrypt to does not.
-- `polynomial_RNSc_lifted_combination` sums its terms in one pass per row
-  (lazy Shoup products, one reduction at the end) where the rows are 64-bit:
-  an AVX-512 IFMA body for primes below 2^50, a scalar one on the portable
-  engine; elsewhere it takes the terms one at a time as before.
-- `MLWE_Scheme(ring, special_primes=k)` derives every level down to one
-  prime by default (`max_lvl` defaults to `len(ring.primes) - k`): with no
-  special primes the one-prime level used to be missing. `max_lvl` outside
-  `1 .. len(ring.primes) - k` raises `ValueError`.
-- `CKKS_Scheme.decrypt`'s default `message_bound` comes from the smallest
-  level with at least two bits above the scaling factor, rather than from the
-  last level whatever its size: a last level about as large as the scale
-  (one prime of the scale's size, as the default chain now reaches without
-  special primes) dropped decryptions to a modulus the message wraps around.
-- The native gadget products take their parameters as one struct
-  (breaking, C): `GadgetParams {log_base, digits, balanced}`, passed by
-  pointer, replaces the `log_base, balanced` pair of
-  `gadget_mul_addto_polynomial`, `gadget_mul_subto_polynomial`,
-  `gadget_decompose`, `gadget_decompose_digit`, `mlwe_new_RNS_ks_key`, the
-  `mgsw_*` products, `cggi16_blind_rotate(_batch)` and the `gp25_*` kernels,
-  and `RNS_MLWE_KS_Key` holds one (`gadget_params`) in place of the two
-  fields. The digit extraction rounds in place for the approximate
-  decomposition (`polynomial_RNSc_decompose_digit_rounded`), with no copy of
-  the residue.
-- Gadget parameters are one object in Python too (breaking):
-  `GadgetParams(log_base=None, digits=None)` (`vfhe.mlwe`; `None` is the RNS
-  gadget) replaces the `radix_log_base` (and `digits`) arguments of
-  `gadget_scalars`, `gen_ksk`, `gen_rlk`, `gen_ksk_automorphism(_set)`,
-  `gen_ksk_trace`, `gen_packing_ksk`, `gen_ring_switch_key`, `MLWE_Set`,
-  `MGSW_Scheme` and `GP25` (`gadget_params=`), and GP25's
-  `hw_reducing_radix_log_base` (`hw_reducing_gadget_params=`, by default
-  GP25's; `GadgetParams()` for the RNS gadget). `MLWE_Set` and
-  `MGSW_Scheme` expose `gadget_params` in place of `log_base` /
-  `radix_log_base` and `digits`; `GadgetParams.native(balanced)` builds the
-  native struct. The RNS digit's centering (`balanced`) stays on the scheme,
-  the key set and the MGSW scheme: keys do not depend on it.
-- GP25's output key is optional: `generate_bootstrap_key(input_key,
-  rotation_key, None, ...)` makes neither the Hamming-weight-reducing key nor
-  an output switch key, inputs come under the input key, and
-  `repack(blind_rotate(...))` leaves the result over `R_N` under the rotation
-  key (trace repacking only), for a caller that switches keys and rings at a
-  modulus of its own choosing: an output switch key at the output level puts
-  the output key at that modulus. The rotation splits in two:
-  `GP25.blind_rotate_exponents(a, b, tv, key)` rotates from exponents already
-  in `Z_2N`, and `blind_rotate` is the weight-reducing switch and the switch
-  to `Z_2N` in front of it. `GP25.repack(acc, key)` is public, and
-  `bootstrap` is `blind_rotate`, `repack` and the output switch. The
-  weight-reducing key takes its own gadget,
-  `generate_bootstrap_key(..., hw_reducing_gadget_params=)` (by default
-  GP25's).
-- GP25 repacks through the trace by default (`trace_repack=True`); pass
-  `trace_repack=False` for the packing key switch.
-- Remove `MLWE_Scheme.full_packing_keyswitch_scaled` and
-  `mlwe_full_packing_keyswitch_scaled`: `trace_pack` packs the same samples
-  without the factor and with less noise.
-- GP25's trace repacking (`trace_repack=True`) works for any `n` and `N`,
-  through ring switching: for `n <= N` the `n` accumulators pack into the
-  subring `Z[X^(N/n)]` of `R_N` (`log2 n` automorphism keys) and a ring
-  switch down projects onto it; for `n > N` each of the `n / N` interleaved
-  groups packs into `R_N` and one ring switch up interleaves them. The ring
-  switch also moves to the output key, at any rank, so trace repacking into
-  a key of another rank works too. `SAB_Key.output_switch_key` is now a
-  ring-switch key (`gen_ring_switch_key`), `None` only when `n == N` and the
-  rotation and output keys are one. The packing is `trace_pack` (below), so
-  the test vector no longer carries a factor `N^-1`. At N = 1024 over three
-  50-bit primes, the repacking keys are 1-3 MiB against 36-576 MiB for the
-  packing key switch (n = 256-4096), at 1-3 bits *less* output noise and a
-  similar repacking time. `MLWE_Scheme.ring_switch` takes a list of up to
-  `n / N` samples going up, interleaved coefficient by coefficient
-  (`mlwe_embed_subring` and `mlwe_ring_switch` take an array and a count).
-- Move LWE extraction and the packing key switch from GP25 to `MLWE_Scheme`
-  (breaking): `extract_lwe(c, idx)`, `gen_packing_ksk(key_out, lwe_key, lvl,
-  radix_log_base, n_threads)` and `packing_keyswitch(extracted, packing_key,
-  lvl)`. GP25's `rlwe_extract_lwe`, `gen_packing_ksk` and `packing_keyswitch`
-  are removed. The native key switching moved to its own sources
-  (`keyswitch.c`, `keyswitch_rns.c`), and the unimplemented LWE key switch
-  (`LWE_KS_Key`, `lwe_new_KS_key`, `lwe_keyswitch`) and the undefined
-  `mlwe_RNSc_extract_lwe` are removed from `mlwe.h`.
-- Rework GP25 (breaking). Three keys take part, all required: the output key,
-  a dense key over `R_n` that inputs arrive under (at the lowest level of its
-  scheme) and outputs leave under, so bootstraps compose; the input key, a
-  sparse key of the same scheme, which inputs are switched to first (the
-  Hamming-weight-reducing key switch, generated for that one level, so the
-  sparse key only has to be secure at that modulus); and the rotation key,
-  over `R_N`, which the blind rotation runs under. Any `n` and `N`: the
-  accumulators are repacked into one sample over `R_n` by a packing key switch
-  (coefficient k at k), or through the trace when `n == N`. The two schemes
-  share primes by value: level 0 of the rotation scheme must be a level of
-  the output key's, which is where outputs land. The blind rotation is one
-  native call, `gp25_blind_rotate`, with one parallel loop per layer on the
-  library's threads; the signed monomial of each accumulator runs inside the
-  last layer of its gap. Surface: `GP25(rotation_scheme, gsw_ell=,
-  radix_log_base=, trace_repack=)` (the radix gadget on every key);
-  `GP25.sample_input_key` (rejection sampling on every gap, the last
-  included) and `GP25.gaps`; `generate_bootstrap_key(input_key,
-  rotation_key, output_key, h, gap_bits, ternary=, hw_reducing_lvl=,
-  hw_reducing_hybrid=)`, where `ternary=False` takes a binary key without
-  sign keys; `test_vector(table)` from exact integers mod q, with the
-  rounding offset built in; `blind_rotate`, and `bootstrap(rlwe_in, tv, key)`,
-  which returns the output. The building blocks are public: `GP25.rotate`
-  (`gp25_rotate`, given the automorphism key) and
-  `GP25.multiply_by_signed_monomials` (`gp25_multiply_by_signed_monomials`).
-  Input keys of any rank. Removed: `threads=`, `generate_sparse_ternary_key`,
-  `sab_LUT_packing`, `sab_rlwe_bootstrap`, `setup_tv_xb`,
-  `sab_blind_rotate`, `sparse_mul`, `RGSW_monomial_mul`, `sub_a`,
-  `CMUX`/`NCMUX`/`mul_by_xai*` wrappers, `get_noise*`, `encrypt_bits`,
-  `extract_lwe_key` (use `MLWE_Key.extract_lwe_key`), and the
-  `gp25_RGSW_monomial_mul(_mt)` and `gp25_sub_a_mt` kernels. `SAB_Key`
-  holds `gaps`, `signs`, `gap_bits`, `n`, `automorphism_key`,
-  `hw_reducing_key` / `hw_reducing_lvl`, `output_lvl` and the packing or
-  trace keys, in place of `s`, `s_sign`, `r_prec` and `b_prec`; its
-  `hw_reducing_key` used to be applied after packing, at the bootstrapping
-  modulus, and only if a caller had set it. At n = N = 512 and 1024 (h = 16,
-  one 100-bit level), a bootstrap takes 13-23% less time on one thread and
-  27-37% less on eight (i7-1165G7, avx512ifma).
-- `mlwe_full_packing_keyswitch(out, in, size, ksk)` takes samples of another
-  ring dimension over the same primes (matched by value), decomposes through
-  the key's gadget (so it takes radix keys), and no longer takes the unused
-  `lvl`.
-- `mgsw_CMUX_to_coeff` and `mgsw_NCMUX_to_coeff` keep the external product
-  canonical, skipping a transform pair per call.
-
-- Single operations run on several threads: the key switch, automorphism,
-  multiplication (tensor product and relinearization), round division and
-  rescale, the domain conversions of a sample, and the decomposition and key
-  product of the hoisted automorphisms are split over the primes of the ring,
-  one task per prime, with the same result on any number of threads. They
-  use the library limit, and `keyswitch`, `automorphism`, `multiply`,
-  `relinearize`, `round_division`, and CKKS's and BFV's `rotate`,
-  `conjugate`, `rescale` and `multiply` take `n_threads`. A ring below
-  N = 4096 stays on one thread. A batch over fewer items than its threads
-  lends the spare ones to its items, when each gets at least four:
-  `multiply_batch` of two products on eight threads runs each on four. Add
-  `vfhe_set_local_num_threads` / `vfhe_local_num_threads` (C) and
-  `vfhe.engine.local_num_threads(n)`, a limit on the threads of the calls one
-  thread makes, below the library-wide one. On a 96-core Xeon 6975P-C (min of three), a rotation at N = 2^14
-  over 17 primes takes 3.9 ms on 192 threads against 25.5 ms before, a
-  multiplication 4.7 against 29.6 and a two-product batch 5.5 against 28.5;
-  over 10 primes 2.3, 3.1 and 3.4 ms against 9.8, 12.0 and 11.7; at N = 2^13
-  over 7 primes about 1.0 and 1.3 ms against 2.4 and 3.0. On one thread
-  they take 10-23 % less than before at N >= 2^13, and 3-4 % more at
-  N = 2^11, below the cut-off.
-- `vfhe_parallel_for` keeps its helper threads between calls and wakes only
-  the ones a call uses. Idle workers wait each on its own lock and condition
-  variable, most recently idle first; a call hands itself to up to
-  `threads - 1` of them and wakes one, each of which wakes two more, and takes
-  back the ones that have not started when its items run out. No lock is
-  taken by every call: the idle workers form a lock-free stack and a call's
-  helpers retire through a counter, so concurrent calls, and the short
-  per-prime loops of single operations, do not queue on one mutex. On a 96-core Xeon 6975P-C
-  with 191 idle workers, a call over two short items costs 37 us instead of
-  240 us, and the product tree of 64 CKKS ciphertexts at N = 2^14 (one
-  multiplication batch per layer) takes 67 ms instead of 105 ms at 8 threads
-  and 51 ms instead of 60 ms at 192 (median of three).
-- Key generation leaves its keys in the NTT domain: `MGSW_Scheme.encrypt` and
-  the key-switch key generators return samples in NTT form, which every
-  consumer converted them to anyway, without the round trip through the
-  coefficient domain each sample used to make. The values are unchanged in
-  distribution; a pinned stream gives other keys than before.
-- Rename the phase `b - <a, s>` to the linear decryption, the scheme-neutral
-  term: `MLWE_Scheme.phase` and `LWE.phase` become `linear_decrypt`, and the
-  native `mlwe_RNS_phase` / `lwe_phase` become `mlwe_RNS_linear_decrypt` /
-  `lwe_linear_decrypt`. The old names are removed.
-- `CKKS_Scheme.decode` reconstructs the coefficients natively
-  (`polynomial_RNSc_to_centered_doubles`: mixed-radix digits in modular
-  arithmetic, read in floating point only at the end, so exact up to the
-  doubles' rounding for any value) instead of a Python big-integer CRT per
-  coefficient: 550 -> 5.2 ms at N=2^14 over 8 primes, the same values to the
-  bit. The values are handed to Python as C `double _Complex` pairs, which
-  builds the list ten times faster than per element. On avx512ifma the
-  conversion of a single-prime plaintext to doubles, and encode's rounding of
-  doubles to integers, use the AVX-512 conversions (0.37 -> 0.017 ms for the
-  former at N=2^16).
-- `CKKS_Scheme.decrypt` returns the plaintext over the fewest primes that
-  hold it -- the last level for a ciphertext at the scheme's scale, higher for
-  one at a larger `delta` -- computing the linear decryption over those primes
-  only, so decrypting and decoding a level-0 ciphertext at N=2^16 over 9 primes
-  takes 2.65 ms instead of 21.9. `message_bound=` sets the bound on the slots
-  it assumes; `drop=False` keeps every prime.
-- `MLWE_Scheme.linear_decrypt` reuses a key over a wider ring instead of
-  rebuilding it for the ciphertext's ring, and takes `ring=` to compute it
-  modulo a quotient only; `MLWE_Key.at_ring(ring)` builds the key over another ring
-  once and keeps it. `Polynomial.mod_reduce` keeps the element's domain.
+- **Breaking:** Prime selection follows the ring's splitting. A partially
+  split ring keeps primes `1 mod 2N / split_degree` with an odd multiplier,
+  so that its residues are fields of size `p^split_degree` [CCCFGS25,
+  Sec. 3.1]; a fully split ring now also takes full-size primes with an even
+  multiplier instead of falling back to a smaller prime (at N = 2^11 and 16
+  bits, 40961 instead of 12289). Rings that had a full-size prime keep their
+  primes. `RNSRing.gen_prime` takes `split_degree` (keyword, required) and
+  raises `ValueError` when no prime is left, and a ring given its primes
+  (`primes=` or `mask=`) with `split_degree > 1` raises `ValueError` for a
+  prime with an even multiplier, which silently gave residues of size `p`.
+- `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` now raise when
+  the mask names primes outside the pool they are given, instead of dropping
+  them silently. `RNSRing.union` builds the ring over two rings' primes.
+- `Multiprecision.compute_crt_consts` raises for moduli its single-digit
+  Barrett step cannot serve (primes wider than 52 bits) rather than returning
+  constants that reconstruct incorrectly.
+- `ExtensionFieldNTT.pack` / `unpack`'s transpose goes through a tile buffer
+  with an odd stride, so both its memory sides are contiguous runs; at `2^22`
+  elements over `F_(p^4)` it takes 107 ms to about 50.
+- `FieldVector.query` also accepts a buffer of unsigned 64-bit indices, handed
+  to the gather as it stands; the kernel now range-checks them itself.
+- `FieldVector.hash_elements` / `hash_fibers` return a read-only `memoryview`
+  of the kernel's buffer rather than a copy. It compares, slices and converts
+  like `bytes`; `bytes(digests)` is the copy, and is what hashing or keying by
+  them needs.
+- `Merkle.from_digests` accepts any bytes-like and keeps it rather than
+  copying, so a mutable buffer stays connected -- `commit()` re-reads it.
 - `dynamic_extensions` names a compiled module after the flags it was built
   with and the compiler that built it, version included, as well as its
   sources and the active engine. Existing caches are invalidated, which is the
@@ -655,6 +356,138 @@ versions may contain breaking changes.
   the state bound to the old ones are one operation -- a reinitializer reaches
   the library through `vfhe.engine`, so it must run after the handles move --
   and callers no longer iterate the registry after calling it.
+- Allocations of 8 MiB and up ask the kernel for huge pages.
+  [`USAGE.md`](docs/USAGE.md) covers the allocator settings that go with it.
+- **Breaking:** Gadget parameters are one object. `GadgetParams(log_base=None,
+  digits=None, primes_per_digit=1)` (`vfhe.mlwe`; `log_base=None` is the RNS
+  gadget) replaces the `radix_log_base` argument of `gadget_scalars`,
+  `gen_ksk`, `gen_rlk`, `gen_ksk_for_level`, `gen_rlk_for_level`,
+  `gen_ksk_automorphism(_set)`, `gen_ksk_trace`, `MLWE_Set` and
+  `MGSW_Scheme` (`gadget_params=`, which the other key generators, `GP25`,
+  `CGGI16` and `SHIP` take too); `MLWE_Set` and `MGSW_Scheme` expose
+  `gadget_params` in place of `log_base` / `radix_log_base`. It adds two
+  decompositions. `primes_per_digit=a` groups the RNS digits, the `dnum` of
+  hybrid key switching [HK20]: the digit of a group of `a` primes is the value
+  modulo their product `Q_J`, lifted to every prime of the key by the fast
+  base conversion (`polynomial_RNSc_lifted_combination`), for about `a` times
+  fewer keys and products (a key switch about 1.6x faster with groups of 4 at
+  N = 2^14 over eight primes); the special modulus `P` has to cover a group,
+  which is not checked, and it does not combine with the radix gadget.
+  `digits` keeps only the top digits of each residue of the radix gadget, the
+  approximate decomposition, rounding the residue first; it holds over one
+  prime only and is refused at a level of more than one. In C, `GadgetParams
+  {log_base, digits, primes_per_digit, balanced}`, passed by pointer,
+  replaces the `log_base` argument of `gadget_mul_addto_polynomial`,
+  `gadget_mul_subto_polynomial`, `mlwe_new_RNS_ks_key` and the `mgsw_*`
+  products, and `RNS_MLWE_KS_Key.gadget_params` replaces `log_base`;
+  `GadgetParams.native(balanced)` builds it.
+- **Breaking:** Gadget digits are balanced by default (RNS and radix;
+  `balanced=False` restores the old outputs). With `MLWE_Scheme(...,
+  balanced=True)`, which `CKKS_Scheme` and `BFV_Scheme` pass through and the
+  scheme's keys and `MGSW_Scheme` follow (unless given `balanced`), the RNS
+  gadget decomposes into centered residues in `(-p_j/2, p_j/2]`, and the
+  radix gadget into base-`2^w` digits of the centered residue in
+  `[-2^(w-1), 2^(w-1))` (the top one taking the carry; `w = 1` keeps the
+  unsigned digits). The keys are the same and the digits' second moment is a
+  quarter, so every gadget product adds about one bit less noise standard
+  deviation at the same cost. Outputs change; what they decrypt to does not.
+  With balanced RNS digits, `MLWE_Scheme.automorphisms` gives the same
+  ciphertexts as `automorphism`. `vfhe.io` records the choice, and the C
+  `GadgetParams` carries it (`balanced`).
+- **Breaking:** The division by the special primes after a gadget product is
+  the ModDown of hybrid key switching (`mlwe_mod_down`), the fast base
+  conversion of the value modulo `P`, in place of a rounding division by one
+  special prime at a time, whose cost grew with the square of their number:
+  about 3x faster at four special primes, for an added error of at most half
+  their number. Outputs change; what they decrypt to does not. The exact
+  rounding division (`mlwe_round_division`: rescale, level moves,
+  decryption) is unchanged.
+- **Breaking:** Fresh samples and keys are drawn from seeds.
+  `MLWE_Scheme.sample` expands a sample's mask from a fresh 32-byte seed by
+  default (`prng_expand_below`) and keeps it as `MLWE.seed`, so `vfhe.io` can
+  store the sample as its seed; `sample(..., seeded=False)` or
+  `MLWE_Scheme.seeded_encryption = False` draws the mask directly. Key
+  generation samples the same way and leaves its keys in the NTT domain,
+  where they are used. Distributions are unchanged, but a pinned stream
+  (`entropy.deterministic`) gives other samples and keys than before.
+- **Breaking:** `MLWE_Scheme(ring, special_primes=k)` derives every level
+  down to one prime by default (`max_lvl` defaults to
+  `len(ring.primes) - k`): with no special primes the one-prime level used to
+  be missing, so such a scheme now has one more level. `max_lvl` outside
+  `1 .. len(ring.primes) - k` raises `ValueError`.
+- **Breaking:** Rename the phase `b - <a, s>` to the linear decryption, the
+  scheme-neutral term: `MLWE_Scheme.phase` and `LWE.phase` become
+  `linear_decrypt`, and the native `mlwe_RNS_phase` / `lwe_phase` become
+  `mlwe_RNS_linear_decrypt` / `lwe_linear_decrypt`. The old names are
+  removed.
+- `MLWE_Scheme.linear_decrypt` reuses a key over a wider ring instead of
+  rebuilding it for the ciphertext's ring, and takes `ring=` to compute it
+  modulo a quotient only; `MLWE_Key.at_ring(ring)` builds the key over
+  another ring once and keeps it. `Polynomial.mod_reduce` keeps the element's
+  domain.
+- `MLWE_Scheme.gen_ksk(..., hybrid=False)` (also `gen_ksk_for_level` and
+  `gen_ring_switch_key`): a key-switch key in the level's own ring rather than
+  its special ring, so the key switch divides by no special prime (BV). For
+  an output key that must stay at a small modulus, such as a sparse one; pair
+  it with a small radix, `GadgetParams(log_base=...)`.
+- **Breaking:** `mlwe_full_packing_keyswitch(out, in, size, ksk)` no longer
+  takes the unused `lvl`; it takes samples of another ring dimension over the
+  same primes (matched by value) and decomposes through the key's gadget, so
+  it takes radix keys.
+- `mgsw_CMUX_to_coeff` and `mgsw_NCMUX_to_coeff` keep the external product
+  canonical, skipping a transform pair per call.
+- `CKKS_Scheme.encode` takes any number of values dividing `N/2` and packs
+  fewer than `N/2` sparsely (repeated across the slots, so the plaintext is a
+  polynomial in `X^(N/2n)`); `decode(..., slots=n)` reads them back.
+- `CKKS_Scheme.decode` reconstructs the coefficients natively
+  (`polynomial_RNSc_to_centered_doubles`, exact up to the doubles' rounding
+  for any value) instead of a Python big-integer CRT per coefficient: about
+  100x faster at N = 2^14 over 8 primes, with the same values.
+- `CKKS_Scheme.decrypt(ciphertext, key, *, message_bound=None, drop=True)`
+  returns the plaintext over the fewest primes that hold it, the lowest level
+  whose modulus exceeds `2 * delta * message_bound`, computing the linear
+  decryption over those primes only (about 8x faster to decrypt and decode a
+  level-0 ciphertext at N = 2^16 over 9 primes). By default `message_bound` is
+  what the smallest level with at least two bits above the scaling factor
+  holds at the scheme's scale; `drop=False` keeps every prime.
+- **Breaking:** Rework GP25 [GP25]. `GP25(scheme, gsw_ell=None,
+  gadget_params=None, trace_repack=True, bits_per_layer=1)` rotates over
+  `scheme`, the rotation key's over `R_N`, and bootstraps every coefficient
+  of a sample over `R_n`, for any `n` and `N`. Three keys take part: the
+  output key, dense over `R_n`, which inputs arrive under (at the lowest level
+  of its scheme) and outputs leave under, so bootstraps compose; the input
+  key, a sparse key of the same scheme (`GP25.sample_input_key(scheme, h,
+  gap_bits, sigma_err)` draws one until every gap, `GP25.gaps`, fits in
+  `gap_bits`), which inputs are switched to by a Hamming-weight-reducing key
+  generated for one level only, so the sparse key only has to be secure at
+  that modulus; and the rotation key. Level 0 of `scheme` must have the
+  primes of a level of the output key's scheme, where outputs land.
+  `generate_bootstrap_key(input_key, rotation_key, output_key, h, gap_bits,
+  ternary=True, hw_reducing_lvl=None, hw_reducing_hybrid=True,
+  hw_reducing_gadget_params=None, n_threads=0)` makes the `SAB_Key` (`gaps`,
+  `signs`, `gap_bits`, `bits_per_layer`, `n`, `h`, `automorphism_key`,
+  `hw_reducing_key`, `hw_reducing_lvl`, `output_lvl`, and `packing_key` or
+  `trace_repack_key` and `output_switch_key`); input keys may have any rank,
+  and `ternary=False` takes a binary one. `output_key=None` switches nothing:
+  inputs come under the input key and `repack(blind_rotate(...))` leaves the
+  result over `R_N` under the rotation key, and
+  `generate_repacking_key(rotation_key, n)` makes only the keys `rotate` and
+  `repack` read.
+  `test_vector(table)` takes exact integers mod q. `bootstrap(rlwe_in, tv,
+  key)` is `blind_rotate` (the weight-reducing switch, the switch to `Z_2N`
+  and `blind_rotate_exponents`), `repack` and the output switch. The blind
+  rotation is one native call on the library's threads, `gp25_blind_rotate`,
+  built from `GP25.rotate(acc, keys, automorphism_key)` (`gp25_rotate`) and
+  `GP25.multiply_by_signed_monomials`. Repacking now goes through
+  `trace_pack` and a ring switch by default, for any `n`, `N` and rank, with
+  1-3 MiB of keys against 36-576 MiB for the packing key switch
+  (`trace_repack=False`) at N = 1024. `bits_per_layer=2` is BatchBoot's
+  multi-bit rotation [LWZ+26]: a pair of rotation bits of value `d` takes
+  three MGSW keys, of `[d = 1]`, `[d = 2]` and `[d = 3]`, while the pair's
+  power `p` has `4 p <= n` (`GP25.rotation_layers`), for 1.5 times the MGSW
+  keys, about 0.8 bit more rotation noise with the RNS gadget, and a rotation
+  about 1.4x faster; `encrypt_rotations(values, n_bits, n, key)` makes such
+  keys. See Removed for the previous surface.
 - **Breaking:** `FoldableRS` and `FieldFoldableRS` now build the general
   foldable code of [ZCF24, Def. 5] by default -- seeded twist tables at every
   level above a Reed-Solomon base code -- rather than a Reed-Solomon code on
@@ -665,7 +498,8 @@ versions may contain breaking changes.
   previous code is `instantiation="rs"`. What the change buys: no 2-adicity
   condition on the codeword length (`FieldFoldableRS` needed
   `2 n_d | p - 1`, `FoldableRS` needed `n_d | N/split_degree`); only the base
-  length `n0` wants a transform, and does without one where the field has none.
+  length `n0` wants a transform, and does without one where the field has
+  none.
 - `FoldableRS.twists` / `FieldFoldableRS.twists` are the general code's
   twist table `T` (the odd position uses `-T`, as in the paper), and the
   field code's are lists of elements rather than integers (a twist of the
@@ -677,169 +511,90 @@ versions may contain breaking changes.
   level-`l` message with one batched transform (`ExtensionField.ntt_plan(n0)`,
   in the base domain or, on a field with too little 2-adicity, the extension
   one) where it ran a Horner scheme of `k0` passes; at `k0 = 128` and a `2^20`
-  codeword over `F_(p^4)` the encode is 12x faster (1.69 s to 0.14 s, avx512ifma),
-  and a field whose only roots of unity lie outside `F_p` now has a transform
-  as its base encoder rather than a Vandermonde product.
+  codeword over `F_(p^4)` the encode is 12x faster (1.69 s to 0.14 s,
+  avx512ifma), and a field whose only roots of unity lie outside `F_p` now
+  has a transform as its base encoder rather than a Vandermonde product.
 - The general code's lifts are `lift_twisted` calls alternating between two
   buffers, in place of `fma_interleave` over a tiled and negated table into a
-  fresh destination per level: at a `2^22` codeword over `F_(p^4)` the lifts of
-  an 11-level encode go from 724 ms to 363 ms and the commit from 1.16 s to
+  fresh destination per level: at a `2^22` codeword over `F_(p^4)` the lifts
+  of an 11-level encode go from 724 ms to 363 ms and the commit from 1.16 s to
   0.88 s (avx512ifma); with `twist_field="prime"` the commit is 0.66 s.
-- `ExtensionFieldNTT.pack` / `unpack`'s transpose goes through a tile buffer
-  with an odd stride, so both its memory sides are contiguous runs; at `2^22`
-  elements over `F_(p^4)` it takes 107 ms to about 50.
 
-- `FieldVector.query` also accepts a buffer of unsigned 64-bit indices, handed
-  to the gather as it stands; the kernel now range-checks them itself.
-- `FieldVector.hash_elements` / `hash_fibers` return a read-only `memoryview`
-  of the kernel's buffer rather than a copy. It compares, slices and converts
-  like `bytes`; `bytes(digests)` is the copy, and is what hashing or keying by
-  them needs.
-- `Merkle.from_digests` accepts any bytes-like and keeps it rather than
-  copying, so a mutable buffer stays connected -- `commit()` re-reads it.
+### Removed
 
-- `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` now raise when
-  the mask names primes outside the pool they are given, instead of dropping
-  them silently. `RNSRing.union` builds the ring over two rings' primes.
-- `Multiprecision.compute_crt_consts` raises for moduli its single-digit
-  Barrett step cannot serve (primes wider than 52 bits) rather than returning
-  constants that reconstruct incorrectly.
-
-- Allocations of 8 MiB and up ask the kernel for huge pages.
-  [`USAGE.md`](docs/USAGE.md) covers the allocator settings that go with it.
-
-- The RNS gadget decomposes into balanced digits by default: centered
-  residues, in `(-p_j/2, p_j/2]`, rather than residues in `[0, p_j)`.
-  `MLWE_Scheme(..., balanced=True)` is the option, which `BFV_Scheme` and
-  `CKKS_Scheme` pass through and `MGSW_Scheme` follows unless given its own
-  `balanced`. The two digits agree modulo `p_j`, so the decomposition stays
-  exact and the keys are the same, and the centered one has a quarter of the
-  second moment, which is what the gadget products' noise grows with. Key
-  switches, automorphisms (hoisted ones included), relinearization, MGSW
-  external products and CMUX, the CGGI16 blind rotation and the LWE packing
-  key switch, all over the RNS gadget, add about one bit less noise standard
-  deviation at the same cost: at N = 2048 over five
-  42-bit primes, a GHS key switch's goes from 2^7.4 to 2^6.4, and a BV
-  external product's from 2^49.9 to 2^49.0. Their output ciphertexts change;
-  what they decrypt to does not, and `balanced=False` gives the previous
-  outputs bit for bit. With balanced digits, `MLWE_Scheme.automorphisms`
-  gives the same ciphertexts as `automorphism`: negating a centered digit
-  gives the centered digit of the negation. The radix gadget
-  (`radix_log_base`) is unchanged. `vfhe.io` records the choice with schemes,
-  MGSW schemes and key-switch keys. In C, a key-switch key carries the choice
-  (`mlwe_new_RNS_ks_key` takes `balanced`), and `gadget_mul_*`,
-  `gadget_decompose*`, `mgsw_*`, `gp25_*` and `cggi16_blind_rotate*` take it
-  as an argument. The digit is the new `polynomial_RNSc_mod_reduce_lifted_centered`,
-  one fused pass per prime at the cost of the `[0, p_j)` lift, which
-  `polynomial_RNSc_mod_reduce_lifted` still gives.
+- **Breaking:** `ComplexRing`'s `special_rous` argument, `gen_special_rous`,
+  `gen_special_rous_hp`, `CT_rous` and `GS_rous`, and the native special-root
+  transforms `CT_NR` / `GS_RN` with their tables (`load_rous_CT`,
+  `load_rous_GS`, `bit_reverse_array`), replaced by the FFT kernel.
+- `mpmath` is no longer a dependency: its only use was building the old
+  transform's root tables.
+- **Breaking:** `array_reduce_mod_N` and `array_mod_switch_from_2k` (C,
+  `util.h`), whose only uses were the biased uniform sampling fixed below.
+- **Breaking:** `MLWE_Scheme.phase`, `LWE.phase`, `mlwe_RNS_phase` and
+  `lwe_phase`; use `linear_decrypt` (see Changed).
+- **Breaking:** `MLWE_Scheme.full_packing_keyswitch_scaled` and
+  `mlwe_full_packing_keyswitch_scaled`: `trace_pack` packs the same samples
+  without the factor and with less noise.
+- **Breaking:** The unimplemented LWE key switch (`LWE_KS_Key`,
+  `lwe_new_KS_key`, `lwe_keyswitch`) and the undefined
+  `mlwe_RNSc_extract_lwe`, from `mlwe.h`.
+- **Breaking:** GP25's previous surface (see the rework in Changed):
+  `GP25(..., debug_key=, threads=)`, `generate_sparse_ternary_key` (use
+  `sample_input_key` and `generate_bootstrap_key`), `encrypt_bits`,
+  `sab_rlwe_bootstrap` (use `bootstrap`), `sab_blind_rotate`, `setup_tv_xb`,
+  `sab_LUT_packing` (use `test_vector`), `sparse_mul`, `RGSW_monomial_mul`,
+  `sub_a`, the `CMUX` / `NCMUX` / `mul_by_xai` / `mul_by_xai_minus_1`
+  wrappers, `get_noise` / `get_noise_stderr`, `extract_lwe_key` (use
+  `MLWE_Key.extract_lwe_key`), `rlwe_extract_lwe`, `gen_packing_ksk` and
+  `packing_keyswitch` (now `MLWE_Scheme.extract_lwe`, `gen_packing_ksk` and
+  `packing_keyswitch`), the `SAB_Key` fields `s`, `s_sign`, `r_prec` and
+  `b_prec`, and the native `gp25_RGSW_monomial_mul(_mt)` and
+  `gp25_sub_a_mt`.
 
 ### Fixed
 
-- Fix MGSW keys of a level whose primes do not come first in the MGSW ring
-  (a special prime with a lower index in the RNS base than the level's): the
-  gadget covered the ring's first primes rather than the level's, so every
-  external product, CMUX and GP25 rotation by a key encrypting anything but
-  0 returned garbage. The gadget now covers the level's primes, wherever they
-  sit; the keys of nested chains with the special primes last are unchanged.
-- Fix `MLWE_Scheme.sample` at a level holding primes the key's ring does not
-  (a level that shares no prime with level 0): the sample was drawn with no
-  key on those primes and did not decrypt. It now uses the key over the
-  sample's ring, as decryption already did.
-- Fix CKKS encoding at a scale that takes a coefficient to 2^63 or beyond
-  (`encode`, `encode_batch`, `ComplexRing.values_ifft_scale_round_to_RNS_batch`
-  and the other rounding paths): the rounding went through an `int64_t` and
-  wrapped silently. A value that large is reduced exactly now, as the
-  integer the double holds, so any scale works; values below 2^63 take the
-  same path as before. This broke SHIP whenever the special modulus `P` was
-  above 2^63, since its column keys are encoded at scale `P`. A NaN or
-  infinite value to round (a non-finite input or scale) now raises
-  `ValueError`; the native `complex_poly_round_to_RNS`,
-  `complex_*_ifft_scale_round_to_RNS_batch` and `ship_encode_*` return
-  `false` for it.
+- Fix uniform sampling below a prime (`Polynomial.sample_uniform`, the masks
+  of MLWE and LWE samples, `gen_sparse_ternary_array_modq`) being biased:
+  random words were mapped onto the modulus by a floating-point scaling or a
+  masked reduction, which lost the low bits of a prime above 2^53 and
+  favoured some residues of a prime well below its power of two. Values are
+  now drawn by rejection (`generate_uniform_below`) and are exactly uniform.
 - Fix `Ring(N, prime_size=[...])` searching forever when no prime of a
   requested size is `1 mod 2N / split_degree` with an odd multiplier (17 bits
-  at N = 2^13, for one). The odd multiplier makes the factors
-  `X^split_degree - zeta` irreducible, so that a partially split ring's
-  residues are fields of size `p^split_degree` [CCCFGS25, Sec. 3.1]; it is
-  kept for `split_degree > 1`. A fully split ring (`split_degree=1`) now
-  takes full-size primes with an even multiplier too, after the odd ones
-  (65537 there), instead of falling back to a smaller prime: at N = 2^11 and
-  16 bits it gets 40961 instead of the 14-bit 12289. `RNSRing.gen_prime`
-  takes `split_degree` (required) and raises `ValueError` when no prime is
-  left. Rings that had a full-size prime keep the same primes. A ring given
-  its primes (`primes=` or `mask=`) with `split_degree > 1` now raises
-  `ValueError` for a prime with an even multiplier, which used to give
-  residues of size `p` only, silently.
-- Fix `MLWE_Scheme(ring, special_primes=k)` for `k >= 2`, and for a ring of
-  one prime: the default level chain was one level too long, and the
-  constructor raised `ValueError` (`IndexError` for one prime).
+  at N = 2^13, for one): it now takes a smaller prime, a fully split ring one
+  with an even multiplier first (65537 there), and raises `ValueError` when
+  none is left.
 - Fix `Ring(N, primes=[...])`, one of the documented ways to give the
   modulus, failing unless `prime_size=None` was passed too.
-- Fix GP25 on a scheme with several levels reading the automorphism key of
-  the last level for gadget keys of level 0: an out-of-bounds read.
-- Fix GP25 rejecting every input key of rank above 1.
-- Fix `MGSW.external_product` and `CMUX` returning a level-0 sample whatever
-  the input's level; below level 0 it decrypted to garbage. The products now
-  keep the input's level and type, and raise `ValueError` when the MGSW was
-  encrypted for another level (`MGSW.check_level`,
-  `MGSW_Scheme.gadget_size`).
-- Fix `full_packing_keyswitch_scaled` (and GP25's `trace_repack`) adding an
-  automorphism allocated over the key's ring to a sample of the ciphertext's:
-  every packed value was garbage.
 - Fix RNS `Polynomial.from_bigint_array` with fewer than N values reading past
   its buffers: the remaining coefficients were heap contents instead of zero.
 - Fix `arith_scalar_new` on an RNS ring whose primes do not start the base
   copying one value per prime when the scaling kernels index the scalar by
   base row: they read past the copy, and `arith_scale_by` and
   `MLWE.multiply_scalar` scaled the ring's higher rows by whatever lay there.
-- Make the entropy-backed generators (`generate_random_bytes`,
-  `generate_normal_random`, `generate_uniform_below`, `entropy`) safe to call
-  from several threads at once. The 1 KiB pool and its index were one
-  process-wide buffer, so concurrent callers could be served the same bytes;
-  each thread now keeps a pool of its own. A forked child discards the pool it
-  inherits, which it used to serve again after its parent. The
-  deterministic-seed counter is advanced atomically, so pinned threads never
-  take the same seed, and setting or clearing the override discards every
-  thread's pool. Draws of 512 bytes or more are unchanged.
-- Fix `CKKS_Scheme.multiply` (inherited from `MLWE_Scheme`) returning the
-  first operand's `delta` instead of the product of both, so a product taken
-  with it decoded at the wrong scale; `*` was right.
-- Fix `ComplexRing(N)` crashing for `N < 8` on avx512ifma, and
-  `complex_poly_scale_double` scaling nothing below `N = 4` there: the
-  vectorized transforms need a full vector of values, and their table loader
-  under-flowed for shorter lengths. Those lengths now run the scalar
-  transforms, which every engine compiles.
-- Fix `mlwe_round_division` leaving the sample on its old ring: the
-  components were divided into the destination ring, but `->ring` still named
-  the source, so native code that allocates or key-switches from a sample
-  after a rescale worked in the wrong ring.
-- Fix `MLWE.new_like()` (behind `copy`, `+`, `-` and plaintext products)
-  allocating at the level's defaults rather than like its input: a sample over
-  a special ring came back over `rings[-1]`, and an unrelinearized product
-  lost every component past the scheme's rank. With neither `lvl` nor `ring`
-  given, the result now has the input's ring, rank and `is_extended`.
 - Fix the native RNS ring handles stopping being shared after 256 distinct
   rings: past that, every lookup allocated a new handle that was never freed
   (one per sample allocated), and two handles for one ring no longer compared
   equal. The table now grows, under a lock.
-- `ComplexPolynomial` assignment, `from_array` and `*=` accept any
-  `numbers.Complex` / `numbers.Real` (e.g. a subclass of `complex`, or a
-  `Fraction`) instead of only the exact builtin types.
-
+- Fix CKKS encoding at a scale that takes a coefficient to 2^63 or beyond
+  (`encode` and the native rounding paths): the rounding went through an
+  `int64_t` and wrapped silently. A value that large is reduced exactly now,
+  as the integer the double holds, so any scale works; values below 2^63 take
+  the same path as before. A NaN or infinite value to round (a non-finite
+  input or scale) now raises `ValueError`; the native
+  `complex_poly_round_to_RNS` and `complex_*_ifft_scale_round_to_RNS_batch`
+  return `false` for it.
+- Fix `ComplexRing(N)` crashing for `N < 8` on avx512ifma, and
+  `complex_poly_scale_double` scaling nothing below `N = 4` there.
+- Fix `ComplexPolynomial` assignment, `from_array` and `*=` rejecting
+  `numbers.Complex` / `numbers.Real` values (e.g. a subclass of `complex`, or
+  a `Fraction`) other than the exact builtin types.
 - `FieldVector.view` of a view started at the parent's buffers rather than at
   the view: the nested view's planes skipped the outer offset, so it read and
   wrote the wrong elements. Both vector implementations.
-
 - Fix `Multiprecision.from_polynomial` leaking its result. `free_mp_polynomial`
   was never exposed, so no caller could release one; the returned handle now
   owns its native allocation.
-
-- Fix `MLWE_Scheme(ring, special_primes=n)` dropping the special primes for
-  any ring but the first one built over its RNS base. The mask was derived
-  from the working primes' *count*, which is their base index only when the
-  ring starts at index 0; every other ring got a special ring equal to its
-  level 0, so key switching silently ran BV instead of the GHS hybrid, at
-  about a prime's worth of extra noise.
 - Fix multiprecision reconstruction (`Multiprecision.from_polynomial`) reading
   rows of the shared RNS base that the polynomial does not own, which crashed
   as soon as a second ring existed in the process, and pairing its CRT
@@ -851,6 +606,48 @@ versions may contain breaking changes.
   than a base-2^52 digit; they now come from the moduli themselves, and the
   reconstruction reduces each residue before accumulating, so the number of
   primes no longer bounds what can be reconstructed.
+- Make the entropy-backed generators (`generate_random_bytes`,
+  `generate_normal_random`, `entropy`) safe to call from several threads at
+  once: concurrent callers could be served the same bytes of the shared 1 KiB
+  pool, and each thread now keeps a pool of its own. A forked child discards
+  the pool it inherits instead of serving it again after its parent, and
+  pinned threads (`entropy.deterministic`) never take the same seed.
+- Fix `MLWE_Scheme(ring, special_primes=n)` dropping the special primes for
+  any ring but the first one built over its RNS base. The mask was derived
+  from the working primes' *count*, which is their base index only when the
+  ring starts at index 0; every other ring got a special ring equal to its
+  level 0, so key switching silently ran BV instead of the GHS hybrid, at
+  about a prime's worth of extra noise.
+- Fix `MLWE_Scheme(ring, special_primes=k)` for `k >= 2`, and for a ring of
+  one prime: the default level chain was one level too long, and the
+  constructor raised `ValueError` (`IndexError` for one prime).
+- Fix MGSW keys of a level whose primes do not come first in the MGSW ring
+  (a special prime with a lower index in the RNS base than the level's): the
+  gadget covered the ring's first primes rather than the level's, so every
+  external product and CMUX by a key encrypting anything but 0 returned
+  garbage. The keys of nested chains with the special primes last are
+  unchanged.
+- Fix `MGSW.external_product` and `CMUX` returning a level-0 sample whatever
+  the input's level; below level 0 it decrypted to garbage. The products now
+  keep the input's level and type, and raise `ValueError` when the MGSW was
+  encrypted for another level (`MGSW.check_level`,
+  `MGSW_Scheme.gadget_size`).
+- Fix `MLWE_Scheme.sample` at a level holding primes the key's ring does not
+  (a level that shares no prime with level 0): the sample was drawn with no
+  key on those primes and did not decrypt. It now uses the key over the
+  sample's ring, as decryption already did.
+- Fix `mlwe_round_division` leaving the sample on its old ring: the
+  components were divided into the destination ring, but `->ring` still named
+  the source, so native code that allocates or key-switches from a sample
+  after a rescale worked in the wrong ring.
+- Fix `MLWE.new_like()` (behind `copy`, `+`, `-` and plaintext products)
+  allocating at the level's defaults rather than like its input: a sample over
+  a special ring came back over `rings[-1]`, and an unrelinearized product
+  lost every component past the scheme's rank. With neither `lvl` nor `ring`
+  given, the result now has the input's ring, rank and `is_extended`.
+- Fix `CKKS_Scheme.multiply` (inherited from `MLWE_Scheme`) returning the
+  first operand's `delta` instead of the product of both, so a product taken
+  with it decoded at the wrong scale; `*` was right.
 
 ## [0.0.3] - 2026-09-10
 

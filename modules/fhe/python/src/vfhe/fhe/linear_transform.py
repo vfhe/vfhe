@@ -167,7 +167,7 @@ class CKKS_LinearTransform:
         rotated[0] = ciphertext
         giants = self._giants
         inner = scheme.linear_combinations(
-            [rotated[i] for i in babies], self._matrix, self.scale, n_threads
+            [rotated[i] for i in babies], self._matrix, n_threads, scale=self.scale
         )
         return scheme.automorphism_sum(
             inner,

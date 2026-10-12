@@ -116,9 +116,9 @@ class GP25:
     ``scheme`` is the rotation key's, over ``R_N``. An RLWE sample over
     ``R_n`` (the input and output keys' scheme, any ``n``) becomes ``n``
     accumulators at ``scheme``'s level 0, one per coefficient, each holding
-    the test vector rotated by that coefficient's phase; they are then
-    repacked into one sample over ``R_n`` under the output key, coefficient
-    ``k`` at coefficient ``k``. Repacking goes, with ``trace_repack`` (the
+    the test vector rotated by that coefficient's linear decryption; they are
+    then repacked into one sample over ``R_n`` under the output key,
+    coefficient ``k`` at coefficient ``k``. Repacking goes, with ``trace_repack`` (the
     default), through the trace packing of [CDKS21] with each level halved
     first [LY26], so the values keep their scale, and a ring switch; or,
     without it, through LWE extraction and a packing key switch, whose key
@@ -523,11 +523,11 @@ class GP25:
     # -- the bootstrap ------------------------------------------------------
 
     def test_vector(self, table: Sequence[int]) -> MLWE:
-        """The test vector that makes the bootstrap of a coefficient of phase
-        ``p`` (in ``Z_2N``, after the input's switch to ``2N``) read
-        ``table[i]`` for ``p`` within half a step of ``i * N / len(table)``,
-        and its negative for ``p`` within half a step of ``N + i * N /
-        len(table)``.
+        """The test vector that makes the bootstrap of a coefficient whose
+        linear decryption is ``p`` (in ``Z_2N``, after the input's switch to
+        ``2N``) read ``table[i]`` for ``p`` within half a step of
+        ``i * N / len(table)``, and its negative for ``p`` within half a step
+        of ``N + i * N / len(table)``.
 
         Values are integers mod the level-0 modulus ``q``, the message as it
         is to be decrypted (scaled already); ``len(table)`` divides ``N``. The
@@ -566,15 +566,15 @@ class GP25:
     ) -> list[MLWE]:
         """The accumulators: ``n`` samples at level 0, canonical, accumulator
         ``k`` holding ``tv(X^-1) * X^-p_k`` for an input of odd rank and
-        ``tv * X^p_k`` for even, ``p_k`` the phase of coefficient ``k`` switched
-        to ``Z_2N``. Their constant coefficients are what `test_vector`
-        describes.
+        ``tv * X^p_k`` for even, ``p_k`` the linear decryption of coefficient
+        ``k`` switched to ``Z_2N``. Their constant coefficients are what
+        `test_vector` describes.
 
         With an output key, the input is under it, at the level of the key's
         Hamming-weight-reducing switch, and is switched to the input key
         first; without one, the input is under the input key. ``in_modulus``
-        is the modulus the input's phase is taken mod after that, by default
-        its ring's. `blind_rotate_exponents` is the rotation alone.
+        is the modulus the input's linear decryption is taken mod after that,
+        by default its ring's. `blind_rotate_exponents` is the rotation alone.
         """
         n = rlwe_in.ring.N
         rank = rlwe_in.scheme.r
@@ -692,7 +692,8 @@ class GP25:
         output key, at the key's ``hw_reducing_lvl``): the result is a sample
         of the same scheme at the key's ``output_lvl``, under the output key,
         whose coefficient ``k`` decrypts to what `test_vector` maps
-        coefficient ``k``'s phase to. Needs a key with an output key.
+        coefficient ``k``'s linear decryption to. Needs a key with an output
+        key.
         """
         if key.output_lvl is None:
             raise ValueError(

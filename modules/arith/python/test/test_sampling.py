@@ -5,7 +5,6 @@
 from collections import Counter
 
 from vfhe.arith import Polynomial, Ring
-from vfhe.mlwe import LWE, LWE_Key
 
 N = 4096
 
@@ -40,13 +39,4 @@ def test_a_prime_far_below_its_power_of_two_is_uniform():
     values = _residues(ring, 32)
     assert all(v < q for v in values)
     assert _balanced(Counter(v % 3 for v in values), len(values), 3)
-    assert _balanced(Counter(v * 4 // q for v in values), len(values), 4)
-
-
-def test_lwe_mask_is_uniform():
-    q = 3 * 2**30 + 1
-    ring = Ring(N, primes=[q], prime_size=[32], split_degree=1)
-    key = LWE_Key(ring, sec_sigma=3.2, err_sigma=3.2)
-    values = [v for _ in range(32) for v in LWE(ring=ring, m=[0], key=key).get_a()[0]]
-    assert all(v < q for v in values)
     assert _balanced(Counter(v * 4 // q for v in values), len(values), 4)

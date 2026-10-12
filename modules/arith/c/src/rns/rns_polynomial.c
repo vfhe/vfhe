@@ -1971,7 +1971,7 @@ void polynomial_RNSc_to_centered_doubles(double *out, RNSc_Polynomial in, double
         if (in->rns_mask & (1ULL << j))
             idx[L++] = j;
 
-    // One prime, the usual case after a level drop: the residue is the value.
+    // One prime: the residue is the value.
     if (L == 1)
     {
         const uint64_t q = in->base->mods[idx[0]]->q, half = (q - 1) / 2;

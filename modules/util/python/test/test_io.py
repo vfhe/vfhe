@@ -205,7 +205,7 @@ def test_streams_through_file_objects(tmp_path):
         def read(self, n):
             return self._b.read(min(n, 7))
 
-    assert s.load(ReadOnly(path.read_bytes()))[0].data  # pyright: ignore[reportArgumentType] == b"q" * 1000
+    assert s.load(ReadOnly(path.read_bytes()))[0].data == b"q" * 1000  # pyright: ignore[reportArgumentType]
 
 
 def test_the_checksum_algorithm_is_recorded(monkeypatch):

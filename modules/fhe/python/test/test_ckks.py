@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Characterization tests for the (reverted) vfhe.fhe CKKS scheme over cffi.
+"""Characterization tests for the vfhe.fhe CKKS scheme over cffi.
 
 Encode/decode, encrypt/decrypt, slot rotation, and ciphertext multiplication
 (ciphertext*ciphertext with relinearization+rescale, and ciphertext*plaintext).

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Characterization test for the (reverted) vfhe.fhe CGGI16 functional
-bootstrap over the cffi boundary: bootstrap-key generation, LUT packing, blind
-rotation (CMUX), and LWE extraction, verified against a random lookup table.
+"""The [CGGI16] functional bootstrap over the cffi boundary: bootstrap-key
+generation, LUT packing, the (unfolded) blind rotation, single and batched, and
+LWE extraction, verified against a random lookup table.
 """
 
 import random

@@ -365,7 +365,7 @@ def test_another_process_with_another_base_order(ghs, tmp_path, profile):
     assert json.loads(out.stdout) == m.get_polynomial()
 
 
-def test_unseeded_encryption_is_still_available(ghs):
+def test_unseeded_encryption_on_request(ghs):
     Rp, scheme, key = ghs
     scheme.seeded_encryption = False
     try:

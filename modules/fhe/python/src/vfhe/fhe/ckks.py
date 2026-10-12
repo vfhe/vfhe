@@ -251,14 +251,16 @@ class CKKS_Scheme(MLWE_Scheme):
         The ciphertexts must share one ``delta``, and the coefficients must all be
         encoded at ``scale`` (default: ``scaling_factor``).
         """
-        return self.linear_combinations(cts, [coefficients], scale, n_threads=1)[0]
+        outs = self.linear_combinations(cts, [coefficients], n_threads=1, scale=scale)
+        return outs[0]
 
     def linear_combinations(
         self,
         cts: Sequence[CKKS_Ciphertext],
         rows: Sequence[Sequence[RNSPolynomial | None]] | PlaintextMatrix,
-        scale: float | None = None,
         n_threads: int = 0,
+        *,
+        scale: float | None = None,
     ) -> list[CKKS_Ciphertext]:
         """One :meth:`linear_combination` of ``cts`` per row of coefficients.
         ``None`` skips a term.

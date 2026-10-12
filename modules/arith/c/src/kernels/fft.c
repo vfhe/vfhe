@@ -378,8 +378,8 @@ static void rec_ct(const struct _FFT_Plan *c, double *re, double *im, double *ou
     }
 }
 
-/* CT_NR: u_{brv(k)} = sum_j q_j exp(+2*pi*I*jk/m). Natural input in s (split
- * re/im), bit-reversed output written to out (split re/im). */
+/* CT_NR: u_k = sum_j c_j zeta^{(4k+1)j} at position brv(k) of out (split
+ * re/im), from the natural-order c in s (split re/im). */
 static void fft_ct(const struct _FFT_Plan *c, double *s, double *out)
 {
     const size_t m = c->m;
@@ -391,7 +391,7 @@ static void fft_ct(const struct _FFT_Plan *c, double *s, double *out)
         return;
     }
     /* An odd number of stages above the leaf: spend the leftover radix-2 at
-     * t = m/2, the one place where it is twiddle-free. */
+     * t = m/2. */
     if ((lg2(m) - lg2(c->leaf)) & 1)
     {
         const size_t t = m >> 1;
@@ -549,8 +549,7 @@ static void leaf_gs(const struct _FFT_Plan *c, const double *in_re, const double
         }
     }
 
-    /* Odd big-stage count -> trailing radix-2 at t = len/2 (twiddle-free only
-     * on the whole array, ngt == 1). */
+    /* Odd big-stage count -> trailing radix-2 at t = len/2. */
     if (t == len / 2)
     {
         /* GS mirror of the CT case above: always twiddled. */

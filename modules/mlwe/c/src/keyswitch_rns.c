@@ -10,10 +10,9 @@
 //
 // mlwe_full_packing_keyswitch assembles ring elements coefficient by
 // coefficient from a vector of scalar LWE samples, and the subring maps of
-// ring switching move coefficients between dimensions. The key-switch key
-// plumbing lives here because deriving a key's ring and relabeling its
-// accumulator into it are mask operations, which is how RNS identifies a
-// ring.
+// ring switching move coefficients between dimensions. mlwe_new_RNS_ks_key
+// lives here because it derives the key's ring from a component's mask, which
+// is how RNS identifies a ring.
 
 // Writes one value per sample, sample k at coefficient k of `poly`'s rows
 // over `mask`; the other coefficients are zero. `row[limb]` is the row of

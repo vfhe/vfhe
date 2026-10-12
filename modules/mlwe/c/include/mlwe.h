@@ -115,8 +115,8 @@ extern "C"
     // and the ring the key lives in. A key switch must accumulate in that
     // ring -- the caller's `out` is only guaranteed to be allocated for its
     // own, narrower one -- so it allocates its scratch there and copies the
-    // finished result out. The key stays immutable and therefore shareable:
-    // gp25 hands one key to every thread of a parallel bootstrap.
+    // finished result out. The key stays immutable, so concurrent key switches
+    // may share it.
     //
     // `gadget_params` are those the keys were generated with, and the key
     // switch decomposes with them. A key generated with one set and read with
@@ -385,7 +385,7 @@ extern "C"
     void mlwe_mod_down(RNSc_MLWE out, RNSc_MLWE in, const ArithElement *const *addend);
     // Reduces every component into `to`, a quotient of the sample's ring, in
     // place and in either domain. Unlike mlwe_round_division, the value is not
-    // divided: this is the CKKS level drop, and it is not valid for BFV.
+    // divided: the linear decryption is kept modulo `to`'s modulus only.
     void mlwe_mod_reduce(MLWE c, ArithRing to);
     // mlwe_round_division of each of the n distinct samples, in place,
     // converting them to the canonical domain first if needed. Up to

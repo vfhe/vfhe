@@ -94,7 +94,7 @@ class MGSW_Scheme:
     ) -> list[MGSW]:
         """MGSW encryptions of the constant polynomials ``values``, as one batch.
 
-        What a bootstrapping key is made of. A constant folds into the gadget
+        A constant folds into the gadget
         scalars -- ``s_j * c`` times ``g`` is ``s_j`` times ``c * g`` -- so the
         messages are the same for every value and only the scalars differ, and
         the whole key is one draw.
