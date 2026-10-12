@@ -68,7 +68,6 @@ class SABKeyCodec(Codec):
         "gaps",
         "signs",
         "automorphism_key",
-        "packing_key",
         "trace_repack_key",
         "hw_reducing_key",
         "output_switch_key",
@@ -92,8 +91,7 @@ class SABKeyCodec(Codec):
         for name, value in zip(self._fields, children, strict=True):
             setattr(out, name, value)
         out.n, out.h, out.gap_bits = meta["n"], meta["h"], meta["gap_bits"]
-        # A record without `bits_per_layer` holds one MGSW key per gap bit.
-        out.bits_per_layer = meta.get("bits_per_layer", 1)
+        out.bits_per_layer = meta["bits_per_layer"]
         out.hw_reducing_lvl = meta["hw_reducing_lvl"]
         out.output_lvl = meta["output_lvl"]
         return out
@@ -104,11 +102,7 @@ class CGGI16KeyCodec(Codec):
     types = (CGGI16_Key,)
 
     def encode(self, obj: CGGI16_Key, _ctx: WriteContext, /) -> Encoded:
-        meta = {
-            "b_prec": obj.b_prec,
-            "n": obj.n,
-            "unfolding": obj.unfolding,
-        }
+        meta = {"n": obj.n, "unfolding": obj.unfolding}
         return Encoded(meta, children=[obj.bk])
 
     def decode(
@@ -116,10 +110,8 @@ class CGGI16KeyCodec(Codec):
     ):
         out = CGGI16_Key()
         (out.bk,) = children
-        out.b_prec = meta["b_prec"]
-        # A record without `n` and `unfolding` holds one key per coefficient.
-        out.n = meta.get("n", len(out.bk))
-        out.unfolding = meta.get("unfolding", 1)
+        out.n = meta["n"]
+        out.unfolding = meta["unfolding"]
         return out
 
 

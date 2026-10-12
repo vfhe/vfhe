@@ -8,7 +8,6 @@ that owns it registers a `Codec`. See ``vfhe.io`` for the layout.
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import struct
@@ -32,29 +31,16 @@ FLAG_SECRET = 1 << 1
 #: Flag bits 8-15: which checksum the records carry, when they carry one.
 _CHECKSUM_SHIFT = 8
 
-#: Checksum algorithms, by the id the header records. BLAKE2b (hashlib) is
-#: always available; the faster BLAKE3 is registered by ``vfhe.crypto``, which
-#: a reader imports when a stream names it.
-CHECKSUM_BLAKE2B = 1
+#: The checksum algorithm, by the id the header records: BLAKE3, from
+#: ``vfhe.crypto``.
 CHECKSUM_BLAKE3 = 2
-_CHECKSUM_PROVIDERS = {CHECKSUM_BLAKE3: "vfhe.crypto"}
-_CHECKSUMS: dict[int, Callable[[], Any]] = {
-    CHECKSUM_BLAKE2B: lambda: hashlib.blake2b(digest_size=_DIGEST),
-}
-
-
-def register_checksum(algorithm: int, factory: Callable[[], Any]) -> None:
-    """Register checksum ``algorithm``: ``factory()`` returns a hasher with
-    ``update`` and a 32-byte ``digest``. Writers use the highest id."""
-    _CHECKSUMS[algorithm] = factory
 
 
 def _checksum(algorithm: int) -> Callable[[], Any]:
-    if algorithm not in _CHECKSUMS and algorithm in _CHECKSUM_PROVIDERS:
-        importlib.import_module(_CHECKSUM_PROVIDERS[algorithm])
-    if algorithm not in _CHECKSUMS:
+    """A factory of hashers with ``update`` and a 32-byte ``digest``."""
+    if algorithm != CHECKSUM_BLAKE3:
         raise ValueError(f"unknown checksum algorithm {algorithm}")
-    return _CHECKSUMS[algorithm]
+    return importlib.import_module("vfhe.crypto").Blake3Stream
 
 
 KIND_END = 0
@@ -359,8 +345,8 @@ class StreamWriter:
         self.options = options
         self.secret = secret
         self.ctx = WriteContext(self, options)
-        self.algorithm = max(_CHECKSUMS)
-        self._hasher = _CHECKSUMS[self.algorithm]
+        self.algorithm = CHECKSUM_BLAKE3
+        self._hasher = _checksum(self.algorithm)
 
     def header(self) -> None:
         flags = (

@@ -9,8 +9,13 @@ import random
 import pytest
 from vfhe import engine
 from vfhe.arith import Polynomial, Ring
-from vfhe.fhe import GP25, mod_switch
+from vfhe.fhe import GP25
 from vfhe.mlwe import GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set
+
+
+def _mod_switch(v: int, q: int, p: int) -> int:
+    """``v`` scaled from ``Z_q`` to ``Z_p``, rounded half up."""
+    return ((2 * v * p + q) // (2 * q)) % p
 
 
 def _key_with(scheme, positions):
@@ -312,9 +317,6 @@ PRECISION = 4
 
 CASES = {
     "default": {},
-    "packing_key_switch": {"trace": False},
-    "packing_key_switch_smaller_input": {"trace": False, "n": 16},
-    "packing_key_switch_larger_input": {"trace": False, "n": 128},
     "one_key": {"same_key": True},
     "binary": {"ternary": False},
     "input_rank_2": {"io_rank": 2},
@@ -358,7 +360,6 @@ def _bootstrap_case(
     n=64,
     h=4,
     ternary=True,
-    trace=True,
     same_key=False,
     radix=None,
     primes_per_digit=1,
@@ -375,7 +376,6 @@ def _bootstrap_case(
     gp25 = GP25(
         rotation,
         gadget_params=GadgetParams(radix, primes_per_digit=primes_per_digit),
-        trace_repack=trace,
         bits_per_layer=bits_per_layer,
     )
     key = gp25.generate_bootstrap_key(
@@ -390,7 +390,7 @@ def _bootstrap_case(
     q = rotation.rings[0].q_l
     size = 1 << (PRECISION - 1)
     table = [random.randrange(size) for _ in range(size)]  # noqa: S311 - test data
-    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in table])
+    tv = gp25.test_vector([_mod_switch(t, 1 << PRECISION, q) for t in table])
     msg = [random.randrange(size) for _ in range(n)]  # noqa: S311 - test data
     rlwe_in = _encrypt_at_the_bottom(io, msg, output_key)
     return gp25, key, tv, rlwe_in, io, output_key, table, msg
@@ -400,7 +400,7 @@ def _encrypt_at_the_bottom(io, msg, output_key):
     q = io.rings[0].q_l
     c = io.sample(
         Polynomial(io.rings[0]).from_bigint_array(
-            [mod_switch(x, 1 << PRECISION, q) for x in msg]
+            [_mod_switch(x, 1 << PRECISION, q) for x in msg]
         ),
         output_key,
     )
@@ -411,7 +411,7 @@ def _encrypt_at_the_bottom(io, msg, output_key):
 def _decrypt_messages(scheme, out, key):
     q = out.ring.q_l
     d = scheme.linear_decrypt(out, key).get_polynomial()
-    return [mod_switch(v, q, 1 << PRECISION) for v in d]
+    return [_mod_switch(v, q, 1 << PRECISION) for v in d]
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -425,23 +425,16 @@ def test_bootstrap(deterministic_prng, case):
 
 
 @pytest.mark.parametrize(
-    ("n", "hybrid", "radix", "trace"),
-    [
-        (16, True, None, False),
-        (64, True, None, False),
-        (128, True, None, False),
-        (64, False, 10, False),
-        (16, True, None, True),
-        (128, True, None, True),
-    ],
+    ("n", "hybrid", "radix"),
+    [(16, True, None), (64, True, None), (128, True, None), (64, False, 10)],
 )
-def test_bootstraps_compose(deterministic_prng, n, hybrid, radix, trace):
+def test_bootstraps_compose(deterministic_prng, n, hybrid, radix):
     # The output is under the output key, as the input was: brought down to
     # the lowest level, it bootstraps again.
     deterministic_prng(0x5AB00005)
     random.seed(0x5AB00005)
     gp25, key, tv, rlwe_in, io, output_key, table, msg = _bootstrap_case(
-        n=n, hybrid=hybrid, radix=radix, trace=trace, primes=(50, 50, 50, 50)
+        n=n, hybrid=hybrid, radix=radix, primes=(50, 50, 50, 50)
     )
     last = len(io.rings) - 1
     assert key.hw_reducing_lvl == last
@@ -490,7 +483,7 @@ def _bare_case(n, N=64, **scheme_options):
     q = rotation.rings[0].q_l
     size = 1 << (PRECISION - 1)
     table = [random.randrange(size) for _ in range(size)]  # noqa: S311 - test data
-    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in table])
+    tv = gp25.test_vector([_mod_switch(t, 1 << PRECISION, q) for t in table])
     msg = [random.randrange(size) for _ in range(n)]  # noqa: S311 - test data
     rlwe_in = _encrypt_at_the_bottom(io, msg, input_key)
     return gp25, key, tv, rlwe_in, io, rotation, rotation_key, output_key, table, msg
@@ -543,11 +536,9 @@ def test_a_repacking_key_alone_repacks(deterministic_prng, n):
             assert got == [table[msg[i + groups * j]] for j in range(N)]
 
 
-def test_a_repacking_key_needs_the_trace_and_a_power_of_two():
+def test_a_repacking_key_needs_a_power_of_two():
     _, rotation = _schemes(64, 64)
     rotation_key = rotation.key_gen_sparse(16, 3.2)
-    with pytest.raises(ValueError, match="trace_repack"):
-        GP25(rotation, trace_repack=False).generate_repacking_key(rotation_key, 64)
     with pytest.raises(ValueError, match="power of two"):
         GP25(rotation).generate_repacking_key(rotation_key, 48)
 
@@ -593,12 +584,6 @@ def test_bootstrap_needs_an_output_key():
     gp25, key, tv, rlwe_in, *_ = _bare_case(64)
     with pytest.raises(ValueError, match="no output key"):
         gp25.bootstrap(rlwe_in, tv, key)
-    io, rotation = _schemes(64, 64)
-    input_key, rotation_key, _, bits = _keys(io, rotation)
-    with pytest.raises(ValueError, match="repack with the trace"):
-        GP25(rotation, trace_repack=False).generate_bootstrap_key(
-            input_key, rotation_key, None, 4, bits
-        )
 
 
 @pytest.mark.parametrize(
@@ -623,7 +608,7 @@ def test_the_weight_reduction_has_its_own_gadget(deterministic_prng, gp25_radix,
     assert key.hw_reducing_key.gadget_params == own
     q = rotation.rings[0].q_l
     table = list(range(8))
-    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in table])
+    tv = gp25.test_vector([_mod_switch(t, 1 << PRECISION, q) for t in table])
     msg = [random.randrange(8) for _ in range(64)]  # noqa: S311 - test data
     out = gp25.bootstrap(_encrypt_at_the_bottom(io, msg, output_key), tv, key)
     assert _decrypt_messages(io, out, output_key) == msg
@@ -650,7 +635,7 @@ def test_fewer_digits_in_the_weight_reduction(deterministic_prng):
     assert component is not None
     assert len(component) == 13 - 5
     q = rotation.rings[0].q_l
-    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in range(8)])
+    tv = gp25.test_vector([_mod_switch(t, 1 << PRECISION, q) for t in range(8)])
     msg = [random.randrange(8) for _ in range(64)]  # noqa: S311 - test data
     out = gp25.bootstrap(_encrypt_at_the_bottom(io, msg, output_key), tv, key)
     assert _decrypt_messages(io, out, output_key) == msg
@@ -671,7 +656,7 @@ def test_fewer_digits_in_the_rotation(deterministic_prng, bits_per_layer):
     key = gp25.generate_bootstrap_key(input_key, rotation_key, output_key, 4, bits)
     assert gp25.mgsw_scheme.gadget_size(0) == 4
     q = rotation.rings[0].q_l
-    tv = gp25.test_vector([mod_switch(t, 1 << PRECISION, q) for t in range(8)])
+    tv = gp25.test_vector([_mod_switch(t, 1 << PRECISION, q) for t in range(8)])
     msg = [random.randrange(8) for _ in range(64)]  # noqa: S311 - test data
     out = gp25.bootstrap(_encrypt_at_the_bottom(io, msg, output_key), tv, key)
     assert _decrypt_messages(io, out, output_key) == msg

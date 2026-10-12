@@ -33,7 +33,6 @@ from typing import IO, TYPE_CHECKING, Any
 
 from ._core import (
     ALIGN,
-    CHECKSUM_BLAKE2B,
     CHECKSUM_BLAKE3,
     FLAG_CHECKSUM,
     FLAG_SECRET,
@@ -51,7 +50,6 @@ from ._core import (
     codec_for_tag,
     options_for,
     register,
-    register_checksum,
 )
 
 if TYPE_CHECKING:
@@ -148,7 +146,6 @@ class Serializer:
 
 __all__ = [
     "ALIGN",
-    "CHECKSUM_BLAKE2B",
     "CHECKSUM_BLAKE3",
     "FLAG_CHECKSUM",
     "FLAG_SECRET",
@@ -164,5 +161,4 @@ __all__ = [
     "codec_for",
     "codec_for_tag",
     "register",
-    "register_checksum",
 ]

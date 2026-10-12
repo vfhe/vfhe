@@ -451,7 +451,7 @@ versions may contain breaking changes.
   what the smallest level with at least two bits above the scaling factor
   holds at the scheme's scale; `drop=False` keeps every prime.
 - **Breaking:** Rework GP25 [GP25]. `GP25(scheme, gsw_ell=None,
-  gadget_params=None, trace_repack=True, bits_per_layer=1)` rotates over
+  gadget_params=None, bits_per_layer=1)` rotates over
   `scheme`, the rotation key's over `R_N`, and bootstraps every coefficient
   of a sample over `R_n`, for any `n` and `N`. Three keys take part: the
   output key, dense over `R_n`, which inputs arrive under (at the lowest level
@@ -466,9 +466,9 @@ versions may contain breaking changes.
   ternary=True, hw_reducing_lvl=None, hw_reducing_hybrid=True,
   hw_reducing_gadget_params=None, n_threads=0)` makes the `SAB_Key` (`gaps`,
   `signs`, `gap_bits`, `bits_per_layer`, `n`, `h`, `automorphism_key`,
-  `hw_reducing_key`, `hw_reducing_lvl`, `output_lvl`, and `packing_key` or
-  `trace_repack_key` and `output_switch_key`); input keys may have any rank,
-  and `ternary=False` takes a binary one. `output_key=None` switches nothing:
+  `hw_reducing_key`, `hw_reducing_lvl`, `output_lvl`, `trace_repack_key` and
+  `output_switch_key`); input keys may have any rank, and `ternary=False`
+  takes a binary one. `output_key=None` switches nothing:
   inputs come under the input key and `repack(blind_rotate(...))` leaves the
   result over `R_N` under the rotation key, and
   `generate_repacking_key(rotation_key, n)` makes only the keys `rotate` and
@@ -478,16 +478,16 @@ versions may contain breaking changes.
   and `blind_rotate_exponents`), `repack` and the output switch. The blind
   rotation is one native call on the library's threads, `gp25_blind_rotate`,
   built from `GP25.rotate(acc, keys, automorphism_key)` (`gp25_rotate`) and
-  `GP25.multiply_by_signed_monomials`. Repacking now goes through
-  `trace_pack` and a ring switch by default, for any `n`, `N` and rank, with
-  1-3 MiB of keys against 36-576 MiB for the packing key switch
-  (`trace_repack=False`) at N = 1024. `bits_per_layer=2` is BatchBoot's
-  multi-bit rotation [LWZ+26]: a pair of rotation bits of value `d` takes
-  three MGSW keys, of `[d = 1]`, `[d = 2]` and `[d = 3]`, while the pair's
-  power `p` has `4 p <= n` (`GP25.rotation_layers`), for 1.5 times the MGSW
-  keys, about 0.8 bit more rotation noise with the RNS gadget, and a rotation
-  about 1.4x faster; `encrypt_rotations(values, n_bits, n, key)` makes such
-  keys. See Removed for the previous surface.
+  `GP25.multiply_by_signed_monomials`. Repacking goes through `trace_pack`
+  and a ring switch, for any `n`, `N` and rank, with 1-3 MiB of keys against
+  36-576 MiB for the packing key switch it replaces at N = 1024.
+  `bits_per_layer=2` is BatchBoot's multi-bit rotation [LWZ+26]: a pair of
+  rotation bits of value `d` takes three MGSW keys, of `[d = 1]`, `[d = 2]`
+  and `[d = 3]`, while the pair's power `p` has `4 p <= n`
+  (`GP25.rotation_layers`), for 1.5 times the MGSW keys, about 0.8 bit more
+  rotation noise with the RNS gadget, and a rotation about 1.4x faster;
+  `encrypt_rotations(values, n_bits, n, key)` makes such keys. See Removed
+  for the previous surface.
 - **Breaking:** `FoldableRS` and `FieldFoldableRS` now build the general
   foldable code of [ZCF24, Def. 5] by default -- seeded twist tables at every
   level above a Reed-Solomon base code -- rather than a Reed-Solomon code on
@@ -539,7 +539,9 @@ versions may contain breaking changes.
   `lwe_new_KS_key`, `lwe_keyswitch`) and the undefined
   `mlwe_RNSc_extract_lwe`, from `mlwe.h`.
 - **Breaking:** GP25's previous surface (see the rework in Changed):
-  `GP25(..., debug_key=, threads=)`, `generate_sparse_ternary_key` (use
+  `GP25(..., debug_key=, threads=, trace_repack=)` (repacking always goes
+  through the trace), `mod_switch` (from `vfhe.fhe`),
+  `generate_sparse_ternary_key` (use
   `sample_input_key` and `generate_bootstrap_key`), `encrypt_bits`,
   `sab_rlwe_bootstrap` (use `bootstrap`), `sab_blind_rotate`, `setup_tv_xb`,
   `sab_LUT_packing` (use `test_vector`), `sparse_mul`, `RGSW_monomial_mul`,
@@ -550,6 +552,7 @@ versions may contain breaking changes.
   `packing_keyswitch`), the `SAB_Key` fields `s`, `s_sign`, `r_prec` and
   `b_prec`, and the native `gp25_RGSW_monomial_mul(_mt)` and
   `gp25_sub_a_mt`.
+- **Breaking:** `CGGI16_Key.b_prec`, which nothing read.
 
 ### Fixed
 

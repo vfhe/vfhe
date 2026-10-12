@@ -27,7 +27,6 @@ class CGGI16_Key:
 
     def __init__(self):
         self.bk: list[MGSW] = []
-        self.b_prec = 0
         self.n = 0
         self.unfolding = 1
         self._handles = None  # (bk, outer array, row arrays) passed to C

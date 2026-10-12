@@ -39,10 +39,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-def mod_switch(v, q, p):
-    return round((v * p) / q) % p
-
-
 class SAB_Key:
     """A GP25 bootstrapping key, made by `GP25.generate_bootstrap_key`.
 
@@ -55,10 +51,10 @@ class SAB_Key:
     ``-1`` (``None`` for a binary key), all under the rotation key, as is
     ``automorphism_key`` (``X -> X^-1``). ``hw_reducing_key`` switches the
     input from the output key to the input key, at level ``hw_reducing_lvl``
-    of their scheme; ``packing_key`` repacks into the output key at level
-    ``output_lvl``, or ``trace_repack_key`` and ``output_switch_key`` do it
-    through the trace and a ring switch (``None`` when ``n == N`` and the
-    rotation and output keys are one).
+    of their scheme; ``trace_repack_key`` and ``output_switch_key`` repack
+    into the output key at level ``output_lvl``, through the trace and a ring
+    switch (``output_switch_key`` is ``None`` when ``n == N`` and the rotation
+    and output keys are one).
     """
 
     def __init__(self):
@@ -72,7 +68,6 @@ class SAB_Key:
         self.hw_reducing_key: MLWE_Set | None = None
         self.hw_reducing_lvl: int | None = None
         self.output_lvl: int | None = None
-        self.packing_key: MLWE_Set | None = None
         self.trace_repack_key: MLWE_Set | None = None
         self.output_switch_key: MLWE_Set | None = None
         self._handles = None
@@ -118,15 +113,11 @@ class GP25:
     accumulators at ``scheme``'s level 0, one per coefficient, each holding
     the test vector rotated by that coefficient's linear decryption; they are
     then repacked into one sample over ``R_n`` under the output key,
-    coefficient ``k`` at coefficient ``k``. Repacking goes, with ``trace_repack`` (the
-    default), through the trace packing of [CDKS21] with each level halved
-    first [LY26], so the values keep their scale, and a ring switch; or,
-    without it, through LWE extraction and a packing key switch, whose key
-    has ``r * N`` gadget rows over ``R_n`` where the trace's has ``log2
-    min(n, N)`` automorphism keys and one ring-switch key, and whose output
-    carries a little more noise. With the trace: for ``n <= N`` the ``n``
-    accumulators pack into
-    the subring ``Z[X^(N/n)]`` of ``R_N``, which the switch down projects
+    coefficient ``k`` at coefficient ``k``. Repacking goes through the trace
+    packing of [CDKS21] with each level halved first [LY26], so the values
+    keep their scale, and a ring switch: for ``n <= N`` the ``n``
+    accumulators pack into the subring ``Z[X^(N/n)]`` of ``R_N``, which the
+    switch down projects
     onto; for ``n > N`` each of the ``n / N`` interleaved groups packs into
     ``R_N`` and the switch up interleaves them. Level 0 of ``scheme`` must
     have the primes of a level of the output key's scheme (by value: the two
@@ -158,7 +149,6 @@ class GP25:
         scheme: MLWE_Scheme,
         gsw_ell: int | None = None,
         gadget_params: GadgetParams | None = None,
-        trace_repack: bool = True,
         bits_per_layer: int = 1,
     ):
         if bits_per_layer not in (1, 2):
@@ -171,7 +161,6 @@ class GP25:
         self.mgsw_scheme = MGSW_Scheme(
             scheme, ell=gsw_ell, gadget_params=self.gadget_params
         )
-        self.trace_repack = trace_repack
         self.bits_per_layer = bits_per_layer
 
     # -- rotations ----------------------------------------------------------
@@ -346,8 +335,7 @@ class GP25:
         :meth:`MLWE_Scheme.gadget_scalars`).
 
         With ``output_key=None`` there is neither that switch nor an output
-        switch (see the module); it needs ``trace_repack``, since the packing
-        key switch packs into the output key.
+        switch (see the module).
 
         Every MGSW key is drawn in one batch, on ``n_threads`` (0: the library
         limit), and so are the other keys.
@@ -357,11 +345,6 @@ class GP25:
             raise ValueError("the input and output keys must be keys of one scheme")
         if rotation_key.scheme is not self.scheme:
             raise ValueError("the rotation key must be a key of this GP25's scheme")
-        if output_key is None and not self.trace_repack:
-            raise ValueError(
-                "the packing key switch packs into the output key; without one, "
-                "repack with the trace"
-            )
         n = io_scheme.N
         self._check_gap_bits(gap_bits, n)
         output_lvl = None if output_key is None else self._output_level(io_scheme)
@@ -433,21 +416,12 @@ class GP25:
                 ),
             )
 
-        if self.trace_repack:
-            if output_key is not None and (
-                n != self.ring.N or rotation_key.key != output_key.key
-            ):
-                sab.output_switch_key = io_scheme.gen_ring_switch_key(
-                    output_key,
-                    rotation_key,
-                    cast("int", output_lvl),
-                    gadget_params=self.gadget_params,
-                    n_threads=n_threads,
-                )
-        else:
-            sab.packing_key = io_scheme.gen_packing_ksk(
-                cast("MLWE_Key", output_key),
-                rotation_key.extract_lwe_key(),
+        if output_key is not None and (
+            n != self.ring.N or rotation_key.key != output_key.key
+        ):
+            sab.output_switch_key = io_scheme.gen_ring_switch_key(
+                output_key,
+                rotation_key,
                 cast("int", output_lvl),
                 gadget_params=self.gadget_params,
                 n_threads=n_threads,
@@ -461,14 +435,8 @@ class GP25:
         for a rotation of ``n`` accumulators the caller schedules: the
         automorphism key (``X -> X^-1``) and the trace keys, under
         ``rotation_key``. No MGSW keys, no Hamming-weight-reducing or output
-        switch. Needs ``trace_repack``, since the packing key switch packs
-        into an output key.
+        switch.
         """
-        if not self.trace_repack:
-            raise ValueError(
-                "the packing key switch packs into an output key; repacking "
-                "without one needs trace_repack"
-            )
         if rotation_key.scheme is not self.scheme:
             raise ValueError("the rotation key must be a key of this GP25's scheme")
         if n < 1 or n & (n - 1):
@@ -481,7 +449,7 @@ class GP25:
         self, sab: SAB_Key, rotation_key: MLWE_Key, n: int, n_threads: int
     ) -> None:
         """Sets ``sab.n`` and the keys under ``rotation_key``: the automorphism
-        key, and with ``trace_repack`` the trace keys."""
+        key and the trace keys."""
         sab.n = n
         # At one level these return one set.
         sab.automorphism_key = cast(
@@ -495,20 +463,19 @@ class GP25:
                 n_threads=n_threads,
             ),
         )
-        if self.trace_repack:
-            # Packing `count` samples takes log2(count) automorphisms.
-            levels = min(n, self.ring.N).bit_length() - 1
-            sab.trace_repack_key = cast(
-                "MLWE_Set",
-                self.scheme.gen_ksk_trace(
-                    rotation_key,
-                    rotation_key,
-                    gens=[(1 << j) + 1 for j in range(1, levels + 1)],
-                    lvl=0,
-                    gadget_params=self.gadget_params,
-                    n_threads=n_threads,
-                ),
-            )
+        # Packing min(n, N) samples takes log2 of that many automorphisms.
+        levels = min(n, self.ring.N).bit_length() - 1
+        sab.trace_repack_key = cast(
+            "MLWE_Set",
+            self.scheme.gen_ksk_trace(
+                rotation_key,
+                rotation_key,
+                gens=[(1 << j) + 1 for j in range(1, levels + 1)],
+                lvl=0,
+                gadget_params=self.gadget_params,
+                n_threads=n_threads,
+            ),
+        )
 
     def _output_level(self, io_scheme: MLWE_Scheme) -> int:
         primes = sorted(self.ring.primes)
@@ -561,9 +528,7 @@ class GP25:
         two_n = 2 * self.ring.N
         return [((2 * v * two_n + q) // (2 * q)) % two_n for v in values]
 
-    def blind_rotate(
-        self, rlwe_in: MLWE, tv: MLWE, key: SAB_Key, in_modulus: int | None = None
-    ) -> list[MLWE]:
+    def blind_rotate(self, rlwe_in: MLWE, tv: MLWE, key: SAB_Key) -> list[MLWE]:
         """The accumulators: ``n`` samples at level 0, canonical, accumulator
         ``k`` holding ``tv(X^-1) * X^-p_k`` for an input of odd rank and
         ``tv * X^p_k`` for even, ``p_k`` the linear decryption of coefficient
@@ -572,9 +537,8 @@ class GP25:
 
         With an output key, the input is under it, at the level of the key's
         Hamming-weight-reducing switch, and is switched to the input key
-        first; without one, the input is under the input key. ``in_modulus``
-        is the modulus the input's linear decryption is taken mod after that,
-        by default its ring's. `blind_rotate_exponents` is the rotation alone.
+        first; without one, the input is under the input key.
+        `blind_rotate_exponents` is the rotation alone.
         """
         n = rlwe_in.ring.N
         rank = rlwe_in.scheme.r
@@ -589,7 +553,7 @@ class GP25:
                     f"{key.hw_reducing_lvl}, where the key reduces its weight"
                 )
             rlwe_in = rlwe_in.scheme.keyswitch(rlwe_in, key.hw_reducing_key)
-        q = rlwe_in.ring.q_l if in_modulus is None else in_modulus
+        q = rlwe_in.ring.q_l
         rlwe_in.to_coeff()
         b = self._exponents(rlwe_in.get_b_poly().get_polynomial(), q)
         a = [
@@ -647,47 +611,24 @@ class GP25:
         return acc
 
     def repack(self, acc: list[MLWE], key: SAB_Key) -> list[MLWE]:
-        """The accumulators of `blind_rotate`, packed. With the trace: under
-        the rotation key over ``R_N``, one sample for ``n <= N`` (coefficient
-        ``k`` at ``k * N / n``, in the subring ``Z[X^(N/n)]``; the other
-        coefficients are not cleared, as a ring switch down drops them) and
-        ``n / N``
-        for ``n > N`` (sample ``i`` holding coefficients ``k = i mod n / N``,
-        coefficient ``k`` at ``k // (n / N)``). With the packing key: one
-        sample over ``R_n`` under the output key, at the key's output level.
+        """The accumulators of `blind_rotate`, packed under the rotation key
+        over ``R_N``: one sample for ``n <= N`` (coefficient ``k`` at
+        ``k * N / n``, in the subring ``Z[X^(N/n)]``; the other coefficients
+        are not cleared, as a ring switch down drops them) and ``n / N`` for
+        ``n > N`` (sample ``i`` holding coefficients ``k = i mod n / N``,
+        coefficient ``k`` at ``k // (n / N)``).
         """
         if len(acc) != key.n:
             raise ValueError("one accumulator per input coefficient")
-        if self.trace_repack:
-            if key.trace_repack_key is None:
-                raise ValueError(
-                    "the key has no trace key; generate it with trace_repack"
-                )
-            groups = max(key.n // self.ring.N, 1)
-            return [
-                self.scheme.trace_pack(acc[i::groups], key.trace_repack_key)
-                for i in range(groups)
-            ]
-        if key.packing_key is None or key.output_lvl is None:
-            raise ValueError(
-                "the key has no packing key; generate it without trace_repack"
-            )
-        io_scheme = next(x for x in key.packing_key.mlwe if x is not None)[0].scheme
+        if key.trace_repack_key is None:
+            raise ValueError("the key has no trace key")
+        groups = max(key.n // self.ring.N, 1)
         return [
-            io_scheme.packing_keyswitch(
-                [self.scheme.extract_lwe(c, 0) for c in acc],
-                key.packing_key,
-                key.output_lvl,
-            )
+            self.scheme.trace_pack(acc[i::groups], key.trace_repack_key)
+            for i in range(groups)
         ]
 
-    def bootstrap(
-        self,
-        rlwe_in: MLWE,
-        tv: MLWE,
-        key: SAB_Key,
-        in_modulus: int | None = None,
-    ) -> MLWE:
+    def bootstrap(self, rlwe_in: MLWE, tv: MLWE, key: SAB_Key) -> MLWE:
         """Bootstraps every coefficient of ``rlwe_in`` (over ``R_n``, under the
         output key, at the key's ``hw_reducing_lvl``): the result is a sample
         of the same scheme at the key's ``output_lvl``, under the output key,
@@ -701,9 +642,7 @@ class GP25:
                 "the rotation key; use repack(blind_rotate(...))"
             )
         io_scheme = rlwe_in.scheme
-        packed = self.repack(self.blind_rotate(rlwe_in, tv, key, in_modulus), key)
-        if not self.trace_repack:
-            return packed[0]
+        packed = self.repack(self.blind_rotate(rlwe_in, tv, key), key)
         if key.output_switch_key is None:
             out = MLWE(io_scheme, lvl=key.output_lvl)
             out.copy_from(packed[0])

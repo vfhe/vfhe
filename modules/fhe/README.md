@@ -29,7 +29,7 @@ FHE schemes built on `vfhe.mlwe`.
   (`blind_rotate`, or `blind_rotate_exponents` on exponents already in
   `Z_2N`) with one or two key bits per layer [LWZ+26], its building blocks
   (`rotate`, `multiply_by_signed_monomials`), and repacking by the trace and a
-  ring switch (the default) or by LWE extraction and a packing key switch.
+  ring switch.
 - `ship.py`: `SHIP`: the SHIP bootstrap [CHKS25] of `N/2` real CKKS slots, for
   a sparse input key (`sample_input_key`).
 - `io.py`: the `vfhe.io` codecs for this package's schemes, ciphertexts and

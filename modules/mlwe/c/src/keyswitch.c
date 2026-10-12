@@ -143,9 +143,8 @@ static int mlwe_hoisted_fits(MLWE_Hoisted h, RNS_MLWE_KS_Key ksk)
 
 // Like mlwe_automorphism_RNSc_GHS, but reusing the decomposition in `h`.
 int mlwe_automorphism_RNSc_GHS_hoisted(RNSc_MLWE out, MLWE_Hoisted h, uint64_t gen,
-                                       RNS_MLWE_KS_Key ksk, uint64_t lvl)
+                                       RNS_MLWE_KS_Key ksk)
 {
-    (void)lvl;
     if (!mlwe_hoisted_fits(h, ksk))
         return -1;
     RNSc_MLWE in = h->in;
@@ -197,26 +196,23 @@ typedef struct
     RNSc_MLWE *in;
     const uint64_t *gens;
     RNS_MLWE_KS_Key *ksks;
-    uint64_t lvl;
 } AutomorphismJobs;
 
 static void hoisted_automorphism_job(void *ctx, uint64_t i)
 {
     AutomorphismJobs *jobs = (AutomorphismJobs *)ctx;
-    mlwe_automorphism_RNSc_GHS_hoisted(jobs->out[i], jobs->h, jobs->gens[i], jobs->ksks[i],
-                                       jobs->lvl);
+    mlwe_automorphism_RNSc_GHS_hoisted(jobs->out[i], jobs->h, jobs->gens[i], jobs->ksks[i]);
 }
 
 int mlwe_automorphisms_RNSc_GHS_hoisted(RNSc_MLWE *out, MLWE_Hoisted h, const uint64_t *gens,
-                                        RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
-                                        uint64_t n_threads)
+                                        RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads)
 {
     for (uint64_t i = 0; i < n; i++)
     {
         if (!mlwe_hoisted_fits(h, ksks[i]))
             return -1;
     }
-    AutomorphismJobs jobs = {out, h, NULL, gens, ksks, lvl};
+    AutomorphismJobs jobs = {out, h, NULL, gens, ksks};
     vfhe_parallel_for(n, n_threads, hoisted_automorphism_job, &jobs);
     return 0;
 }
@@ -239,12 +235,11 @@ static void automorphism_job(void *ctx, uint64_t i)
             mlwe_copy_RNSc_sample(out, in);
     }
     else
-        mlwe_automorphism_RNSc_GHS(out, in, jobs->gens[i], jobs->ksks[i], jobs->lvl);
+        mlwe_automorphism_RNSc_GHS(out, in, jobs->gens[i], jobs->ksks[i], 0);
 }
 
 void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
-                                      RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
-                                      uint64_t n_threads)
+                                      RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads)
 {
     // Row by row over the whole batch when every sample is a hybrid key
     // switch over RNS rings; a generator 1 (a copy, with no key) or another
@@ -257,7 +252,7 @@ void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint6
         mlwe_rns_automorphism_batch(out, in, gens, ksks, n, n_threads);
         return;
     }
-    AutomorphismJobs jobs = {out, NULL, in, gens, ksks, lvl};
+    AutomorphismJobs jobs = {out, NULL, in, gens, ksks};
     vfhe_parallel_for(n, n_threads, automorphism_job, &jobs);
 }
 
@@ -451,16 +446,6 @@ static void automorphism_mux(RNSc_MLWE out, RNSc_MLWE in, const uint64_t *gens,
     mlwe_RNS_to_RNSc(acc, acc);
     mlwe_mod_down(out, acc, NULL);
     free_mlwe_RNS_sample(acc);
-}
-
-// One multiplexer, after checking its keys.
-int mlwe_automorphism_mux_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, const uint64_t *gens,
-                                   RNS_MLWE_KS_Key *ksks, uint64_t n)
-{
-    if (!automorphism_mux_keys_fit(ksks, n, in->r))
-        return -1;
-    automorphism_mux(out, in, gens, ksks, n);
-    return 0;
 }
 
 typedef struct

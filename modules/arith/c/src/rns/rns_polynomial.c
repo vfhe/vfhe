@@ -533,46 +533,6 @@ void polynomial_mul_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
     rns_product(out, in1, in2, RNS_BLOCK_SUBTO);
 }
 
-// out += sum_t a[t] * b[t] on the rows of out's mask, which it keeps.
-static void inner_product_addto(RNS_Polynomial out, RNS_Polynomial const *a,
-                                RNS_Polynomial const *b, uint64_t terms)
-{
-    RNS_Base base = out->base;
-    // Over a ring that does not split fully a product is a convolution of blocks: term by term.
-    if (base->split_degree != 1)
-    {
-        for (uint64_t t = 0; t < terms; t++)
-        {
-            const uint64_t mask = out->rns_mask;
-            polynomial_mul_addto_RNS_polynomial(out, a[t], b[t]);
-            out->rns_mask = mask;
-        }
-        return;
-    }
-    uint64_t **a_rows = (uint64_t **)safe_malloc((terms > 0 ? terms : 1) * 2 * sizeof(uint64_t *));
-    uint64_t **b_rows = a_rows + terms;
-    for (size_t i = 0; i < base->l; i++)
-    {
-        if (!(out->rns_mask & (1ULL << i)))
-            continue;
-        Modulus mod = base->mods[i];
-        if (rns_row_is_narrow(base, i)) // 32-bit rows: term by term
-        {
-            for (uint64_t t = 0; t < terms; t++)
-                mod_eltwise_mul_addto_w32(out->rows32[i], a[t]->rows32[i], b[t]->rows32[i], base->N,
-                                          mod);
-            continue;
-        }
-        for (uint64_t t = 0; t < terms; t++)
-        {
-            a_rows[t] = a[t]->rows64[i];
-            b_rows[t] = b[t]->rows64[i];
-        }
-        mod_eltwise_inner_product_addto(out->rows64[i], a_rows, b_rows, terms, base->N, mod);
-    }
-    free(a_rows);
-}
-
 // The size of one tile of all the b operands of polynomial_matrix_mul_addto_RNS_polynomial,
 // small enough to stay in cache while every row of a uses it.
 #define MATRIX_TILE_BYTES (1 << 17)
@@ -581,15 +541,22 @@ void polynomial_matrix_mul_addto_RNS_polynomial(RNS_Polynomial *out, RNS_Polynom
                                                 RNS_Polynomial const *b, uint64_t rows,
                                                 uint64_t inner, uint64_t cols)
 {
-    if (rows == 0 || cols == 0)
+    if (rows == 0 || cols == 0 || inner == 0)
         return;
     RNS_Base base = out[0]->base;
     const uint64_t N = base->N, mask = out[0]->rns_mask;
-    if (base->split_degree != 1 || inner == 0)
+    // Over a ring that does not split fully a product is a convolution of blocks: term by term.
+    if (base->split_degree != 1)
     {
         for (uint64_t r = 0; r < rows; r++)
             for (uint64_t c = 0; c < cols; c++)
-                inner_product_addto(out[r * cols + c], a + r * inner, b + c * inner, inner);
+                for (uint64_t t = 0; t < inner; t++)
+                {
+                    RNS_Polynomial o = out[r * cols + c];
+                    const uint64_t keep = o->rns_mask;
+                    polynomial_mul_addto_RNS_polynomial(o, a[r * inner + t], b[c * inner + t]);
+                    o->rns_mask = keep;
+                }
         return;
     }
     uint64_t tile = MATRIX_TILE_BYTES / (cols * inner * sizeof(uint64_t));

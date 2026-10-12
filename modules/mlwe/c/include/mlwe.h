@@ -266,19 +266,17 @@ extern "C"
     MLWE_Hoisted mlwe_hoist(RNSc_MLWE in, RNS_MLWE_KS_Key ksk);
     void free_mlwe_hoisted(MLWE_Hoisted h);
     int mlwe_automorphism_RNSc_GHS_hoisted(RNSc_MLWE out, MLWE_Hoisted h, uint64_t gen,
-                                           RNS_MLWE_KS_Key ksk, uint64_t lvl);
+                                           RNS_MLWE_KS_Key ksk);
     // out[i] = Aut_gens[i](sample of h) for i < n, on up to `n_threads`
     // threads (0: the library limit). Returns -1, writing nothing, if any key
     // does not fit `h`.
     int mlwe_automorphisms_RNSc_GHS_hoisted(RNSc_MLWE *out, MLWE_Hoisted h, const uint64_t *gens,
-                                            RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
-                                            uint64_t n_threads);
+                                            RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
     // out[i] = Aut_gens[i](in[i]) for i < n, canonical, on up to `n_threads`
     // threads (0: the library limit). Inputs may be in either domain and are
     // not modified. gens[i] == 1 copies, and ksks[i] may then be NULL.
     void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
-                                          RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
-                                          uint64_t n_threads);
+                                          RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
     // out = sum_i Aut_gens[i](in[i]) for i < n, canonical, on up to
     // `n_threads` threads. The key-switch products of all terms are
     // accumulated in the keys' ring and divided down once: one inverse
@@ -289,20 +287,18 @@ extern "C"
     // over out's ring and rank, in either domain, and are not modified.
     int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *gens,
                                        RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
-    // The automorphism multiplexer: out = sum_d b_d Aut_gens[d](in) for d < n,
-    // b_d the bit encrypted in ksks[d]. With one bit set, it applies the selected
+    // `count` automorphism multiplexers over the same automorphisms:
+    // out[i] = sum_d b_(i,d) Aut_gens[d](in[i]) for d < n, b_(i,d) the bit
+    // encrypted in ksks[i * n + d]. With one bit set, it applies the selected
     // automorphism without revealing which: the B-to-1 mux-rotate of [CHKS25].
-    // Key d has r + 1 components, each a gadget key array: component i < r
-    // encrypts b_d Aut_gens[d](s_i), component r encrypts b_d. `in` is decomposed
-    // once for all terms, and the sum is divided by the special primes once.
-    // `out` is over in's ring, canonical; `in` may be in either domain, is not
-    // modified, and may be `out`. Returns -1, leaving `out` untouched, if the
-    // keys do not share a ring and gadget or have a pass-through component.
-    int mlwe_automorphism_mux_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, const uint64_t *gens,
-                                       RNS_MLWE_KS_Key *ksks, uint64_t n);
-    // `count` multiplexers over the same automorphisms: out[i] is the above of
-    // in[i] with the keys ksks[i * n .. i * n + n - 1]. Up to `n_threads` threads
-    // (0: the library limit). Returns -1, writing nothing, if any keys do not fit.
+    // A key has r + 1 components, each a gadget key array: component j < r
+    // encrypts b Aut_gens[d](s_j), component r encrypts b. Each input is
+    // decomposed once for all its terms, and each sum is divided by the special
+    // primes once. out[i] is over in[i]'s ring, canonical; in[i] may be in
+    // either domain, is not modified, and may be out[i]. Up to `n_threads`
+    // threads (0: the library limit). Returns -1, writing nothing, if any
+    // item's keys do not share a ring and gadget or have a pass-through
+    // component.
     int mlwe_automorphism_mux_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
                                              RNS_MLWE_KS_Key *ksks, uint64_t count, uint64_t n,
                                              uint64_t n_threads);

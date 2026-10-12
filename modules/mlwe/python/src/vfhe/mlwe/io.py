@@ -165,9 +165,9 @@ class MGSWSchemeCodec(Codec):
     ):
         inner = ctx.deref(meta["mlwe_scheme"])
         params = GadgetParams(
-            meta["log_base"] or None,
-            meta.get("digits"),
-            meta.get("primes_per_digit", 1),
+            meta["log_base"],
+            meta["digits"],
+            meta["primes_per_digit"],
         )
         ident = (codec_for(inner).identity(inner), meta["ell"], params)
         found = ctx.bound(self.tag, ident)
@@ -360,9 +360,9 @@ class KeySwitchKeyCodec(Codec):
         return MLWE_Set(
             components,
             GadgetParams(
-                meta["log_base"] or None,
-                meta.get("digits"),
-                meta.get("primes_per_digit", 1),
+                meta["log_base"],
+                meta["digits"],
+                meta["primes_per_digit"],
             ),
             meta["balanced"],
         )

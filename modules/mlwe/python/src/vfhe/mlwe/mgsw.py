@@ -339,9 +339,6 @@ class MGSW:
 
 
 def CMUX(in1: MLWE, in2: MLWE, selector: MGSW) -> MLWE:
-    # Old Python implementation:
-    # return selector*(in2 - in1) + in1
-
     selector.check_level(in1)
     res = in1.new_like(lvl=in1.lvl)
     in1.to_coeff()
@@ -400,10 +397,6 @@ def CMUX_batch(
 def NCMUX(
     in1: MLWE, in2: MLWE, selector: MGSW, aut_minus1: MLWE_Set | list[MLWE_Set]
 ) -> MLWE:
-    # Old Python implementation:
-    # tmp = in2.scheme.automorphism(in2, 2 * in2.ring.N - 1, aut_minus1)
-    # return CMUX(in1, tmp, selector)
-
     aut_minus1 = aut_minus1 if isinstance(aut_minus1, MLWE_Set) else aut_minus1[in1.lvl]
     selector.check_level(in1)
     res = in1.new_like(lvl=in1.lvl)

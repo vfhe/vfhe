@@ -6,13 +6,19 @@ LWE extraction, verified against a random lookup table.
 """
 
 import random
+from typing import cast
 
 import pytest
 from vfhe import engine
 from vfhe.arith import Ring
-from vfhe.fhe import CGGI16, mod_switch
+from vfhe.fhe import CGGI16
 from vfhe.fhe.cggi16 import unfolded_key_count
 from vfhe.mlwe import LWE, GadgetParams, LWE_Key, MLWE_Scheme
+
+
+def _mod_switch(v: int, q: int, p: int) -> int:
+    """``v`` scaled from ``Z_q`` to ``Z_p``, rounded half up."""
+    return ((2 * v * p + q) // (2 * q)) % p
 
 
 @pytest.mark.complete
@@ -51,7 +57,7 @@ def test_functional_bootstrap(deterministic_prng, balanced, keygen_threads):
     rlwe_tv = cggi16.LUT_packing(lut, lut_size, msg_prec)
 
     msg_val = random.randint(0, lut_size - 1)  # noqa: S311 - test data, not a key
-    m_scaled = mod_switch(msg_val, 1 << msg_prec, in_ring.q_l)
+    m_scaled = _mod_switch(msg_val, 1 << msg_prec, in_ring.q_l)
     lwe_in = LWE(
         ring=in_ring, m=[m_scaled % q for q in in_ring.primes], key=input_lwe_key
     )
@@ -65,8 +71,10 @@ def test_functional_bootstrap(deterministic_prng, balanced, keygen_threads):
     output_lwe_key_ell2 = LWE_Key(
         ring=in_ring, key=output_lwe_key.get_s(), n=output_lwe_key.n
     )
-    decryption = out_lwe.linear_decrypt(output_lwe_key_ell2, recompose=True)
-    assert mod_switch(decryption, in_ring.q_l, 1 << msg_prec) == lut[msg_val]
+    decryption = cast(
+        "int", out_lwe.linear_decrypt(output_lwe_key_ell2, recompose=True)
+    )
+    assert _mod_switch(decryption, in_ring.q_l, 1 << msg_prec) == lut[msg_val]
 
 
 class _Setup:
@@ -106,7 +114,7 @@ class _Setup:
             LWE(
                 ring=self.input_ring,
                 m=[
-                    mod_switch(m, 1 << self.msg_prec, q) % p
+                    _mod_switch(m, 1 << self.msg_prec, q) % p
                     for p in self.input_ring.primes
                 ],
                 key=self.input_key,
@@ -121,8 +129,8 @@ class _Setup:
     def decrypt(self, outs: list[LWE]) -> list[int]:
         q = self.output_ring.q_l
         return [
-            mod_switch(
-                o.linear_decrypt(self.decryption_key, recompose=True),
+            _mod_switch(
+                cast("int", o.linear_decrypt(self.decryption_key, recompose=True)),
                 q,
                 1 << self.msg_prec,
             )

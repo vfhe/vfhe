@@ -716,7 +716,6 @@ class MLWE_Scheme:
                 ffi.new("uint64_t[]", list(gens)),
                 ffi.new("void *[]", [k.obj for k in keys]),
                 len(gens),
-                c.lvl,
                 n_threads,
             )
         finally:
@@ -766,7 +765,6 @@ class MLWE_Scheme:
             ffi.new("uint64_t[]", list(gens)),
             ffi.new("void *[]", keys),
             len(cts),
-            lvl,
             n_threads,
         )
         for out in outs:
