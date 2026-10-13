@@ -179,17 +179,27 @@ static void zero_restores_the_default(void)
     TEST_ASSERT_GREATER_OR_EQUAL_UINT64(1, vfhe_num_threads());
 }
 
-// Kernel thread ids: unlike pthread_t values, not reused as soon as a thread
-// is joined.
+// A number per thread, drawn on first use: unlike pthread_t values, not
+// reused when a thread is joined and another created.
+static atomic_int next_thread_number;
+static _Thread_local int thread_number;
+
+static int this_thread_number(void)
+{
+    if (thread_number == 0)
+        thread_number = atomic_fetch_add(&next_thread_number, 1) + 1;
+    return thread_number;
+}
+
 #define MAX_TIDS 1024
-static pid_t tids[MAX_TIDS];
+static int tids[MAX_TIDS];
 static atomic_int n_tids;
 static pthread_mutex_t tids_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void tid_body(void *ctx, uint64_t i)
 {
     (void)ctx;
-    const pid_t self = gettid();
+    const int self = this_thread_number();
     pthread_mutex_lock(&tids_lock);
     int known = 0;
     for (int k = 0; k < atomic_load(&n_tids); k++)

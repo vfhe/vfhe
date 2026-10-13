@@ -27,6 +27,46 @@
 #define BYPASSED 0
 #endif
 
+// A reusable barrier: Barrier is optional in POSIX, and macOS does
+// not have it.
+typedef struct
+{
+    pthread_mutex_t lock;
+    pthread_cond_t all_arrived;
+    unsigned count, waiting, generation;
+} Barrier;
+
+static void barrier_init(Barrier *b, unsigned count)
+{
+    pthread_mutex_init(&b->lock, NULL);
+    pthread_cond_init(&b->all_arrived, NULL);
+    b->count = count;
+    b->waiting = 0;
+    b->generation = 0;
+}
+
+static void barrier_wait(Barrier *b)
+{
+    pthread_mutex_lock(&b->lock);
+    const unsigned generation = b->generation;
+    if (++b->waiting == b->count)
+    {
+        b->waiting = 0;
+        b->generation++;
+        pthread_cond_broadcast(&b->all_arrived);
+    }
+    else
+        while (generation == b->generation)
+            pthread_cond_wait(&b->all_arrived, &b->lock);
+    pthread_mutex_unlock(&b->lock);
+}
+
+static void barrier_destroy(Barrier *b)
+{
+    pthread_cond_destroy(&b->all_arrived);
+    pthread_mutex_destroy(&b->lock);
+}
+
 #define SIZE (64u * 1024u)
 
 static MempoolStatistics stats(void)
@@ -217,7 +257,7 @@ static void wipe_on_release_zeroes_every_released_buffer(void)
 
 typedef struct
 {
-    pthread_barrier_t retained, released;
+    Barrier retained, released;
     void *handed;
 } Holder;
 
@@ -226,8 +266,8 @@ static void *retain_then_wait(void *arg)
     Holder *h = (Holder *)arg;
     void *p = mempool_aligned_malloc(SIZE);
     mempool_free(p, SIZE);
-    pthread_barrier_wait(&h->retained);
-    pthread_barrier_wait(&h->released);
+    barrier_wait(&h->retained);
+    barrier_wait(&h->released);
     return NULL;
 }
 
@@ -236,18 +276,18 @@ static void *retain_then_wait(void *arg)
 static void release_all_reaches_a_waiting_thread(void)
 {
     Holder h;
-    pthread_barrier_init(&h.retained, NULL, 2);
-    pthread_barrier_init(&h.released, NULL, 2);
+    barrier_init(&h.retained, 2);
+    barrier_init(&h.released, 2);
     pthread_t t;
     pthread_create(&t, NULL, retain_then_wait, &h);
-    pthread_barrier_wait(&h.retained);
+    barrier_wait(&h.retained);
     TEST_ASSERT_EQUAL_UINT64(SIZE, stats().retained_bytes);
     mempool_release_all();
     TEST_ASSERT_EQUAL_UINT64(0, stats().retained_bytes);
-    pthread_barrier_wait(&h.released);
+    barrier_wait(&h.released);
     pthread_join(t, NULL);
-    pthread_barrier_destroy(&h.retained);
-    pthread_barrier_destroy(&h.released);
+    barrier_destroy(&h.retained);
+    barrier_destroy(&h.released);
 }
 
 static void *allocate_only(void *arg)
@@ -344,7 +384,7 @@ static void concurrent_use_hands_no_buffer_to_two_holders(void)
 
 typedef struct
 {
-    pthread_barrier_t *retained, *released;
+    Barrier *retained, *released;
     size_t bytes;
     int count;
 } Retainer;
@@ -357,8 +397,8 @@ static void *retain_count_then_wait(void *arg)
         p[i] = mempool_aligned_malloc(r->bytes);
     for (int i = 0; i < r->count; i++)
         mempool_free(p[i], r->bytes);
-    pthread_barrier_wait(r->retained);
-    pthread_barrier_wait(r->released);
+    barrier_wait(r->retained);
+    barrier_wait(r->released);
     return NULL;
 }
 
@@ -370,25 +410,25 @@ static void a_fixed_capacity_bounds_what_all_threads_retain(void)
         THREADS = 6
     };
     mempool_set_capacity(5 * SIZE);
-    pthread_barrier_t retained, released;
-    pthread_barrier_init(&retained, NULL, THREADS + 1);
-    pthread_barrier_init(&released, NULL, THREADS + 1);
+    Barrier retained, released;
+    barrier_init(&retained, THREADS + 1);
+    barrier_init(&released, THREADS + 1);
     Retainer r = {&retained, &released, SIZE, 2};
     pthread_t t[THREADS];
     for (int i = 0; i < THREADS; i++)
         pthread_create(&t[i], NULL, retain_count_then_wait, &r);
-    pthread_barrier_wait(&retained);
+    barrier_wait(&retained);
     TEST_ASSERT_EQUAL_UINT64(5 * SIZE, stats().retained_bytes);
-    pthread_barrier_wait(&released);
+    barrier_wait(&released);
     for (int i = 0; i < THREADS; i++)
         pthread_join(t[i], NULL);
-    pthread_barrier_destroy(&retained);
-    pthread_barrier_destroy(&released);
+    barrier_destroy(&retained);
+    barrier_destroy(&released);
 }
 
 typedef struct
 {
-    pthread_barrier_t *step;
+    Barrier *step;
     int rounds;
 } Cycler;
 
@@ -401,13 +441,13 @@ static void *cycle_in_step(void *arg)
     void *p[MANY];
     for (int round = 0; round < c->rounds; round++)
     {
-        pthread_barrier_wait(c->step);
+        barrier_wait(c->step);
         for (int i = 0; i < MANY; i++)
             p[i] = mempool_aligned_malloc(SIZE);
-        pthread_barrier_wait(c->step);
+        barrier_wait(c->step);
         for (int i = 0; i < MANY; i++)
             mempool_free(p[i], SIZE);
-        pthread_barrier_wait(c->step);
+        barrier_wait(c->step);
     }
     return NULL;
 }
@@ -426,24 +466,24 @@ static void auto_capacity_keeps_every_threads_live_set(void)
     };
     TEST_ASSERT_LESS_THAN_UINT64_MESSAGE(2 * MANY * SIZE, stats().peak_outstanding_bytes,
                                          "an earlier test peaked too high for this one");
-    pthread_barrier_t step;
-    pthread_barrier_init(&step, NULL, THREADS + 1);
+    Barrier step;
+    barrier_init(&step, THREADS + 1);
     Cycler c = {&step, 2};
     pthread_t t[THREADS];
     for (int i = 0; i < THREADS; i++)
         pthread_create(&t[i], NULL, cycle_in_step, &c);
-    pthread_barrier_wait(&step);
-    pthread_barrier_wait(&step);
+    barrier_wait(&step);
+    barrier_wait(&step);
     const uint64_t peak = stats().peak_outstanding_bytes;
-    pthread_barrier_wait(&step);
+    barrier_wait(&step);
     const uint64_t retained = stats().retained_bytes;
     const uint64_t misses_before = stats().misses;
     for (int i = 0; i < 3; i++)
-        pthread_barrier_wait(&step);
+        barrier_wait(&step);
     const uint64_t misses_after = stats().misses;
     for (int i = 0; i < THREADS; i++)
         pthread_join(t[i], NULL);
-    pthread_barrier_destroy(&step);
+    barrier_destroy(&step);
     TEST_ASSERT_GREATER_OR_EQUAL_UINT64(THREADS * MANY * SIZE, peak);
     TEST_ASSERT_EQUAL_UINT64(THREADS * MANY * SIZE, retained);
     TEST_ASSERT_EQUAL_UINT64(misses_before, misses_after);
@@ -485,11 +525,11 @@ static void an_exited_thread_leaves_the_capacity_whole(void)
 static void a_forked_child_uses_the_pool(void)
 {
     Holder h;
-    pthread_barrier_init(&h.retained, NULL, 2);
-    pthread_barrier_init(&h.released, NULL, 2);
+    barrier_init(&h.retained, 2);
+    barrier_init(&h.released, 2);
     pthread_t t;
     pthread_create(&t, NULL, retain_then_wait, &h);
-    pthread_barrier_wait(&h.retained);
+    barrier_wait(&h.retained);
     void *mine = mempool_aligned_malloc(2 * SIZE);
     mempool_free(mine, 2 * SIZE);
 
@@ -513,10 +553,10 @@ static void a_forked_child_uses_the_pool(void)
     TEST_ASSERT_TRUE(WIFEXITED(status));
     TEST_ASSERT_EQUAL_INT(0, WEXITSTATUS(status));
     TEST_ASSERT_EQUAL_UINT64(3 * SIZE, stats().retained_bytes);
-    pthread_barrier_wait(&h.released);
+    barrier_wait(&h.released);
     pthread_join(t, NULL);
-    pthread_barrier_destroy(&h.retained);
-    pthread_barrier_destroy(&h.released);
+    barrier_destroy(&h.retained);
+    barrier_destroy(&h.released);
 }
 
 int main(void)
