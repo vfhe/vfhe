@@ -27,6 +27,10 @@ updates:
       dev:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    ignore:
+      # Sphinx holds docutils below 0.23; a constraints file cannot say so.
+      - dependency-name: docutils
+        versions: [">=0.23"]
     commit-message:
       prefix: "deps"
 
