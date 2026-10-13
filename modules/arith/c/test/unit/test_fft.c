@@ -56,6 +56,24 @@ static double *random_buffer(uint64_t n)
     return x;
 }
 
+// A sum that carries the rounding error of every product and addition, so the
+// reference stays accurate where long double is no wider than double (Apple
+// arm64).
+typedef struct
+{
+    long double hi, lo;
+} Sum;
+
+static void add_product(Sum *s, long double a, long double b)
+{
+    const long double p = a * b;
+    const long double p_err = fmal(a, b, -p);
+    const long double t = s->hi + p;
+    const long double t_err = fabsl(s->hi) >= fabsl(p) ? (s->hi - t) + p : (p - t) + s->hi;
+    s->hi = t;
+    s->lo += t_err + p_err;
+}
+
 void test_fft_matches_the_defining_sum(void)
 {
     const long double pi = 3.141592653589793238462643383279502884L;
@@ -79,16 +97,18 @@ void test_fft_matches_the_defining_sum(void)
         for (uint64_t k = 0; k < m; k++)
         {
             // f(zeta^(4k+1))
-            long double re = 0, im = 0;
+            Sum re = {0, 0}, im = {0, 0};
             for (uint64_t j = 0; j < n; j++)
             {
                 const uint64_t t = ((4 * k + 1) * j) % (2 * n);
-                re += a[j] * cs[t];
-                im += a[j] * sn[t];
+                add_product(&re, a[j], cs[t]);
+                add_product(&im, a[j], sn[t]);
             }
             const uint64_t at = reverse_bits(k, bits);
-            err += (x[at] - re) * (x[at] - re) + (x[m + at] - im) * (x[m + at] - im);
-            norm += re * re + im * im;
+            const long double d_re = (x[at] - re.hi) - re.lo;
+            const long double d_im = (x[m + at] - im.hi) - im.lo;
+            err += d_re * d_re + d_im * d_im;
+            norm += re.hi * re.hi + im.hi * im.hi;
         }
         TEST_ASSERT_TRUE_MESSAGE(sqrtl(err / norm) < 1e-15L, "relative error above 1e-15");
         free(cs);

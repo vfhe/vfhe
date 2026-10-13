@@ -76,8 +76,12 @@
  * double first (pi times a ratio, two roundings) puts an error of a few ulp in
  * every twiddle, which is enough to make the transform's output error about
  * 1.7x larger. The tables are built once per plan, so the cost is irrelevant.
+ * Where long double is no wider than double (Apple), the angle over pi, which
+ * is exact in double, goes to __cospi / __sinpi instead; elsewhere such a
+ * platform falls back to long double and gets the double-rounded twiddles.
  */
 #include <arith.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -745,7 +749,9 @@ FFT_Plan fft_new_plan(uint64_t n)
     c->wsn_im = (double *)safe_aligned_malloc(m * sizeof(double));
 
     // Group i at level h: angle pi (4 brv(i) + 1) / (4h). Index 0 is unused.
+#if !(LDBL_MANT_DIG <= DBL_MANT_DIG && defined(__APPLE__))
     const long double pi = 3.141592653589793238462643383279502884L;
+#endif
     c->ws_re[0] = 1.0;
     c->ws_im[0] = 0.0;
     unsigned bits = 0;
@@ -753,10 +759,17 @@ FFT_Plan fft_new_plan(uint64_t n)
     {
         for (size_t i = 0; i < h; i++)
         {
+#if LDBL_MANT_DIG <= DBL_MANT_DIG && defined(__APPLE__)
+            // An odd integer over a power of two below 2^22: exact in double.
+            const double x = (4.0 * (double)arith_bit_reverse(i, bits) + 1.0) / (4.0 * (double)h);
+            c->ws_re[h + i] = __cospi(x);
+            c->ws_im[h + i] = __sinpi(x);
+#else
             const long double x = pi * (4.0L * (long double)arith_bit_reverse(i, bits) + 1.0L) /
                                   (4.0L * (long double)h);
             c->ws_re[h + i] = (double)cosl(x);
             c->ws_im[h + i] = (double)sinl(x);
+#endif
         }
     }
     for (size_t i = 0; i < m; i++)
