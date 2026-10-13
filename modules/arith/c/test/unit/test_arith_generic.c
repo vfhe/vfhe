@@ -897,6 +897,7 @@ void test_matrix_product_over_a_ring_that_is_not_fully_split(void)
     RNS_Base split = new_rns_base(PRIMES, 2, TEST_N, TEST_L);
     check_matrix_product(split, TEST_MASK);
     check_matrix_product(split, 0x6);
+    rns_base_free(split);
 }
 
 int main(void)
