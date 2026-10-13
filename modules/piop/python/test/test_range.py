@@ -5,6 +5,7 @@
 the statements it reduces to, and the three ways a prover can cheat -- each
 rejected by the branch that is supposed to catch it."""
 
+import math
 import random
 
 import pytest
@@ -73,6 +74,18 @@ def _iop(field, protocol=None, **kw):
 
 def _statement(v):
     return Statement(Relation_Range(BOUND, CHUNKS), oracles=[v])
+
+
+def _most_acceptances(runs, error, false_failure=1e-6):
+    """The most of `runs` independent cheating runs a protocol of soundness
+    error `error` accepts, except with probability below `false_failure`
+    (the binomial tail)."""
+    tail = 1.0
+    for t in range(runs + 1):
+        tail -= math.comb(runs, t) * error**t * (1 - error) ** (runs - t)
+        if tail < false_failure:
+            return t
+    return runs
 
 
 # --- the relations' ideal deciders -----------------------------------------
@@ -223,7 +236,11 @@ def test_decomposition_accepts_an_honest_witness(ring, field):
 )
 def test_decomposition_across_the_parameter_knobs(ring, field, bound, chunks, m, kappa):
     """m, kappa and c move the block boundaries of the digit table; each
-    setting has to survive an honest run and reject a bad coefficient."""
+    setting has to survive an honest run and reject a bad coefficient.
+
+    With one repetition the soundness error is ``(ell + nu) / sigma``, about
+    2% here, so a single cheating run may pass: the cheating run is repeated
+    and its acceptances are held to what that error allows."""
     good = _witness(ring, seed=20 + m + chunks, bound=bound)
     statement = Statement(Relation_Range(bound, chunks), oracles=[good])
     protocol = RangeDecomposition(field, m=m, alphabet=ALPHABET, kappa=kappa)
@@ -233,11 +250,17 @@ def test_decomposition_across_the_parameter_knobs(ring, field, bound, chunks, m,
     assert iop.run(statement)
 
     bad = _witness(ring, bound=bound, tweak=lambda c: c.__setitem__(1, bound + 1))
-    iop = IOP(domain=field)
-    iop.register(
-        Relation_Range, RangeDecomposition(field, m=m, alphabet=ALPHABET, kappa=kappa)
-    )
-    assert not iop.run(Statement(Relation_Range(bound, chunks), oracles=[bad]))
+    cheating = Statement(Relation_Range(bound, chunks), oracles=[bad])
+    runs = 64
+    accepted = 0
+    for _ in range(runs):
+        iop = IOP(domain=field)
+        iop.register(
+            Relation_Range,
+            RangeDecomposition(field, m=m, alphabet=ALPHABET, kappa=kappa),
+        )
+        accepted += bool(iop.run(cheating))
+    assert accepted <= _most_acceptances(runs, protocol.soundness_error(cheating))
 
 
 def test_decomposition_emits_the_expected_bundle(ring, field):
