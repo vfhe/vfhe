@@ -485,33 +485,14 @@ void mlwe_tensor_product(ArithElement *out, RNS_MLWE in1, RNS_MLWE in2)
     const uint64_t R = mlwe_extended_rank(r);
     if (in1->ring->impl == ARITH_IMPL_RNS && mlwe_rns_tensor_product(out, in1, in2) == 0)
         return;
-    size_t k = 0;
-
-    // Quadratic slots: q_ij for i <= j.
-    for (size_t i = 0; i < r; i++)
+    for (uint64_t k = 0; k <= R; k++)
     {
-        for (size_t j = i; j < r; j++)
-        {
-            arith_mul(in1->ring, &out[k], &in1->a[i], &in2->a[j]);
-            if (i != j)
-            {
-                arith_mul_addto(in1->ring, &out[k], &in1->a[j], &in2->a[i]);
-            }
-            k++;
-        }
+        uint64_t i, j;
+        const bool cross = mlwe_tensor_slot_factors(r, k, &i, &j);
+        arith_mul(in1->ring, &out[k], mlwe_component(in1, i), mlwe_component(in2, j));
+        if (cross)
+            arith_mul_addto(in1->ring, &out[k], mlwe_component(in1, j), mlwe_component(in2, i));
     }
-
-    // Linear slots: a1_i*b2 + b1*a2_i.
-    for (size_t i = 0; i < r; i++)
-    {
-        arith_mul(in1->ring, &out[k], &in1->a[i], &in2->b);
-        arith_mul_addto(in1->ring, &out[k], &in1->b, &in2->a[i]);
-        k++;
-    }
-    assert(k == R);
-
-    // Constant term.
-    arith_mul(in1->ring, &out[R], &in1->b, &in2->b);
 }
 
 // The product relinearized to rank r, in the canonical domain. Reuses the GHS
@@ -692,7 +673,7 @@ void mlwe_mod_down(RNSc_MLWE out, RNSc_MLWE in, const ArithElement *const *adden
     mlwe_copy_RNSc_sample(out, in);
     for (size_t k = 0; addend && k <= out->r; k++)
     {
-        ArithElement *e = k < out->r ? &out->a[k] : &out->b;
+        ArithElement *e = mlwe_component(out, k);
         if (addend[k])
             arith_add(out->ring, e, e, addend[k]);
     }

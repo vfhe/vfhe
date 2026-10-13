@@ -11,14 +11,6 @@
 #include <immintrin.h>
 #endif
 
-static uint32_t reverse_bits(uint32_t x, uint32_t bits)
-{
-    uint32_t r = 0;
-    for (uint32_t b = 0; b < bits; b++)
-        r |= ((x >> b) & 1u) << (bits - 1 - b);
-    return r;
-}
-
 // zeta^(5^j) is zeta^(4k+1) for k = (5^j mod 4N - 1) / 4: every power of 5 is
 // 1 mod 4, and the powers of 5 below 4N are exactly the residues 1 mod 4.
 void complex_slot_positions(uint32_t *out, uint64_t N)
@@ -30,7 +22,7 @@ void complex_slot_positions(uint32_t *out, uint64_t N)
     uint64_t e = 1;
     for (uint64_t j = 0; j < N; j++)
     {
-        out[j] = reverse_bits((uint32_t)((e - 1) / 4), bits);
+        out[j] = (uint32_t)arith_bit_reverse((e - 1) / 4, bits);
         e = (e * 5) & mask;
     }
 }

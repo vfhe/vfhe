@@ -253,11 +253,6 @@ static void check_dropped_digits(RNS_Polynomial source, const GadgetParams *gadg
 #endif
 }
 
-static RNS_Polynomial sample_part(RNS_MLWE c, uint64_t k)
-{
-    return arith_rns_polynomial(k < c->r ? &c->a[k] : &c->b);
-}
-
 void gadget_sum_init(GadgetSum *s, RNS_MLWE *const *ksk, const ArithElement *const *poly,
                      uint64_t n_terms, const GadgetParams *gadget_params, int subtract)
 {
@@ -302,8 +297,10 @@ void gadget_sum_row(const GadgetSum *s, RNS_MLWE out, uint64_t group, uint64_t g
         polynomial_RNSc_to_RNS((RNS_Polynomial)tmp, tmp);
         for (uint64_t k = 0; k < s->components; k++)
         {
-            RNS_Polynomial o = polynomial_RNS_view(&out_storage, sample_part(out, k), row_mask);
-            RNS_Polynomial x = polynomial_RNS_view(&key_storage, sample_part(key, k), row_mask);
+            RNS_Polynomial o =
+                polynomial_RNS_view(&out_storage, mlwe_component_rows(out, k), row_mask);
+            RNS_Polynomial x =
+                polynomial_RNS_view(&key_storage, mlwe_component_rows(key, k), row_mask);
             if (s->subtract)
                 polynomial_mul_subto_RNS_polynomial(o, x, (RNS_Polynomial)tmp);
             else
@@ -317,7 +314,7 @@ uint64_t gadget_sum_mask(const GadgetSum *s, uint64_t k)
 {
     // What the last product gives every row.
     const uint64_t d = s->n_digits - 1;
-    return sample_part(s->ksk[s->term_of[d]][s->digit_of[d]], k)->rns_mask & s->key_mask;
+    return mlwe_component_rows(s->ksk[s->term_of[d]][s->digit_of[d]], k)->rns_mask & s->key_mask;
 }
 
 void gadget_sum_free(GadgetSum *s)
@@ -349,7 +346,8 @@ static void grouped_sum_row(void *ctx, uint64_t row, uint64_t group)
     {
         struct _RNS_Polynomial storage;
         for (uint64_t k = 0; k < t->sum->components; k++)
-            polynomial_RNS_zero(polynomial_RNS_view(&storage, sample_part(acc, k), 1ULL << row));
+            polynomial_RNS_zero(
+                polynomial_RNS_view(&storage, mlwe_component_rows(acc, k), 1ULL << row));
     }
     gadget_sum_row(t->sum, acc, group, t->groups, row);
 }
@@ -358,10 +356,13 @@ static void add_group_sums_row(void *ctx, uint64_t row, uint64_t k)
 {
     const GroupedSum *t = (const GroupedSum *)ctx;
     struct _RNS_Polynomial out_storage, storage;
-    RNS_Polynomial o = polynomial_RNS_view(&out_storage, sample_part(t->out, k), 1ULL << row);
+    RNS_Polynomial o =
+        polynomial_RNS_view(&out_storage, mlwe_component_rows(t->out, k), 1ULL << row);
     for (uint64_t g = 1; g < t->groups; g++)
         polynomial_add_RNS_polynomial(
-            o, o, polynomial_RNS_view(&storage, sample_part(t->group_acc[g - 1], k), 1ULL << row));
+            o, o,
+            polynomial_RNS_view(&storage, mlwe_component_rows(t->group_acc[g - 1], k),
+                                1ULL << row));
 }
 
 static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
@@ -377,7 +378,7 @@ static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElemen
         return;
     GadgetSum sum;
     gadget_sum_init(&sum, &ksk, &poly, 1, gadget_params, subtract);
-    const uint64_t N = sample_part(out, 0)->base->N;
+    const uint64_t N = mlwe_component_rows(out, 0)->base->N;
     const uint64_t groups =
         rns_rows_parts(N, (uint64_t)__builtin_popcountll(sum.key_mask), sum.n_digits, 0);
     RNS_MLWE group_acc[groups > 1 ? groups - 1 : 1];
@@ -385,7 +386,7 @@ static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElemen
     {
         group_acc[g - 1] = mlwe_alloc_sample(out->ring, out->r);
         for (uint64_t k = 0; k <= out->r; k++)
-            sample_part(group_acc[g - 1], k)->rns_mask = sum.key_mask;
+            mlwe_component_rows(group_acc[g - 1], k)->rns_mask = sum.key_mask;
     }
     GroupedSum t = {&sum, out, group_acc, groups};
     rns_rows_for(N, sum.key_mask, groups, grouped_sum_row, &t);
@@ -397,7 +398,7 @@ static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElemen
     // Each row's last product set that row's mask in its view; the mask of
     // the whole element is what that product gives on every row.
     for (uint64_t k = 0; k <= out->r; k++)
-        sample_part(out, k)->rns_mask = gadget_sum_mask(&sum, k);
+        mlwe_component_rows(out, k)->rns_mask = gadget_sum_mask(&sum, k);
     gadget_sum_free(&sum);
 }
 
@@ -558,9 +559,10 @@ static void automorphism_product_row(void *ctx, uint64_t row, uint64_t part)
         }
         for (uint64_t k = 0; k < parts; k++)
         {
-            RNS_Polynomial o = polynomial_RNS_view(&out_storage, sample_part(p->out, k), row_mask);
+            RNS_Polynomial o =
+                polynomial_RNS_view(&out_storage, mlwe_component_rows(p->out, k), row_mask);
             RNS_Polynomial x =
-                polynomial_RNS_view(&key_storage, sample_part(p->ksk[i], k), row_mask);
+                polynomial_RNS_view(&key_storage, mlwe_component_rows(p->ksk[i], k), row_mask);
             if (p->subtract)
                 polynomial_mul_subto_RNS_polynomial(o, x, factor);
             else
@@ -593,8 +595,8 @@ static void gadget_mul_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDig
 
     // As in gadget_mul_accumulate: the mask the last product gives every row.
     for (uint64_t k = 0; k <= out->r; k++)
-        sample_part(out, k)->rns_mask =
-            sample_part(ksk[digits->n - 1], k)->rns_mask & first->rns_mask;
+        mlwe_component_rows(out, k)->rns_mask =
+            mlwe_component_rows(ksk[digits->n - 1], k)->rns_mask & first->rns_mask;
 }
 
 void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,

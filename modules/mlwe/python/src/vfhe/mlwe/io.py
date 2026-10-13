@@ -46,6 +46,18 @@ if TYPE_CHECKING:
 SEED_BYTES = 32
 
 
+def _gadget_meta(params: GadgetParams) -> dict[str, Any]:
+    return {
+        "log_base": params.log_base,
+        "digits": params.digits,
+        "primes_per_digit": params.primes_per_digit,
+    }
+
+
+def _gadget_params(meta: dict[str, Any]) -> GadgetParams:
+    return GadgetParams(meta["log_base"], meta["digits"], meta["primes_per_digit"])
+
+
 # --- schemes ---------------------------------------------------------------
 
 
@@ -153,9 +165,7 @@ class MGSWSchemeCodec(Codec):
             {
                 "mlwe_scheme": ctx.ref(obj.mlwe_scheme),
                 "ell": obj.ell,
-                "log_base": obj.gadget_params.log_base,
-                "digits": obj.gadget_params.digits,
-                "primes_per_digit": obj.gadget_params.primes_per_digit,
+                **_gadget_meta(obj.gadget_params),
                 "balanced": obj.balanced,
             }
         )
@@ -164,11 +174,7 @@ class MGSWSchemeCodec(Codec):
         self, meta: dict, _payload: Payload, _children: list, ctx: ReadContext, /
     ):
         inner = ctx.deref(meta["mlwe_scheme"])
-        params = GadgetParams(
-            meta["log_base"],
-            meta["digits"],
-            meta["primes_per_digit"],
-        )
+        params = _gadget_params(meta)
         ident = (codec_for(inner).identity(inner), meta["ell"], params)
         found = ctx.bound(self.tag, ident)
         if found is not None:
@@ -328,12 +334,7 @@ class KeySwitchKeyCodec(Codec):
     def encode(self, obj: MLWE_Set, ctx: WriteContext, /) -> Encoded:
         if obj.dim > 2:
             return Encoded(
-                {
-                    "log_base": obj.gadget_params.log_base,
-                    "digits": obj.gadget_params.digits,
-                    "primes_per_digit": obj.gadget_params.primes_per_digit,
-                    "balanced": obj.balanced,
-                },
+                {**_gadget_meta(obj.gadget_params), "balanced": obj.balanced},
                 children=vars(obj)["_children"],
             )
         lengths = [None if comp is None else len(comp) for comp in obj.mlwe]
@@ -341,9 +342,7 @@ class KeySwitchKeyCodec(Codec):
         batch = SampleBatch(samples, ctx)
         meta = {
             **batch.meta,
-            "log_base": obj.gadget_params.log_base,
-            "digits": obj.gadget_params.digits,
-            "primes_per_digit": obj.gadget_params.primes_per_digit,
+            **_gadget_meta(obj.gadget_params),
             "balanced": obj.balanced,
             "lengths": lengths,
         }
@@ -357,15 +356,7 @@ class KeySwitchKeyCodec(Codec):
             None if n is None else [next(samples) for _ in range(n)]
             for n in meta["lengths"]
         ]
-        return MLWE_Set(
-            components,
-            GadgetParams(
-                meta["log_base"],
-                meta["digits"],
-                meta["primes_per_digit"],
-            ),
-            meta["balanced"],
-        )
+        return MLWE_Set(components, _gadget_params(meta), meta["balanced"])
 
 
 class MGSWCodec(Codec):

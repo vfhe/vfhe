@@ -14,6 +14,46 @@
 
 #include <stdbool.h>
 
+// Component k of a sample: a[k] for k < r, and the body b for k == r.
+static inline ArithElement *mlwe_component(MLWE c, uint64_t k)
+{
+    return k < c->r ? &c->a[k] : &c->b;
+}
+
+// The RNS polynomial of component k of a sample over an RNS ring.
+static inline RNS_Polynomial mlwe_component_rows(MLWE c, uint64_t k)
+{
+    return arith_rns_polynomial(mlwe_component(c, k));
+}
+
+// The slot of the quadratic term s_p * s_q, p <= q < r, in a tensor product
+// of rank-r samples. mlwe_tensor_product lays the slots out as the quadratic
+// pairs in lexicographic order, then the r linear terms, then the constant.
+static inline uint64_t mlwe_quadratic_slot(uint64_t r, uint64_t p, uint64_t q)
+{
+    return p * r - p * (p - 1) / 2 + (q - p);
+}
+
+// The factors of slot k <= mlwe_extended_rank(r) of the tensor product of x
+// and y, component r standing for the body: x[*i] * y[*j], plus
+// x[*j] * y[*i] when it returns true.
+static inline bool mlwe_tensor_slot_factors(uint64_t r, uint64_t k, uint64_t *i, uint64_t *j)
+{
+    const uint64_t quadratic = r * (r + 1) / 2;
+    if (k >= quadratic)
+    {
+        *i = k - quadratic;
+        *j = r;
+        return *i < r;
+    }
+    uint64_t p = 0;
+    while (k >= mlwe_quadratic_slot(r, p + 1, p + 1))
+        p++;
+    *i = p;
+    *j = p + (k - mlwe_quadratic_slot(r, p, p));
+    return *i != *j;
+}
+
 // Below this ring dimension a row is too little work to hand to another
 // thread: the hand-off costs more than the row.
 #define ROWS_MIN_N 4096

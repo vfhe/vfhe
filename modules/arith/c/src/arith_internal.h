@@ -62,6 +62,18 @@ void mod_eltwise_reduce_centered_gen(uint64_t *out, uint64_t *in, uint64_t q_in,
 void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
                              Modulus mod);
 
+// The low `bits` bits of x reversed, for bits <= 32.
+static inline uint64_t arith_bit_reverse(uint64_t x, uint64_t bits)
+{
+    uint32_t v = (uint32_t)x;
+    v = ((v >> 1) & 0x55555555u) | ((v & 0x55555555u) << 1);
+    v = ((v >> 2) & 0x33333333u) | ((v & 0x33333333u) << 2);
+    v = ((v >> 4) & 0x0F0F0F0Fu) | ((v & 0x0F0F0F0Fu) << 4);
+    v = ((v >> 8) & 0x00FF00FFu) | ((v & 0x00FF00FFu) << 8);
+    v = (v >> 16) | (v << 16);
+    return bits ? (uint64_t)(v >> (32 - bits)) : 0;
+}
+
 /* x in [0, q_in) as its centered representative x - [x > q_in / 2] * q_in,
    mod q. Adding neg_q_in = -q_in mod q instead keeps it one unsigned
    reduction, of a value below q_in + q. */

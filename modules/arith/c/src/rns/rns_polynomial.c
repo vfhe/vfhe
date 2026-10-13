@@ -1840,18 +1840,6 @@ void polynomial_RNSc_permute(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t g
     }
 }
 
-// The low `bits` bits of x reversed, for bits <= 32.
-static uint64_t rns_index_bit_reverse(uint64_t x, uint64_t bits)
-{
-    uint32_t v = (uint32_t)x;
-    v = ((v >> 1) & 0x55555555u) | ((v & 0x55555555u) << 1);
-    v = ((v >> 2) & 0x33333333u) | ((v & 0x33333333u) << 2);
-    v = ((v >> 4) & 0x0F0F0F0Fu) | ((v & 0x0F0F0F0Fu) << 4);
-    v = ((v >> 8) & 0x00FF00FFu) | ((v & 0x00FF00FFu) << 8);
-    v = (v >> 16) | (v << 16);
-    return bits ? (uint64_t)(v >> (32 - bits)) : 0;
-}
-
 // Position p holds P(psi^(2 brv(p) + 1)); P(X) -> P(X^gen) takes position p
 // to the position holding that point raised to `gen`.
 void polynomial_RNS_automorphism_index(uint32_t *idx, uint64_t N, uint64_t gen)
@@ -1863,8 +1851,8 @@ void polynomial_RNS_automorphism_index(uint32_t *idx, uint64_t N, uint64_t gen)
     const uint64_t mask_2n = 2 * N - 1;
     for (uint64_t p = 0; p < N; p++)
     {
-        const uint64_t point = (2 * rns_index_bit_reverse(p, log_n) + 1) * gen & mask_2n;
-        idx[p] = (uint32_t)rns_index_bit_reverse(point >> 1, log_n);
+        const uint64_t point = (2 * arith_bit_reverse(p, log_n) + 1) * gen & mask_2n;
+        idx[p] = (uint32_t)arith_bit_reverse(point >> 1, log_n);
     }
 }
 

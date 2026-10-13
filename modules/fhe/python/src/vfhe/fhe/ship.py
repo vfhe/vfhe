@@ -289,8 +289,7 @@ class SHIP:
     def _rotation_generator(self, k: int) -> int:
         """The Galois element of the paper's ``Rot_k`` (right by ``k`` slots),
         i.e. `CKKS_Scheme.rotate` by ``-k``."""
-        N = self.scheme.N
-        return pow(5, (-k) % (N // 2), 2 * N)
+        return self.scheme.rotation_generator(-k)
 
     def _mux_generators(self, p: int) -> list[int]:
         step = self.base**p * self.theta
@@ -411,7 +410,7 @@ class SHIP:
             scheme.gen_ksk_automorphism_set(
                 output_key,
                 output_key.at_ring(scheme.special_rings[lvl]),
-                [pow(5, k, 2 * N) for k in rotations],
+                [scheme.rotation_generator(k) for k in rotations],
                 lvl,
                 params,
                 n_threads,

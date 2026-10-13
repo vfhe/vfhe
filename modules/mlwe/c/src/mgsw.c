@@ -187,13 +187,6 @@ typedef struct
     RNS_MLWE_KS_Key aut, rlk;
 } Automorphism;
 
-// Slot of the quadratic term s_p * s_q (p <= q) in an extended sample of rank r, as
-// mlwe_tensor_product lays them out.
-static uint64_t quadratic_slot(uint64_t r, uint64_t p, uint64_t q)
-{
-    return p * r - p * (p - 1) / 2 + (q - p);
-}
-
 static void automorphism_column(void *ctx, uint64_t k)
 {
     const Automorphism *A = (const Automorphism *)ctx;
@@ -219,7 +212,7 @@ static void automorphism_column(void *ctx, uint64_t k)
         for (uint64_t i = 0; i < r; i++)
         {
             const uint64_t p = i < j ? i : j, q = i < j ? j : i;
-            arith_copy(ring, &ext->a[quadratic_slot(r, p, q)], &z->a[i]);
+            arith_copy(ring, &ext->a[mlwe_quadratic_slot(r, p, q)], &z->a[i]);
         }
         arith_copy(ring, &ext->a[R - r + j], &z->b);
         RNS_MLWE row = mlwe_alloc_sample(ring, r);
@@ -281,11 +274,6 @@ typedef struct
     uint64_t width, ell;
     const GadgetParams *gadget_params;
 } Shift;
-
-static RNS_Polynomial sample_component(MLWE c, uint64_t k)
-{
-    return arith_rns_polynomial(k < c->r ? &c->a[k] : &c->b);
-}
 
 // One sequence being shifted. A digit is numbered d = j * ell + i, digit i of component j, the
 // order of an MGSW key's rows. Digit rows are one-row polynomials, recycled through a stack of
@@ -369,13 +357,13 @@ static void block_row(void *ctx, uint64_t row, uint64_t part)
             for (uint64_t d = 0; d < digits; d++)
                 lhs[o * terms + t * digits + d] = digit_rows[d * window + q - t];
         for (uint64_t k = 0; k < c; k++)
-            acc_rows[o * c + k] =
-                polynomial_RNS_view(&views[o * c + k], sample_component(S->acc[slot], k), row_mask);
+            acc_rows[o * c + k] = polynomial_RNS_view(
+                &views[o * c + k], mlwe_component_rows(S->acc[slot], k), row_mask);
     }
     for (uint64_t k = 0; k < c; k++)
         for (uint64_t t = 0; t <= w; t++)
             for (uint64_t d = 0; d < digits; d++)
-                rhs[k * terms + t * digits + d] = sample_component(shift->lag_keys[t][d], k);
+                rhs[k * terms + t * digits + d] = mlwe_component_rows(shift->lag_keys[t][d], k);
     polynomial_matrix_mul_addto_RNS_polynomial(acc_rows, lhs, rhs, outputs, terms, c);
 
     // Keep the last w inputs' digit rows; recycle the others.
@@ -449,8 +437,7 @@ static void shift_sequence(void *ctx, uint64_t s)
             for (uint64_t j = 0; j < c; j++)
             {
                 ElementDecomposition *e = gadget_decomposition_new(
-                    &shift->lag_keys[1][j * ell], j < input->r ? &input->a[j] : &input->b,
-                    shift->gadget_params);
+                    &shift->lag_keys[1][j * ell], mlwe_component(input, j), shift->gadget_params);
                 assert(gadget_decomposition_digits(e) <= ell);
                 S.decompositions[(q - start) * c + j] = e;
             }
@@ -465,7 +452,7 @@ static void shift_sequence(void *ctx, uint64_t s)
         {
             RNSc_MLWE input = automorphed[q - start] != NULL ? automorphed[q - start] : x[q];
             for (uint64_t j = 0; j < c; j++)
-                own_input[j] = j < input->r ? &input->a[j] : &input->b;
+                own_input[j] = mlwe_component(input, j);
             mlwe_RNS_to_RNSc(S.acc[q - start], S.acc[q - start]);
             mlwe_mod_down(y[q - w], S.acc[q - start], own_input);
         }

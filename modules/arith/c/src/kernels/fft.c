@@ -675,14 +675,6 @@ static bool fft_vectorized(const struct _FFT_Plan *c)
 #endif
 }
 
-static unsigned brv(unsigned x, unsigned bits)
-{
-    unsigned r = 0;
-    for (unsigned b = 0; b < bits; b++)
-        r |= ((x >> b) & 1u) << (bits - 1 - b);
-    return r;
-}
-
 /* The fused tail's per-lane tables: one vector per vector of data, the
  * forward's with the butterfly's sign folded in (+w on the u lanes, -w on the
  * v lanes), the inverse's with the identity (1, 0) on the u lanes and conj(w)
@@ -761,8 +753,8 @@ FFT_Plan fft_new_plan(uint64_t n)
     {
         for (size_t i = 0; i < h; i++)
         {
-            const long double x =
-                pi * (4.0L * (long double)brv((unsigned)i, bits) + 1.0L) / (4.0L * (long double)h);
+            const long double x = pi * (4.0L * (long double)arith_bit_reverse(i, bits) + 1.0L) /
+                                  (4.0L * (long double)h);
             c->ws_re[h + i] = (double)cosl(x);
             c->ws_im[h + i] = (double)sinl(x);
         }

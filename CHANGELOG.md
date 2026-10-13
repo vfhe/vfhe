@@ -247,6 +247,8 @@ versions may contain breaking changes.
 - Add `CKKS_Scheme.linear_combination(cts, coefficients, scale)` /
   `linear_combinations(cts, rows)`, the `MLWE_Scheme` ones with `delta`
   tracked, and `CKKS_Scheme.conjugate` / `gen_conjugation_key`.
+- Add `CKKS_Scheme.rotation_generator(k)`: the Galois element `5^k mod 2N`
+  of a rotation of the slots by `k` steps.
 - Add `CKKS_Scheme.multiply_batch(lhs, rhs, ksk, n_threads, *, lvl=None)`,
   which rescales each product to `lvl` in the same native call when given,
   and `rescale_batch(cts)`.

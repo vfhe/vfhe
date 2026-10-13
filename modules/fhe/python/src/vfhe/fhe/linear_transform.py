@@ -148,7 +148,6 @@ class CKKS_LinearTransform:
         missing = [k for k in self.rotations if k not in ksks]
         if missing:
             raise ValueError(f"missing rotation keys for {missing}")
-        two_n = 2 * scheme.N
         b = self.baby_steps
 
         babies = self._babies
@@ -157,7 +156,7 @@ class CKKS_LinearTransform:
                 [i for i in babies if i],
                 scheme.automorphisms(
                     ciphertext,
-                    [pow(5, i, two_n) for i in babies if i],
+                    [scheme.rotation_generator(i) for i in babies if i],
                     [ksks[i] for i in babies if i],
                     n_threads,
                 ),
@@ -171,7 +170,7 @@ class CKKS_LinearTransform:
         )
         return scheme.automorphism_sum(
             inner,
-            [pow(5, j * b, two_n) for j in giants],
+            [scheme.rotation_generator(j * b) for j in giants],
             [ksks[j * b] if j else None for j in giants],
             n_threads,
         )

@@ -43,17 +43,15 @@
 // sample is one task, which goes through the same steps on its own. A ring
 // below ROWS_MIN_N always runs that way.
 
-static ArithElement *element_of(MLWE c, uint64_t k) { return k < c->r ? &c->a[k] : &c->b; }
-
 // Row `row` of component k of `c`, as a view.
 static RNS_Polynomial row_of(struct _RNS_Polynomial *storage, MLWE c, uint64_t k, uint64_t row)
 {
-    return polynomial_RNS_view(storage, arith_rns_polynomial(element_of(c, k)), 1ULL << row);
+    return polynomial_RNS_view(storage, mlwe_component_rows(c, k), 1ULL << row);
 }
 
 static RNSc_Polynomial component_of(MLWE c, uint64_t k)
 {
-    return (RNSc_Polynomial)arith_rns_polynomial(element_of(c, k));
+    return (RNSc_Polynomial)mlwe_component_rows(c, k);
 }
 
 static uint64_t lowest_bit(uint64_t mask) { return mask & (~mask + 1); }
@@ -313,9 +311,9 @@ static void run_steps(KeySwitchState *st, uint64_t n, uint64_t n_threads)
     {
         for (uint64_t k = 0; k <= st[j].ks.out->r; k++)
         {
-            element_of(st[j].group_acc[0], k)->domain = ARITH_DOMAIN_CANONICAL;
+            mlwe_component(st[j].group_acc[0], k)->domain = ARITH_DOMAIN_CANONICAL;
             component_of(st[j].ks.out, k)->rns_mask = st[j].out_mask;
-            element_of(st[j].ks.out, k)->domain = ARITH_DOMAIN_CANONICAL;
+            mlwe_component(st[j].ks.out, k)->domain = ARITH_DOMAIN_CANONICAL;
         }
     }
     run_step(st, n, STEP_MOD_DOWN, n_threads);
@@ -327,7 +325,7 @@ static void run_steps(KeySwitchState *st, uint64_t n, uint64_t n_threads)
     run_step(st, n, STEP_NTT, n_threads);
     for (uint64_t j = 0; j < n; j++)
         for (uint64_t k = 0; st[j].ks.to_mul_domain && k <= st[j].ks.out->r; k++)
-            element_of(st[j].ks.out, k)->domain = ARITH_DOMAIN_MUL;
+            mlwe_component(st[j].ks.out, k)->domain = ARITH_DOMAIN_MUL;
 }
 
 // The n key switches, each step one loop over all of them.
@@ -391,7 +389,8 @@ static void operands_to_mul_task(void *ctx, uint64_t j, uint64_t row, uint64_t p
     MLWE c = part < components ? p->in1 : p->in2;
     const uint64_t k = part % components;
     // A square has one operand, converted once.
-    if ((part >= components && p->in2 == p->in1) || element_of(c, k)->domain == ARITH_DOMAIN_MUL ||
+    if ((part >= components && p->in2 == p->in1) ||
+        mlwe_component(c, k)->domain == ARITH_DOMAIN_MUL ||
         !(component_of(c, k)->rns_mask & (1ULL << row)))
         return;
     struct _RNS_Polynomial storage;
@@ -405,27 +404,8 @@ static void operands_to_mul_task(void *ctx, uint64_t j, uint64_t row, uint64_t p
 static void tensor_task(void *ctx, uint64_t j, uint64_t row, uint64_t k)
 {
     Product *p = &((Product *)ctx)[j];
-    const uint64_t r = p->in1->r;
-    // Index r stands for the body b.
-    uint64_t at = 0, i1 = r, i2 = r;
-    bool cross = false;
-    for (uint64_t i = 0; i < r && i1 == r; i++)
-    {
-        for (uint64_t m = i; m < r && i1 == r; m++, at++)
-        {
-            if (at == k)
-            {
-                i1 = i;
-                i2 = m;
-                cross = i != m;
-            }
-        }
-    }
-    if (i1 == r && k < at + r)
-    {
-        i1 = k - at;
-        cross = true;
-    }
+    uint64_t i1, i2;
+    const bool cross = mlwe_tensor_slot_factors(p->in1->r, k, &i1, &i2);
     struct _RNS_Polynomial o_storage, x_storage, y_storage;
     RNS_Polynomial o = row_of(&o_storage, p->tensor, k, row);
     polynomial_mul_RNS_polynomial(o, row_of(&x_storage, p->in1, i1, row),
@@ -453,8 +433,8 @@ static void run_products(Product *p, KeySwitch *ks, uint64_t n, uint64_t n_threa
         p[j].by_rows = true;
         for (uint64_t k = 0; k <= r; k++)
         {
-            element_of(p[j].in1, k)->domain = ARITH_DOMAIN_MUL;
-            element_of(p[j].in2, k)->domain = ARITH_DOMAIN_MUL;
+            mlwe_component(p[j].in1, k)->domain = ARITH_DOMAIN_MUL;
+            mlwe_component(p[j].in2, k)->domain = ARITH_DOMAIN_MUL;
             p[j].by_rows = p[j].by_rows && component_of(p[j].in1, k)->rns_mask == p[j].mask &&
                            component_of(p[j].in2, k)->rns_mask == p[j].mask;
         }
@@ -464,10 +444,10 @@ static void run_products(Product *p, KeySwitch *ks, uint64_t n, uint64_t n_threa
         {
             ArithElement tensor[R + 1];
             for (uint64_t k = 0; k <= R; k++)
-                tensor[k] = *element_of(p[j].tensor, k);
+                tensor[k] = *mlwe_component(p[j].tensor, k);
             mlwe_tensor_product(tensor, p[j].in1, p[j].in2);
             for (uint64_t k = 0; k <= R; k++)
-                *element_of(p[j].tensor, k) = tensor[k];
+                *mlwe_component(p[j].tensor, k) = tensor[k];
             mlwe_RNS_to_RNSc(p[j].tensor, p[j].tensor);
         }
     }
@@ -477,7 +457,7 @@ static void run_products(Product *p, KeySwitch *ks, uint64_t n, uint64_t n_threa
         for (uint64_t k = 0; p[j].by_rows && k <= p[j].tensor->r; k++)
         {
             component_of(p[j].tensor, k)->rns_mask = p[j].mask;
-            element_of(p[j].tensor, k)->domain = ARITH_DOMAIN_CANONICAL;
+            mlwe_component(p[j].tensor, k)->domain = ARITH_DOMAIN_CANONICAL;
         }
     }
     free(masks);
@@ -547,7 +527,7 @@ static void input_to_coeff_task(void *ctx, uint64_t j, uint64_t row, uint64_t k)
     struct _RNS_Polynomial in_storage, out_storage;
     RNS_Polynomial x = row_of(&in_storage, a->in, k, row);
     RNS_Polynomial y = row_of(&out_storage, batch->ks[j].out, k, row);
-    if (element_of(a->in, k)->domain == ARITH_DOMAIN_MUL)
+    if (mlwe_component(a->in, k)->domain == ARITH_DOMAIN_MUL)
         polynomial_RNS_to_RNSc((RNSc_Polynomial)y, x);
     else
         polynomial_copy_RNS_polynomial(y, x);
@@ -582,7 +562,7 @@ static void run_automorphisms(Automorphism *a, KeySwitch *ks, uint64_t n, uint64
             for (uint64_t k = 0; k <= out->r; k++)
             {
                 component_of(out, k)->rns_mask = component_of(a[j].in, k)->rns_mask;
-                element_of(out, k)->domain = ARITH_DOMAIN_CANONICAL;
+                mlwe_component(out, k)->domain = ARITH_DOMAIN_CANONICAL;
             }
             a[j].in = out;
         }
@@ -591,7 +571,7 @@ static void run_automorphisms(Automorphism *a, KeySwitch *ks, uint64_t n, uint64
         {
             const uint64_t mask = component_of(a[j].in, k)->rns_mask;
             component_of(a[j].image, k)->rns_mask = mask;
-            element_of(a[j].image, k)->domain = ARITH_DOMAIN_CANONICAL;
+            mlwe_component(a[j].image, k)->domain = ARITH_DOMAIN_CANONICAL;
             masks[j] |= mask;
         }
     }

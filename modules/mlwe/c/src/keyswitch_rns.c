@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
+#include "rns_rows.h"
 // RNS row width and accessors: this file is the RNS backend, so it reaches
 // into the representation on purpose.
 #include "arith_internal.h"
@@ -94,8 +95,7 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
     {
         for (size_t j = 0; j <= out->r; j++)
         {
-            RNSc_Polynomial p =
-                (RNSc_Polynomial)arith_rns_polynomial(j < out->r ? &out->a[j] : &out->b);
+            RNSc_Polynomial p = (RNSc_Polynomial)mlwe_component_rows(out, j);
             polynomial_mod_down_RNSc_prepare(p, divide_mask);
             polynomial_mod_down_RNSc_rows(p, p, NULL, divide_mask, p->rns_mask);
             polynomial_round_division_RNSc_finish(p, divide_mask);
@@ -173,7 +173,7 @@ static void claim_rows(MLWE out, uint64_t mask)
 {
     for (size_t e = 0; e <= out->r; e++)
     {
-        ArithElement *x = e < out->r ? &out->a[e] : &out->b;
+        ArithElement *x = mlwe_component(out, e);
         arith_rns_polynomial(x)->rns_mask = mask;
         x->domain = ARITH_DOMAIN_CANONICAL;
     }
@@ -242,15 +242,11 @@ void mlwe_project_subring(MLWE out, MLWE in)
         const uint##W##_t **rows_ =                                                                \
             (const uint##W##_t **)safe_malloc((k) * sizeof(uint##W##_t *));                        \
         for (size_t j_ = 0; j_ < (k); j_++)                                                        \
-            rows_[j_] = j_ < (count) ? rns_row##W(element_rows((in)[j_], (e)), (ii)) : NULL;       \
+            rows_[j_] =                                                                            \
+                j_ < (count) ? rns_row##W(mlwe_component_rows((in)[j_], (e)), (ii)) : NULL;        \
         vec_interleave_k_u##W(rns_row##W((dst), (oi)), rows_, (k), (n));                           \
         free(rows_);                                                                               \
     } while (0)
-
-static RNS_Polynomial element_rows(MLWE c, size_t e)
-{
-    return arith_rns_polynomial(e < c->r ? &c->a[e] : &c->b);
-}
 
 void mlwe_embed_subring(MLWE out, MLWE *in, uint64_t count)
 {
@@ -274,11 +270,13 @@ void mlwe_embed_subring(MLWE out, MLWE *in, uint64_t count)
         const bool narrow = rns_row_is_narrow(in_b->base, i);
         for (size_t e = 0; e <= out->r; e++)
         {
-            RNS_Polynomial dst = element_rows(out, e);
+            RNS_Polynomial dst = mlwe_component_rows(out, e);
             if (count == 1 && narrow)
-                vec_spread_u32(rns_row32(dst, row[i]), rns_row32(element_rows(in[0], e), i), k, n);
+                vec_spread_u32(rns_row32(dst, row[i]), rns_row32(mlwe_component_rows(in[0], e), i),
+                               k, n);
             else if (count == 1)
-                vec_spread_u64(rns_row64(dst, row[i]), rns_row64(element_rows(in[0], e), i), k, n);
+                vec_spread_u64(rns_row64(dst, row[i]), rns_row64(mlwe_component_rows(in[0], e), i),
+                               k, n);
             else if (narrow)
                 INTERLEAVE_ROW(32, dst, row[i], in, count, e, i, k, n);
             else
