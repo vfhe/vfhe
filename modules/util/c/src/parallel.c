@@ -66,21 +66,30 @@ static uint64_t thread_budget(uint64_t requested)
     return (requested == 0 || requested > n) ? n : requested;
 }
 
+// The threads a loop over n_items runs on, within `budget`.
+static uint64_t loop_threads(uint64_t budget, uint64_t n_items)
+{
+    return n_items <= 1 ? 1 : (budget < n_items ? budget : n_items);
+}
+
+// The local number of threads of each of a loop's `threads` threads, out of
+// `budget` (see vfhe_parallel_for).
+static uint64_t share_of(uint64_t budget, uint64_t threads)
+{
+    if (threads <= 1)
+        return budget;
+    return budget / threads >= MIN_LENT_SHARE ? budget / threads : 1;
+}
+
 uint64_t vfhe_threads_for(uint64_t requested, uint64_t n_items)
 {
-    if (n_items <= 1)
-        return 1;
-    const uint64_t n = thread_budget(requested);
-    return n < n_items ? n : n_items;
+    return n_items <= 1 ? 1 : loop_threads(thread_budget(requested), n_items);
 }
 
 uint64_t vfhe_share_for(uint64_t requested, uint64_t n_items)
 {
     const uint64_t budget = thread_budget(requested);
-    const uint64_t threads = n_items <= 1 ? 1 : (budget < n_items ? budget : n_items);
-    if (threads <= 1)
-        return budget;
-    return budget / threads >= MIN_LENT_SHARE ? budget / threads : 1;
+    return share_of(budget, loop_threads(budget, n_items));
 }
 
 typedef struct Worker Worker;
@@ -349,7 +358,7 @@ void vfhe_parallel_for(uint64_t n, uint64_t n_threads, void (*body)(void *ctx, u
     // share below MIN_LENT_SHARE is not lent: so few threads on one body cost
     // more in hand-offs than they return.
     const uint64_t budget = thread_budget(n_threads);
-    const uint64_t threads = n <= 1 ? 1 : (budget < n ? budget : n);
+    const uint64_t threads = loop_threads(budget, n);
     const uint64_t caller_local = local_num_threads;
     if (threads <= 1)
     {
@@ -359,8 +368,7 @@ void vfhe_parallel_for(uint64_t n, uint64_t n_threads, void (*body)(void *ctx, u
         local_num_threads = caller_local;
         return;
     }
-    const uint64_t share = vfhe_share_for(n_threads, n);
-    ParallelLoop loop = {body, ctx, n, share, 0, 0};
+    ParallelLoop loop = {body, ctx, n, share_of(budget, threads), 0, 0};
     pthread_mutex_init(&loop.done_lock, NULL);
     pthread_cond_init(&loop.done_cond, NULL);
     grow_pool(threads - 1);
