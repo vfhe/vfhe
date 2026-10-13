@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """The basefold polynomial commitment scheme [ZCF24] over R_q or a field.
 
@@ -54,7 +54,7 @@ changing any message here.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import MLE, Field, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
@@ -75,10 +75,12 @@ from vfhe.piop.sumcheck import _exceptional_set_size, interpolate_evals
 
 # `pair_digest` is re-exported here: the aliased form is what marks it
 # as a public name of this module rather than an unused import.
-from .code import FoldableRS
 from .code import pair_digest as pair_digest
-from .field_code import FieldFoldableRS
 from .queries import query_positions
+
+if TYPE_CHECKING:
+    from .code import FoldableRS
+    from .field_code import FieldFoldableRS
 
 #: A coefficient table or a codeword, in whichever form the domain's code
 #: takes: a list of ring elements, or one `FieldVector`. A `Basefold` is built

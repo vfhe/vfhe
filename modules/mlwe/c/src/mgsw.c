@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <assert.h>
 #include <string.h>
@@ -6,7 +6,7 @@
 #include "gadget_rns.h"
 #include "mlwe.h"
 #include "rns_rows.h"
-#include "util.h"
+#include "alloc.h"
 
 // The external product, left canonical in `out`.
 static void external_product_canonical(RNSc_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,

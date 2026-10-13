@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.arith public API re-exports.
 from .base import ArithParent, Field, FieldElement, FieldVector, Polynomial, Ring
@@ -10,7 +10,7 @@ from .impl.pmf.ntt import PseudoMersenneNTT
 from .impl.pmf.pseudo_mersenne import PseudoMersenneElement, PseudoMersenneField
 from .impl.pmf.vector import PseudoMersenneVector
 
-# Registers the vfhe.io codecs.
+# Registers the vfhe.util.io codecs.
 from .impl.rns import io as _io  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from .impl.rns.polynomial import (
     Representation,
@@ -29,12 +29,7 @@ from .registry import (
     resolve,
 )
 from .spec import Capability, Constraints, Domain, Spec
-from .state import (
-    rebind as rebind_state,
-)
-from .state import (
-    reset as reset_state,
-)
+from .state import reset as reset_state
 
 __all__ = [
     "MLE",
@@ -70,7 +65,6 @@ __all__ = [
     "gen_pseudo_mersenne_prime",
     "implementations",
     "is_prime",
-    "rebind_state",
     "register_conversion",
     "registered",
     "repr",

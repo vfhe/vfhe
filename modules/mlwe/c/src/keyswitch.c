@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
 #include "rns_rows.h"
-#include "util.h"
+#include "alloc.h"
+#include <parallel.h>
 
 // Key switching and the operations built on it: the GHS hybrid key switch
 // (a BV one when the key lives in the sample's own ring), automorphisms --

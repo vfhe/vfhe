@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <string.h>
 
 #include "gadget_rns.h"
 #include "mlwe.h"
 #include "rns_rows.h"
-#include "util.h"
+#include "alloc.h"
 
 // Gadget decompositions against the RNS base.
 //

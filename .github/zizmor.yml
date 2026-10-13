@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 rules:
   # This audit wants GitHub's `uses: $/...` (July 2026), which actionlint

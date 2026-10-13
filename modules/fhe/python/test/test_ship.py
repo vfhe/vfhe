@@ -11,11 +11,11 @@ import math
 import random
 
 import pytest
-from vfhe import engine
 from vfhe.arith import Polynomial, Ring
 from vfhe.fhe import SHIP, CKKS_Ciphertext, CKKS_Scheme
 from vfhe.fhe.ship import _lemma1_masks
 from vfhe.mlwe import MLWE_Key
+from vfhe.util import parallel
 
 N = 256
 M = N // 2
@@ -304,11 +304,11 @@ def test_bootstrap_does_not_depend_on_the_thread_count(setup):
     mu = _values(3)
     ct = _coefficient_input(scheme, ship, dense, mu, ship.input_scale)
     one = ship.half_bootstrap(ct, key, n_threads=1)
-    engine.set_num_threads(8)
+    parallel.set_num_threads(8)
     try:
         many = ship.half_bootstrap(ct, key, n_threads=0)
     finally:
-        engine.set_num_threads()
+        parallel.set_num_threads()
     for c in (one, many):
         c.to_coeff()
     assert one.get_a_poly(0) == many.get_a_poly(0)

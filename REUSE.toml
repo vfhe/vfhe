@@ -1,44 +1,34 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 version = 1
 
-# No comment syntax
+# Everything that cannot carry a header of its own.
 [[annotations]]
 path = [
+    # No comment syntax
     "**/.gitkeep",
     "**/py.typed",
     ".gitmessage",
     ".gitmodules",
     ".python-version",
-    ".zenodo.json",
+    "pyrightconfig.json",
     "external/adapted.cdx.json",
     "external/blake3/blake3.cdx.json",
+    # Documents
+    "docs/*.md",
+    "README.md",
+    # GitHub surfaces these raw to contributors
+    ".github/CODEOWNERS",
+    ".github/ISSUE_TEMPLATE/*.yml",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    # Legal notice reproduced verbatim
+    "NOTICE",
 ]
 SPDX-FileCopyrightText = "2026 The vFHE Authors"
 SPDX-License-Identifier = "Apache-2.0"
 
-[[annotations]]
-path = ["docs/*.md", "README.md"]
-SPDX-FileCopyrightText = "2026 The vFHE Authors"
-SPDX-License-Identifier = "Apache-2.0"
-
+# The Contributor Covenant carries its own licence.
 [[annotations]]
 path = "docs/CODE_OF_CONDUCT.md"
 SPDX-FileCopyrightText = "2026 The vFHE Authors"
 SPDX-License-Identifier = "CC-BY-SA-4.0"
-
-# GitHub surfaces these raw to contributors
-[[annotations]]
-path = [
-    ".github/CODEOWNERS",
-    ".github/ISSUE_TEMPLATE/*.yml",
-    ".github/PULL_REQUEST_TEMPLATE.md",
-]
-SPDX-FileCopyrightText = "2026 Alin-Petru Roșu <rosualinpetru@gmail.com>"
-SPDX-License-Identifier = "Apache-2.0"
-
-# Legal notice reproduced verbatim
-[[annotations]]
-path = "NOTICE"
-SPDX-FileCopyrightText = "2026 The vFHE Authors"
-SPDX-License-Identifier = "Apache-2.0"

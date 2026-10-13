@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "rns_rows.h"
 
+#include "alloc.h"
+
 typedef struct
 {
     uint64_t rows[64];

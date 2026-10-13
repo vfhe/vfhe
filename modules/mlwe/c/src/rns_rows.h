@@ -10,7 +10,7 @@
 #define VFHE_MLWE_RNS_ROWS_H
 
 #include "mlwe.h"
-#include "util.h"
+#include <parallel.h>
 
 #include <stdbool.h>
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""`vfhe.io` codecs for RNS rings and polynomials, and their row encoding.
+"""`vfhe.util.io` codecs for RNS rings and polynomials, and their row encoding.
 
 A ring is written by its primes, not by base index, since base indices depend
 on the order a process built its rings in; rows go in ascending prime value.
@@ -14,8 +14,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from vfhe.engine import ffi, lib
-from vfhe.io import Codec, Encoded, Payload, ReadContext, Sink, WriteContext, register
+from vfhe.util.bindings import ffi, lib
+from vfhe.util.io import (
+    Codec,
+    Encoded,
+    Payload,
+    ReadContext,
+    Sink,
+    WriteContext,
+    register,
+)
 
 from .polynomial import RNSPolynomial, RNSRing
 from .polynomial import repr as Repr

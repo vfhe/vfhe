@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """The GP25 sparse-amortized bootstrap: input keys and their gaps, the
 building blocks (rotation, signed monomials) and the whole bootstrap over the
@@ -7,10 +7,10 @@ options it takes, composed with itself."""
 import random
 
 import pytest
-from vfhe import engine
 from vfhe.arith import Polynomial, Ring
 from vfhe.fhe import GP25
 from vfhe.mlwe import GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set
+from vfhe.util import parallel
 
 
 def _mod_switch(v: int, q: int, p: int) -> int:
@@ -270,11 +270,11 @@ def test_two_bit_layers_do_not_depend_on_the_threads(N):
     results = []
     for threads in (1, 3, 8):
         out = [c.copy() for c in acc]
-        engine.set_num_threads(threads)
+        parallel.set_num_threads(threads)
         try:
             gp25.rotate(out, keys, automorphism_key)
         finally:
-            engine.set_num_threads()
+            parallel.set_num_threads()
         for c in out:
             c.to_coeff()
         results.append([c.get_b_poly().get_coeff_matrix() for c in out])
@@ -459,11 +459,11 @@ def test_bootstrap_does_not_depend_on_the_threads(deterministic_prng):
     gp25, key, tv, rlwe_in, *_ = _bootstrap_case(io_rank=2)
     results = []
     for threads in (1, 4):
-        engine.set_num_threads(threads)
+        parallel.set_num_threads(threads)
         try:
             out = gp25.bootstrap(rlwe_in.copy(), tv, key)
         finally:
-            engine.set_num_threads()
+            parallel.set_num_threads()
         out.to_coeff()
         results.append(
             [out.get_a_poly(0).get_coeff_matrix(), out.get_b_poly().get_coeff_matrix()]
@@ -670,9 +670,9 @@ def test_bootstrap_at_256(deterministic_prng, threads):
     gp25, key, tv, rlwe_in, io, output_key, table, msg = _bootstrap_case(
         N=256, n=256, h=17, rotation_rank=4
     )
-    engine.set_num_threads(threads)
+    parallel.set_num_threads(threads)
     try:
         out = gp25.bootstrap(rlwe_in, tv, key)
     finally:
-        engine.set_num_threads()
+        parallel.set_num_threads()
     assert _decrypt_messages(io, out, output_key) == [table[x] for x in msg]

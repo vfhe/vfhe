@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
 """CKKS and BFV schemes, ciphertexts and keys, the bootstrapping key
-containers and CKKS linear transforms through vfhe.io."""
+containers and CKKS linear transforms through vfhe.util.io."""
 
 import random
 
@@ -17,8 +17,8 @@ from vfhe.fhe import (
     CKKS_LinearTransform,
     CKKS_Scheme,
 )
-from vfhe.io import Serializer
 from vfhe.mlwe import MLWE_Scheme
+from vfhe.util.io import Serializer
 
 
 def _mod_switch(v: int, q: int, p: int) -> int:

@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-# Builds the sdist and the wheels, at a release version or the commit.
+# Builds the sdist and the wheels at the version pyproject.toml declares.
 name: Release Build
 
 on:
@@ -10,20 +10,12 @@ on:
         description: JSON array of cibuildwheel interpreter tags to build.
         type: string
         default: '["cp310", "cp311", "cp312", "cp313", "cp314"]'
-      release-version:
-        description: Version of the distribution; empty derives one from the tree.
-        type: string
-        default: ""
   workflow_dispatch:
     inputs:
       interpreters:
         description: JSON array of cibuildwheel interpreter tags to build.
         type: string
         default: '["cp310", "cp311", "cp312", "cp313", "cp314"]'
-      release-version:
-        description: Version of the distribution; empty derives one from the tree.
-        type: string
-        default: ""
 
 permissions:
   contents: read # checkout
@@ -33,9 +25,6 @@ permissions:
 concurrency:
   group: release-build-${{ github.ref }}
   cancel-in-progress: false
-
-env:
-  SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VFHE: ${{ inputs.release-version || format('0+g{0}', github.sha) }}
 
 jobs:
   # ----------------------------------------------------------------- sdist ---
@@ -93,8 +82,6 @@ jobs:
           output-dir: dist
         env:
           CIBW_BUILD: ${{ matrix.python }}-*
-          # The manylinux build runs in a container, which inherits nothing.
-          CIBW_ENVIRONMENT_PASS_LINUX: SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VFHE
       - name: Set up dev environment
         uses: ./.github/actions/setup-dev
         with:

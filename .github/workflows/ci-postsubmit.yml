@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 # Push-to-main checks at complete depth; too slow for the merge gate.
 name: CI Postsubmit
@@ -17,6 +17,28 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------- checks ---
+
+  docs:
+    name: Docs
+    uses: ./.github/workflows/docs.yml
+    with:
+      publish: true
+
+  publish-docs:
+    name: Publish Docs
+    needs: [docs]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write # Pages deployment
+      pages: write # Pages deployment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
 
   lint:
     name: Lint
@@ -160,7 +182,9 @@ jobs:
     name: CI Postsubmit OK
     if: always()
     needs:
+      - docs
       - lint
+      - publish-docs
       - release-build
       - scan-vulnerability
       - test-c
@@ -182,7 +206,9 @@ jobs:
     name: Alert
     if: failure() && github.event_name != 'workflow_dispatch'
     needs:
+      - docs
       - lint
+      - publish-docs
       - release-build
       - scan-vulnerability
       - test-c

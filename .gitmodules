@@ -1,5 +1,5 @@
 [submodule "external/unity"]
-	path = external/unity
+	path = external/unity/unity
 	url = https://github.com/ThrowTheSwitch/Unity.git
 [submodule "external/blake3"]
 	path = external/blake3/blake3

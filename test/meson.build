@@ -1,126 +1,175 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-#
-# Which tests exist and how they run; the root builds the artefacts and hands
-# them over in engine_builds. A test's NAME is the selection API (`meson test
-# '<engine>-*'`), not --suite: a --suite matching nothing reports success.
 
-# The picker's probe as a command: exit 0 supported, 1 absent, 2 unjudgeable.
-cpu_probe = executable(
-    'vfhe-cpu',
-    probe['sources'],
-    include_directories: probe['includes'],
-    c_args: ['-DVFHE_CPU_MAIN'],
-    install: false,
-)
+# --- Static libraries ---------------------------------------------------------
 
-# Wraps every test: exit 77 (meson's SKIP) when this CPU lacks the capability.
-guard = find_program('unit/require_cpu.sh')
-
-# One setup per emulatable engine (setups do not compose). The flags go to the
-# guard rather than an exe_wrapper, which would emulate the guard and leave the
-# kernels it execs on the bare CPU. The launcher comes from the caller, so its
-# absence fails a test rather than the build.
-foreach fact : engine_facts
-    if fact['sde'].length() > 0
-        add_test_setup(
-            fact['name'] + '_emulated',
-            timeout_multiplier: 20,
-            env: {'VFHE_SDE_FLAGS': ' '.join(fact['sde'])},
-        )
-    endif
+static_libs = {}
+foreach engine_name, c_args : engines
+    static_libs += {
+        engine_name: static_library(
+            'vfhe_' + engine_name,
+            vfhe_c_sources,
+            include_directories: vfhe_c_include_dirs,
+            c_args: c_args,
+            dependencies: [m_dep, thread_dep],
+            build_by_default: false,
+        ),
+    }
 endforeach
 
-# ASan's leak checker counts CPython's own allocations, so it is off everywhere.
-# So is its fake stack: GCC 13 lays a frame out for the real stack and emits
-# aligned zmm accesses into it, but the fake stack's base sits at another
-# 64-byte residue, so under it those accesses fault (GCC PR sanitizer/110027).
-sanitized = 'address' in get_option('b_sanitize')
-asan_options = 'detect_leaks=0:detect_stack_use_after_return=0'
-asan_env = sanitized ? {'ASAN_OPTIONS': asan_options} : {}
+# --- Emulation ----------------------------------------------------------------
 
-# A non-instrumented interpreter dlopens the instrumented extension too late
-# for ASan, so its runtime must load before the interpreter.
+# The setup launches every test under Intel SDE, which tools/test/sde/fetch.sh fetches
+# into .cache/sde before run.sh reconfigures; configure itself downloads nothing.
+sde = find_program(
+    'sde64',
+    dirs: [meson.project_source_root() / '.cache/sde'],
+    required: false,
+)
+
+if host_machine.cpu_family() == 'x86_64' and sde.found()
+    add_test_setup(
+        'avx512ifma_emulated',
+        exe_wrapper: [sde, '-icl', '-no-follow-child', '--'],
+        timeout_multiplier: 20,
+        env: {'VFHE_SDE_FLAGS': '-icl'},
+    )
+endif
+
+# --- Sanitizers ---------------------------------------------------------------
+
+asan = 'address' in get_option('b_sanitize')
+
+asan_options = 'detect_stack_use_after_return=0'
+leak_check = ''
 asan_runtime = ''
-if sanitized and host_machine.system() == 'linux'
-    # required: false, because run_command errors on a missing program even
-    # with check: false.
-    gcc = find_program('gcc', required: false)
-    if gcc.found()
-        found = run_command(gcc, '-print-file-name=libasan.so', check: false)
-        # gcc echoes the bare name back when it has no such library.
-        if found.returncode() == 0 and found.stdout().strip().startswith('/')
-            asan_runtime = found.stdout().strip()
-        endif
+
+# LeakSanitizer and LD_PRELOAD are both Linux-only.
+if asan and host_machine.system() == 'linux'
+    leak_check = ':detect_leaks=1'
+    probe = run_command(
+        meson.get_compiler('c').cmd_array(),
+        '-print-file-name=libasan.so',
+        check: false,
+    )
+
+    if probe.stdout().strip().startswith('/')
+        asan_runtime = probe.stdout().strip()
     endif
 endif
 
-# meson-logs already holds meson's own C coverage report, so both halves land
-# in one directory for a single upload.
-coverage = get_option('b_coverage')
-reports = meson.project_build_root() + '/meson-logs'
+# The C suites are pure C, so a leak there is ours. CPython allocates at import
+# and keeps it, so leak detection is off under pytest.
+asan_env = asan ? {'ASAN_OPTIONS': asan_options + leak_check} : {}
+pytest_asan_env = asan ? {'ASAN_OPTIONS': asan_options + ':detect_leaks=0'} : {}
+if asan_runtime != ''
+    pytest_asan_env += {'LD_PRELOAD': asan_runtime}
+endif
 
-pythonpath = ':'.join([meson.project_build_root()] + python_source_dirs)
+# --- Import path --------------------------------------------------------------
 
-foreach engine, built : engine_builds
-    needs_cpu = [cpu_probe, built['capability'], '--']
+pythonpath = ':'.join(
+    [
+        meson.project_build_root(),
+        fs.parent(proto_bindings.full_path()),
+    ]
+    + [
+        meson.project_source_root() / 'modules/arith/python/src',
+        meson.project_source_root() / 'modules/circuit/python/src',
+        meson.project_source_root() / 'modules/crypto/python/src',
+        meson.project_source_root() / 'modules/fhe/python/src',
+        meson.project_source_root() / 'modules/mlwe/python/src',
+        meson.project_source_root() / 'modules/piop/python/src',
+        meson.project_source_root() / 'modules/polycom/python/src',
+        meson.project_source_root() / 'modules/util/python/src',
+    ],
+)
 
-    foreach test_file : build_c_tests ? collected['c_tests'] : []
-        name = engine + '-c-' + fs.stem(test_file)
+# --- C suites -----------------------------------------------------------------
+
+foreach engine_name, c_args : engines
+    foreach test_file : vfhe_c_unit_tests
+        test_name = engine_name + '-c-' + fs.stem(test_file)
         test_exe = executable(
-            name,
+            test_name,
             test_file,
-            include_directories: collected['includes'] + [unity_includes],
-            c_args: built['cflags'],
-            link_with: [built['lib'], unity_lib],
-            dependencies: m_dep,
-            override_options: ['warning_level=2'],
+            include_directories: vfhe_c_include_dirs,
+            c_args: c_args,
+            link_with: static_libs[engine_name],
+            dependencies: unity_dep,
+            build_by_default: false,
         )
-        test(
-            name,
-            guard,
-            args: needs_cpu + [test_exe],
-            env: asan_env,
-            depends: [cpu_probe, test_exe],
-            timeout: 300,
-        )
+        test(test_name, test_exe, env: asan_env)
     endforeach
+endforeach
 
-    # The fast depth filters; complete runs whatever is collected.
-    foreach depth : ['fast', 'complete']
-        name = engine + '-pytest-' + depth
+# --- Python suites ------------------------------------------------------------
 
-        pytest_env = environment()
-        pytest_env.set('PYTHONPATH', pythonpath)
-        pytest_env.set('VFHE_ENGINE', engine)
-        pytest_env.set('PYTHONDONTWRITEBYTECODE', '1')
-        if sanitized
-            pytest_env.set('ASAN_OPTIONS', asan_options)
-            if asan_runtime != ''
-                pytest_env.set('LD_PRELOAD', asan_runtime)
-            endif
-        endif
+coverage_dir = meson.project_build_root() / 'meson-logs'
 
-        # Named per test, so the two depths never overwrite each other's data.
-        measure = []
-        if coverage
-            pytest_env.set('COVERAGE_FILE', reports + '/' + name + '.data')
-            measure = [
+# fast leaves out the heavy @pytest.mark.complete computations.
+depths = {
+    'fast': {'args': ['-m', 'not complete'], 'timeout': 900},
+    'complete': {'args': [], 'timeout': 3600},
+}
+
+foreach engine_name : engines.keys()
+    foreach depth, spec : depths
+        test_name = engine_name + '-py-' + depth
+
+        pytest_env = pytest_asan_env + {
+            'PYTHONPATH': pythonpath,
+            'VFHE_ENGINE': engine_name,
+            'PYTHONDONTWRITEBYTECODE': '1',
+        }
+
+        cov_args = []
+        if get_option('b_coverage')
+            pytest_env += {'COVERAGE_FILE': coverage_dir / test_name + '.data'}
+            cov_args = [
                 '--cov=vfhe',
-                '--cov-report=xml:' + reports + '/' + name + '.xml',
-                '--cov-report=json:' + reports + '/' + name + '.json',
+                '--cov-report=xml:' + coverage_dir / test_name + '.xml',
+                '--cov-report=json:' + coverage_dir / test_name + '.json',
             ]
         endif
 
         test(
-            name,
-            guard,
-            args: needs_cpu + [py.full_path(), '-m', 'pytest', '-q']
-            + (depth == 'fast' ? ['-m', 'not complete'] : []) + measure,
+            test_name,
+            py,
+            args: ['-m', 'pytest', '-q'] + spec['args'] + cov_args,
             env: pytest_env,
-            depends: [cpu_probe],
             workdir: meson.project_source_root(),
-            timeout: depth == 'complete' ? 3600 : 900,
+            timeout: spec['timeout'],
         )
     endforeach
 endforeach
+
+# --- Fuzzing ------------------------------------------------------------------
+
+if get_option('fuzz') == ''
+    subdir_done()
+endif
+
+# $LIB_FUZZING_ENGINE is C++ and supplies main().
+add_languages('cpp', native: false)
+
+wanted = get_option('fuzz')
+if not engines.has_key(wanted)
+    error('this build has no engine "' + wanted + '"')
+endif
+
+fuzzers = []
+foreach fuzzer : vfhe_c_fuzz_tests
+    fuzzers += executable(
+        fs.stem(fuzzer),
+        fuzzer,
+        include_directories: vfhe_c_include_dirs,
+        c_args: engines[wanted],
+        link_with: static_libs[wanted],
+        link_args: get_option('fuzz_link_args').split(),
+        link_language: 'cpp',
+    )
+endforeach
+
+# build.sh asks for this name alone, so only the fuzzers build.
+alias_target('fuzzers', fuzzers)

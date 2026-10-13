@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "fhe.h"
 
 #include <assert.h>
 #include <stdlib.h>
-#include <util.h>
+#include <alloc.h>
+#include <parallel.h>
 
 /* ------------------------------------------------------------------------------------------------
  * The blind rotation of [GP25] runs on a vector of n accumulators. Per input component, a sparse

@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.fhe
 
@@ -32,11 +32,11 @@ FHE schemes built on `vfhe.mlwe`.
   ring switch.
 - `ship.py`: `SHIP`: the SHIP bootstrap [CHKS25] of `N/2` real CKKS slots, for
   a sparse input key (`sample_input_key`).
-- `io.py`: the `vfhe.io` codecs for this package's schemes, ciphertexts and
+- `io.py`: the `vfhe.util.io` codecs for this package's schemes, ciphertexts and
   keys.
 
 `c/src/` holds `bfv.c` (an empty placeholder: the scheme needs no kernels of
 its own), the CGGI16 and GP25 blind rotations (`cggi16.c`, `gp25.c`) and the
 SHIP encoders (`ship.c`), all prototyped in `c/include/fhe.h`;
-`python/cdef/fhe.cdef` declares the CGGI16, GP25 and SHIP ABI (BFV and CKKS
+`python/cdef/fhe.h` declares the CGGI16, GP25 and SHIP ABI (BFV and CKKS
 reuse the arith + mlwe surfaces).

@@ -3,7 +3,8 @@
 //
 // An RNS polynomial as bytes, and an RNS polynomial from a seed.
 #include "arith.h"
-#include "util.h"
+#include <alloc.h>
+#include <parallel.h>
 #include <crypto.h>
 #include <string.h>
 

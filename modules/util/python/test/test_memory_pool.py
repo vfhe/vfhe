@@ -7,9 +7,7 @@ import subprocess
 import sys
 
 import pytest
-import vfhe.engine as engine
-from vfhe.dynamic_extensions._reload import reinit_memory_pool_settings
-from vfhe.engine import memory_pool
+from vfhe.util import memory_pool
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +61,7 @@ def test_the_environment_sets_the_default(variable, value, query, expected):
             "-W",
             "ignore",
             "-c",
-            f"from vfhe.engine import memory_pool; print(memory_pool.{query}())",
+            f"from vfhe.util import memory_pool; print(memory_pool.{query}())",
         ],
         env=env,
         capture_output=True,
@@ -71,19 +69,6 @@ def test_the_environment_sets_the_default(variable, value, query, expected):
         check=True,
     )
     assert out.stdout.strip() == expected
-
-
-def test_a_reloaded_library_gets_the_capacity():
-    # A module loaded by vfhe.dynamic_extensions has its own pool; the
-    # reinitializer is what carries the setting over. Here it is handed the
-    # library already loaded, reset behind its back.
-    memory_pool.set_capacity(12345)
-    memory_pool.set_wipe_on_release(True)
-    engine.lib.mempool_set_capacity(0)
-    engine.lib.mempool_set_wipe_on_release(0)
-    reinit_memory_pool_settings(engine.ffi, engine.lib)
-    assert memory_pool.capacity() == 12345
-    assert memory_pool.wipe_on_release()
 
 
 def test_wiping_is_switched_and_restored():

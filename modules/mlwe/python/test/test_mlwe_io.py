@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""MLWE schemes, samples, keys and key-switch keys through vfhe.io, and the
+"""MLWE schemes, samples, keys and key-switch keys through vfhe.util.io, and the
 seeded samples that let a fresh one be written as its seed and body."""
 
 import json
@@ -13,7 +13,6 @@ import warnings
 import pytest
 from vfhe.arith import Polynomial, Ring
 from vfhe.arith import repr as Repr
-from vfhe.io import Serializer
 from vfhe.mlwe import (
     LWE,
     MLWE,
@@ -23,6 +22,7 @@ from vfhe.mlwe import (
     MLWE_Key,
     MLWE_Scheme,
 )
+from vfhe.util.io import Serializer
 
 N = 256
 PROFILES = ["default", "compact", "fast"]
@@ -322,7 +322,7 @@ _CHILD = textwrap.dedent(
     """
     import json, sys
     from vfhe.arith import Ring
-    from vfhe.io import Serializer
+    from vfhe.util.io import Serializer
     primes = json.loads(sys.argv[1])
     Ring(256, prime_size=[33, 47], split_degree=1)
     for p in reversed(primes):

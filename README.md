@@ -47,17 +47,24 @@ required.
 > **What did I get?** `python -m vfhe.info` prints the whole environment a
 > bug report needs:
 >
-> ```text
-> vfhe      0.0.3
-> engine    neon (this CPU can also run: portable)
-> python    3.14.5 CPython
-> platform  macOS-26.6.2-arm64-arm-64bit-Mach-O
+> ```json
+> {
+>   "version": "0.0.3",
+>   "engine": "neon",
+>   "engine_file": "/…/site-packages/_vfhe_native_neon.so",
+>   "runs": {
+>     "avx512ifma": false,
+>     "neon": true,
+>     "portable": true
+>   },
+>   "python": "3.14.5 CPython",
+>   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O"
+> }
 > ```
 >
-> **Pinning the engine.** `VFHE_ENGINE=<name>` overrides the CPU probe at
-> import and refuses if this CPU cannot run that engine. Pinning a slower
-> engine than the CPU deserves gets a one-time hint (silence it with the
-> usual `warnings` filters).
+> **Pinning the engine.** `VFHE_ENGINE=<name>` selects that engine at import
+> without asking the CPU, so an emulator can run one the host lacks. An
+> unknown or uninstalled name is refused.
 
 ### Verifying a release
 
@@ -82,7 +89,7 @@ these attestations at `https://pypi.org/project/vfhe/#files`.
 
 A walkthrough of encrypted computation with CKKS is in
 [`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md);
-[`test/smoke/cases/ckks.py`](https://github.com/vfhe/vfhe/blob/main/test/smoke/cases/ckks.py)
+[`test/smoke/ckks.py`](https://github.com/vfhe/vfhe/blob/main/test/smoke/ckks.py)
 is its runnable form.
 
 ---
@@ -98,13 +105,13 @@ modules, no Python symbols). A Python-facing module's public API is its
 | Module | Kind | What it provides |
 |---|---|---|
 | `arith` | Python-facing | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: incomplete NTTs, complex FFTs, general multiprecision, basic number theory procedures, and multilinear extensions |
-| `util` | Python-facing | The native handle (`ffi`/`lib`), the engine picker and CPU probe, `vfhe.info`, runtime C compilation (`vfhe.dynamic_extensions`), and the C substrate (aligned allocation, mod switching) |
+| `util` | Python-facing | The native handle (`ffi`/`lib`), the engine picker and the pure-Python host probes (`vfhe.util._cpu`), `vfhe.info`, custom kernel builds (`vfhe.util.kernels`), and the C substrate (aligned allocation, the thread limit and parallel loop) |
 | `crypto` | Python-facing | Basic primitives: the library's randomness (BLAKE3-seeded PRNG, AES-CTR RNG, Box-Muller sampling, a seeded transcript sampler) and BLAKE3 Merkle trees |
 | `mlwe` | Python-facing | LWE / Module-LWE and MGSW: key generation, encryption, key-switching, arithmetic, and ring morphisms |
 | `fhe` | Python-facing | Schemes on top of `mlwe`: CKKS (encode/encrypt/rescale/rotate/multiply), CGGI16 functional bootstrap, GP25 sparse-amortized bootstrap |
 | `piop` | Python-facing | Sketch of IOP prover/verifier framework (currently under development) |
 | `polycom` | Python-facing | Basefold polynomial commitments over a foldable Reed-Solomon code (currently under development) |
-| `circuit` | Python-facing | Arithmetic circuits (protobuf wire format) and their polynomial export to `arith` (currently under development) |
+| `circuit` | Python-facing | Arithmetic circuits (wire format in `proto/`) and their polynomial export to `arith` (currently under development) |
 | `vfhe` | placeholder | the top-level assembly that will tie the modules together |
 
 Still to come, each its own module when it has code: a circuit compiler
@@ -113,6 +120,8 @@ and its commitments.
 
 ## Development
 
+The module map is
+[`ARCHITECTURE.md`](https://github.com/vfhe/vfhe/blob/main/docs/ARCHITECTURE.md).
 The development guide — repository layout, build system, testing, coverage,
 and CI — is
 [`DEVELOPMENT.md`](https://github.com/vfhe/vfhe/blob/main/docs/DEVELOPMENT.md).
@@ -149,11 +158,6 @@ published, we'll add it as the preferred citation.) In BibTeX form:
   url = {https://github.com/vfhe/vfhe}
 }
 ```
-
-<!-- TODO(release): once a release is archived on Zenodo (enable the
-GitHub-Zenodo integration, then cut a GitHub release), add the DOI badge:
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
--->
 
 ## Acknowledgements
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """The sparse-amortized bootstrap of [GP25].
 
@@ -31,9 +31,9 @@ from typing import TYPE_CHECKING, cast
 
 from vfhe.arith import Polynomial, repr
 from vfhe.crypto import entropy
-from vfhe.engine import ffi, lib
 from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
 from vfhe.mlwe.mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set, lib_rlwe
+from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -133,7 +133,7 @@ class GP25:
     unless told otherwise (:class:`GadgetParams`; fewer digits than a prime
     has, the approximate decomposition, needs a rotation level 0 over one
     prime). Everything runs on the library's threads
-    (``vfhe.engine.set_num_threads``).
+    (``vfhe.util.parallel.set_num_threads``).
 
     ``bits_per_layer`` is the number of rotation bits per layer of the blind
     rotation. With 1, a layer is one CMUX per accumulator. With 2, BatchBoot's

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ from vfhe.arith import (
     repr,
 )
 from vfhe.crypto import entropy
-from vfhe.engine import ffi, lib, local_num_threads
+from vfhe.util.bindings import ffi, lib
+from vfhe.util.parallel import local_num_threads
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -1808,7 +1809,7 @@ class MLWE:
     def ell(self) -> int:
         return self.ring.ell
 
-    def new_like(  # noqa: PYI019 - Self needs 3.11
+    def new_like(
         self: CtT,
         lvl: int | None = None,
         ring: RNSRing | None = None,
@@ -1866,9 +1867,7 @@ class MLWE:
         lib_rlwe.lib.mlwe_RNS_mul_by_poly(self.obj, in_rlwe.obj, in_poly.as_element())
         self.repr = repr.ntt
 
-    def multiply_by_monomial(  # noqa: PYI019 - Self needs 3.11
-        self: CtT, exponent: int, minus_one: bool = False
-    ) -> CtT:
+    def multiply_by_monomial(self: CtT, exponent: int, minus_one: bool = False) -> CtT:
         """``self * X^exponent``, or ``self * (X^exponent - 1)`` with
         ``minus_one``, for any integer ``exponent`` (``X^N = -1``).
 
@@ -1966,7 +1965,7 @@ class MLWE:
         return ffi.cast("MLWE", self.obj).b.handle
 
     @classmethod
-    def from_components(  # noqa: PYI019 - Self needs 3.11
+    def from_components(
         cls: type[CtT],
         scheme: MLWE_Scheme,
         a: Sequence[RNSPolynomial],
@@ -2005,7 +2004,7 @@ class MLWE:
         self.repr = other.repr
         self.seed = other.seed
 
-    def round_division(  # noqa: PYI019 - Self needs 3.11
+    def round_division(
         self: CtT,
         ring: RNSRing | None = None,
         lvl: int | None = None,
@@ -2036,7 +2035,7 @@ class MLWE:
         self.ring = ring
         return self
 
-    def mod_reduce(  # noqa: PYI019 - Self needs 3.11
+    def mod_reduce(
         self: CtT, ring: RNSRing | None = None, lvl: int | None = None
     ) -> CtT:
         """Reduces the ciphertext into a smaller (quotient) ring, in place.

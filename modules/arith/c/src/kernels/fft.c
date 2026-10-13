@@ -81,7 +81,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <util.h>
+#include <alloc.h>
 
 #include "arith_internal.h"
 

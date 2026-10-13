@@ -3,7 +3,8 @@
 #include "gadget_rns.h"
 #include "mlwe.h"
 #include "rns_rows.h"
-#include "util.h"
+#include "alloc.h"
+#include <parallel.h>
 
 // Hybrid (GHS) key switches over RNS rings, many at a time.
 //

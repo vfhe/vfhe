@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
-#include "util.h"
+#include "memory_pool.h"
+
+#include <alloc.h>
 
 #include <pthread.h>
 #include <stdatomic.h>

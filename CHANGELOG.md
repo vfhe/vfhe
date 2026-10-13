@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Alin-Petru Roșu -->
+<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -18,10 +18,6 @@ versions may contain breaking changes.
   unsplit ring: a row is now read with `ffi.unpack` and written with one
   packed `ffi.memmove` instead of element by element. `BFV_Scheme.encode` /
   `decode` at N=4096 go from 1.9 / 2.1 ms to 0.27 / 0.29 ms.
-- Correct `Polynomial.base_extend`'s documented contract: it returns a value
-  congruent to this element modulo the ring's modulus, not the element
-  itself. Behaviour is unchanged; the docstring claimed exactness the fast
-  base conversion behind it never provided.
 - Add `Polynomial.convert_base(ring, out, exact)`: a value re-expressed over
   another base, which need not contain this one -- the general move
   `base_extend` is the special case of. The default is the fast conversion
@@ -76,35 +72,24 @@ versions may contain breaking changes.
   same sequence on every engine. It replaces `aes_rng.c` as the entropy
   stream's AES-NI expander. Also `Blake3Stream` (`hash_stream_*`),
   incremental BLAKE3.
-- Add `dynamic_extensions.compile(reuse=True)`: hand the process over to an
-  earlier build of the same inputs in `output_dir`, when one is there and
-  still newer than the `libvfhe_<engine>.a` it links, and compile only
-  otherwise. The same inputs means the same registered sources and
-  declarations, the same `extra_compile_args` / `extra_link_args`, the same
-  compiler at the same version, and the same engine -- all of which the
-  module's name now carries, so one set of sources built under two sets of
-  flags gives two modules and neither answers for the other. Reuse is the
-  library's to offer because that name is: a caller naming the module for
-  itself either rebuilds every time or loads a module built for other flags
-  or another ABI.
 - Add native multithreading under one library-wide limit:
-  `vfhe.engine.set_num_threads(n)` / `num_threads()` (C `vfhe_set_num_threads`
+  `vfhe.util.parallel.set_num_threads(n)` / `num_threads()` (C `vfhe_set_num_threads`
   / `vfhe_num_threads`), defaulting to `VFHE_NUM_THREADS` or else 1 (single
-  threaded) and kept across `dynamic_extensions` reloads. Operations taking
+  threaded). Operations taking
   `n_threads` use up to the limit by default and never exceed it: single
   operations (key switch, automorphism, multiplication, relinearization,
   round division and rescale, domain conversions) split over the ring's
   primes from N = 4096 up, and batches over their items.
-  `vfhe.engine.local_num_threads(n)` (C `vfhe_set_local_num_threads` /
+  `vfhe.util.parallel.local_num_threads(n)` (C `vfhe_set_local_num_threads` /
   `vfhe_local_num_threads`) limits the threads of the calls one thread makes,
   and a parallel call inside another gets only its share of the outer call's
   threads (`vfhe_share_for`), so nesting never goes past the limit. Results
   do not depend on the thread count. The native loop is `vfhe_parallel_for`
-  (util), with helper threads kept asleep between calls. The complex-FFT
+  (util's `parallel.h`), with helper threads kept asleep between calls. The complex-FFT
   batch, which always used 8 threads, follows the limit too. A CKKS rotation
   at N = 2^14 over 17 primes runs about 6x faster on 96 cores than on one.
 - Add a memory pool for the buffers the library allocates and frees
-  repeatedly (`vfhe.engine.memory_pool`; C `mempool_*`): a released RNS
+  repeatedly (`vfhe.util.memory_pool`; C `mempool_*`, in util's `memory_pool.h`): a released RNS
   polynomial row, field or pseudo-Mersenne vector, or complex polynomial is
   kept by the releasing thread and handed out again for the next request of
   its size. At N = 2^14 the CKKS batch calls went from thousands of minor page
@@ -115,9 +100,9 @@ versions may contain breaking changes.
   (`peak_outstanding_bytes` may miss a short-lived peak by a few MiB per
   thread). `set_wipe_on_release(True)` zeroes every buffer as it is released
   (off by default). `VFHE_MEMPOOL_CAPACITY` and
-  `VFHE_MEMPOOL_WIPE_ON_RELEASE=1` set the defaults, and both settings survive
-  `dynamic_extensions` reloads. A sanitized build bypasses the pool.
-- Add serialization, `vfhe.io`: `Serializer.dump` / `dumps` write one value
+  `VFHE_MEMPOOL_WIPE_ON_RELEASE=1` set the defaults. A sanitized build
+  bypasses the pool.
+- Add serialization, `vfhe.util.io`: `Serializer.dump` / `dumps` write one value
   per stream -- a vfhe object, `None`, a JSON scalar, or lists, tuples and
   dicts of values -- and `load` / `loads` read it back, binding each scheme to
   the caller's with the same primes and parameters (`schemes=`, `rings=`).
@@ -135,11 +120,34 @@ versions may contain breaking changes.
 - Add `MLWE_Scheme.key_gen(sigma_err, distribution="ternary")`: a key with
   every coefficient uniform in `{-1, 0, 1}`.
 - Add `MLWE(..., obj=)`: adopt a native sample.
+- Add a documentation site, `make docs`, published from `main` to GitHub Pages:
+  the guides, the Python API from the docstrings and the C API from the
+  Doxygen blocks, built with warnings as errors.
 - Add `MLWE.from_components(scheme, a, b, lvl=None)`: the sample with mask
   `a` and body `b`, copied from the polynomials (which may be temporaries, in
   either domain), over a level of the scheme or another of its rings.
 - Add `MLWE.mod_reduce(ring | lvl)`: a ciphertext reduced into a smaller
   level in place, the value kept rather than divided -- CKKS's level drop.
+- Add `vfhe.util.kernels`: compile your own C kernels *into* the library. Your
+  sources and vfhe's are one translation-unit set and one link with link-time
+  optimisation, so a loop of yours calling `add_modq` inlines it exactly as
+  vfhe's own loops do, and the process still holds one copy of the library.
+  `kernels.ExtensionBuilder(sources, declarations).build()` does it in place: the engine it builds
+  carries the prebuilt engine's module name and goes first on `sys.path`, so
+  `vfhe.util.bindings` imports it in place of the prebuilt one. It must run
+  before anything imports vfhe's C -- a loaded extension cannot be replaced, so
+  a late call raises. `python -m vfhe.util.kernels` builds the same artefact and
+  exits, so putting its directory on `PYTHONPATH` removes the ordering rule and
+  lets an image ship without a compiler. Builds are cached under
+  `$VFHE_BUILD_DIR`, else `~/.cache/vfhe`, and ninja rebuilds only what a change
+  actually reached.
+- Add a `kernels` extra: `pip install vfhe[kernels]` pulls in meson and ninja, which
+  `vfhe.util.kernels` drives. Only a custom build needs it -- the default path loads
+  a prebuilt engine -- and building without it now says so instead of failing
+  with `FileNotFoundError`.
+- Ship the library's C in wheels and sdists as `vfhe/_source/kernels-src.tar.gz`,
+  which is what `vfhe.util.kernels` compiles against: the sources, the public
+  headers and the cdefs, and nothing else. It adds about 350 KB to a wheel.
 - Add `MLWE.multiply_by_monomial(exponent, minus_one=False)`: the sample
   times `X^exponent` (or `X^exponent - 1`), any integer exponent, keeping its
   ring (special primes included), level, type (a CKKS ciphertext keeps its
@@ -310,7 +318,7 @@ versions may contain breaking changes.
 
 ### Changed
 
-- **Breaking:** The CKKS encoder and decoder (`ComplexRing`) run on a new
+- **BREAKING**: The CKKS encoder and decoder (`ComplexRing`) run on a new
   negacyclic FFT kernel (`fft_new_plan` / `fft_forward` / `fft_inverse` /
   `fft_pointwise_mul`, native `FFT_Plan`) in place of the special-root
   transforms; results agree to rounding. `ComplexRing(N)` no longer takes
@@ -319,10 +327,19 @@ versions may contain breaking changes.
   `complex_polys_ifft_scale_round_to_RNS_batch` takes `(plan, slots)` in
   place of `(n_complex, log_prec, gs_ws)` and no longer overwrites its input.
   Building a `CKKS_Scheme` at N = 2^16 takes milliseconds instead of seconds.
-- `Polynomial.automorphism` of an NTT-domain element on a fully split ring
-  stays in the NTT domain (a reordering of the transform's points) instead of
+- Keep `Polynomial.automorphism` of an NTT-domain element on a fully split ring
+  in the NTT domain (a reordering of the transform's points) instead of
   converting the element to coefficients first.
-- **Breaking:** Prime selection follows the ring's splitting. A partially
+- **BREAKING**: Move util's packages under `vfhe.util`: `vfhe.util.bindings`,
+  `vfhe.util.kernels` and `vfhe.util.io`, plus the internal `vfhe.util._engine`
+  and `vfhe.util._cpu`. The kernels command is `python -m vfhe.util.kernels`.
+  `vfhe.info` and `python -m vfhe.info` stay where they were.
+- **BREAKING**: Make `python -m vfhe.info` print JSON, with plain values: `version`
+  (`null` in a source tree), `engine`, the loaded engine's name (`null` when none
+  loads, with the reason on stderr), `engine_file`, its path, and `runs`, which
+  maps every engine to whether this CPU runs it (`true`, `false`, or `null` when
+  the CPU cannot say).
+- **BREAKING**: Prime selection follows the ring's splitting. A partially
   split ring keeps primes `1 mod 2N / split_degree` with an odd multiplier,
   so that its residues are fields of size `p^split_degree` [CCCFGS25,
   Sec. 3.1]; a fully split ring now also takes full-size primes with an even
@@ -332,35 +349,26 @@ versions may contain breaking changes.
   raises `ValueError` when no prime is left, and a ring given its primes
   (`primes=` or `mask=`) with `split_degree > 1` raises `ValueError` for a
   prime with an even multiplier, which silently gave residues of size `p`.
-- `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` now raise when
+- Make `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` raise when
   the mask names primes outside the pool they are given, instead of dropping
   them silently. `RNSRing.union` builds the ring over two rings' primes.
-- `Multiprecision.compute_crt_consts` raises for moduli its single-digit
+- Make `Multiprecision.compute_crt_consts` raise for moduli its single-digit
   Barrett step cannot serve (primes wider than 52 bits) rather than returning
   constants that reconstruct incorrectly.
-- `ExtensionFieldNTT.pack` / `unpack`'s transpose goes through a tile buffer
+- Route `ExtensionFieldNTT.pack` / `unpack`'s transpose through a tile buffer
   with an odd stride, so both its memory sides are contiguous runs; at `2^22`
   elements over `F_(p^4)` it takes 107 ms to about 50.
-- `FieldVector.query` also accepts a buffer of unsigned 64-bit indices, handed
+- Let `FieldVector.query` also accept a buffer of unsigned 64-bit indices, handed
   to the gather as it stands; the kernel now range-checks them itself.
-- `FieldVector.hash_elements` / `hash_fibers` return a read-only `memoryview`
+- Make `FieldVector.hash_elements` / `hash_fibers` return a read-only `memoryview`
   of the kernel's buffer rather than a copy. It compares, slices and converts
   like `bytes`; `bytes(digests)` is the copy, and is what hashing or keying by
   them needs.
-- `Merkle.from_digests` accepts any bytes-like and keeps it rather than
+- Let `Merkle.from_digests` accept any bytes-like and keep it rather than
   copying, so a mutable buffer stays connected -- `commit()` re-reads it.
-- `dynamic_extensions` names a compiled module after the flags it was built
-  with and the compiler that built it, version included, as well as its
-  sources and the active engine. Existing caches are invalidated, which is the
-  intended effect.
-- `dynamic_extensions.update_cffi_references` now runs the
-  `REINITIALIZATION_REGISTRY` itself. Installing the new handles and rebuilding
-  the state bound to the old ones are one operation -- a reinitializer reaches
-  the library through `vfhe.engine`, so it must run after the handles move --
-  and callers no longer iterate the registry after calling it.
-- Allocations of 8 MiB and up ask the kernel for huge pages.
-  [`USAGE.md`](docs/USAGE.md) covers the allocator settings that go with it.
-- **Breaking:** Gadget parameters are one object. `GadgetParams(log_base=None,
+- Ask the kernel for huge pages for allocations of 8 MiB and up.
+  [`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md) covers the allocator settings that go with it.
+- **BREAKING**: Gadget parameters are one object. `GadgetParams(log_base=None,
   digits=None, primes_per_digit=1)` (`vfhe.mlwe`; `log_base=None` is the RNS
   gadget) replaces the `radix_log_base` argument of `gadget_scalars`,
   `gen_ksk`, `gen_rlk`, `gen_ksk_for_level`, `gen_rlk_for_level`,
@@ -383,7 +391,7 @@ versions may contain breaking changes.
   `gadget_mul_subto_polynomial`, `mlwe_new_RNS_ks_key` and the `mgsw_*`
   products, and `RNS_MLWE_KS_Key.gadget_params` replaces `log_base`;
   `GadgetParams.native(balanced)` builds it.
-- **Breaking:** Gadget digits are balanced by default (RNS and radix;
+- **BREAKING**: Gadget digits are balanced by default (RNS and radix;
   `balanced=False` restores the old outputs). With `MLWE_Scheme(...,
   balanced=True)`, which `CKKS_Scheme` and `BFV_Scheme` pass through and the
   scheme's keys and `MGSW_Scheme` follow (unless given `balanced`), the RNS
@@ -394,9 +402,9 @@ versions may contain breaking changes.
   quarter, so every gadget product adds about one bit less noise standard
   deviation at the same cost. Outputs change; what they decrypt to does not.
   With balanced RNS digits, `MLWE_Scheme.automorphisms` gives the same
-  ciphertexts as `automorphism`. `vfhe.io` records the choice, and the C
+  ciphertexts as `automorphism`. `vfhe.util.io` records the choice, and the C
   `GadgetParams` carries it (`balanced`).
-- **Breaking:** The division by the special primes after a gadget product is
+- **BREAKING**: The division by the special primes after a gadget product is
   the ModDown of hybrid key switching (`mlwe_mod_down`), the fast base
   conversion of the value modulo `P`, in place of a rounding division by one
   special prime at a time, whose cost grew with the square of their number:
@@ -404,55 +412,104 @@ versions may contain breaking changes.
   their number. Outputs change; what they decrypt to does not. The exact
   rounding division (`mlwe_round_division`: rescale, level moves,
   decryption) is unchanged.
-- **Breaking:** Fresh samples and keys are drawn from seeds.
+- **BREAKING**: Fresh samples and keys are drawn from seeds.
   `MLWE_Scheme.sample` expands a sample's mask from a fresh 32-byte seed by
-  default (`prng_expand_below`) and keeps it as `MLWE.seed`, so `vfhe.io` can
+  default (`prng_expand_below`) and keeps it as `MLWE.seed`, so `vfhe.util.io` can
   store the sample as its seed; `sample(..., seeded=False)` or
   `MLWE_Scheme.seeded_encryption = False` draws the mask directly. Key
   generation samples the same way and leaves its keys in the NTT domain,
   where they are used. Distributions are unchanged, but a pinned stream
   (`entropy.deterministic`) gives other samples and keys than before.
-- **Breaking:** `MLWE_Scheme(ring, special_primes=k)` derives every level
+- **BREAKING**: `MLWE_Scheme(ring, special_primes=k)` derives every level
   down to one prime by default (`max_lvl` defaults to
   `len(ring.primes) - k`): with no special primes the one-prime level used to
   be missing, so such a scheme now has one more level. `max_lvl` outside
   `1 .. len(ring.primes) - k` raises `ValueError`.
-- **Breaking:** Rename the phase `b - <a, s>` to the linear decryption, the
+- **BREAKING**: Rename the phase `b - <a, s>` to the linear decryption, the
   scheme-neutral term: `MLWE_Scheme.phase` and `LWE.phase` become
   `linear_decrypt`, and the native `mlwe_RNS_phase` / `lwe_phase` become
   `mlwe_RNS_linear_decrypt` / `lwe_linear_decrypt`. The old names are
   removed.
-- `MLWE_Scheme.linear_decrypt` reuses a key over a wider ring instead of
+- Make `MLWE_Scheme.linear_decrypt` reuse a key over a wider ring instead of
   rebuilding it for the ciphertext's ring, and takes `ring=` to compute it
   modulo a quotient only; `MLWE_Key.at_ring(ring)` builds the key over
   another ring once and keeps it. `Polynomial.mod_reduce` keeps the element's
   domain.
+- **BREAKING**: Rename the installed `engine.h` to `x86_64.h`, holding only
+  what its name says: `VFHE_HAVE_X86_64`, `VFHE_HAVE_AVX512F` and
+  `VFHE_HAVE_AVX512IFMA`. The cipher and RNG instructions it also carried
+  (`VFHE_HAVE_AESNI`, `VFHE_HAVE_VAES`, `VFHE_HAVE_RDRAND`) are crypto's alone
+  and moved into that module, unexported -- no other module read them. Include
+  `<x86_64.h>` where you included `<engine.h>`.
+- **BREAKING**: Move the index and modulus helpers (`array_reduce_mod_N`,
+  `array_mod_switch_from_2k`, `double2int`, `int_rev`, `bit_rev`) from
+  `util.h` to `arith.h`, and what is left of that header is now `alloc.h`:
+  `util` is allocation and nothing else. Every caller of the moved helpers
+  already compiled against `arith.h`; include `<alloc.h>` for the rest.
+- **BREAKING**: Rename `vfhe.engine` to `vfhe.util.bindings`: import `from vfhe.util.bindings
+  import ffi, lib`. `vfhe.util._engine` is instead the catalogue -- an `Engine` enum
+  of every engine this build knows, and which of them this CPU can run. The two
+  names were one letter apart while doing unrelated jobs, and only the
+  catalogue is answerable before anything compiled is mapped, which is what
+  `vfhe.util.kernels` and the test runner need.
+- Drop `setuptools` as a runtime dependency. Nothing imports it on any
+  path that still exists; it served the old runtime-compilation code.
+- **BREAKING**: Replace two build options with one: `-Dfuzz=<engine>` is what asks
+  for a fuzzing build, since a session instruments exactly one ISA and there is
+  no such thing as fuzzing without naming it. The old `-Dfuzz=true` boolean and
+  `-Dfuzz_engine=<name>` string could disagree, and passing the engine while
+  forgetting the boolean configured an ordinary wheel build, silently.
+- Move the CPU and cache probes to pure Python in `vfhe.util._cpu`. It is private, so
+  no import path a caller uses changes.
+- Make `tools/test/unit/run.sh` read the built engines off meson's test list, keep
+  those this CPU runs, and select their tests by name; meson runs every test
+  directly. Under
+  `EMULATE=1` the emulated test setup launches each test through SDE as its
+  `exe_wrapper`, once `tools/test/sde/fetch.sh` has fetched it.
+- Build engines with link-time optimisation. The shipped extension was
+  already an LTO build, but the static archive beside it was not, so C linked
+  against it paid a call where the extension inlined -- measured at 2870 ns per
+  call against 530 ns. LTO is not a build option: inlining across the boundary
+  is the point of the feature that needs it.
+- Change every copyright header to `The vFHE Authors`, in
+  place of the individual and institutional lines they replaced.
+- Configure ruff and pyright in `ruff.toml` and `pyrightconfig.json`
+  rather than in `pyproject.toml`, which each tool reads by default and which
+  keeps packaging metadata separate from tool settings.
+- Make the version a static `version` in `pyproject.toml`; the build has no
+  version logic left: `project()` declares none, and `setuptools-scm` is no
+  longer a build dependency. It no longer comes from `git describe` -- a
+  release edits the line and tags it -- so sdists need no frozen `.version`.
+- **BREAKING**: Name cffi declaration files `.h` instead of `.cdef`, so
+  editors and `clang-format` treat them as the C they contain. The library's
+  own move with them, and `vfhe.util.kernels` reads a caller's `.h` as
+  declarations.
 - `MLWE_Scheme.gen_ksk(..., hybrid=False)` (also `gen_ksk_for_level` and
   `gen_ring_switch_key`): a key-switch key in the level's own ring rather than
   its special ring, so the key switch divides by no special prime (BV). For
   an output key that must stay at a small modulus, such as a sparse one; pair
   it with a small radix, `GadgetParams(log_base=...)`.
-- **Breaking:** `mlwe_full_packing_keyswitch(out, in, size, ksk)` no longer
+- **BREAKING**: `mlwe_full_packing_keyswitch(out, in, size, ksk)` no longer
   takes the unused `lvl`; it takes samples of another ring dimension over the
   same primes (matched by value) and decomposes through the key's gadget, so
   it takes radix keys.
 - `mgsw_CMUX_to_coeff` and `mgsw_NCMUX_to_coeff` keep the external product
   canonical, skipping a transform pair per call.
-- `CKKS_Scheme.encode` takes any number of values dividing `N/2` and packs
+- Let `CKKS_Scheme.encode` take any number of values dividing `N/2` and pack
   fewer than `N/2` sparsely (repeated across the slots, so the plaintext is a
   polynomial in `X^(N/2n)`); `decode(..., slots=n)` reads them back.
 - `CKKS_Scheme.decode` reconstructs the coefficients natively
   (`polynomial_RNSc_to_centered_doubles`, exact up to the doubles' rounding
   for any value) instead of a Python big-integer CRT per coefficient: about
   100x faster at N = 2^14 over 8 primes, with the same values.
-- `CKKS_Scheme.decrypt(ciphertext, key, *, message_bound=None, drop=True)`
-  returns the plaintext over the fewest primes that hold it, the lowest level
+- Make `CKKS_Scheme.decrypt(ciphertext, key, *, message_bound=None, drop=True)`
+  return the plaintext over the fewest primes that hold it, the lowest level
   whose modulus exceeds `2 * delta * message_bound`, computing the linear
   decryption over those primes only (about 8x faster to decrypt and decode a
   level-0 ciphertext at N = 2^16 over 9 primes). By default `message_bound` is
   what the smallest level with at least two bits above the scaling factor
   holds at the scheme's scale; `drop=False` keeps every prime.
-- **Breaking:** Rework GP25 [GP25]. `GP25(scheme, gsw_ell=None,
+- **BREAKING**: Rework GP25 [GP25]. `GP25(scheme, gsw_ell=None,
   gadget_params=None, bits_per_layer=1)` rotates over
   `scheme`, the rotation key's over `R_N`, and bootstraps every coefficient
   of a sample over `R_n`, for any `n` and `N`. Three keys take part: the
@@ -490,7 +547,7 @@ versions may contain breaking changes.
   rotation noise with the RNS gadget, and a rotation about 1.4x faster;
   `encrypt_rotations(values, n_bits, n, key)` makes such keys. See Removed
   for the previous surface.
-- **Breaking:** `FoldableRS` and `FieldFoldableRS` now build the general
+- **BREAKING**: Make `FoldableRS` and `FieldFoldableRS` build the general
   foldable code of [ZCF24, Def. 5] by default -- seeded twist tables at every
   level above a Reed-Solomon base code -- rather than a Reed-Solomon code on
   roots of unity at every level. The same constructor call gives a different
@@ -502,21 +559,21 @@ versions may contain breaking changes.
   `2 n_d | p - 1`, `FoldableRS` needed `n_d | N/split_degree`); only the base
   length `n0` wants a transform, and does without one where the field has
   none.
-- `FoldableRS.twists` / `FieldFoldableRS.twists` are the general code's
+- Make `FoldableRS.twists` / `FieldFoldableRS.twists` the general code's
   twist table `T` (the odd position uses `-T`, as in the paper), and the
   field code's are lists of elements rather than integers (a twist of the
   general code need not lie in the prime subfield). `twists2_inv` is gone:
   the fold's `1 / (2 T)` is held privately.
-- `relative_distance` is a method, not a property: the general code's bound
+- Make `relative_distance` a method, not a property: the general code's bound
   depends on the security parameter.
-- The general code over an extension field encodes the base messages of a
+- Make the general code over an extension field encode the base messages of a
   level-`l` message with one batched transform (`ExtensionField.ntt_plan(n0)`,
   in the base domain or, on a field with too little 2-adicity, the extension
   one) where it ran a Horner scheme of `k0` passes; at `k0 = 128` and a `2^20`
   codeword over `F_(p^4)` the encode is 12x faster (1.69 s to 0.14 s,
   avx512ifma), and a field whose only roots of unity lie outside `F_p` now
   has a transform as its base encoder rather than a Vandermonde product.
-- The general code's lifts are `lift_twisted` calls alternating between two
+- Make the general code's lifts `lift_twisted` calls alternating between two
   buffers, in place of `fma_interleave` over a tiled and negated table into a
   fresh destination per level: at a `2^22` codeword over `F_(p^4)` the lifts
   of an 11-level encode go from 724 ms to 363 ms and the commit from 1.16 s to
@@ -524,23 +581,66 @@ versions may contain breaking changes.
 
 ### Removed
 
-- **Breaking:** `ComplexRing`'s `special_rous` argument, `gen_special_rous`,
+- **BREAKING**: Reduce `vfhe.util.bindings` to `ffi` and `lib`.
+  `active_engine()` and `runnable_engines()` are gone, since the loaded engine
+  is internal knowledge; `set_num_threads` and `num_threads` moved to
+  `vfhe.util.parallel` (see Added); the "a faster engine could run" warning is gone —
+  only a pin could trigger it, and `python -m vfhe.info` reports what else
+  this CPU runs.
+- **BREAKING**: Remove `vfhe_engine_active()` from the C, and with it
+  `build_info.c`, util's `python/cdef/engine.h` and the `-DVFHE_ENGINE_NAME`
+  every engine was compiled with. It reported which engine a binary was, for a
+  "you could be faster" hint that became pure Python; nothing has called it
+  since. `python -m vfhe.info` reports the loaded engine.
+- **BREAKING**: Remove `cache_root` from `vfhe.util.kernels`. `ExtensionBuilder.compile()`
+  and `build()` return the directory they produced, which is the path a
+  caller actually needs; nothing in the tree or the docs ever asked where the
+  cache root was.
+- **BREAKING**: Remove `libvfhe` and its `LibVFHE` class from
+  `vfhe.util.bindings`. Nothing read them: `multithreaded` and `num_threads` were never
+  consulted, since the C that threads takes its count as a call argument. Use
+  `from vfhe.util.bindings import ffi, lib`, which is what the wrappers already do.
+- **BREAKING**: Remove the CPU probe from C: `vfhe_cpu.h`, `cpu_probe.c` and
+  the `vfhe_cpu` cdef. What a host supports is `vfhe.util._cpu`'s
+  answer, in pure Python, because it has to be answerable *before* an engine
+  loads -- a probe inside the engine cannot say whether that engine may load.
+- **BREAKING**: Remove `rebind_state` from `vfhe.arith`, and
+  `vfhe.arith.state` no longer offers `register_rebind` / `rebind`. They
+  existed only to rebuild state after the hot swap, which is gone; the `reset`
+  half stays, and is what empties caches between tests.
+- **BREAKING**: Remove `vfhe.dynamic_extensions`, replaced by `vfhe.util.kernels`
+  (see Added). The hot swap it was built around -- `update_cffi_references`,
+  `register_reinitializer`, `REINITIALIZATION_REGISTRY` -- goes with it:
+  CPython cannot unload an extension, so a swap could never reach objects a
+  caller already held, which in a cryptography library is a wrong answer rather
+  than an untidiness.
+- **BREAKING**: Stop installing a standalone C library: the
+  `libvfhe_<engine>` shared libraries, their pkg-config files and the public
+  headers under `<prefix>/include/vfhe` are gone. Nothing linked them -- the
+  engine extension carries the code -- and vFHE is a Python library with C
+  underneath, not a C library with Python bindings. `vfhe.util.kernels` is how C
+  reaches these kernels.
+- **BREAKING**: Stop shipping `libvfhe_<engine>.a` and
+  `engine-<engine>.json`. Nothing links the archive any more, and the JSON's
+  contents moved into the generated `_vfhe_flags` table, so meson's engine
+  catalog reaches Python by one route instead of two.
+- **BREAKING**: `ComplexRing`'s `special_rous` argument, `gen_special_rous`,
   `gen_special_rous_hp`, `CT_rous` and `GS_rous`, and the native special-root
   transforms `CT_NR` / `GS_RN` with their tables (`load_rous_CT`,
   `load_rous_GS`, `bit_reverse_array`), replaced by the FFT kernel.
 - `mpmath` is no longer a dependency: its only use was building the old
   transform's root tables.
-- **Breaking:** `array_reduce_mod_N` and `array_mod_switch_from_2k` (C,
+- **BREAKING**: `array_reduce_mod_N` and `array_mod_switch_from_2k` (C,
   `util.h`), whose only uses were the biased uniform sampling fixed below.
-- **Breaking:** `MLWE_Scheme.phase`, `LWE.phase`, `mlwe_RNS_phase` and
+- **BREAKING**: `MLWE_Scheme.phase`, `LWE.phase`, `mlwe_RNS_phase` and
   `lwe_phase`; use `linear_decrypt` (see Changed).
-- **Breaking:** `MLWE_Scheme.full_packing_keyswitch_scaled` and
+- **BREAKING**: `MLWE_Scheme.full_packing_keyswitch_scaled` and
   `mlwe_full_packing_keyswitch_scaled`: `trace_pack` packs the same samples
   without the factor and with less noise.
-- **Breaking:** The unimplemented LWE key switch (`LWE_KS_Key`,
+- **BREAKING**: The unimplemented LWE key switch (`LWE_KS_Key`,
   `lwe_new_KS_key`, `lwe_keyswitch`) and the undefined
   `mlwe_RNSc_extract_lwe`, from `mlwe.h`.
-- **Breaking:** GP25's previous surface (see the rework in Changed):
+- **BREAKING**: GP25's previous surface (see the rework in Changed):
   `GP25(..., debug_key=, threads=, trace_repack=)` (repacking always goes
   through the trace), `mod_switch` (from `vfhe.fhe`),
   `generate_sparse_ternary_key` (use
@@ -554,10 +654,14 @@ versions may contain breaking changes.
   `packing_keyswitch`), the `SAB_Key` fields `s`, `s_sign`, `r_prec` and
   `b_prec`, and the native `gp25_RGSW_monomial_mul(_mt)` and
   `gp25_sub_a_mt`.
-- **Breaking:** `CGGI16_Key.b_prec`, which nothing read.
+- **BREAKING**: `CGGI16_Key.b_prec`, which nothing read.
 
 ### Fixed
 
+- Correct `Polynomial.base_extend`'s documented contract: it returns a value
+  congruent to this element modulo the ring's modulus, not the element
+  itself. Behaviour is unchanged; the docstring claimed exactness the fast
+  base conversion behind it never provided.
 - Fix uniform sampling below a prime (`Polynomial.sample_uniform`, the masks
   of MLWE and LWE samples, `gen_sparse_ternary_array_modq`) being biased:
   random words were mapped onto the modulus by a floating-point scaling or a
@@ -594,7 +698,7 @@ versions may contain breaking changes.
 - Fix `ComplexPolynomial` assignment, `from_array` and `*=` rejecting
   `numbers.Complex` / `numbers.Real` values (e.g. a subclass of `complex`, or
   a `Fraction`) other than the exact builtin types.
-- `FieldVector.view` of a view started at the parent's buffers rather than at
+- Fix `FieldVector.view` of a view starting at the parent's buffers rather than at
   the view: the nested view's planes skipped the outer offset, so it read and
   wrote the wrong elements. Both vector implementations.
 - Fix `Multiprecision.from_polynomial` leaking its result. `free_mp_polynomial`

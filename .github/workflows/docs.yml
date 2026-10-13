@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+# `make docs` - the site from docs/, the docstrings and the Doxygen blocks,
+# warnings as errors; uploaded for GitHub Pages when asked, which the
+# caller deploys with the permissions a reusable workflow cannot ask for.
+name: Docs
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Upload the site as the GitHub Pages artifact.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read # checkout
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Set up dev environment
+        uses: ./.github/actions/setup-dev
+        with:
+          groups: docs
+      - name: Install doxygen
+        run: sudo apt-get install -y --no-install-recommends doxygen
+      - name: Build site
+        run: make docs
+      - name: Upload site
+        if: inputs.publish
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: build/docs/html

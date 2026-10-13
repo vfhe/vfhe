@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Vectors of pseudo-Mersenne elements, against two independent oracles.
 
@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 from vfhe.arith import FieldVector, PseudoMersenneField, PseudoMersenneVector
-from vfhe.engine import lib
+from vfhe.util.bindings import lib
 
 rng = random.Random(0xB0A710)  # noqa: S311 - test data, not a key
 

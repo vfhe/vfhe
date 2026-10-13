@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Follow the .env a script sources, resolved beside the script.
+external-sources=true
+source-path=SCRIPTDIR

@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <rns-rlwe.h>
-#include <engine.h>
 #include "arith_internal.h"
+#include <memory_pool.h>
+#include <parallel.h>
+#include <x86_64.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>

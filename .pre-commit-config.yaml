@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 default_install_hook_types: [pre-commit, commit-msg]
 
@@ -30,6 +30,16 @@ repos:
         # Manual only, so a prose typo never blocks a merge: `make spellcheck`.
         stages: [manual]
 
+  # buf.yaml configures lint and breaking-change rules; this is what runs them.
+  - repo: https://github.com/bufbuild/buf
+    rev: v1.73.0
+    hooks:
+      - id: buf-lint
+        # Our schemas only: a bare `buf lint` walks the venvs too, where
+        # grpc_tools vendors google's own protos.
+        args: [proto]
+        files: ^proto/
+
   - repo: local
     hooks:
       - id: ruff-check
@@ -56,6 +66,26 @@ repos:
         entry: clang-format --dry-run --Werror
         language: system
         files: \.(c|h)$
+
+      - id: vendored-sbom
+        name: BLAKE3 SBOM fits the submodule
+        entry: external/blake3/check_freeze.sh
+        language: system
+        always_run: true
+        pass_filenames: false
+
+      - id: zizmor
+        name: zizmor
+        entry: zizmor --no-progress --persona=pedantic
+        language: system
+        files: ^\.github/(workflows/.*|actions/.*/action)\.ya?ml$
+
+      - id: dco-signoff
+        name: DCO sign-off (git commit -s)
+        entry: "Signed-off-by:"
+        language: pygrep
+        args: [--negate]
+        stages: [commit-msg]
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
@@ -89,29 +119,3 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
-
-  - repo: local
-    hooks:
-      - id: vendored-sbom
-        name: BLAKE3 SBOM fits the submodule
-        entry: external/blake3/check_freeze.sh
-        language: system
-        always_run: true
-        pass_filenames: false
-
-  - repo: local
-    hooks:
-      - id: zizmor
-        name: zizmor
-        entry: zizmor --no-progress --persona=pedantic
-        language: system
-        files: ^\.github/(workflows/.*|actions/.*/action)\.ya?ml$
-
-  - repo: local
-    hooks:
-      - id: dco-signoff
-        name: DCO sign-off (git commit -s)
-        entry: "Signed-off-by:"
-        language: pygrep
-        args: [--negate]
-        stages: [commit-msg]

@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+cache-dir = ".cache/ruff"
+extend-exclude = ["external"]
+
+[lint]
+select = [
+    "ARG",
+    "B",
+    "BLE",
+    "C4",
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "I",
+    "PERF",
+    "PIE",
+    "RUF",
+    "S",
+    "SIM",
+    "SLF",
+    "TC",
+    "TID",
+    "UP",
+]
+
+[lint.per-file-ignores]
+"modules/*/python/test/**" = ["S101", "SLF001"]
+# An implementation's element, field and vector classes share private state:
+# a vector borrows its field's native parameters.
+"modules/arith/python/src/vfhe/arith/impl/**" = ["SLF001"]
+# piop, polycom and mle.py assert internal invariants (their tests expect
+# AssertionError), reach into cooperating classes, and leave protocol
+# arguments unused; piop's tests draw their data from `random`.
+"modules/arith/python/src/vfhe/arith/mle.py" = ["ARG002", "S101", "SLF001"]
+"modules/piop/python/**" = ["ARG002", "S101", "S311", "SLF001"]
+"modules/polycom/python/**" = ["ARG002", "SLF001"]

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the relation / statement layer of vfhe.piop: the ideal deciders
 of Relation_Sum / Relation_Zero / Relation_Eval over coefficient-basis and

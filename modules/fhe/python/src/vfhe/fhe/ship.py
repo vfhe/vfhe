@@ -43,8 +43,8 @@ from typing import TYPE_CHECKING, cast
 
 from vfhe.arith import Polynomial, domain_of, repr
 from vfhe.crypto import entropy
-from vfhe.engine import ffi, lib
 from vfhe.mlwe.mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Set, lib_rlwe
+from vfhe.util.bindings import ffi, lib
 
 from .ckks import CKKS_Ciphertext, CKKS_Scheme
 from .linear_transform import CKKS_LinearTransform

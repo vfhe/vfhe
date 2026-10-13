@@ -1,10 +1,29 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #ifndef __ARITH_INTERNAL_H__
 #define __ARITH_INTERNAL_H__
 
 #include <arith.h>
 #include <blake3.h>
+
+#if VFHE_HAVE_AVX512IFMA
+#include <immintrin.h>
+#endif
+
+// Engine-typed and declared in no cdef, so they are ours alone.
+#if VFHE_HAVE_AVX512IFMA
+void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t shoup_shift,
+                        __m512i ***out_ws, __m512i ***out_w_precon);
+void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uint64_t shoup_shift,
+                        __m512i ***out_ws, __m512i ***out_w_precon);
+void ntt_free_precompute(__m512i **ws, __m512i **w_precon, uint64_t n);
+#else
+void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t shoup_shift,
+                        uint64_t ***out_ws, uint64_t ***out_w_precon);
+void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uint64_t shoup_shift,
+                        uint64_t ***out_ws, uint64_t ***out_w_precon);
+void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
+#endif
 
 // Size-generic scalar declarations (mod_scalar.c / ntt_scalar.c). Compiled into
 // every engine: the vectorized kernels below need n >= 8 (element-wise) or

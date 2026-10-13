@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Sumcheck protocols [LFKN92]: Relation_Sum and Relation_SumProd both
 reduce to Relation_Eval claims.
@@ -26,7 +26,7 @@ from typing import Any, cast
 
 from vfhe.arith import ArithParent, Field, Polynomial, Ring, RNSPolynomial
 from vfhe.arith.mle import MLE, element_array, mark_ntt, native_table, vector_table
-from vfhe.engine import lib
+from vfhe.util.bindings import lib
 
 from .piop import (
     IOP,

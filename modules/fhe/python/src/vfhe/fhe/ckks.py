@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from vfhe.arith import (
     RNSRing,
     repr,
 )
-from vfhe.engine import ffi
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
+from vfhe.util.bindings import ffi
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

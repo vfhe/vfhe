@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.piop
 
@@ -48,6 +48,14 @@ module's.
   proof)` checks it with no prover, witnesses, or oracles present, reading
   the proof in a single forward pass and rejecting messages that arrive out
   of turn, run out, or are left over.
+- `range.py` / `lookup.py`: range checks over packed `R_q` polynomials, and
+  the lookup argument they rest on.
+  `Relation_Range` (every coefficient below a bound `B`) reduces, via
+  `RangeDecomposition`, to a `Relation_Lookup` on the base-`beta` digits
+  plus evaluation claims on the digits and on the original oracle. The
+  digits live over a large prime field while the oracle stays over `R_q`;
+  the bridge is the unpacked-evaluation lemma, so the digit polynomial is
+  never committed on the ring side. See [range.md](range.md).
 - `sumcheck.py`: `Sumcheck` (reduces `Relation_Sum` to `Relation_Eval` in
   `num_vars` rounds) and the Libra-style `SumcheckProd` (reduces
   `Relation_SumProd` to one `Relation_Eval` per factor). Round messages are
@@ -87,6 +95,6 @@ set of the coefficient domain (`Ring` / `Field`), never from a set carried
 by the statement.
 
 `c/src/sumcheck.c` holds the sumcheck round-message kernels
-(`python/cdef/sumcheck.cdef`), the module's only C. The dense-MLE kernels
+(`python/cdef/sumcheck.h`), the module's only C. The dense-MLE kernels
 they mirror are `vfhe.arith`'s (`arith/c/src/mle.c`), and the vector
 commitment the PCS layer uses is `vfhe.crypto`'s `Merkle`.

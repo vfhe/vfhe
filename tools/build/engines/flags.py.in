@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+ENGINES = {
+    name: flags.split(";")
+    for name, flags in {
+        "avx512ifma": r"""@AVX512IFMA@""",
+        "neon": r"""@NEON@""",
+        "portable": r"""@PORTABLE@""",
+    }.items()
+    if flags
+}

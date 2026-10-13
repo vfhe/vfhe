@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // The Reed-Solomon code over an extension field F_p[x]/(x^d - w), on the
@@ -9,7 +9,7 @@
 
 #include <string.h>
 
-#include "util.h"
+#include "alloc.h"
 
 NTT_Plan rs_field_new_plan(uint64_t size, Modulus mod) { return ntt_new_plan(size, mod); }
 

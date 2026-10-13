@@ -1,0 +1,18 @@
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-License-Identifier: Apache-2.0
+// Python-facing ABI of the sumcheck prover kernels (piop/c/src/sumcheck.c,
+// prototyped in piop/c/include/sumcheck.h). Element arrays and
+// handle-arrays are passed as `void *` (cffi converts any pointer/array).
+
+void sumcheck_round_pairs(ArithRing ring, ArithElement *g0, ArithElement *g1, ArithElement *table,
+                          uint64_t size);
+void sumcheck_round_halves(ArithRing ring, ArithElement *g0, ArithElement *g1, ArithElement *table,
+                           uint64_t size);
+void sumcheck_round(ArithRing ring, ArithElement *g0, ArithElement *g1, ArithElement *table,
+                    uint64_t size, uint64_t eval_var_idx);
+void sumcheck_prod2_round_pairs(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                                ArithElement *tg, uint64_t size);
+void sumcheck_prod2_round_halves(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                                 ArithElement *tg, uint64_t size);
+void sumcheck_prod2_round(ArithRing ring, ArithElement *g_out, ArithElement *tf, ArithElement *tg,
+                          uint64_t size, uint64_t eval_var_idx);

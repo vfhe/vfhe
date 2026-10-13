@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for vfhe.mlwe over the cffi boundary.
 
@@ -16,11 +16,9 @@ from collections import Counter
 from typing import cast
 
 import pytest
-import vfhe.engine as engine
 from vfhe.arith import Polynomial, Ring, repr
 from vfhe.arith.number_theory import crt
 from vfhe.crypto import entropy
-from vfhe.engine import ffi
 from vfhe.mlwe import (
     CMUX,
     LWE,
@@ -36,6 +34,8 @@ from vfhe.mlwe import (
     PlaintextMatrix,
 )
 from vfhe.mlwe.io import seed_still_holds
+from vfhe.util import parallel
+from vfhe.util.bindings import ffi
 
 N = 256
 
@@ -1349,11 +1349,11 @@ def test_packing_ksk(balanced, keygen_threads):
     Rq = Ring(256, prime_size=[50, 50, 50], split_degree=1)
     out_scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=4, balanced=balanced)
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
-    engine.set_num_threads(keygen_threads)
+    parallel.set_num_threads(keygen_threads)
     try:
         _check_packing(out_scheme, output_key, 256)
     finally:
-        engine.set_num_threads()
+        parallel.set_num_threads()
 
 
 def test_packing_ksk_radix():
@@ -2013,9 +2013,9 @@ def test_hoisted_automorphisms_refuse_a_key_of_another_gadget(ghs):
 @pytest.fixture
 def threads():
     """Lets the test's parallel calls use up to 8 threads (vfhe defaults to 1)."""
-    engine.set_num_threads(8)
+    parallel.set_num_threads(8)
     yield
-    engine.set_num_threads()
+    parallel.set_num_threads()
 
 
 @pytest.mark.parametrize("n_threads", [1, 0])
@@ -2524,7 +2524,7 @@ def test_single_operations_do_not_depend_on_the_thread_count(radix, r):
         prod = scheme.multiply(c.copy(), c.copy(), rlk, n_threads)
         out.append(prod.copy())
         out.append(prod.round_division(lvl=1, n_threads=n_threads))
-        with engine.local_num_threads(n_threads):
+        with parallel.local_num_threads(n_threads):
             out += scheme.automorphisms(c.copy(), [5, 25], auts)
         for x in out:
             x.to_coeff()
@@ -2573,7 +2573,7 @@ def test_batches_do_not_depend_on_the_thread_count(gadget, r):
             x.to_coeff()
         return _digests(out)
 
-    engine.set_num_threads(32)
+    parallel.set_num_threads(32)
     try:
         runs = [run(n_threads) for n_threads in (1, 3, 0)]
         single = [
@@ -2581,7 +2581,7 @@ def test_batches_do_not_depend_on_the_thread_count(gadget, r):
             scheme.automorphism(cs[1].copy(), gens[1], auts[1]),
         ]
     finally:
-        engine.set_num_threads()
+        parallel.set_num_threads()
     assert runs[0] == runs[1] == runs[2]
     for x in single:
         x.to_coeff()

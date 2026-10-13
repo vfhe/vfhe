@@ -12,8 +12,8 @@ from vfhe.arith import (
     crt,
     repr,
 )
-from vfhe.engine import lib
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
+from vfhe.util.bindings import lib
 
 
 class _CenteredMove:

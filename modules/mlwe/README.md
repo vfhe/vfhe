@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Antonio Guimarães -->
+<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.mlwe
 
@@ -23,4 +23,4 @@ depend on the thread count.
 `c/src/` holds the kernels -- samples (`mlwe.c`), key switching
 (`keyswitch.c`), the gadget (`gadget_rns.c`), MGSW (`mgsw.c`) and LWE
 (`lwe.c`), with the parts that reach into RNS residues in the `_rns` files;
-`python/cdef/mlwe.cdef` declares their ABI.
+`python/cdef/mlwe.h` declares their ABI.

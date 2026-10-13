@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Daniele Cozzo <daniele.cozzo@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Correctness tests for pseudo-Mersenne field addition and multiplication.
 

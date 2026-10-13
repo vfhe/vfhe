@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
 #include "rns_rows.h"
-#include "util.h"
+#include "alloc.h"
+#include <parallel.h>
 #include <crypto.h>
 
 // MLWE RNS functions

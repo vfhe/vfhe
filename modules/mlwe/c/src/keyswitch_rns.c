@@ -5,7 +5,7 @@
 // RNS row width and accessors: this file is the RNS backend, so it reaches
 // into the representation on purpose.
 #include "arith_internal.h"
-#include "util.h"
+#include "alloc.h"
 
 // The key-switching operations that need the RNS representation itself.
 //

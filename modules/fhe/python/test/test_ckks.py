@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for the vfhe.fhe CKKS scheme over cffi.
 
@@ -10,12 +10,12 @@ import cmath
 import math
 
 import pytest
-import vfhe.engine as engine
 from vfhe.arith import Polynomial, Ring
 from vfhe.arith.residue_selection import search_log_residues_minq0
 from vfhe.crypto import entropy
-from vfhe.engine import ffi
 from vfhe.fhe import CKKS_Ciphertext, CKKS_Scheme
+from vfhe.util import parallel
+from vfhe.util.bindings import ffi
 
 N = 256
 
@@ -78,11 +78,11 @@ def test_encode_batch_matches_encode():
     )
     ring = scheme.rings[1]
     batch = [rand_values(n) for n in (1, 4, N // 2, 32, N // 2)]
-    engine.set_num_threads(8)
+    parallel.set_num_threads(8)
     try:
         polys = scheme.encode_batch(batch, ring=ring, scale=2**20, n_threads=3)
     finally:
-        engine.set_num_threads()
+        parallel.set_num_threads()
     for values, poly in zip(batch, polys, strict=True):
         expected = scheme.encode(values, ring=ring, scale=2**20)
         assert poly.get_polynomial(signed=True) == expected.get_polynomial(signed=True)
@@ -508,9 +508,9 @@ def test_ciphertext_multiplication_module_rank(r, N_r):
 @pytest.fixture
 def threads():
     """Lets the test's parallel calls use up to 8 threads (vfhe defaults to 1)."""
-    engine.set_num_threads(8)
+    parallel.set_num_threads(8)
     yield
-    engine.set_num_threads()
+    parallel.set_num_threads()
 
 
 def _product_scheme(n_levels, n=N):

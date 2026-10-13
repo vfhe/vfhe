@@ -1,7 +1,7 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
-#include "util.h"
+#include "alloc.h"
 #include <crypto.h>
 
 // Generates a sparse ternary array with Hamming Weight h, balanced (h/2 ones and h/2 negative ones)

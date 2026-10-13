@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Puts each vendored dependency's CycloneDX fragment in every wheel, where PEP 770
@@ -15,26 +15,20 @@ fi
 root=$(cd "$(dirname "$0")/../../.." && pwd)
 python=${PYTHON:-python3}
 
-# Every vendored or adapted dependency's CycloneDX fragment.
-fragments="
-external/blake3/blake3.cdx.json
-external/adapted.cdx.json
-"
-
 for wheel in "$@"; do
     into=$(dirname "$wheel")
     staging=$into/.sbom
     rm -rf "$staging"
-    $python -m wheel unpack -d "$staging" "$wheel" >/dev/null
+    $python -m wheel unpack -d "$staging" "$wheel"
 
     sboms=$(echo "$staging"/*/*.dist-info)/sboms
     mkdir -p "$sboms"
 
-    for fragment in $fragments; do
+    # Every vendored or adapted dependency's CycloneDX fragment.
+    for fragment in external/blake3/blake3.cdx.json external/adapted.cdx.json; do
         cp "$root/$fragment" "$sboms/$(basename "$fragment")"
     done
 
-    $python -m wheel pack -d "$into" "$staging"/* >/dev/null
+    $python -m wheel pack -d "$into" "$staging"/*
     rm -rf "$staging"
-    echo "embedded SBOMs in $(basename "$wheel")"
 done

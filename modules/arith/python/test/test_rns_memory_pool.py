@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from vfhe.arith import Polynomial, Ring
-from vfhe.engine import memory_pool
+from vfhe.util import memory_pool
 
 
 def _asan_runtime_loaded() -> bool:

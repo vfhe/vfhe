@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
-#include "util.h"
+#include "alloc.h"
+#include "memory_pool.h"
 #include <crypto.h>
 #include <blake3.h>
 

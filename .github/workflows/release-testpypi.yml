@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 # Publishes a pre-release to TestPyPI.
 name: Release TestPyPI
@@ -32,10 +32,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Check the version is a release or a candidate
+      - name: Check the version is a candidate and is what pyproject declares
         env:
           VERSION: ${{ inputs.version }}
-        run: echo "$VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.dev[0-9]+)?'
+        run: |
+          echo "$VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.dev[0-9]+)?'
+          grep -Fqx "version = \"$VERSION\"" pyproject.toml
       - name: Wait for CI on main
         uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
@@ -62,8 +64,6 @@ jobs:
     uses: ./.github/workflows/release-build.yml
     permissions:
       contents: read # checkout
-    with:
-      release-version: ${{ inputs.version }}
 
   # --------------------------------------------------------------- publish ---
 

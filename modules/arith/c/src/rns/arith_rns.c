@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <arith_generic.h>
 
 #include "arith_dispatch.h"
+#include <alloc.h>
 #include <pthread.h>
-#include <util.h>
 
 // RNS as an implementation of the generic arithmetic interface.
 //

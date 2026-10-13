@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Vectors of `PseudoMersenneField` elements, as L limb planes.
 
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 from vfhe.arith._alloc import aligned64, aligned64_unset
 from vfhe.arith.base import FieldVector, index_buffer
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 from .pseudo_mersenne import _LANES, PseudoMersenneElement
 

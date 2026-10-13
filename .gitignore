@@ -1,23 +1,16 @@
-# SPDX-FileCopyrightText: 2026 Alin-Petru Roșu <rosualinpetru@gmail.com>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 
-*.egg-info/
 *.o
 *.py[cod]
 *.so
 .DS_Store
 /.cache/
-.claude/settings.local.json
 /.env*
 .idea/
 .tox/
 .venv/
-/.version
 .vscode/
 __pycache__/
 /build/
-/coverage/
 /dist/
-
-# Third-party papers kept beside the code for reference; not distributable.
-/reference/

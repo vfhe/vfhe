@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Foldable codes over a finite field for the basefold commitment.
 
@@ -47,7 +47,7 @@ from vfhe.arith import (
     PseudoMersenneField,
     PseudoMersenneVector,
 )
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 from .code import (
     DEFAULT_SEED,

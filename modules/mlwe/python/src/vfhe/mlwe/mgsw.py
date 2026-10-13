@@ -1,9 +1,9 @@
-# SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from vfhe.arith import Polynomial, RNSPolynomial, domain_of, repr
-from vfhe.engine import ffi, lib
+from vfhe.util.bindings import ffi, lib
 
 from .mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set, _monomial
 
