@@ -10,14 +10,18 @@ from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import (
     IOP,
     Implicit,
+    ImplicitEval,
+    ImplicitOracle,
     OracleKind,
     Protocol,
     Relation,
     Relation_Eval,
     Relation_Sum,
+    Relation_SumDef,
     Relation_Zero,
     Statement,
     Sumcheck,
+    SumDefStart,
     VirtualEval,
     VirtualOracle,
     compose,
@@ -676,3 +680,256 @@ def test_a_terminal_statement_reading_a_head_is_refused():
 
     with pytest.raises(RuntimeError, match="no protocol"):
         _iop(_IntDomain(), layering=bad).run(_chain_instance())
+
+
+# --- sum definitions -------------------------------------------------------
+
+
+def _eq_table(variables, ring=None):
+    """eq(z, p) over variables [p..., z...] (same width each), public."""
+    n = len(variables) // 2
+    table = [int((b & ((1 << n) - 1)) == (b >> n)) for b in range(1 << len(variables))]
+    return MLE(ring=ring, variables=variables, evaluations=table, public=True)
+
+
+def _product_body(below, i):
+    """The sum definition of one grand-product level: L(z) = sum_p eq(z, p)
+    below(p, 0) below(p, 1) [Tha13, §5.3.1]; returns (L, G), L implicit."""
+    n = below.num_vars - 1
+    z = _vars(*[f"z{i}_{k}" for k in range(n)])
+    p = _vars(*[f"p{i}_{k}" for k in range(n)])
+    eq = _eq_table(p + z, ring=getattr(below, "ring", None))
+    lo = dict(zip(below.variables[:-1], p, strict=True)) | {below.variables[-1]: 0}
+    hi = dict(zip(below.variables[:-1], p, strict=True)) | {below.variables[-1]: 1}
+    body = VirtualOracle(
+        z + p,
+        [eq, below, below],
+        [(1, (0, 1, 2))],
+        [{v: v for v in eq.variables}, lo, hi],
+    )
+    return Implicit(z), body
+
+
+def _sum_tree(W, levels):
+    """(L_i, G_i) pairs, deepest first: L_{levels-1}, ..., L_0, L_levels = W."""
+    below = W
+    pairs = []
+    for i in range(levels):
+        L, G = _product_body(below, i)
+        pairs.append((L, G))
+        below = L
+    return pairs
+
+
+def _old_tree(W, levels):
+    """The same tree as an ImplicitOracle chain, for the message comparison."""
+    below = W
+    oracles = []
+    for i in range(levels):
+        L, G = _product_body(below, i)
+        below = ImplicitOracle(L.variables, G, Relation_SumDef.summed_of(L, G))
+        oracles.append(below)
+    return oracles
+
+
+def _messages(iop):
+    """Every transcript value in order, challenges included."""
+    t = iop.transcript
+    return [t.entries[label].result() for label in t.order]
+
+
+# The transcript values of the two runs below under _IntDomain(0): what the
+# ImplicitOracle route sent, pinned so that the composition keeps sending it.
+ONE_LEVEL_MESSAGES = [(-100, 231, 1152, 2915), 885442, (885444, 1770889)]
+TWO_LEVEL_MESSAGES = [
+    (-9350, 31122, 172312, 468076),
+    885442,
+    (15052536, 42501301),
+    403960,
+    794774,
+    (-67685686673310, 107545238116844, 463395593428950, 1042228612393776),
+    933490,
+    (
+        1163832537013774607460054312480,
+        4579598518976424980877088450070,
+        10247319616473145718758580764968,
+        18167017540661817691405424390862,
+    ),
+    441003,
+    (411674146971, 4513009),
+]
+
+
+def _sumdef_iop(domain, **kw):
+    iop = IOP(domain=domain, **kw)
+    iop.register(Relation_SumDef.Start, SumDefStart())
+    iop.register(Relation_Sum, Sumcheck())
+    iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+    return iop
+
+
+def _old_iop(domain, **kw):
+    iop = IOP(domain=domain, **kw)
+    iop.register(Relation_Sum, Sumcheck())
+    iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+    iop.register(Relation_Eval, ImplicitEval(), kind=OracleKind.implicit)
+    return iop
+
+
+@pytest.mark.parametrize("ring", [None, Ring(1024, prime_size=[49], split_degree=4)])
+def test_sumdef_relation_and_head(ring):
+    W = MLE(ring=ring, variables=_vars("w0", "w1"), evaluations=[2, 3, 5, 7])
+    ((L1, G1),) = _sum_tree(W, 1)  # L1(z) = W(z, 0) * W(z, 1) = [10, 21]
+    stmt = Statement(Relation_SumDef(), oracles=(L1, G1), head=L1)
+    assert Relation_SumDef.summed(stmt) == G1.variables[1:]
+    table = stmt.relation.compute_head(stmt)  # constituents are tables already
+    assert table.variables == L1.variables and table.ring is ring
+    assert list(table.table) == [10, 21]
+    assert Statement(Relation_SumDef(), oracles=(table, G1)).check()
+    wrong = _like(table, [10, 22])
+    assert not Statement(Relation_SumDef(), oracles=(wrong, G1)).check()
+    plain = Statement(Relation_SumDef(), oracles=(L1, W), head=L1)
+    with pytest.raises(TypeError):  # G is a virtual oracle
+        plain.relation.compute_head(plain)
+
+
+def test_sumdef_one_level_started_statement():
+    # A started sum definition run on its own, the driver completing it
+    # (sumcheck, then the virtual-oracle rewriting); the same messages as the
+    # ImplicitOracle route sends. Rejections are exact: an honest prover on a
+    # false claim fails the first round's check whatever the challenges.
+    W = _table(_vars("w0", "w1"), [2, 3, 5, 7])
+    ((L1, G1),) = _sum_tree(W, 1)
+    (z,) = L1.variables
+    r = 11
+    v = (1 - r) * 10 + r * 21  # the MLE of the products, not the product of MLEs
+    stmt = Statement(Relation_SumDef(), oracles=(L1, G1), head=L1)
+    claim = Statement(Relation_Eval(), oracles=(L1,), point={z: r}, value=v)
+    started = stmt.relation.start(stmt, [claim])
+    assert started.check()
+    iop = _sumdef_iop(_IntDomain())
+    assert iop.run(started)
+    # The started statement is the child "/0" of stmt; no RLC for one claim.
+    assert iop.transcript.order[0] == "sumcheck/0/0/g0"
+    assert len(iop.transcript.entries["sumcheck/0/0/g0"].result()) == 4  # degree 3
+    bad = stmt.relation.start(
+        stmt, [Statement(Relation_Eval(), oracles=(L1,), point={z: r}, value=v + 1)]
+    )
+    assert not bad.check()
+    assert not _sumdef_iop(_IntDomain(1)).run(bad)
+    # Two claims, one of them wrong: the random linear combination exposes it.
+    v5 = (1 - 5) * 10 + 5 * 21
+    other = Statement(Relation_Eval(), oracles=(L1,), point={z: 5}, value=v5)
+    two = stmt.relation.start(stmt, [other, claim])
+    assert two.check()
+    assert _sumdef_iop(_IntDomain()).run(two)
+    two_bad = stmt.relation.start(stmt, [other, bad.parents[1]])
+    assert not two_bad.check()
+    assert not _sumdef_iop(_IntDomain(1)).run(two_bad)
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    assert SumDefStart().soundness_error(started, ring) == 0
+    assert SumDefStart().soundness_error(two, ring) == 1 / ring.exceptional_set_size
+    # Message for message what the ImplicitOracle route sends.
+    (old,) = _old_tree(W, 1)
+    (zo,) = old.variables
+    old_iop = _old_iop(_IntDomain())
+    assert old_iop.run(
+        Statement(Relation_Eval(), oracles=[old], point={zo: r}, value=v)
+    )
+    assert _messages(old_iop) == _messages(iop) == ONE_LEVEL_MESSAGES
+
+
+class _Query(Relation):
+    """`L(point) = value` stated of an implicit oracle L by a headless
+    statement of a reduction (as a circuit's output test does); its protocol
+    emits the evaluation claim, with no message."""
+
+    name = "query"
+    fields = ("oracles", "point", "value")
+
+
+class _Emit(Protocol):
+    reduces_from = _Query
+    reduces_to = (Relation_Eval,)
+
+    async def prove(self, prover, statements):
+        return self._claim(statements)
+
+    async def verify(self, verifier, statements):
+        return self._claim(statements)
+
+    def _claim(self, statements):
+        (s,) = statements
+        return [self.reduce([s], point=s.point, value=s.value)]
+
+
+class _Tree(Relation):
+    """The two-level product tree of W evaluates to `value` at `point`."""
+
+    name = "tree"
+    fields = ("oracles", "point", "value")
+
+
+def _tree_layering(root):
+    (W,) = root.oracles
+    (L1, G1), (L0, G0) = _sum_tree(W, 2)
+    (z,) = L0.variables
+    (zr,) = root.point.keys()
+    point = {z: root.point[zr]}
+    return [
+        [root.reduce_to(_Query, oracles=[L0], point=point, value=root.value)],
+        [root.reduce_to(Relation_SumDef, oracles=(L0, G0), head=L0)],
+        [root.reduce_to(Relation_SumDef, oracles=(L1, G1), head=L1)],
+    ]
+
+
+def test_sumdef_two_levels_bundle_claims():
+    # The two claims on L1 left by L0's sumcheck meet in one started
+    # statement, combined by a random linear combination.
+    W = _table(_vars("w0", "w1", "w2"), [2, 3, 5, 7, 11, 13, 17, 19])
+    r = 6
+    (L1o, L0o) = _old_tree(W, 2)
+    (zo,) = L0o.variables
+    v = L0o.evaluate({zo: r}).constant()
+    terminal = []
+
+    class _Record(Protocol):
+        async def prove(self, prover, statements):
+            return []
+
+        async def verify(self, verifier, statements):
+            terminal.extend(statements)
+            return []
+
+    iop = _sumdef_iop(_IntDomain())
+    iop.register(_Tree, compose(_tree_layering, name="tree"))
+    iop.register(_Query, _Emit())
+    iop.register(Relation_Eval, _Record())
+    root = Statement(_Tree(), oracles=[W], point={_vars("z")[0]: r}, value=v)
+    assert iop.run(root)
+    order = iop.transcript.order
+    assert "sumdef/2/0/a0" in order and "sumdef/2/0/a1" in order  # the RLC
+    assert len(terminal) == 2 and all(s.oracles[0] is W for s in terminal)
+    assert all(s.check() for s in terminal)
+    heads = sorted(
+        (
+            list(t.table)
+            for o, t in iop.prover.witnesses.items()
+            if isinstance(o, Implicit)
+        ),
+        key=len,
+    )
+    assert heads == [list(L0o.materialize().table), list(L1o.materialize().table)]
+    # Message for message what the ImplicitOracle route sends.
+    old_iop = _old_iop(_IntDomain())
+    old_iop.register(Relation_Eval, _Record())
+    old_iop.prover.witnesses[L1o] = L1o.materialize()
+    assert old_iop.run(
+        Statement(Relation_Eval(), oracles=[L0o], point={zo: r}, value=v)
+    )
+    assert _messages(old_iop) == _messages(iop) == TWO_LEVEL_MESSAGES
+    bad = Statement(_Tree(), oracles=[W], point={_vars("z")[0]: r}, value=v + 1)
+    iop = _sumdef_iop(_IntDomain(1))
+    iop.register(_Tree, compose(_tree_layering, name="tree"))
+    iop.register(_Query, _Emit())
+    assert not iop.run(bad)

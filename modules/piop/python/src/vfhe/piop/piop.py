@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, TypeVar, cast
 
 from vfhe.crypto import entropy, hash_bytes
 
@@ -599,7 +599,10 @@ def _with_head_table(statement: Statement, base: Relation, table) -> Statement:
     return Statement(base, **fields)
 
 
-def with_start(cls: type[Relation]) -> type[Relation]:
+_R = TypeVar("_R", bound=Relation)
+
+
+def with_start(cls: type[_R]) -> type[_R]:
     """Class decorator: derive the *start relation* of a relation with a head.
 
     For `R` with head `u` and other oracles `dep`, `R.Start` is the relation

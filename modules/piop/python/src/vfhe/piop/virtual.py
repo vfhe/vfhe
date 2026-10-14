@@ -75,6 +75,7 @@ from .piop import (
     _constant,
     _hypercube,
     element_digest,
+    with_start,
 )
 
 
@@ -1021,6 +1022,130 @@ class ImplicitEval(Protocol):
         self, verifier: Verifier, statements: list[Statement]
     ) -> list[Statement]:
         return await self._combine(verifier, statements)
+
+
+@with_start
+class Relation_SumDef(Relation):
+    """`L(z) = sum_{b in {0,1}^m} G(z, b)` on the hypercube: a *sum definition*
+    of the oracle L, the head, by the virtual oracle G over L's variables z
+    and the summed variables b, the others of G, in G's order: a layer of a
+    layered circuit in terms of the layer below it [Tha22, §4.6], a
+    grand-product level [Tha13, §5.3.1]. A statement headed at L plays the
+    role of today's `ImplicitOracle`; in a layered reduction it sits in the
+    layer of L, and `SumDefStart`, registered against
+    `Relation_SumDef.Start`, is its composable protocol.
+    """
+
+    name = "sumdef"
+    fields = ("oracles",)
+    head_index = 0
+
+    @staticmethod
+    def summed_of(L, G) -> list:
+        """The summed variables: G's that are not L's."""
+        return [v for v in G.variables if not any(v is u for u in L.variables)]
+
+    @classmethod
+    def summed(cls, statement: Statement) -> list:
+        L, G = statement.oracles
+        return cls.summed_of(L, G)
+
+    def check(self, statement: Statement) -> bool:
+        L, G = statement.oracles
+        summed = self.summed(statement)
+        for z in _hypercube(L.variables):
+            total = None
+            for b in _hypercube(summed):
+                e = _constant(G.evaluate({**z, **b}, in_place=False))
+                total = e if total is None else total + e
+            if _constant(L.evaluate(z, in_place=False)) != total:
+                return False
+        return True
+
+    def compute_head(self, statement: Statement):
+        """L's table, the hypercube sums of G over the summed variables, from
+        G's constituent tables (the prover view): the generic, exponential
+        route. A relation that knows G's structure (a circuit layer) computes
+        the table directly instead."""
+        L, G = statement.oracles
+        _defining(G)
+        summed = self.summed(statement)
+        view = G.prover_view(None, strategy="dense")
+        evaluations = []
+        for z in _hypercube(L.variables):
+            total = None
+            for b in _hypercube(summed):
+                e = view.at({**z, **b})
+                total = e if total is None else total + e
+            evaluations.append(total)
+        return _table_like(view.tables, L.variables, evaluations)
+
+
+class SumDefStart(Protocol):
+    """The composable protocol of a sum definition: the started statement's
+    claims `L(r_i) = y_i` become one `Sum(sum_i alpha_i G(r_i, .), sum_i
+    alpha_i y_i)` over the summed variables, the alphas independent challenges
+    (none for a single claim); the registered sumcheck then reduces it to one
+    evaluation claim on that virtual oracle, and `VirtualEval` that claim to
+    claims on G's constituents, both run by the Composer inside the layer (or
+    by the driver, for a started statement run on its own). Zero
+    communication; soundness error (k-1)/|A| for k claims [Sor22, Lem. 11;
+    CCCFGS25, Eqs. (19)-(20)]. `ImplicitEval` on a started statement instead
+    of a bundle.
+    """
+
+    name = "sumdef"
+    reduces_from: type[Relation] = Relation_SumDef.Start
+    reduces_to: tuple[type[Relation], ...] = (Relation_Sum,)
+
+    def soundness_error(self, statement: Statement, domain) -> float | None:
+        from .sumcheck import _exceptional_set_size
+
+        size = _exceptional_set_size(domain)
+        if size is None:
+            return None
+        return (len(statement.points) - 1) / size
+
+    async def _combine(self, party, statements: list[Statement]) -> list[Statement]:
+        iop = _iop_of(party)
+        (s,) = statements
+        await s.resolved()
+        L, G = s.oracles
+        _defining(G)
+        points, values = list(s.points), list(s.values)
+        if not points or len(points) != len(values):
+            raise ValueError("a started sum definition carries k >= 1 paired claims")
+        label = f"{self.name}{s.path}"
+        if len(points) == 1:
+            alphas = [1]
+        else:
+            alphas = [
+                iop.verifier.challenge(f"{label}/a{i}") for i in range(len(points))
+            ]
+        bodies = [
+            G.evaluate({v: p[v] for v in L.variables}, in_place=False) for p in points
+        ]
+        combined = VirtualOracle.linear(alphas, bodies)
+        value = None
+        for alpha, y in zip(alphas, values, strict=True):
+            t = _scale(alpha, y)
+            value = t if value is None else value + t
+        return [self.reduce([s], Relation_Sum, oracles=[combined], value=value)]
+
+    async def prove(
+        self, prover: Prover, statements: list[Statement]
+    ) -> list[Statement]:
+        return await self._combine(prover, statements)
+
+    async def verify(
+        self, verifier: Verifier, statements: list[Statement]
+    ) -> list[Statement]:
+        return await self._combine(verifier, statements)
+
+
+def _defining(G) -> None:
+    if not isinstance(G, VirtualOracle):
+        raise TypeError("the defining oracle of a sum definition is a virtual oracle")
 
 
 def _iop_of(party) -> IOP:

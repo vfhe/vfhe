@@ -30,7 +30,14 @@ from .piop import (
 )
 from .range import RangeDecomposition, Relation_Range
 from .sumcheck import Sumcheck, SumcheckProd
-from .virtual import ImplicitEval, ImplicitOracle, VirtualEval, VirtualOracle
+from .virtual import (
+    ImplicitEval,
+    ImplicitOracle,
+    Relation_SumDef,
+    SumDefStart,
+    VirtualEval,
+    VirtualOracle,
+)
 
 __all__ = [
     "GKR",
@@ -53,9 +60,11 @@ __all__ = [
     "Relation_Lookup",
     "Relation_Range",
     "Relation_Sum",
+    "Relation_SumDef",
     "Relation_SumProd",
     "Relation_Zero",
     "Statement",
+    "SumDefStart",
     "Sumcheck",
     "SumcheckProd",
     "Transcript",
