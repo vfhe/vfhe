@@ -10,8 +10,6 @@ from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import (
     IOP,
     Implicit,
-    ImplicitEval,
-    ImplicitOracle,
     OracleKind,
     Protocol,
     Relation,
@@ -325,10 +323,11 @@ class _HadamardStart(Protocol):
     def _sums(self, statements):
         (s,) = statements
         _, b, c = s.oracles
+        ref = c if isinstance(b, Implicit) else b  # a table, for the domain
         out = []
         for point, value in zip(s.points, s.values, strict=True):
             r = [point[v] for v in s.head.variables]
-            eq = _like(b, _eq_weights(r, _one_of([b])), public=True)
+            eq = _like(ref, _eq_weights(r, _one_of([ref])), public=True)
             g = VirtualOracle.product([b, c, eq])
             out.append(self.reduce([s], oracles=[g], value=value))
         return out
@@ -721,25 +720,15 @@ def _sum_tree(W, levels):
     return pairs
 
 
-def _old_tree(W, levels):
-    """The same tree as an ImplicitOracle chain, for the message comparison."""
-    below = W
-    oracles = []
-    for i in range(levels):
-        L, G = _product_body(below, i)
-        below = ImplicitOracle(L.variables, G, Relation_SumDef.summed_of(L, G))
-        oracles.append(below)
-    return oracles
-
-
 def _messages(iop):
     """Every transcript value in order, challenges included."""
     t = iop.transcript
     return [t.entries[label].result() for label in t.order]
 
 
-# The transcript values of the two runs below under _IntDomain(0): what the
-# ImplicitOracle route sent, pinned so that the composition keeps sending it.
+# The transcript values of the two runs below under _IntDomain(0), pinned:
+# what the framework sent for the same claims before sum definitions became
+# statements of a reduction, message for message.
 ONE_LEVEL_MESSAGES = [(-100, 231, 1152, 2915), 885442, (885444, 1770889)]
 TWO_LEVEL_MESSAGES = [
     (-9350, 31122, 172312, 468076),
@@ -768,14 +757,6 @@ def _sumdef_iop(domain, **kw):
     return iop
 
 
-def _old_iop(domain, **kw):
-    iop = IOP(domain=domain, **kw)
-    iop.register(Relation_Sum, Sumcheck())
-    iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
-    iop.register(Relation_Eval, ImplicitEval(), kind=OracleKind.implicit)
-    return iop
-
-
 @pytest.mark.parametrize("ring", [None, Ring(1024, prime_size=[49], split_degree=4)])
 def test_sumdef_relation_and_head(ring):
     W = MLE(ring=ring, variables=_vars("w0", "w1"), evaluations=[2, 3, 5, 7])
@@ -795,9 +776,9 @@ def test_sumdef_relation_and_head(ring):
 
 def test_sumdef_one_level_started_statement():
     # A started sum definition run on its own, the driver completing it
-    # (sumcheck, then the virtual-oracle rewriting); the same messages as the
-    # ImplicitOracle route sends. Rejections are exact: an honest prover on a
-    # false claim fails the first round's check whatever the challenges.
+    # (sumcheck, then the virtual-oracle rewriting). Rejections are exact: an
+    # honest prover on a false claim fails the first round's check whatever
+    # the challenges.
     W = _table(_vars("w0", "w1"), [2, 3, 5, 7])
     ((L1, G1),) = _sum_tree(W, 1)
     (z,) = L1.variables
@@ -829,14 +810,7 @@ def test_sumdef_one_level_started_statement():
     ring = Ring(1024, prime_size=[49], split_degree=4)
     assert SumDefStart().soundness_error(started, ring) == 0
     assert SumDefStart().soundness_error(two, ring) == 1 / ring.exceptional_set_size
-    # Message for message what the ImplicitOracle route sends.
-    (old,) = _old_tree(W, 1)
-    (zo,) = old.variables
-    old_iop = _old_iop(_IntDomain())
-    assert old_iop.run(
-        Statement(Relation_Eval(), oracles=[old], point={zo: r}, value=v)
-    )
-    assert _messages(old_iop) == _messages(iop) == ONE_LEVEL_MESSAGES
+    assert _messages(iop) == ONE_LEVEL_MESSAGES
 
 
 class _Query(Relation):
@@ -887,10 +861,10 @@ def test_sumdef_two_levels_bundle_claims():
     # The two claims on L1 left by L0's sumcheck meet in one started
     # statement, combined by a random linear combination.
     W = _table(_vars("w0", "w1", "w2"), [2, 3, 5, 7, 11, 13, 17, 19])
+    # L1(z) = W(z, 0) W(z, 1) = [22, 39, 85, 133]; L0(z) = L1(z, 0) L1(z, 1)
+    # = [1870, 5187]; L0~(6) = (1 - 6) 1870 + 6 * 5187.
     r = 6
-    (L1o, L0o) = _old_tree(W, 2)
-    (zo,) = L0o.variables
-    v = L0o.evaluate({zo: r}).constant()
+    v = -5 * 1870 + 6 * 5187
     terminal = []
 
     class _Record(Protocol):
@@ -919,17 +893,44 @@ def test_sumdef_two_levels_bundle_claims():
         ),
         key=len,
     )
-    assert heads == [list(L0o.materialize().table), list(L1o.materialize().table)]
-    # Message for message what the ImplicitOracle route sends.
-    old_iop = _old_iop(_IntDomain())
-    old_iop.register(Relation_Eval, _Record())
-    old_iop.prover.witnesses[L1o] = L1o.materialize()
-    assert old_iop.run(
-        Statement(Relation_Eval(), oracles=[L0o], point={zo: r}, value=v)
-    )
-    assert _messages(old_iop) == _messages(iop) == TWO_LEVEL_MESSAGES
+    assert heads == [[1870, 5187], [22, 39, 85, 133]]
+    assert _messages(iop) == TWO_LEVEL_MESSAGES
     bad = Statement(_Tree(), oracles=[W], point={_vars("z")[0]: r}, value=v + 1)
     iop = _sumdef_iop(_IntDomain(1))
     iop.register(_Tree, compose(_tree_layering, name="tree"))
     iop.register(_Query, _Emit())
     assert not iop.run(bad)
+
+
+def test_a_head_waits_for_every_claim(monkeypatch):
+    # Claims on c come from two layers (the sum in L0, the Hadamard headed at
+    # k in L1); c is started once, in L2, with both. The layer order, not a
+    # parking rule, decides when.
+    starts = []
+    start = _Hadamard.start
+
+    def counting(self, statement, claims):
+        starts.append(len(claims))
+        return start(self, statement, claims)
+
+    monkeypatch.setattr(_Hadamard, "start", counting)
+
+    def layering(root):  # sum b (d o e) + sum b k, with k = (d o e) o e
+        b, d, e = root.oracles
+        c, k = Implicit(b.variables), Implicit(b.variables)
+        bc = VirtualOracle.product([b, c])
+        bk = VirtualOracle.product([b, k])
+        return [
+            [
+                root.reduce_to(Relation_Sum, oracles=[bc], value=290),
+                root.reduce_to(Relation_Sum, oracles=[bk], value=root.total - 290),
+            ],
+            [root.reduce_to(_Hadamard, oracles=(k, c, e), head=k)],
+            [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)],
+        ]
+
+    # (d o e) o e = [20, 54, 112, 200]; sum b * that = 20 + 108 + 336 + 800
+    stmt = _chain_instance(total=290 + 1264)
+    iop = _iop(_IntDomain(), layering=layering)
+    assert iop.run(stmt)
+    assert starts == [1, 2, 1, 2]  # per party: k with one claim, c with both

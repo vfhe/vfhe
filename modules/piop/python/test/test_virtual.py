@@ -1,16 +1,15 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 """Defined oracles: virtual oracles in a sumcheck and their free reduction
-(VirtualEval), implicit oracles and the bundled ImplicitEval, the parking
-rule of the driver, and Fiat-Shamir over statements carrying them."""
+(VirtualEval), the oracle kinds, and Fiat-Shamir over statements carrying
+them. Sum definitions and the Composer are in test_composition.py."""
 
 import random
 
 from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
 from vfhe.piop import (
     IOP,
-    ImplicitEval,
-    ImplicitOracle,
+    Implicit,
     OracleKind,
     Protocol,
     Relation_Eval,
@@ -44,7 +43,6 @@ def _iop(domain=None, **kw):
     iop = IOP(domain=domain or _IntDomain(), **kw)
     iop.register(Relation_Sum, Sumcheck())
     iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
-    iop.register(Relation_Eval, ImplicitEval(), kind=OracleKind.implicit)
     return iop
 
 
@@ -59,8 +57,7 @@ def test_oracle_kinds():
     )
     assert oracle_kind(f, commitment=object()) is OracleKind.committed
     assert oracle_kind(g) is OracleKind.virtual
-    body = VirtualOracle.product([f])
-    assert oracle_kind(ImplicitOracle([], body, x)) is OracleKind.implicit
+    assert oracle_kind(Implicit(x)) is OracleKind.implicit
     v = _vars("y0", "y1", "y2")
     assert oracle_kind(SparseMLE(variables=v, evaluations={5: 3}, public=True)) is (
         OracleKind.public
@@ -151,111 +148,16 @@ def test_virtual_claims_dedupe_and_skip_public():
     assert H.maps[1][x[0]] == 5 and H.constituents[1] is W
 
 
-def _eq_table(variables, ring=None):
-    """eq(z, p) over variables [p..., z...] (same width each), as a public
-    table in W's domain."""
-    n = len(variables) // 2
-    table = [int((b & ((1 << n) - 1)) == (b >> n)) for b in range(1 << len(variables))]
-    return MLE(ring=ring, variables=variables, evaluations=table, public=True)
-
-
-def _grand_product_tree(W, levels):
-    """Implicit oracles L_{levels-1}, ..., L_0 with L_i(z) = sum_p eq(z, p)
-    L_{i+1}(p, 0) L_{i+1}(p, 1), L_levels = W [Tha13, §5.3.1]."""
-    below = W
-    oracles = []
-    for i in range(levels):
-        n = below.num_vars - 1
-        z = _vars(*[f"z{i}_{k}" for k in range(n)])
-        p = _vars(*[f"p{i}_{k}" for k in range(n)])
-        eq = _eq_table(p + z, ring=W.ring)
-        lo = dict(zip(below.variables[:-1], p, strict=True)) | {below.variables[-1]: 0}
-        hi = dict(zip(below.variables[:-1], p, strict=True)) | {below.variables[-1]: 1}
-        body = VirtualOracle(
-            z + p,
-            [eq, below, below],
-            [(1, (0, 1, 2))],
-            [
-                {v: v for v in eq.variables},
-                lo,
-                hi,
-            ],
-        )
-        below = ImplicitOracle(z, body, p)
-        oracles.append(below)
-    return oracles
-
-
-def test_implicit_grand_product_one_level():
-    w = _vars("w0", "w1")
-    W = MLE(variables=w, evaluations=[2, 3, 5, 7])
-    (L1,) = _grand_product_tree(W, 1)  # L1(z) = W(z, 0) * W(z, 1)
-    (z,) = L1.variables
-    assert L1.evaluate({z: 0}).constant() == 2 * 5
-    assert L1.evaluate({z: 1}).constant() == 3 * 7
-    r = 11
-    v = L1.evaluate({z: r}).constant()
-    assert (
-        v == (1 - r) * 10 + r * 21
-    )  # the MLE of the products, not the product of MLEs
-    stmt = Statement(Relation_Eval(), oracles=[L1], point={z: r}, value=v)
-    assert stmt.check()
-    iop = _iop()
-    assert iop.run(stmt)
-    # No challenge for a single claim; the sumcheck over p has degree 3.
-    assert iop.transcript.order[0] == "sumcheck/0/g0"
-    assert len(iop.transcript.entries["sumcheck/0/g0"].result()) == 4
-    assert not _iop().run(
-        Statement(Relation_Eval(), oracles=[L1], point={z: r}, value=v + 1)
-    )
-
-
-def test_implicit_two_levels_bundle_claims():
-    # Two claims on L1 (from the sumcheck of L0's definition) meet in one
-    # ImplicitEval bundle; W's claims from the two combined bodies dedupe.
-    w = _vars("w0", "w1", "w2")
-    W = MLE(variables=w, evaluations=[2, 3, 5, 7, 11, 13, 17, 19])
-    L1, L0 = _grand_product_tree(W, 2)
-    (z,) = L0.variables
-    r = 6
-    v = L0.evaluate({z: r}).constant()
-    sizes = []
-
-    class _Counting(ImplicitEval):
-        async def _combine(self, party, statements):
-            sizes.append(len(statements))
-            return await super()._combine(party, statements)
-
-    terminal = []
-
-    class _Record(Protocol):
-        async def prove(self, prover, statements):
-            return []
-
-        async def verify(self, verifier, statements):
-            terminal.extend(statements)
-            return []
-
-    iop = _iop()
-    iop.register(Relation_Eval, _Counting(), kind=OracleKind.implicit)
-    iop.register(Relation_Eval, _Record())
-    iop.prover.witnesses[L1] = L1.materialize()  # the prover's table for L1
-    assert iop.run(Statement(Relation_Eval(), oracles=[L0], point={z: r}, value=v))
-    assert sizes == [1, 2, 1, 2]  # per party: L0 alone, then both L1 claims
-    assert "implicit/0/0/0/a0" in iop.transcript.order  # RLC challenges
-    assert len(terminal) == 2 and all(s.oracles[0] is W for s in terminal)
-    assert all(s.check() for s in terminal)
-
-
 def test_parking_rule_waits_for_all_claims_on_an_oracle():
-    # Zero -> two Sum claims on f (synthetic); each sumcheck emits Eval(f).
-    # The first Eval(f) must wait for the second Sum to be reduced, so the
-    # bundle protocol for plain oracles sees both claims at once.
+    # Zero -> an Eval claim on f and a Sum claim on f (synthetic), the Eval
+    # first in the worklist. The Eval must wait for the Sum to be reduced to
+    # its own Eval, so the bundle protocol for plain oracles sees both at
+    # once: without parking it would see [1, 1] per party.
     sizes = []
 
     class _Split(Protocol):
         reduces_from = Relation_Zero
-        reduces_to = (Relation_Sum,)
+        reduces_to = (Relation_Eval, Relation_Sum)
 
         async def prove(self, prover, statements):
             return self._go(statements)
@@ -266,10 +168,10 @@ def test_parking_rule_waits_for_all_claims_on_an_oracle():
         def _go(self, statements):
             (s,) = statements
             (f,) = s.oracles
-            total = sum(f.table)
+            (x0, x1) = f.variables
             return [
-                self.reduce(statements, value=total),
-                self.reduce(statements, value=total),
+                self.reduce(statements, Relation_Eval, point={x0: 1, x1: 1}, value=4),
+                self.reduce(statements, Relation_Sum, value=sum(f.table)),
             ]
 
     class _Bundle(Protocol):
@@ -320,11 +222,11 @@ def test_fiat_shamir_over_defined_oracles():
     ring = Ring(1024, prime_size=[49], split_degree=4)
     w = _vars("w0", "w1")
     W = MLE(ring=ring, variables=w, evaluations=[2, 3, 5, 7])
-    (L1,) = _grand_product_tree(W, 1)
-    (z,) = L1.variables
-    r = ring.random_exceptional()
-    v = L1.evaluate({z: r}).constant()
-    stmt = Statement(Relation_Eval(), oracles=[L1], point={z: r}, value=v)
+    E = MLE(ring=ring, variables=w, evaluations=[1, 0, 0, 1], public=True)
+    G = VirtualOracle(w, [E, W, W], terms=[(1, (0, 1)), (1, (2,))])  # E W + W
+    # The sumcheck's challenges come from the chain; VirtualEval ends it.
+    total = (2 + 7) + (2 + 3 + 5 + 7)
+    stmt = Statement(Relation_Sum(), oracles=[G], value=total)
     proofs = []
     for _ in range(2):
         iop = _iop(domain=ring, fiat_shamir=True)
@@ -332,5 +234,6 @@ def test_fiat_shamir_over_defined_oracles():
     assert proofs[0].labels == proofs[1].labels
     assert proofs[0].digest() == proofs[1].digest()
     assert _iop(domain=ring, fiat_shamir=True).verify(stmt, proofs[0])
-    bad = Statement(Relation_Eval(), oracles=[L1], point={z: r}, value=v + 1)
+    assert any(label.startswith("sumcheck") for label in proofs[0].labels)
+    bad = Statement(Relation_Sum(), oracles=[G], value=total + 1)
     assert not _iop(domain=ring, fiat_shamir=True).verify(bad, proofs[0])

@@ -103,7 +103,7 @@ enforces it cryptographically [BFS20] — registering
 ## 4. The relation toolbox
 
 Following the multilinear PIOP toolboxes of [Set20, CBBZ23], the module
-starts from four relation kinds. In all of them `f` is (an MLE of) an
+starts from a handful of relation kinds. In all of them `f` is (an MLE of) an
 `n`-variate polynomial oracle and the coefficient domain is `R_q` or a field.
 
 - **`Relation_Sum`** — instance `(f, v)`:
@@ -144,19 +144,44 @@ starts from four relation kinds. In all of them `f` is (an MLE of) an
 - **`Relation_Circuit`** — index: a layered arithmetic circuit
   (`vfhe.circuit`: fan-in-2 ADD and MUL gates and XMULT inner-product gates
   `Σ_i in[l_i]·in[r_i]`, the generalized gates of zkCNN [LXZ21, §4]);
-  instance `(W_in, output)`: the input oracle evaluates under the circuit
-  to the output oracle. Discharged by `GKR` [GKR15; Tha22, §4.6]
-  (`circuit.py`), which turns each gate layer into an *implicit oracle*
-  (below) defined by the generalized layer identity
+  instance `oracles = (out, w_in)`: the input oracle evaluates under the
+  circuit to the output oracle. `out` is the relation's *head* (§5): its
+  table is computed from `w_in` (`compute_head`), so a circuit can define
+  an implicit oracle of a larger reduction. Discharged by `GKR` [GKR15;
+  Tha22, §4.6] (`circuit.py`), a *composition* (§5): the output test
+  (`Relation_Equal`, below) between `out` and the output layer, then one
+  sum definition per gate layer (`Relation_Layer`), from the output layer
+  down to `w_in`; the rest of the proof is the framework's ordinary
+  reduction of the claims the layers leave. It is a relation rather than a
+  helper so that circuit satisfiability can be a factor of a larger product
+  of relations, the target of another reduction, or the head of a
+  statement of one.
+- **`Relation_SumDef`** — instance `oracles = (L, G)`:
+  `L(z) = Σ_{b ∈ {0,1}^m} G(z, b)` on the hypercube, a *sum definition* of
+  the head `L` by a virtual oracle `G` (below) over `L`'s variables `z` and
+  the summed variables `b`: a layer of a layered circuit in terms of the
+  layer below it [Tha22, §4.6], a grand-product level [Tha13, §5.3.1]. A
+  statement headed at `L` is how an implicit oracle gets its definition;
+  started with the claims on `L` (§5), it is discharged by `SumDefStart`,
+  registered against `Relation_SumDef.Start`.
+- **`Relation_Layer`** — a `Relation_SumDef` indexed by `(circuit, l)`:
+  gate layer `l` as the sum definition of `W_{l+1}` by the generalized
+  layer identity
   `W_{l+1}(z) = Σ_{x,y} lin_l(z,x,y) W_l(x) + xmult_l(z,x,y) W_l(x) W_l(y)`
   over public *sparse* wiring predicates — `lin` (the linear summands,
   supported on `y = 0`) and `xmult` (the multiplied pairs), one nonzero per
-  wire read — and reduces the claim to one evaluation claim on the output
-  layer at a random point (soundness `s_out/|A|`, §6); the rest of the
-  proof is the framework's ordinary reduction of that claim. It is a
-  relation rather than a helper so that circuit satisfiability can be a
-  factor of a larger product of relations or the target of another
-  reduction.
+  wire read — and the layer below, read under two renamings. Same decider
+  and same protocol as the generic sum definition; only `compute_head`
+  differs: it evaluates the gates on the table of the layer below, linear
+  in the wires, where the generic route is exponential.
+- **`Relation_Equal`** — instance `oracles = (a, b)`: the two oracles agree
+  on the hypercube; the headless statement that ties a circuit's output
+  oracle to its output layer. Discharged by `OutputTest`, the
+  random-evaluation identity test [Tha22, §4.6]: the verifier draws `r`,
+  the value `v = a(r)` is computed by the verifier when `a` is public and
+  sent by the prover otherwise, and the claim reduces to `b(r) = v` plus,
+  unless `a` is public, `a(r) = v` — soundness `s/|A|` for `s` variables
+  [GNS23, Lem. 2] (§6).
 
 Further members of the toolbox (product-check, permutation-check, lookups
 [CBBZ23]) can be added as new `Relation` subclasses without touching
@@ -172,11 +197,11 @@ the verifier has* of the oracle (`OracleKind`, `oracle_kind`):
 | `public` (`MLE(public=True)`) | the table itself: a wiring predicate, `eq̃`, a public output | terminal — the verifier evaluates it |
 | `committed` | a commitment | the PCS protocol (`vfhe.polycom.BasefoldEval`) |
 | `virtual` (`VirtualOracle`) | a local definition over other oracles | `VirtualEval`: rewritten into claims on the constituents, no challenge, error 0 |
-| `implicit` (`ImplicitOracle`) | a definition with a hypercube sum | `ImplicitEval`: instantiated into a Sum claim, then the sumcheck |
+| `implicit` (`Implicit`) | nothing but the statement it heads | never discharged by a protocol: held by the Composer until its head's layer (§5) |
 | `plain` | the oracle of the ideal model, which it may query | terminal, or the protocol registered without a kind |
 
-The two *defined* kinds (`virtual.py`) are one idea: an oracle given by a
-relation on other oracles instead of by a table. A **virtual oracle**
+The two *defined* kinds are one idea: an oracle given by a relation on
+other oracles instead of by a table. A **virtual oracle**
 [CBBZ23, §2.2; BCRSW19, Def. 4.6 ("rational constraints")] is
 `p*(x) = Σ_terms c · Π_j p_j(h_j(x))` — a sum of products of constituents,
 each read through a *variable map* `h_j` (a renaming of its variables,
@@ -185,22 +210,36 @@ some possibly fixed to constants: how one oracle appears as both `W(x)` and
 constituent, so a claim `p*(x) = v` reduces for free: the prover sends the
 constituent values, the verifier evaluates the public constituents
 itself, checks the combination against `v`, and one claim per distinct
-(constituent, point) pair remains. An **implicit oracle** is
-`L(z) = Σ_{b} G(z, b)` for a virtual oracle `G` over the free variables
-`z` and the summed ones `b`; the verifier has nothing of `L` but this
-definition, and making `L(r)` explicit takes a sumcheck. The multilinear
-extension of a layer of gate values is of this second kind even when the
-gates are local, because extension does not commute with products
+(constituent, point) pair remains. An **implicit oracle** (`Implicit`) is
+a handle with variables and no content of its own: it is the *head* of
+exactly one statement of a reduction (`Statement.head`, §5), and that
+statement is its definition — `L(z) = Σ_{b} G(z, b)` for a virtual oracle
+`G` over the free variables `z` and the summed ones `b`
+(`Relation_SumDef`), or the output of a circuit on an input oracle
+(`Relation_Circuit`). The verifier has nothing of `L` but the statement,
+and making `L(r)` explicit takes a protocol for it — for a sum
+definition, a sumcheck. The multilinear extension of a layer of gate
+values is of this second kind even when the gates are local, because
+extension does not commute with products
 (`W̃_l(r) ≠ W̃_{l+1}(r,0)·W̃_{l+1}(r,1)`): the `eq̃` factor is what makes
 `W_l(z) = Σ_p eq̃(z,p) W_{l+1}(p,0) W_{l+1}(p,1)` an identity [Tha13,
 §5.3.1]. (Jolt's code calls this second kind "virtual polynomials"; here
 "virtual" is HyperPlonk's word for the first.)
 
-`ImplicitEval` is a *bundle* protocol: the driver hands it every pending
-claim on one implicit oracle at once (§5), and it combines them by a random
-linear combination with one independent challenge per claim — the ring
-precedents [Sor22, Fig. 2, Lemma 11; CCCFGS25, Eqs. (19)–(20)] — into one
-Sum claim over `Σ_i α_i G(r_i, ·)`, itself a virtual oracle. Zero
+A claim on an implicit oracle is therefore never discharged on its own: no
+protocol is registered for the `implicit` kind, the Composer of the
+reduction holds every claim on a head until the layer of the statement it
+heads, and `IOP.protocol_for` refuses one that strays to the driver (the
+`kind` exists for that guard only). At that layer the statement is
+*started*: `R.start(statement, claims)` is the statement of `R.Start`
+carrying the `k ≥ 1` claims (§5), and the protocol registered for
+`R.Start` consumes them. For a sum definition that is `SumDefStart`: it
+combines the claims by a random linear combination with one independent
+challenge per claim (none for a single claim) — the ring precedents
+[Sor22, Fig. 2, Lemma 11; CCCFGS25, Eqs. (19)–(20)] — into one Sum claim
+over `Σ_i α_i G(r_i, ·)`, itself a virtual oracle; the registered sumcheck
+reduces it to one evaluation claim on that virtual oracle, and
+`VirtualEval` that claim to claims on `G`'s constituents. Zero
 communication; soundness `(k−1)/|A|` for `k` claims. Binding a defined
 oracle is *symbolic* (a bound variable becomes a constant in the variable
 maps; no constituent is touched), so the claims that come out are about
@@ -209,9 +248,10 @@ constituent (`SparseMLE`) is only ever queried at a full point, which is
 the one evaluation the sparse form supports (`O(nnz · vars)`, the honest
 verifier cost of a public predicate). The prover's sumcheck works on
 `prover_view`, the definition with every constituent resolved to a table
-(`Prover.witnesses` for implicit constituents) and folded in place, under
-one of two round-message *strategies* that send the same messages: the
-dense one enumerates the remaining hypercube; the two-phase one of Libra
+(`Prover.witnesses` for implicit constituents, where the Composer stores
+every head's table, §5) and folded in place, under one of two
+round-message *strategies* that send the same messages: the dense one
+enumerates the remaining hypercube; the two-phase one of Libra
 [XZZPS19, §3.3, Algs. 4–6], as generalized to arbitrary predicates by
 zkCNN and Virgo++ [LXZ21; ZLWZS21], applies whenever the summed variables
 split into two blocks `x` (bound first) and `y`, each dense factor lives
@@ -256,12 +296,15 @@ composition") composes reductions over products. Both directions occur:
   Spooner).
 
 ```text
-Relation_Circuit ─(GKR, sample r)────────▶ Relation_Eval (output layer) [× Relation_Eval (output)]
+Relation_Circuit ─(GKR = Composed: OutputTest, then per layer Relation_Layer.Start)─▶ Relation_Eval^2 (w_in) [× Relation_Eval (out)]
+Relation_Circuit.Start ─(GKR_Start = Composed: per layer Relation_Layer.Start)─────▶ Relation_Eval^2 (w_in)
+Relation_Equal ───(OutputTest, sample r)─▶ Relation_Eval (output layer) [× Relation_Eval (output)]
+Relation_SumDef.Start ─(SumDefStart, k challenges)─▶ Relation_Sum
 Relation_Zero ────(zerocheck, sample r)──▶ Relation_Sum
 Relation_Sum ─────(sumcheck, n rounds)───▶ Relation_Eval
 Relation_SumProd ─(sumcheckprod)─────────▶ Relation_Eval × … × Relation_Eval
 Relation_Eval (virtual) ─(VirtualEval)──▶ Relation_Eval × … × Relation_Eval (constituents)
-Relation_Eval^k (implicit) ─(ImplicitEval, k challenges)─▶ Relation_Sum
+Relation_Eval^k (implicit) ─(held by the Composer, R.start)─▶ R.Start (the statement it heads)
 Relation_Eval^k (committed) ─(PCS, per claim today)──────▶ accepted / rejected
 Relation_Eval (public / plain) ─(oracle query)───────────▶ accepted / rejected
 ```
@@ -271,9 +314,10 @@ the bundle it came from in `parents`, and the verifier decides the leaves.
 Organizing claims as a DAG has precedent — proof-carrying data defines
 transcripts over a DAG [BCCT13], Virgo++ runs GKR over general DAG circuits
 with claims flowing along the edges [ZLWZS21] — but the DAG here stays
-*implicit* in the `parents` edges plus the worklist driver below; no
-dedicated graph object. (Implementations name what a step emits a "claim" or
-"subclaim" — e.g. arkworks' `SubClaim` — which is exactly our `Statement`.)
+*implicit* in the `parents` edges plus the worklist driver and the
+Composer below; no dedicated graph object. (Implementations name what a
+step emits a "claim" or "subclaim" — e.g. arkworks' `SubClaim` — which is
+exactly our `Statement`.)
 
 Each statement's instance fields are declared by its relation
 (`Relation.fields`, in canonical order — the order Fiat-Shamir will hash)
@@ -350,17 +394,25 @@ transcript.
   protocols swappable (e.g. a batched sumcheck can replace the plain one
   without touching relations or parties). For `Relation_Eval` the key also
   carries the oracle kind (§4): the PCS protocol is registered without a
-  kind and receives committed and plain oracles, `VirtualEval` and
-  `ImplicitEval` are registered for theirs, and a kind without an entry
-  falls back to the default; claims on public oracles never reach a
-  protocol.
+  kind and receives committed and plain oracles, `VirtualEval` is
+  registered for the virtual kind, and a kind without an entry falls back
+  to the default; claims on public oracles never reach a protocol, and no
+  protocol is registered for the implicit kind (a claim on an implicit
+  oracle reaching `protocol_for` is an error, §4). Start relations are
+  keyed like any other, by exact type, so a subclass's start relation has
+  its own entry: `Relation_SumDef.Start` and `Relation_Layer.Start` get
+  `SumDefStart`, `Relation_Equal` gets `OutputTest`, `Relation_Circuit`
+  gets `GKR` and `Relation_Circuit.Start` gets `GKR_Start`.
 - **Drivers.** Both parties run the same worklist loop over the DAG's
   frontier: take the first statement that is not *parked*, hand the
   registered protocol its bundle, push the outputs; statements with no
-  registered protocol are terminal. A protocol with `batching = True` is a
-  *bundle* protocol — a folding reduction `R^ℓ → R` [KP23, Def. 4] — and
-  receives, in one invocation, every frontier statement of its relation;
-  for `Relation_Eval`, every frontier claim on one oracle. Such a claim is
+  registered protocol are terminal. A composed protocol (below) is, to
+  the driver, one protocol like any other. A protocol with
+  `batching = True` is a *bundle* protocol — a folding reduction
+  `R^ℓ → R` [KP23, Def. 4] — and receives, in one invocation, every
+  frontier statement of its relation; for `Relation_Eval`, every frontier
+  claim on one oracle — in practice the PCS bundle on a committed oracle,
+  since claims on implicit oracles never reach the driver. Such a claim is
   **parked** while any other frontier statement, outside its bundle, has
   that oracle in its *oracle closure* (its oracles and, through the
   definitions of the defined ones, their constituents, recursively): that
@@ -386,6 +438,67 @@ transcript.
   sampling challenge *i* (a crashed prover is re-raised rather than left to
   deadlock the verifier). An `IOP` object is single-use — one run consumes
   its transcript.
+
+### Layered reductions and the Composer
+
+Some protocols are a schedule of reductions rather than one step. GKR is
+the example: each gate layer defines the layer above it, the claims on a
+layer come from the layer above, and the layer's sumcheck has to wait
+until all of them are in. Such a protocol is written as a **layered
+reduction** and run by the Composer (`composer.py`): `compose(layering)`
+is the protocol for a relation `R` whose reduction is `layering`, a
+function from a statement of `R` to its layers `L_0, …, L_D`, each a list
+of child statements (built with `reduce_to`, so paths and labels agree on
+both parties). A child is *headless*, an ordinary statement discharged by
+its registered protocol, or *headed* (`Statement.head`): it introduces an
+implicit oracle whose table its relation computes from the statement's
+other oracles (`Relation.compute_head`), and it is discharged, once every
+claim on the head has been made, by the protocol registered for its
+relation's start relation (`Start`, §7): the relation's *sequentially
+composable* protocol. Two rules make the layers a schedule, checked on
+every run (`_check_rules`):
+
+1. every implicit oracle heads exactly one statement;
+2. a statement in `L_l` reads, besides its own head, only non-implicit
+   oracles and heads of deeper layers — through virtual oracles too
+   (`oracle_closure`).
+
+An implicit oracle that no statement of the layering heads belongs to an
+enclosing composition and counts as non-implicit for the rules. The run is
+the same on both parties, except for the first step:
+
+- **Head pass** (prover only): every head's table, once, deepest layer
+  first, into `Prover.witnesses`, where the subprotocols read it —
+  `compute_head` on `_statement_view`, the statement with every other
+  oracle replaced by what the prover holds of it (rule 2 is what makes
+  deepest-first possible). A head an enclosing composition has already
+  stored is not recomputed.
+- **Loop**: the layers in order, each statement in list order. A headless
+  statement goes to its protocol; a headed one is started,
+  `relation.start(statement, claims)`, with the claims accumulated on its
+  head, and goes to the protocol of the start relation. A headed statement
+  with no claim on its head is an error, and so is a claim left over after
+  the last layer.
+- **Routing** (`_discharge`) of what a subprotocol leaves: a claim on a
+  head of this reduction waits for that head's layer; a statement whose
+  protocol is not a bundle protocol (an evaluation claim on a virtual
+  oracle, a sum a protocol handed back) is discharged inline, inside the
+  layer, so a claim on a head hidden behind a virtual oracle is caught in
+  time; everything else — a terminal statement, a claim for the PCS
+  bundle, a claim on a head of an enclosing composition — is an output of
+  the composed protocol, returned to the driver. A layer statement with no
+  protocol that reads a head of this reduction is refused: nothing could
+  decide it.
+
+A composed protocol is an ordinary protocol to the driver: one statement
+in, the leftover statements out. Hence **nesting**: a relation whose
+protocol is composed can itself head a statement of another reduction
+(`Relation_Circuit`, head `out`). Its `R.Start` protocol is then composed
+too (`GKR_Start`): the claims the started statement carries seed the
+claims on its head, and its statements may read the heads of the
+enclosing reduction. A reduction that depends on the IOP it runs in (its
+domain, say) subclasses `Composed` and overrides `layers(root, iop)`
+instead of passing a layering, as `GKR` does.
 
 ### The non-interactive pair: producing and checking a proof
 
@@ -599,7 +712,8 @@ yet-unsampled point). Statements may reference either in `point` / `value`;
 
 The two roles of the IOP model [BCS16]: the **prover** computes and sends
 oracles, and holds the witnesses (`Prover.witnesses` maps statements to
-their private data — the witness never sits on the statement itself); the
+their private data, and commitments and implicit oracles to what is behind
+them — the witness never sits on the statement itself); the
 **verifier** sends challenges and is restricted to oracle queries. Both keep
 protocol-local `state` and run the reduce-until-terminal driver loops of §5:
 `prove` follows the registered reductions and makes no decision; `verify`
@@ -708,29 +822,33 @@ asyncio-free: variables are plain identifiers (`MLE_Variable`, or any
 hashable — *not* protocol futures), and evaluation points are always
 concrete values; anything unresolved is a Transcript / Statement concern.
 
-### `VirtualOracle` / `ImplicitOracle` (`virtual.py`)
+### `VirtualOracle`, `Relation_SumDef` / `SumDefStart` (`virtual.py`)
 
-The two defined oracle kinds of §4, as objects with the oracle surface the
-rest of the module duck-types on (`variables`, `num_vars`, `evaluate`,
-`constant`, `digest`), plus `dependencies()` for the driver's closures and
+The virtual oracle of §4 is an object with the oracle surface the rest of
+the module duck-types on (`variables`, `num_vars`, `evaluate`, `constant`,
+`digest`), plus `dependencies()` for the closures of §5 and
 `prover_view(witnesses)` for the prover's sumcheck. A `VirtualOracle` is
 `(variables, constituents, terms, maps)`: `terms` is the products form
 `[(coeff, (j, …)), …]` and `maps[j]` sends each variable of constituent
 `j` to one of `variables` or to a constant; `VirtualOracle.product` and
-`VirtualOracle.linear` build the common shapes. An `ImplicitOracle` is
-`(variables, body, summed)` and `instantiate(point)` is the summed oracle
-of the Sum claim at that point. `evaluate` on either is symbolic (maps
-rewritten, constituents untouched); `constant()` on a fully bound one is
-the ideal decider, recursing through implicit constituents, and
-`ImplicitOracle.materialize` is the generic, slow prover table (a protocol
-that knows the structure, like `GKR`, computes the layer tables directly
-and records them in `Prover.witnesses`). The prover-side form
-(`prover_view`) computes round messages over the products form: per
-hypercube point, each factor at `t = 0..degree` from its two neighbours
-(`lo + t·(hi − lo)`), summed per term — the degree is the longest product,
-and factors over a subset of the variables are constant in the others.
-`VirtualEval` and `ImplicitEval` live in the same file, as do the two
-round-message strategies (`_ProverVirtual`, `_LibraProver`; §4).
+`VirtualOracle.linear` build the common shapes. `evaluate` is symbolic
+(maps rewritten, constituents untouched), and `constant()` on a fully
+bound one is the ideal decider. The prover-side form (`prover_view`)
+computes round messages over the products form: per hypercube point, each
+factor at `t = 0..degree` from its two neighbours (`lo + t·(hi − lo)`),
+summed per term — the degree is the longest product, and factors over a
+subset of the variables are constant in the others.
+
+`Relation_SumDef` is the sum definition of §4, head at index 0 of
+`(L, G)`, the summed variables being `G`'s that are not `L`'s
+(`summed_of`); its ideal decider enumerates both hypercubes. Its
+`compute_head` is the generic, exponential route — `G`'s dense prover view
+summed over the summed variables at every point of `L`'s hypercube; a
+relation that knows the structure overrides it, as `Relation_Layer` does
+(§4). `SumDefStart` is its composable protocol (§4), not a bundle
+protocol: it takes one started statement, whose `points` and `values` are
+the claims. `VirtualEval` and `SumDefStart` live in the same file, as do
+the two round-message strategies (`_ProverVirtual`, `_LibraProver`; §4).
 `VirtualOracle.strategy` (`"auto"` / `"dense"` / `"libra"`) pins one; the
 tests assert message-for-message agreement between them.
 
@@ -740,17 +858,63 @@ Circuit satisfiability over the protobuf circuits of `vfhe.circuit`
 (imported lazily), with the wiring tables of `vfhe.circuit.export` as
 public oracles: a table indexed `z‖x‖y` (y in the low bits) is the MLE over
 the variables `[y…, x…, z…]`, so the framework's LSB-first tables need no
-reordering. `GKR.layers` builds the chain of implicit layer oracles; the
-protocol draws the output point, computes (public output) or receives
-(otherwise, with a second claim on the output oracle) the value there, and
-emits the claim on the top layer. Everything below that is `ImplicitEval`
-→ sumcheck → `VirtualEval` per layer, the two claims per layer meeting in
-one bundle thanks to the parking rule, down to the input oracle. The
-predicates come from `vfhe.circuit.export.sparse_wiring` (one nonzero per
-wire read; the dense `wiring_tables` remain as their materialization), the
-summed variables are listed `x` first then `y`, and the prover runs the
-two-phase strategy; the verifier's end-of-layer cost is the sparse
-evaluation of the two predicates.
+reordering. `Relation_Circuit` has `oracles = (out, w_in)` and head `out`;
+`layer_tables(w_in)` evaluates the circuit gate by gate, which serves both
+the ideal decider and `compute_head`.
+
+`GKR` is a `Composed` subclass (§5) whose `layers(root, iop)` is an
+instance method, since the sparse predicates are built in the IOP's
+domain. Layer `L_0` is the output test `Relation_Equal(out, W_d)`, `W_d` a
+fresh `Implicit` handle for the output layer; then comes one
+`Relation_Layer` statement per gate layer, from the output layer down,
+headed at that layer's implicit oracle and reading the one below, the
+bottom one reading `w_in` itself. The layering first checks that `out`
+and `w_in` have the numbers of variables the circuit's layer sizes
+require. `GKR_Start`, registered for `Relation_Circuit.Start`, is the same
+layering without the output test: the top layer is headed at `out` itself
+and started by the claims the statement carries. `GKR` refuses a started
+statement and `GKR_Start` an unstarted one. Per layer the Composer starts
+the definition with the claims the layer above left on it (one for the
+top layer under `GKR`, the `k` the statement carries under `GKR_Start`,
+two below it, one per renaming `x`, `y`), `SumDefStart`
+combines them, and the sumcheck and `VirtualEval` reduce them to claims on
+the layer below, down to the input oracle, whose claims leave the
+composition and are decided by its kind. `GKR.soundness_error` reports the
+output test's `s_out/|A|` only (`GKR_Start`'s is 0); the rest is the
+layers' sumchecks and combinations.
+
+The predicates come from `vfhe.circuit.export.sparse_wiring` (one nonzero
+per wire read; the dense `wiring_tables` remain as their materialization),
+the summed variables are listed `x` first then `y`, and the prover runs
+the two-phase strategy, unchanged by the composition; the verifier's
+end-of-layer cost is the sparse evaluation of the two predicates.
+
+### `Statement.head`, `with_start`, `Composed` (`piop.py`, `composer.py`)
+
+`Statement.head` is structural, beside `parents` and `path`: not a field,
+never digested, set through `reduce_to(…, head=…)` and kept by the
+parties' forks of the root. A relation with a head declares `head_index`,
+the head's position in `oracles`, and `compute_head(statement)`, the
+head's table from the other oracles on the prover's view (concrete
+tables); a statement checks that its head is the `Implicit` handle at that
+position. The class decorator `with_start` derives `R.Start`, whose fields
+are `R`'s plus `points` and
+`values` and whose oracles and head are `R`'s: "`R` with its head bound to
+the oracle it defines, plus the evaluation claims on it". Its decider is
+generic — compute the head, decide `R` with that table in the head's
+place, then one `Relation_Eval` check per claim — and `R.Start` rebuilds
+`R` from its index, so a relation with a head must be constructible as
+`type(r)(index=r.index)`. The decorator also installs
+`R.start(statement, claims)`, which builds the started statement as a
+child of the headed one, the claims as further parents. A sequentially
+composable protocol for `R` is a protocol for `R.Start`.
+
+`Implicit` is the handle itself: variables and nothing else. Its
+`digest()` is by its variables, so a statement carrying it can seed a
+Fiat–Shamir chain, and its `kind = implicit` exists only for the guard in
+`protocol_for`. `Composed` is the protocol `compose` builds (§5); a
+reduction that needs the IOP subclasses it and overrides the `layers`
+hook.
 
 ### `Merkle` (`vfhe.crypto`, `crypto/merkle.py`)
 
@@ -805,8 +969,13 @@ therefore lives inside the PCS's evaluation protocol
    `eq̃(r, ·)·f`): a small protocol now that defined oracles exist (§4);
    a lazily evaluated `eq̃` factor (O(1) per query) would spare the dense
    table.
-3. **Batching / folding**: done for claims on implicit oracles
-   (`ImplicitEval`, parking rule, §4–§5). Open for committed oracles: the
+3. **Batching / folding**: done for claims on implicit oracles — the
+   Composer holds them until their head's layer and `SumDefStart`
+   combines them inside the composable protocol (§4–§5). Open: a
+   `Composed.soundness_error` adding up its subprotocols' errors, the
+   inline-discharged sumchecks and `VirtualEval` steps included — today
+   `GKR.soundness_error` reports the output test alone. Open for
+   committed oracles: the
    PCS bundle protocol still opens each claim on its own; a common-point
    reduction plus a batched opening (BatchEval [CBBZ23, §3.8]) is the
    `vfhe.polycom` roadmap. Sumcheck-side batching (one run for several

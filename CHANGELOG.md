@@ -14,6 +14,17 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add sequential composition to `vfhe.piop`: a statement may carry a `head`,
+  an implicit oracle (`Implicit`) its relation computes from the statement's
+  other oracles (`Relation.head_index`, `compute_head`); `with_start` derives
+  the start relation `R.Start` (the relation with its head bound, plus
+  evaluation claims on it) and `R.start(statement, claims)`; `compose` /
+  `Composed` build a relation's protocol from a layered reduction, computing
+  the heads deepest layer first and starting each headed statement with the
+  claims on its head. `Relation_SumDef` / `SumDefStart` are the sum
+  definition `L(z) = sum_b G(z, b)` and its composable protocol;
+  `Relation_Layer`, `Relation_Equal` / `OutputTest` and `GKR_Start` are the
+  pieces of GKR as a composition.
 - Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix` on an
   unsplit ring: a row is now read with `ffi.unpack` and written with one
   packed `ffi.memmove` instead of element by element. `BFV_Scheme.encode` /
@@ -318,6 +329,14 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: `Relation_Circuit`'s instance is `oracles = (out, w_in)`,
+  the output first and the relation's head, instead of `oracles = (w_in,)`
+  with a separate `output` field; its constructor's parameter is `index`.
+  `GKR` is now a composed protocol (the output test, then one
+  `Relation_Layer` statement per gate layer); `GKR.layers(root, iop)` is an
+  instance method and users register `OutputTest` for `Relation_Equal` and
+  `SumDefStart` for `Relation_Layer.Start` beside it. The messages are
+  unchanged; transcript labels carry statement paths and differ.
 - **BREAKING**: The CKKS encoder and decoder (`ComplexRing`) run on a new
   negacyclic FFT kernel (`fft_new_plan` / `fft_forward` / `fft_inverse` /
   `fft_pointwise_mul`, native `FFT_Plan`) in place of the special-root
@@ -581,6 +600,12 @@ versions may contain breaking changes.
 
 ### Removed
 
+- **BREAKING**: `ImplicitOracle`, `ImplicitEval` and the `implicit` entry of
+  the protocol registry. An oracle defined by a hypercube sum is a
+  `Relation_SumDef` statement headed at that oracle inside a layered
+  reduction; `IOP.protocol_for` refuses an evaluation claim on an implicit
+  oracle, which only the Composer consumes. The driver's parking rule now
+  concerns committed and plain oracles only.
 - **BREAKING**: Reduce `vfhe.util.bindings` to `ffi` and `lib`.
   `active_engine()` and `runnable_engines()` are gone, since the loaded engine
   is internal knowledge; `set_num_threads` and `num_threads` moved to

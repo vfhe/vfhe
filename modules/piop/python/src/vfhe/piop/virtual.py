@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Defined oracles: virtual and implicit (piop.md §4).
+"""Defined oracles: virtual oracles and sum definitions (piop.md §4).
 
 An oracle the verifier has neither as a table nor as a commitment may still
 be *defined* in terms of other oracles:
@@ -14,24 +14,27 @@ be *defined* in terms of other oracles:
   prover can compute. An evaluation claim on a virtual oracle reduces, with
   no challenge and no soundness loss, to one claim per non-public
   constituent plus a local check (`VirtualEval`).
-- an **implicit oracle** is a definition with a hypercube sum,
-  `L(z) = sum_{b} G(z, b)` for a virtual oracle `G` over the free variables
-  z and the summed variables b — a layer of a layered circuit in terms of
-  the layer below it [Tha22, §4.6], a grand-product level [Tha13, §5.3.1].
-  Making its value at a point explicit takes a sumcheck: `ImplicitEval`
-  turns every pending claim on it into one Sum claim over the definition
+- a **sum definition** (`Relation_SumDef`) is a definition with a hypercube
+  sum, `L(z) = sum_{b} G(z, b)` for a virtual oracle `G` over the free
+  variables z and the summed variables b — a layer of a layered circuit in
+  terms of the layer below it [Tha22, §4.6], a grand-product level [Tha13,
+  §5.3.1]. It is a *relation* with L as its head: in a layered reduction
+  (`composer.py`) L is an implicit oracle, `Implicit`, whose table the
+  prover computes (`compute_head`), and making its value at a point
+  explicit takes a sumcheck: `SumDefStart`, the composable protocol of the
+  relation, turns the claims on L into one Sum claim over the definition
   (the claims combined by a random linear combination with independent
   challenges [Sor22, Lem. 11; CCCFGS25, Eqs. (19)-(20)]), which the
   registered sumcheck then reduces to claims on the constituents.
 
-Both are ordinary oracles to the rest of the framework: they have
-`variables`, bind them with `evaluate`, and yield a `constant()` once fully
-bound, so the ideal deciders of the relations work on them (recursively,
-and exponentially — they are the reference semantics, not the fast path).
-Binding is *symbolic*: a bound variable becomes a constant in the query
-maps and no constituent is touched, so claims derived later are about the
-original constituents at explicit points. The prover's fast path is
-`prover_view`, which resolves every constituent to a concrete table
+A virtual oracle is an ordinary oracle to the rest of the framework: it has
+`variables`, binds them with `evaluate`, and yields a `constant()` once
+fully bound, so the ideal deciders of the relations work on it
+(recursively, and exponentially — they are the reference semantics, not
+the fast path). Binding is *symbolic*: a bound variable becomes a constant
+in the query maps and no constituent is touched, so claims derived later
+are about the original constituents at explicit points. The prover's fast
+path is `prover_view`, which resolves every constituent to a concrete table
 (`Prover.witnesses` for implicit constituents) and folds those — with one
 of two *strategies* for the round messages, both producing the same
 messages: the dense one (`_ProverVirtual`) enumerates the hypercube of the
@@ -41,8 +44,8 @@ keeps the sparse predicates sparse and builds, per phase, dense
 bookkeeping tables in time linear in their nonzeros, so that every round
 is a product of dense tables of degree at most two.
 
-Naming hazard: Jolt's code calls the implicit kind "virtual polynomials";
-this module's "virtual" is the HyperPlonk sense.
+Naming hazard: Jolt's code calls the implicit oracles "virtual
+polynomials"; this module's "virtual" is the HyperPlonk sense.
 """
 
 from __future__ import annotations
@@ -111,14 +114,14 @@ def _combine(terms: list, values: list):
 def resolve_table(oracle, witnesses: dict | None = None) -> Any:
     """The concrete table behind an oracle on the prover's side: the
     witness recorded for it (`Prover.witnesses[oracle]`), the oracle itself
-    when it is a table, else its materialization (defined oracles)."""
+    when it is a table, else its materialization (a sparse table)."""
     if witnesses is not None and oracle in witnesses:
         return witnesses[oracle]
     if hasattr(oracle, "table"):
         return oracle
     materialize = getattr(oracle, "materialize", None)
     if callable(materialize):
-        return materialize(witnesses)
+        return materialize()
     raise TypeError(f"no table for oracle {oracle!r}")
 
 
@@ -249,7 +252,7 @@ class VirtualOracle:
 
     def constituent_values(self, point: dict | None = None) -> list:
         """Every constituent evaluated at its query point (the ideal decider's
-        queries; exponential through implicit constituents)."""
+        queries)."""
         return [
             _constant(c.evaluate(self.query_point(j, point), in_place=False))
             for j, c in enumerate(self.constituents)
@@ -807,88 +810,6 @@ class _LibraProver:
         return self.phase.constant()
 
 
-class ImplicitOracle:
-    """`L(z) = sum_{b in {0,1}^m} body(z, b)`: the free variables `variables`
-    (z), the summed ones `summed` (b), and the `body`, a virtual oracle over
-    both. The verifier has nothing of L but this definition; a claim
-    `L(r) = v` is the Sum claim `sum_b body(r, b) = v` (`instantiate`)."""
-
-    kind = OracleKind.implicit
-    public = False
-
-    def __init__(self, variables: list, body: VirtualOracle, summed: list):
-        self.variables = list(variables)
-        self.body = body
-        self.summed = list(summed)
-        expected = set(map(id, self.variables)) | set(map(id, self.summed))
-        if expected != set(map(id, body.variables)) or len(expected) != len(
-            body.variables
-        ):
-            raise ValueError("body variables must be the free and summed ones")
-
-    @property
-    def num_vars(self) -> int:
-        return len(self.variables)
-
-    def dependencies(self) -> list:
-        return self.body.dependencies()
-
-    def instantiate(self, point: dict) -> VirtualOracle:
-        """The summed oracle of the Sum claim `L(point) = v`: the body with
-        the free variables bound (symbolically), over the summed ones."""
-        if any(v not in point for v in self.variables):
-            raise ValueError("instantiate needs every free variable bound")
-        g = self.body.evaluate({v: point[v] for v in self.variables}, in_place=False)
-        g.variables = [v for v in self.body.variables if v in self.summed]
-        return g
-
-    def evaluate(self, point: dict | list, in_place: bool = False) -> ImplicitOracle:
-        """Bind free variables symbolically (a partially evaluated L)."""
-        if isinstance(point, list):
-            point = dict(zip(self.variables, point, strict=True))
-        point = {v: val for v, val in point.items() if v in self.variables}
-        body = self.body.evaluate(point, in_place=in_place)
-        variables = [v for v in self.variables if v not in point]
-        if in_place:
-            self.body, self.variables = body, variables
-            return self
-        return ImplicitOracle(variables, body, self.summed)
-
-    def constant(self):
-        """The value of a fully-bound L: the hypercube sum of its body (the
-        ideal decider — exponential)."""
-        assert self.num_vars == 0, "constant() needs a fully-evaluated oracle"
-        total = None
-        for b in _hypercube(self.summed):
-            e = self.body.evaluate(b, in_place=False).constant()
-            total = e if total is None else total + e
-        return total
-
-    def materialize(self, witnesses: dict | None = None) -> MLE:
-        """L's hypercube table from concrete constituent tables — the
-        generic (slow) prover-side route; a protocol that knows the
-        structure (a circuit) computes the table directly instead."""
-        view = self.body.prover_view(witnesses, strategy="dense")
-        evaluations = []
-        for z in _hypercube(self.variables):
-            total = None
-            for b in _hypercube(self.summed):
-                e = view.at({**z, **b})
-                total = e if total is None else total + e
-            evaluations.append(total)
-        return _table_like(view.tables, self.variables, evaluations)
-
-    def digest(self) -> bytes:
-        parts = [b"implicit"]
-        parts += [element_digest(v) for v in self.variables]
-        parts += [element_digest(v) for v in self.summed]
-        parts.append(self.body.digest())
-        return _chain(parts)
-
-    def __repr__(self) -> str:
-        return f"ImplicitOracle(vars={self.num_vars}, summed={len(self.summed)})"
-
-
 def _table_like(tables: list, variables: list, evaluations: list) -> MLE:
     """A dense table over `variables` in the domain of `tables`."""
     ring = next((t.ring for t in tables if getattr(t, "ring", None) is not None), None)
@@ -962,77 +883,15 @@ class VirtualEval(Protocol):
         return self._outputs(statement, claims, list(values))
 
 
-class ImplicitEval(Protocol):
-    """Every pending `Eval(L, r_i, v_i)` on one implicit oracle -> one
-    `Sum(sum_i alpha_i body(r_i, .), sum_i alpha_i v_i)` (piop.md §4).
-
-    A bundle protocol: the driver parks claims on L until nothing else on
-    the frontier can produce one, then hands them over together. The
-    verifier draws one independent challenge per claim (none when there is
-    a single claim), the combined summed oracle is itself a virtual oracle
-    (`VirtualOracle.linear` of the instantiated definitions), and the
-    registered sumcheck does the rest — ending in an Eval claim on that
-    virtual oracle, which `VirtualEval` turns into claims on L's
-    constituents. Zero communication; soundness error (k-1)/|A| for k
-    claims [Sor22, Lem. 11; CCCFGS25, Eqs. (19)-(20)].
-    """
-
-    name = "implicit"
-    reduces_from: type[Relation] = Relation_Eval
-    reduces_to: tuple[type[Relation], ...] = (Relation_Sum,)
-    batching = True
-
-    def soundness_error(self, statements: list[Statement], domain) -> float | None:
-        from .sumcheck import _exceptional_set_size
-
-        size = _exceptional_set_size(domain)
-        if size is None:
-            return None
-        return (len(statements) - 1) / size
-
-    async def _combine(self, party, statements: list[Statement]) -> list[Statement]:
-        iop = _iop_of(party)
-        for s in statements:
-            await s.resolved()
-        first = statements[0]
-        oracle = first.oracles[0]
-        if any(s.oracles[0] is not oracle for s in statements):
-            raise ValueError("a bundle of implicit claims must share the oracle")
-        label = f"{self.name}{first.path}"
-        if len(statements) == 1:
-            alphas = [1]
-        else:
-            alphas = [
-                iop.verifier.challenge(f"{label}/a{i}") for i in range(len(statements))
-            ]
-        bodies = [oracle.instantiate(dict(s.point)) for s in statements]
-        combined = VirtualOracle.linear(alphas, bodies)
-        value = None
-        for alpha, s in zip(alphas, statements, strict=True):
-            t = _scale(alpha, s.value)
-            value = t if value is None else value + t
-        return [self.reduce(statements, Relation_Sum, oracles=[combined], value=value)]
-
-    async def prove(
-        self, prover: Prover, statements: list[Statement]
-    ) -> list[Statement]:
-        return await self._combine(prover, statements)
-
-    async def verify(
-        self, verifier: Verifier, statements: list[Statement]
-    ) -> list[Statement]:
-        return await self._combine(verifier, statements)
-
-
 @with_start
 class Relation_SumDef(Relation):
     """`L(z) = sum_{b in {0,1}^m} G(z, b)` on the hypercube: a *sum definition*
     of the oracle L, the head, by the virtual oracle G over L's variables z
     and the summed variables b, the others of G, in G's order: a layer of a
     layered circuit in terms of the layer below it [Tha22, §4.6], a
-    grand-product level [Tha13, §5.3.1]. A statement headed at L plays the
-    role of today's `ImplicitOracle`; in a layered reduction it sits in the
-    layer of L, and `SumDefStart`, registered against
+    grand-product level [Tha13, §5.3.1]. A statement headed at L is how an
+    oracle that is defined and never committed enters a layered reduction:
+    it sits in the layer of L, and `SumDefStart`, registered against
     `Relation_SumDef.Start`, is its composable protocol.
     """
 
@@ -1090,8 +949,7 @@ class SumDefStart(Protocol):
     claims on G's constituents, both run by the Composer inside the layer (or
     by the driver, for a started statement run on its own). Zero
     communication; soundness error (k-1)/|A| for k claims [Sor22, Lem. 11;
-    CCCFGS25, Eqs. (19)-(20)]. `ImplicitEval` on a started statement instead
-    of a bundle.
+    CCCFGS25, Eqs. (19)-(20)].
     """
 
     name = "sumdef"
