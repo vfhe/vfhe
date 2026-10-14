@@ -9,7 +9,7 @@ from .circuit import (
     Relation_Equal,
     Relation_Layer,
 )
-from .composer import compose
+from .composer import Composed, compose
 from .fs import FS_Verifier
 from .lookup import Lookup, Relation_Lookup
 from .piop import (
@@ -38,8 +38,6 @@ from .piop import (
 from .range import RangeDecomposition, Relation_Range
 from .sumcheck import Sumcheck, SumcheckProd
 from .virtual import (
-    ImplicitEval,
-    ImplicitOracle,
     Relation_SumDef,
     SumDefStart,
     VirtualEval,
@@ -49,11 +47,10 @@ from .virtual import (
 __all__ = [
     "GKR",
     "IOP",
+    "Composed",
     "FS_Verifier",
     "GKR_Start",
     "Implicit",
-    "ImplicitEval",
-    "ImplicitOracle",
     "Lookup",
     "OracleKind",
     "OutputTest",

@@ -69,7 +69,7 @@ def _aligned_tables(oracles) -> list | None:
     value at the point `_hypercube` yields `i`-th -- both are LSB-first over
     the variable list -- so the tables line up index for index and a sum over
     the hypercube is a `sum()`, a sum of products one elementwise product and
-    a `sum()`. Anything else (a ring table, the monomial basis, an implicit
+    a `sum()`. Anything else (a ring table, the monomial basis, a virtual
     oracle, oracles over different variables) returns None and is walked.
     """
     # Deferred, as `fs` is below: imported where it is used, not at module load.
@@ -199,8 +199,9 @@ class OracleKind(Enum):
     - `committed`: a commitment; a polynomial commitment scheme's protocol.
     - `virtual`: a local definition over other oracles (`virtual.py`); the
       claim is rewritten into claims on the constituents, free of charge.
-    - `implicit`: a definition with a hypercube sum (`virtual.py`); the
-      claim is instantiated into a Sum claim, then a sumcheck.
+    - `implicit`: the head of a statement of a reduction (`Implicit`), a
+      table only the prover has; the Composer consumes the claim at the
+      layer of its head, no protocol ever does (`composer.py`).
     - `plain`: an oracle in the ideal model, which the verifier may query;
       admissible only while no commitment scheme is registered.
     """
@@ -993,6 +994,8 @@ class Party:
         its own bundle, can still produce a claim on the same oracle — i.e.
         has that oracle in its oracle closure. Definitions form a DAG and
         non-Eval statements never park, so some statement is always ready.
+        Claims on implicit oracles never reach the driver (the Composer
+        consumes them), so this concerns committed and plain oracles.
         """
         assert self.iop is not None
         if not isinstance(stmt.relation, Relation_Eval):
@@ -1191,11 +1194,13 @@ class IOP:
         `Relation_Eval` is one relation with several discharges, keyed by
         the kind of oracle the claim is about (`OracleKind`): register the
         PCS protocol with no kind (the default, reached by committed and
-        plain oracles), `VirtualEval` for `OracleKind.virtual` and
-        `ImplicitEval` for `OracleKind.implicit`. A kind without its own
-        entry falls back to the default; claims on public oracles never
-        reach a protocol.
+        plain oracles) and `VirtualEval` for `OracleKind.virtual`. A kind
+        without its own entry falls back to the default; claims on public
+        oracles never reach a protocol, and claims on implicit oracles never
+        reach the driver (the Composer consumes them).
         """
+        if kind is OracleKind.implicit:
+            raise ValueError("no protocol discharges claims on implicit oracles")
         self.protocols[(relation_type, kind)] = protocol
         return protocol
 
@@ -1203,13 +1208,13 @@ class IOP:
         """The protocol discharging `statement`, None if it is terminal."""
         relation = statement.relation
         if isinstance(relation, Relation_Eval):
-            if isinstance(Relation_Eval.subject(statement), Implicit):
+            kind = Relation_Eval.kind(statement)
+            if kind is OracleKind.implicit:
                 raise RuntimeError(
                     "an evaluation claim on an implicit oracle reached the driver; "
                     "claims on a head are consumed by the Composer of the "
                     "reduction that heads it"
                 )
-            kind = Relation_Eval.kind(statement)
             if kind is OracleKind.public:
                 return None
             exact = self.protocols.get((type(relation), kind))
