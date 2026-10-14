@@ -36,7 +36,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Security :: Cryptography",
 ]
-dependencies = ["cffi>=2.1.0", "protobuf>=7.35.1,<8", "mpmath>=1.4.1"]
+dependencies = ["cffi>=2.1.0", "protobuf>=7.35.1,<8"]
 
 [project.optional-dependencies]
 kernels = ["meson>=1.4", "ninja>=1.11"]
@@ -68,7 +68,6 @@ test = [
     "pytest>=9.1.1",
     "pytest-cov>=7",
     "gcovr>=8.3",
-    "mpmath>=1.4.1",
 ]
 docs = [
     { include-group = "compile" },

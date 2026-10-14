@@ -457,6 +457,301 @@ void test_from_int_array_zero_extends_a_short_array(void)
     arith_free(ring, &e);
 }
 
+/* A residue's digits after rounding it to a multiple of 2^(w d), against the
+ * definition, on every row width -- including residues near p, where adding
+ * half a step wraps -- and the kept digits rebuild the residue within half a
+ * step. Dropping none is the plain decomposition. */
+void test_decompose_digit_rounded_known_answers(void)
+{
+    const uint64_t w = 7, d = 2, half = 1ULL << (w * d - 1);
+    RNS_Polynomial in = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    RNS_Polynomial out = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    RNS_Polynomial plain = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    fill(in, 151);
+    for (uint64_t i = 0; i < TEST_L; i++)
+        for (uint64_t j = 0; j < 4; j++)
+            set_coeff(in, i, j, PRIMES[i] - 1 - j * (half / 2)); /* x + half >= p */
+
+    for (uint64_t i = 0; i < TEST_L; i++)
+    {
+        const uint64_t q = PRIMES[i], bits = 64 - (uint64_t)__builtin_clzll(q);
+        const uint64_t digits = (bits + w - 1) / w;
+        uint64_t rebuilt[TEST_N] = {0};
+        for (uint64_t level = d; level < digits; level++)
+        {
+            polynomial_RNSc_decompose_digit_rounded((RNSc_Polynomial)out, (RNSc_Polynomial)in, i, w,
+                                                    level, d);
+            for (uint64_t j = 0; j < TEST_N; j++)
+            {
+                const uint64_t x = coeff(in, i, j);
+                const uint64_t v = x + half >= q ? x + half - q : x + half;
+                const uint64_t want = (v >> (w * level)) & ((1ULL << w) - 1);
+                for (uint64_t k = 0; k < TEST_L; k++) /* broadcast to every row */
+                    TEST_ASSERT_EQUAL_UINT64(want, coeff(out, k, j));
+                rebuilt[j] += want << (w * level);
+            }
+        }
+        for (uint64_t j = 0; j < TEST_N; j++)
+        {
+            const uint64_t x = coeff(in, i, j);
+            /* rebuilt = (x + half mod p) - its low w d bits: x up to half, mod p */
+            const uint64_t diff = (rebuilt[j] % q + q - x) % q;
+            TEST_ASSERT_TRUE(diff <= half || q - diff <= half);
+        }
+        polynomial_RNSc_decompose_digit_rounded((RNSc_Polynomial)out, (RNSc_Polynomial)in, i, w, 3,
+                                                0);
+        polynomial_RNSc_decompose_digit((RNSc_Polynomial)plain, (RNSc_Polynomial)in, i, w, 3);
+        assert_same(plain, out);
+    }
+    free_RNS_polynomial(in);
+    free_RNS_polynomial(out);
+    free_RNS_polynomial(plain);
+}
+
+/* Balanced digits of the centered residue, on every row width: each row holds
+ * the same signed digit, every digit is within its bound, and the digits
+ * rebuild the centered residue exactly -- within half a step when the low ones
+ * are dropped. The residues include both ends of the centered range, where
+ * the top digit takes the largest carry. */
+void test_decompose_digit_balanced_known_answers(void)
+{
+    const uint64_t cases[][2] = {{2, 0}, {7, 0}, {7, 2}, {13, 1}, {29, 0}};
+    RNS_Polynomial in = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    RNS_Polynomial out = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    fill(in, 152);
+    for (uint64_t i = 0; i < TEST_L; i++)
+    {
+        const uint64_t q = PRIMES[i];
+        const uint64_t edges[] = {0, 1, q / 2, q / 2 + 1, q - 1, q - 2};
+        for (uint64_t j = 0; j < sizeof(edges) / sizeof(edges[0]); j++)
+            set_coeff(in, i, j, edges[j]);
+    }
+
+    for (uint64_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
+    {
+        const uint64_t w = cases[c][0], d = cases[c][1];
+        const int64_t half = (int64_t)1 << (w - 1);
+        for (uint64_t i = 0; i < TEST_L; i++)
+        {
+            const uint64_t q = PRIMES[i], bits = 64 - (uint64_t)__builtin_clzll(q);
+            const uint64_t digits = (bits + w - 1) / w;
+            if ((1ULL << w) > PRIMES[TEST_L - 1])
+                continue; /* the digit must fit every row */
+            int64_t rebuilt[TEST_N] = {0};
+            for (uint64_t level = d; level < digits; level++)
+            {
+                polynomial_RNSc_decompose_digit_balanced((RNSc_Polynomial)out, (RNSc_Polynomial)in,
+                                                         i, w, level, d);
+                for (uint64_t j = 0; j < TEST_N; j++)
+                {
+                    const uint64_t first = coeff(out, 0, j);
+                    const int64_t digit = first > PRIMES[0] / 2
+                                              ? (int64_t)first - (int64_t)PRIMES[0]
+                                              : (int64_t)first;
+                    for (uint64_t k = 0; k < TEST_L; k++) /* the same digit in every row */
+                        TEST_ASSERT_EQUAL_UINT64(digit < 0 ? PRIMES[k] - (uint64_t)(-digit)
+                                                           : (uint64_t)digit,
+                                                 coeff(out, k, j));
+                    if (level + 1 < digits)
+                        TEST_ASSERT_TRUE(-half <= digit && digit < half);
+                    else
+                        TEST_ASSERT_TRUE(-half <= digit && digit <= half);
+                    rebuilt[j] += digit * ((int64_t)1 << (w * level));
+                }
+            }
+            for (uint64_t j = 0; j < TEST_N; j++)
+            {
+                const uint64_t x = coeff(in, i, j);
+                const int64_t centered = x > q / 2 ? (int64_t)x - (int64_t)q : (int64_t)x;
+                const int64_t err = centered - rebuilt[j];
+                if (d == 0)
+                    TEST_ASSERT_EQUAL_INT64(centered, rebuilt[j]);
+                else
+                    TEST_ASSERT_TRUE(-(half << (w * (d - 1))) <= err &&
+                                     err < (half << (w * (d - 1))));
+            }
+        }
+    }
+    free_RNS_polynomial(in);
+    free_RNS_polynomial(out);
+}
+
+/* Each row of a combination of lifted residues against the definition, for
+ * both readings of a residue and both row widths on either side (the mask
+ * pairs a wide prime with the narrow one); a zero factor drops its term. */
+void test_lifted_combination_known_answers(void)
+{
+    const uint64_t masks[] = {0x9, 0x6, 0xF};
+    RNS_Polynomial in = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    RNS_Polynomial out = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    fill(in, 153);
+    uint64_t factors[TEST_L * TEST_L];
+    for (uint64_t k = 0; k < TEST_L; k++)
+        for (uint64_t i = 0; i < TEST_L; i++)
+            factors[k * TEST_L + i] = (k == 2 && i == 0) ? 0 : (977 * k + 31 * i + 5) % PRIMES[i];
+
+    for (uint64_t c = 0; c < sizeof(masks) / sizeof(masks[0]); c++)
+    {
+        for (int centered = 0; centered <= 1; centered++)
+        {
+            polynomial_RNSc_lifted_combination((RNSc_Polynomial)out, (RNSc_Polynomial)in, masks[c],
+                                               factors, centered);
+            for (uint64_t i = 0; i < TEST_L; i++)
+            {
+                const uint64_t p = PRIMES[i];
+                for (uint64_t j = 0; j < TEST_N; j++)
+                {
+                    unsigned __int128 want = 0;
+                    for (uint64_t k = 0; k < TEST_L; k++)
+                    {
+                        if (!(masks[c] & (1ULL << k)))
+                            continue;
+                        const uint64_t x = coeff(in, k, j), q = PRIMES[k];
+                        uint64_t lifted = x % p;
+                        if (centered && x > q / 2) /* x - q, as a residue mod p */
+                            lifted = (x % p + p - q % p) % p;
+                        want = (want + (unsigned __int128)lifted * factors[k * TEST_L + i]) % p;
+                    }
+                    TEST_ASSERT_EQUAL_UINT64((uint64_t)want, coeff(out, i, j));
+                }
+            }
+        }
+    }
+    free_RNS_polynomial(in);
+    free_RNS_polynomial(out);
+}
+
+/* The fused lifted combination against a 128-bit reference: every term
+ * count up to 16, both readings of a residue, inputs at the edges of their
+ * range (0, the half that flips the centering, q - 1), a length with a tail
+ * past the vector width, and the output aliasing its first input. The
+ * engine's dispatcher and the scalar body are checked alike. */
+void test_lifted_combination_kernel_known_answers(void)
+{
+    enum
+    {
+        LEN = 37,
+        TERMS = 16
+    };
+    static uint64_t rows[TERMS][LEN] __attribute__((aligned(64)));
+    static uint64_t out[LEN] __attribute__((aligned(64)));
+    uint64_t q_in[TERMS], scale[TERMS];
+    const uint64_t *in[TERMS];
+    Modulus mod = base->mods[1];
+    const uint64_t p = mod->q;
+    uint64_t x = 0x9E3779B97F4A7C15ULL;
+    for (uint64_t t = 0; t < TERMS; t++)
+    {
+        q_in[t] = PRIMES[t % 3]; /* the wide primes, the output's among them */
+        x = x * 6364136223846793005ULL + 1442695040888963407ULL;
+        scale[t] = x % p;
+        const uint64_t q = q_in[t], edges[] = {0, q / 2, q / 2 + 1, q - 1};
+        for (uint64_t j = 0; j < LEN; j++)
+        {
+            x = x * 6364136223846793005ULL + 1442695040888963407ULL;
+            rows[t][j] = j < 4 ? edges[(j + t) % 4] : x % q;
+        }
+        in[t] = rows[t];
+    }
+    for (int body = 0; body < 2; body++)
+        for (int centered = 0; centered <= 1; centered++)
+            for (uint64_t m = 1; m <= TERMS; m++)
+                for (int alias = 0; alias <= 1; alias++)
+                {
+                    uint64_t want[LEN];
+                    for (uint64_t j = 0; j < LEN; j++)
+                    {
+                        unsigned __int128 acc = 0;
+                        for (uint64_t t = 0; t < m; t++)
+                        {
+                            const uint64_t v = rows[t][j], q = q_in[t];
+                            uint64_t lifted = v % p;
+                            if (centered && v > q / 2)
+                                lifted = (v % p + p - q % p) % p;
+                            acc = (acc + (unsigned __int128)lifted * scale[t]) % p;
+                        }
+                        want[j] = (uint64_t)acc;
+                    }
+                    uint64_t saved[LEN];
+                    memcpy(saved, rows[0], sizeof(saved));
+                    uint64_t *dst = alias ? rows[0] : out;
+                    if (body)
+                        mod_eltwise_lifted_combination_gen(dst, in, q_in, scale, m, centered, LEN,
+                                                           mod);
+                    else if (!mod_eltwise_lifted_combination(dst, in, q_in, scale, m, centered, LEN,
+                                                             mod))
+                        continue; /* no fused body here; the caller falls back */
+                    for (uint64_t j = 0; j < LEN; j++)
+                        TEST_ASSERT_EQUAL_UINT64(want[j], dst[j]);
+                    memcpy(rows[0], saved, sizeof(saved));
+                }
+}
+
+/* The approximate division (mod_down) against the exact round division: on every row that stays the
+ * two differ by an integer of at most half the number of primes divided by,
+ * the same integer on every row. Over wide rows only (the fused body) and
+ * with the narrow row among those that leave (the term-by-term one); in
+ * place, and into another polynomial with an addend. */
+void test_mod_down_is_round_division_up_to_half_the_primes(void)
+{
+    const uint64_t divides[] = {0x6, 0xC, 0x8};
+    for (uint64_t c = 0; c < sizeof(divides) / sizeof(divides[0]); c++)
+    {
+        const uint64_t divide = divides[c];
+        const int primes = __builtin_popcountll(divide);
+        RNS_Polynomial exact = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+        RNS_Polynomial fast = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+        fill(exact, 154 + c);
+        fill(fast, 154 + c);
+        polynomial_round_division_RNSc_wo_free((RNSc_Polynomial)exact, divide);
+        /* Out of place with an addend first, from a prepared copy: it must be
+         * the in-place result plus the addend, on every row that stays. */
+        RNS_Polynomial in = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+        RNS_Polynomial added = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+        RNS_Polynomial addend = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+        fill(in, 154 + c);
+        fill(addend, 254 + c);
+        polynomial_mod_down_RNSc_prepare((RNSc_Polynomial)in, divide);
+        polynomial_mod_down_RNSc_rows((RNSc_Polynomial)added, (RNSc_Polynomial)in,
+                                      (RNSc_Polynomial)addend, divide, TEST_MASK);
+
+        polynomial_mod_down_RNSc_prepare((RNSc_Polynomial)fast, divide);
+        polynomial_mod_down_RNSc_rows((RNSc_Polynomial)fast, (RNSc_Polynomial)fast, NULL, divide,
+                                      TEST_MASK);
+        polynomial_round_division_RNSc_finish((RNSc_Polynomial)fast, divide);
+        for (uint64_t i = 0; i < TEST_L; i++)
+        {
+            if (!(fast->rns_mask & (1ULL << i)))
+                continue;
+            for (uint64_t j = 0; j < TEST_N; j++)
+                TEST_ASSERT_EQUAL_UINT64((coeff(fast, i, j) + coeff(addend, i, j)) % PRIMES[i],
+                                         coeff(added, i, j));
+        }
+        free_RNS_polynomial(in);
+        free_RNS_polynomial(added);
+        free_RNS_polynomial(addend);
+        TEST_ASSERT_EQUAL_UINT64(exact->rns_mask, fast->rns_mask);
+        for (uint64_t j = 0; j < TEST_N; j++)
+        {
+            int64_t first = 0;
+            int seen = 0;
+            for (uint64_t i = 0; i < TEST_L; i++)
+            {
+                if (!(fast->rns_mask & (1ULL << i)))
+                    continue;
+                const uint64_t q = PRIMES[i], d = (coeff(fast, i, j) + q - coeff(exact, i, j)) % q;
+                const int64_t diff = d > q / 2 ? (int64_t)d - (int64_t)q : (int64_t)d;
+                TEST_ASSERT_TRUE(2 * (diff < 0 ? -diff : diff) <= primes);
+                if (seen++ && diff != first)
+                    TEST_FAIL_MESSAGE("rows disagree on the error");
+                first = diff;
+            }
+        }
+        free_RNS_polynomial(exact);
+        free_RNS_polynomial(fast);
+    }
+}
+
 /* The tower slots take the destination ring, and the implementation derives
  * which primes leave. */
 void test_round_division_to_a_smaller_ring(void)
@@ -527,9 +822,89 @@ void test_an_unknown_tag_dispatches_through_the_table(void)
     arith_free(ring, &fallback);
 }
 
+/* out += a * b^T against term-by-term products, over `over` and on the rows of `mask` only: the
+ * other rows must come back untouched. The a operands hold only their mask's rows, as row-by-row
+ * scratch does. */
+static void check_matrix_product(RNS_Base over, uint64_t mask)
+{
+    enum
+    {
+        ROWS = 3,
+        INNER = 5,
+        COLS = 2
+    };
+    RNS_Polynomial a[ROWS * INNER], b[COLS * INNER], out[ROWS * COLS], ref[ROWS * COLS];
+    for (uint64_t k = 0; k < ROWS * INNER; k++)
+    {
+        RNS_Polynomial full = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        fill(full, 100 + k);
+        a[k] = polynomial_new_RNS_polynomial_rows(TEST_N, mask, over);
+        for (uint64_t i = 0; i < TEST_L; i++)
+        {
+            TEST_ASSERT_EQUAL(!(mask & (1ULL << i)),
+                              a[k]->rows64[i] == NULL && a[k]->rows32[i] == NULL);
+            if (mask & (1ULL << i))
+                for (uint64_t j = 0; j < TEST_N; j++)
+                    set_coeff(a[k], i, j, coeff(full, i, j));
+        }
+        free_RNS_polynomial(full);
+    }
+    for (uint64_t k = 0; k < COLS * INNER; k++)
+    {
+        b[k] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        fill(b[k], 200 + k);
+    }
+    for (uint64_t k = 0; k < ROWS * COLS; k++)
+    {
+        out[k] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        ref[k] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        fill(out[k], 300 + k);
+        fill(ref[k], 300 + k);
+        out[k]->rns_mask = ref[k]->rns_mask = mask;
+    }
+    for (uint64_t r = 0; r < ROWS; r++)
+        for (uint64_t c = 0; c < COLS; c++)
+            for (uint64_t t = 0; t < INNER; t++)
+            {
+                polynomial_mul_addto_RNS_polynomial(ref[r * COLS + c], a[r * INNER + t],
+                                                    b[c * INNER + t]);
+                ref[r * COLS + c]->rns_mask = mask;
+            }
+    polynomial_matrix_mul_addto_RNS_polynomial(out, a, b, ROWS, INNER, COLS);
+    for (uint64_t k = 0; k < ROWS * COLS; k++)
+    {
+        TEST_ASSERT_EQUAL_UINT64(mask, out[k]->rns_mask);
+        out[k]->rns_mask = ref[k]->rns_mask = TEST_MASK;
+        assert_same(ref[k], out[k]);
+        free_RNS_polynomial(out[k]);
+        free_RNS_polynomial(ref[k]);
+    }
+    for (uint64_t k = 0; k < ROWS * INNER; k++)
+        free_RNS_polynomial(a[k]);
+    for (uint64_t k = 0; k < COLS * INNER; k++)
+        free_RNS_polynomial(b[k]);
+}
+
+void test_matrix_product_matches_the_term_by_term_products(void)
+{
+    check_matrix_product(base, TEST_MASK);
+    check_matrix_product(base, 1ULL << (TEST_L - 1)); // the narrow row alone
+    check_matrix_product(base, 0x5);
+}
+
+void test_matrix_product_over_a_ring_that_is_not_fully_split(void)
+{
+    RNS_Base split = new_rns_base(PRIMES, 2, TEST_N, TEST_L);
+    check_matrix_product(split, TEST_MASK);
+    check_matrix_product(split, 0x6);
+    rns_base_free(split);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_matrix_product_matches_the_term_by_term_products);
+    RUN_TEST(test_matrix_product_over_a_ring_that_is_not_fully_split);
     RUN_TEST(test_capabilities_and_names);
     RUN_TEST(test_new_starts_empty_and_zero_is_canonical);
     RUN_TEST(test_new_like_matches_the_model);
@@ -548,6 +923,11 @@ int main(void)
     RUN_TEST(test_sampling_lands_in_the_canonical_domain);
     RUN_TEST(test_from_int_array_reduces_per_prime);
     RUN_TEST(test_from_int_array_zero_extends_a_short_array);
+    RUN_TEST(test_decompose_digit_rounded_known_answers);
+    RUN_TEST(test_decompose_digit_balanced_known_answers);
+    RUN_TEST(test_lifted_combination_known_answers);
+    RUN_TEST(test_lifted_combination_kernel_known_answers);
+    RUN_TEST(test_mod_down_is_round_division_up_to_half_the_primes);
     RUN_TEST(test_round_division_to_a_smaller_ring);
     RUN_TEST(test_the_shared_ring_is_shared);
     RUN_TEST(test_an_unknown_tag_dispatches_through_the_table);

@@ -9,7 +9,7 @@ LWE / Module-LWE and MGSW over the `vfhe.arith` ring.
 - `mlwe.py`: `MLWE_Scheme` / `MLWE` / `MLWE_Key` / `MLWE_Set`: module-LWE
   encryption and linear decryption, homomorphic add / sub / scalar and polynomial
   multiplication, BV and GHS key-switching, automorphisms, trace, packing
-  key-switch, and relinearized ciphertext multiplication.
+  key-switch, ring switching, and relinearized ciphertext multiplication.
 - `mgsw.py`: `MGSW_Scheme` / `MGSW` with the external product and the
   `CMUX` / `NCMUX` gates that the bootstraps in `vfhe.fhe` build on.
 
@@ -20,5 +20,7 @@ on up to `n_threads` threads (0: the library limit). Each sample is drawn from
 seeds of its own, taken in order on the calling thread, so the keys do not
 depend on the thread count.
 
-`c/src/` holds the kernels (`gadget.c`, `lwe.c`, `mgsw.c`, `mlwe.c`); `python/cdef/mlwe.h`
-declares their ABI.
+`c/src/` holds the kernels -- samples (`mlwe.c`), key switching
+(`keyswitch.c`), the gadget (`gadget_rns.c`), MGSW (`mgsw.c`) and LWE
+(`lwe.c`), with the parts that reach into RNS residues in the `_rns` files;
+`python/cdef/mlwe.h` declares their ABI.

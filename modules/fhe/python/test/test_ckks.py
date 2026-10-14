@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Characterization tests for the (reverted) vfhe.fhe CKKS scheme over cffi.
+"""Characterization tests for the vfhe.fhe CKKS scheme over cffi.
 
 Encode/decode, encrypt/decrypt, slot rotation, and ciphertext multiplication
 (ciphertext*ciphertext with relinearization+rescale, and ciphertext*plaintext).
@@ -10,11 +10,12 @@ import cmath
 import math
 
 import pytest
-from vfhe.arith import Ring
+from vfhe.arith import Polynomial, Ring
 from vfhe.arith.residue_selection import search_log_residues_minq0
 from vfhe.crypto import entropy
 from vfhe.fhe import CKKS_Ciphertext, CKKS_Scheme
-from vfhe.util.bindings import ffi, lib
+from vfhe.util import parallel
+from vfhe.util.bindings import ffi
 
 N = 256
 
@@ -69,6 +70,45 @@ def test_sparse_encoding(n):
         scheme.encode(rand_values(3))
     with pytest.raises(ValueError, match="slots must divide"):
         scheme.decode(pt, slots=3)
+
+
+def test_encode_batch_matches_encode():
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
+    )
+    ring = scheme.rings[1]
+    batch = [rand_values(n) for n in (1, 4, N // 2, 32, N // 2)]
+    parallel.set_num_threads(8)
+    try:
+        polys = scheme.encode_batch(batch, ring=ring, scale=2**20, n_threads=3)
+    finally:
+        parallel.set_num_threads()
+    for values, poly in zip(batch, polys, strict=True):
+        expected = scheme.encode(values, ring=ring, scale=2**20)
+        assert poly.get_polynomial(signed=True) == expected.get_polynomial(signed=True)
+    assert scheme.encode_batch([]) == []
+    with pytest.raises(ValueError, match="dividing"):
+        scheme.encode_batch([rand_values(4), rand_values(3)])
+    with pytest.raises(NotImplementedError, match="str"):
+        scheme.encode(["1"] * 4)  # pyright: ignore[reportArgumentType]
+
+
+def test_encode_reads_complex_buffers():
+    np = pytest.importorskip("numpy")
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
+    )
+    values = rand_values(N // 2)
+    expected = scheme.encode(values).get_polynomial(signed=True)
+    for buffer in (
+        np.array(values),  # read in place
+        np.repeat(np.array(values), 2)[::2],  # not contiguous: converted
+    ):
+        assert scheme.encode(buffer).get_polynomial(signed=True) == expected
+    reals = [v.real for v in values]
+    assert scheme.encode(np.array(reals)).get_polynomial(signed=True) == scheme.encode(
+        reals
+    ).get_polynomial(signed=True)
 
 
 def test_encrypt_decrypt():
@@ -468,9 +508,9 @@ def test_ciphertext_multiplication_module_rank(r, N_r):
 @pytest.fixture
 def threads():
     """Lets the test's parallel calls use up to 8 threads (vfhe defaults to 1)."""
-    lib.vfhe_set_num_threads(8)
+    parallel.set_num_threads(8)
     yield
-    lib.vfhe_set_num_threads(0)
+    parallel.set_num_threads()
 
 
 def _product_scheme(n_levels, n=N):
@@ -525,17 +565,25 @@ def test_product_refusals():
         scheme.product([ct, ct])
 
 
-def test_multiply_batch_with_a_shared_operand():
+@pytest.mark.parametrize("fused", [False, True])
+def test_multiply_batch_with_a_shared_operand(fused):
     scheme, key = _product_scheme(1)
     x, y = (_unit_values(N // 2) for _ in range(2))
     cx, cy = (scheme.encrypt(scheme.encode(v), key) for v in (x, y))
-    outs = scheme.rescale_batch(scheme.multiply_batch([cx, cx], [cx, cy], scheme.rlk))
+    if fused:
+        outs = scheme.multiply_batch([cx, cx], [cx, cy], scheme.rlk, lvl=1)
+    else:
+        outs = scheme.rescale_batch(
+            scheme.multiply_batch([cx, cx], [cx, cy], scheme.rlk)
+        )
+    dropped = scheme.rings[0].primes[-1]
     for out, expected in zip(
         outs,
         ([a * a for a in x], [a * b for a, b in zip(x, y, strict=True)]),
         strict=True,
     ):
         assert out.lvl == 1
+        assert out.delta == cx.delta * cx.delta / dropped
         dec = scheme.decode(scheme.decrypt(out, key), scaling_factor=out.delta)
         assert all(abs(e - d) < 1e-3 for e, d in zip(expected, dec, strict=True))
 
@@ -636,3 +684,42 @@ def test_decrypt_drops_to_the_lowest_level_that_holds_the_message():
     assert key.at_ring(scheme.rings[-1]) is key.at_ring(scheme.rings[-1])
     with pytest.raises(ValueError, match="quotient"):
         scheme.linear_decrypt(scheme.rescale(cx * cy), key, ring=scheme.rings[0])
+
+
+def test_decrypt_ignores_a_level_with_no_room_above_the_scale():
+    # The chain reaches one 49-bit prime, about the scale: no message fits
+    # there, so the default bound comes from the two-prime level.
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=1), scaling_factor=2**49, special_primes=0
+    )
+    assert scheme.rings[-1].ell == 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    v = rand_values(N // 2)
+    ct = scheme.encrypt(scheme.encode(v), key)
+    pt = scheme.decrypt(ct, key)
+    assert pt.ring.ell == 2
+    dec = scheme.decode(pt, scaling_factor=ct.delta)
+    assert all(abs(a - d) < 0.05 for a, d in zip(v, dec, strict=True))
+
+
+def test_multiply_by_monomial_keeps_the_ciphertext():
+    """A CKKS ciphertext times X^e is still one, at its level and scale, and
+    its linear decryption is exactly the input's times the monomial."""
+    scheme = CKKS_Scheme(
+        Ring(N, prime_size=[45, 45, 50], split_degree=1),
+        scaling_factor=2**30,
+        special_primes=1,
+    )
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ct = scheme.encrypt(scheme.encode(rand_values(N // 2)), key)
+    out = ct.multiply_by_monomial(N // 2)
+    assert isinstance(out, CKKS_Ciphertext)
+    assert (out.lvl, out.delta) == (ct.lvl, ct.delta)
+    monomial = Polynomial(ct.ring).from_bigint_array(
+        [0] * (N // 2) + [1] + [0] * (N // 2 - 1)
+    )
+    expected = scheme.decrypt(ct, key, drop=False) * monomial
+    got = scheme.decrypt(out, key, drop=False)
+    expected.to_coeff()
+    got.to_coeff()
+    assert not any((got - expected).get_polynomial(signed=True))

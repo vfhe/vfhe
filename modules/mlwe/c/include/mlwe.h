@@ -42,12 +42,6 @@ extern "C"
         RNS_Base base;
     } *LWE;
 
-    typedef struct _LWE_KS_Key
-    {
-        LWE ***s;
-        uint64_t base_bit, t;
-    } *LWE_KS_Key;
-
     // mlwe rns
     /* MLWE RNS */
 
@@ -84,29 +78,58 @@ extern "C"
     ArithDomain mlwe_domain(MLWE c);
     MLWE mlwe_alloc_sample(ArithRing ring, uint64_t r);
 
+    // The parameters of a gadget decomposition: how an element is split into
+    // digits, each multiplied by a key of its own (gadget_mul_*, the key
+    // switches, the MGSW products).
+    //
+    // `log_base` 0 is the RNS gadget: one digit per prime, the residue,
+    // centered in (-p_j/2, p_j/2] if `balanced`. Otherwise each residue is
+    // split into base-2^log_base digits (`gadget_radix_digits` of them), of
+    // which the top `digits` are kept (0: all), balanced digits of the
+    // centered residue if `balanced` and log_base > 1 (each in
+    // [-2^(log_base-1), 2^(log_base-1)), the top one taking the carry), the
+    // unsigned ones otherwise; the keys are the same. Keeping fewer is the
+    // approximate decomposition: the residue is rounded to a multiple of
+    // 2^(log_base * dropped), dropped the digits left out, which adds at most
+    // half of that times the key. That error is small over one prime only
+    // (over several it is multiplied by a CRT idempotent, which is not
+    // small), so an element decomposed with digits left out must be over one
+    // prime. Keys hold one key per digit kept, prime-major, generated with the
+    // same parameters.
+    //
+    // `primes_per_digit` a > 1 groups the RNS gadget's primes (it cannot be
+    // combined with `log_base`): the element's primes, by ascending base index,
+    // form groups of a (the last may be smaller), and the digit of group J,
+    // modulus Q_J, is x mod Q_J lifted to every prime of the key by the fast
+    // base conversion -- centered if `balanced`, then at most about a Q_J / 2
+    // -- against the gadget element P (Q/Q_J) [(Q/Q_J)^-1]_{Q_J}, one key per
+    // group. 0 and 1 are the digit per prime.
+    typedef struct
+    {
+        uint64_t log_base;
+        uint64_t digits;
+        uint64_t primes_per_digit;
+        bool balanced;
+    } GadgetParams;
+
     // A key-switch key: one gadget-decomposed key array per input component
     // (NULL marks a component that keeps the target key and passes through),
     // and the ring the key lives in. A key switch must accumulate in that
     // ring -- the caller's `out` is only guaranteed to be allocated for its
     // own, narrower one -- so it allocates its scratch there and copies the
-    // finished result out. The key stays immutable and therefore shareable:
-    // gp25 hands one key to every thread of a parallel bootstrap.
+    // finished result out. The key stays immutable, so concurrent key switches
+    // may share it.
     //
-    // `log_base` is the gadget the keys were generated for, and the key switch
-    // decomposes against it: 0 for the RNS gadget (one key per prime), or the
-    // radix base's log for the radix one (one key per prime and digit; see
-    // `gadget_radix_digits`). A key generated for one and read as the other
-    // decrypts to garbage, which is why it travels with the key rather than
-    // with the call. `balanced` picks the RNS gadget's digit, which the keys
-    // do not depend on; it travels with them only because they are all a key
-    // switch is given.
+    // `gadget_params` are those the keys were generated with, and the key
+    // switch decomposes with them. A key generated with one set and read with
+    // another decrypts to garbage, which is why they travel with the key
+    // rather than with the call.
     typedef struct _RNS_MLWE_KS_Key
     {
         RNS_MLWE **s;
         uint64_t count;
         uint64_t mask;
-        uint64_t log_base;
-        bool balanced;
+        GadgetParams gadget_params;
         ArithRing ring;
     } *RNS_MLWE_KS_Key;
 
@@ -182,8 +205,6 @@ extern "C"
     // library limit, see vfhe_threads_for).
     void mlwe_RNS_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const ArithElement *coeff,
                                       uint64_t n_out, uint64_t n_in, uint64_t n_threads);
-    void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
-                                    uint64_t lvl);
     void mlwe_scale_RNSc_mlwe(RNSc_MLWE c, uint64_t scale);
     void mlwe_addto_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in);
     RNS_MLWE *mlwe_alloc_RNS_sample_array(uint64_t size, uint64_t N, uint64_t r, uint64_t mask,
@@ -193,7 +214,6 @@ extern "C"
     void free_mlwe_RNS_sample(void *p);
     void mlwe_scale_RNS_mlwe_addto(RNS_MLWE out, RNS_MLWE in, uint64_t scale);
     void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly);
-    void mlwe_RNSc_extract_lwe(uint64_t *out, RNSc_MLWE in, uint64_t idx);
     void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
     void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
     void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2);
@@ -205,26 +225,37 @@ extern "C"
     void mlwe_tensor_product(ArithElement *out, RNS_MLWE in1, RNS_MLWE in2);
     void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk);
     // out[i] = in1[i] * in2[i] for i < n, as mlwe_multiply with `ksk` (NULL:
-    // extended products). Inputs must be in the mul domain and may repeat. Up
+    // extended products). Inputs not in the mul domain are converted in place,
+    // so each must appear only once; inputs in the mul domain may repeat. Up
     // to `n_threads` threads (0: the library limit).
     void mlwe_multiply_batch(RNS_MLWE *out, RNS_MLWE *in1, RNS_MLWE *in2, RNS_MLWE_KS_Key ksk,
                              uint64_t n, uint64_t n_threads);
+    // mlwe_multiply_batch with `ksk`, then mlwe_round_division of each product
+    // to `to`, a quotient of the inputs' ring. The outputs are canonical. Same
+    // input rules.
+    void mlwe_multiply_round_division_batch(RNSc_MLWE *out, RNS_MLWE *in1, RNS_MLWE *in2,
+                                            RNS_MLWE_KS_Key ksk, ArithRing to, uint64_t n,
+                                            uint64_t n_threads);
 
     RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l,
                                              RNS_Base base, double sigma);
     void mlwe_copy_array(RNS_MLWE *out, RNS_MLWE *in, uint64_t size);
     RNS_MLWE *mlwe_create_copy_array(RNS_MLWE *in, uint64_t size);
 
+    /* Key switching */
+
     // Wrap per-component gadget key arrays (borrowed, not deep-copied) into a
     // key-switch key, deriving the key's ring from its first real component.
-    // `log_base` is the gadget the arrays were generated against (0 for the
-    // RNS gadget), and each array must hold exactly as many keys as that
-    // gadget decomposes an element of the key's ring into.
-    RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count, uint64_t log_base,
-                                        bool balanced);
+    // `gadget_params` are those the arrays were generated with (copied), and
+    // each array must hold exactly as many keys as they decompose an element
+    // of the key's ring into.
+    RNS_MLWE_KS_Key mlwe_new_RNS_ks_key(RNS_MLWE **s, uint64_t count,
+                                        const GadgetParams *gadget_params);
     void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key);
     void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk,
                                         uint64_t lvl);
+    void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
+                                    uint64_t lvl);
     // Hoisted automorphisms: several automorphisms of one sample, decomposing
     // it only once. mlwe_hoist copies `in` and decomposes it for the gadget
     // and ring of `ksk`; each mlwe_automorphism_RNSc_GHS_hoisted then only
@@ -237,30 +268,122 @@ extern "C"
     MLWE_Hoisted mlwe_hoist(RNSc_MLWE in, RNS_MLWE_KS_Key ksk);
     void free_mlwe_hoisted(MLWE_Hoisted h);
     int mlwe_automorphism_RNSc_GHS_hoisted(RNSc_MLWE out, MLWE_Hoisted h, uint64_t gen,
-                                           RNS_MLWE_KS_Key ksk, uint64_t lvl);
+                                           RNS_MLWE_KS_Key ksk);
     // out[i] = Aut_gens[i](sample of h) for i < n, on up to `n_threads`
     // threads (0: the library limit). Returns -1, writing nothing, if any key
     // does not fit `h`.
     int mlwe_automorphisms_RNSc_GHS_hoisted(RNSc_MLWE *out, MLWE_Hoisted h, const uint64_t *gens,
-                                            RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
-                                            uint64_t n_threads);
-    // out[i] = Aut_gens[i](in[i]) for i < n, on up to `n_threads` threads (0:
-    // the library limit). gens[i] == 1 copies, and then ksks[i] may be NULL.
+                                            RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
+    // out[i] = Aut_gens[i](in[i]) for i < n, canonical, on up to `n_threads`
+    // threads (0: the library limit). Inputs may be in either domain and are
+    // not modified. gens[i] == 1 copies, and ksks[i] may then be NULL.
     void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
-                                          RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t lvl,
-                                          uint64_t n_threads);
+                                          RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
+    // out = sum_i Aut_gens[i](in[i]) for i < n, canonical, on up to
+    // `n_threads` threads. The key-switch products of all terms are
+    // accumulated in the keys' ring and divided down once: one inverse
+    // transform, one round division and one rounding error for the whole sum.
+    // The keys must share a ring and pass-through components, as automorphism
+    // keys for one level do; otherwise returns -1 and leaves `out` untouched.
+    // gens[i] == 1 adds in[i] as is, and ksks[i] may then be NULL. Inputs are
+    // over out's ring and rank, in either domain, and are not modified.
+    int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *gens,
+                                       RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads);
+    // `count` automorphism multiplexers over the same automorphisms:
+    // out[i] = sum_d b_(i,d) Aut_gens[d](in[i]) for d < n, b_(i,d) the bit
+    // encrypted in ksks[i * n + d]. With one bit set, it applies the selected
+    // automorphism without revealing which: the B-to-1 mux-rotate of [CHKS25].
+    // A key has r + 1 components, each a gadget key array: component j < r
+    // encrypts b Aut_gens[d](s_j), component r encrypts b. Each input is
+    // decomposed once for all its terms, and each sum is divided by the special
+    // primes once. out[i] is over in[i]'s ring, canonical; in[i] may be in
+    // either domain, is not modified, and may be out[i]. Up to `n_threads`
+    // threads (0: the library limit). Returns -1, writing nothing, if any
+    // item's keys do not share a ring and gadget or have a pass-through
+    // component.
+    int mlwe_automorphism_mux_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
+                                             RNS_MLWE_KS_Key *ksks, uint64_t count, uint64_t n,
+                                             uint64_t n_threads);
     void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
                             uint64_t size, uint64_t lvl);
+    // The trace Tr_(K/Q) of in's message (canonical): `out` decrypts to N times
+    // its constant coefficient. Evaluated over the tower of power-of-two
+    // cyclotomics, one automorphism per level [AP13]: ksks[i] is the key for
+    // 2^(log2 N - i) + 1, i < log2 N.
     void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl);
-    // The samples in `in` live over exactly the primes of `out`'s ring.
-    void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key ksk,
-                                     uint64_t lvl);
-    void mlwe_full_packing_keyswitch_scaled(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks,
-                                            uint64_t lvl);
+    // The normalized trace (n / N) Tr_(K/K_n) [AP13] of `in` (canonical), K_n
+    // the subring Z[X^(N/n)], each level halved before its automorphism after
+    // [LY26]: `out` decrypts to the coefficients of in's message at the
+    // multiples of N / n and to zero elsewhere (n = 1: the constant
+    // coefficient alone), with the noise of log2(N / n) key switches, which
+    // later levels do not amplify. n is a power of two dividing N; ksks[j] is
+    // the automorphism key for 2^(j + 1) + 1, as for mlwe_trace_pack, and only
+    // those with j >= log2(n) are read. `out` may alias `in`.
+    void mlwe_normalized_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t n, RNS_MLWE_KS_Key *ksks);
+    // Packs `size` LWE samples into one: out decrypts to sum_k m_k X^k, m_k
+    // what in[k] decrypts to (size <= N). The samples live over the same
+    // primes as `out`'s ring -- by value: they may come from a ring of
+    // another dimension -- under a key whose coefficients `ksk` switches from:
+    // component i of `ksk` encrypts the i-th coefficient, against the key's
+    // gadget.
+    void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_KS_Key ksk);
+    // Packs the constant coefficients of the 2^ell canonical samples of `vec`
+    // into vec[0]: it decrypts to m_k at k * N / 2^ell, m_k the constant
+    // coefficient of what vec[k] decrypts to, and to junk elsewhere. The values
+    // keep their scale, and each level adds one key switch's noise, which the
+    // levels after it do not amplify. ksks[j] is the automorphism key for
+    // 2^(j + 1) + 1 at the
+    // samples' level, j < ell. The other samples of `vec` are overwritten.
+    // The 2^(ell - j) packings of level j are independent and run on up to
+    // `n_threads` threads (0: the library limit).
+    void mlwe_trace_pack(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks, uint64_t n_threads);
+
+    // Subring maps between R_N = Z[X]/(X^N + 1) and R_n = Z[Y]/(Y^n + 1),
+    // N = k * n, R_n embedded as Y = X^k. Both move coefficients only, so they
+    // add no noise; the input is canonical and the output is written
+    // canonical over its own ring, which must have the input ring's primes
+    // (by value: the two dimensions have bases of their own).
+    //
+    // mlwe_project_subring: `in` over R_N of rank r, `out` over R_n of rank
+    // r * k. Component i * k + j of `out` holds coefficients j + k * m of
+    // component i of `in` (at m), the body coefficients k * m. Its linear
+    // decryption under the key whose components i * k + j are s_i^(0) for
+    // j = 0 and Y * s_i^(k - j) otherwise -- s_i^(l) being coefficients
+    // l + k * m of s_i -- is coefficients k * m of the linear decryption of
+    // `in` under s: the subring part of the message, and the rest dropped.
+    void mlwe_project_subring(MLWE out, MLWE in);
+    // mlwe_embed_subring: `count` <= k samples in[i] over R_n, one ring and
+    // rank r, and `out` over R_N of rank r: out = sum_i X^i in[i](X^k), so it
+    // decrypts under s(X^k) to sum_i X^i m_i(X^k) -- coefficient i + k * m
+    // holds coefficient m of m_i, and the coefficients of missing inputs are
+    // zero. With one input it is the embedding Y = X^k, and with k the inverse
+    // of mlwe_project_subring's split of the mask.
+    void mlwe_embed_subring(MLWE out, MLWE *in, uint64_t count);
+    // Ring switching [GHPS12], down by reading the sample as one of rank r * k
+    // over the subring before the key switch: mlwe_project_subring of in[0]
+    // (if its dimension is at least `out`'s; `count` is then 1) or
+    // mlwe_embed_subring of the `count` inputs, into a sample over `out`'s
+    // ring, then a key switch with `ksk`, whose components switch from the
+    // key that map leaves the sample under (one per component it produces,
+    // r * k down and r up) to `out`'s key, at any rank. `ksk` belongs to the
+    // level of `out`'s ring.
+    void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE *in, uint64_t count, RNS_MLWE_KS_Key ksk);
+
     void mlwe_round_division(RNSc_MLWE out, ArithRing to);
+    // The ModDown of hybrid key switching, into `out`: `in`, over a ring with
+    // primes `out`'s ring does not have, divided by their product as
+    // mlwe_round_division would, up to an error of at most half their number
+    // per coefficient, at a cost linear in that number
+    // (polynomial_mod_down_RNSc_rows); then addend[k], when `addend` and it
+    // are not NULL, added to component k (the body last), in the same pass.
+    // For a sample a gadget product has just accumulated, where that error
+    // is noise. `in` is canonical and is overwritten; the addends are
+    // canonical over `out`'s ring. Over rings that are not RNS, or with
+    // nothing to divide by, it is mlwe_round_division, a copy and the adds.
+    void mlwe_mod_down(RNSc_MLWE out, RNSc_MLWE in, const ArithElement *const *addend);
     // Reduces every component into `to`, a quotient of the sample's ring, in
     // place and in either domain. Unlike mlwe_round_division, the value is not
-    // divided: this is the CKKS level drop, and it is not valid for BFV.
+    // divided: the linear decryption is kept modulo `to`'s modulus only.
     void mlwe_mod_reduce(MLWE c, ArithRing to);
     // mlwe_round_division of each of the n distinct samples, in place,
     // converting them to the canonical domain first if needed. Up to
@@ -270,20 +393,19 @@ extern "C"
     // for those already there). Up to `n_threads` threads.
     void mlwe_RNSc_to_RNS_batch(RNS_MLWE *io, uint64_t n, uint64_t n_threads);
 
-    // Gadget decomposition products: decompose `poly` against the gadget
-    // `log_base` names -- the RNS one (one digit per prime) when it is 0, the
-    // radix one (one digit per prime and power of 2^log_base) otherwise -- and
+    // Gadget decomposition products: decompose `poly` with `gadget_params` and
     // accumulate the products with the matching keys into `out`. `ksk` must
-    // hold one key per digit, prime-major, generated against the same gadget.
-    // `balanced` centers the RNS gadget's digit, in (-p_j/2, p_j/2].
+    // hold one key per digit, prime-major, generated with the same parameters.
     void gadget_mul_addto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
-                                     uint64_t log_base, bool balanced);
+                                     const GadgetParams *gadget_params);
     void gadget_mul_subto_polynomial(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
-                                     uint64_t log_base, bool balanced);
+                                     const GadgetParams *gadget_params);
 
     // How many base-2^log_base digits the radix gadget takes for one residue
     // modulo `prime`: enough to cover every value below it.
     uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base);
+    // How many primes one RNS digit covers: `primes_per_digit`, 1 when unset.
+    uint64_t gadget_primes_per_digit(const GadgetParams *gadget_params);
 
     // A stored gadget decomposition of one element: `n` digits over the key's
     // ring, in key order, ready to multiply (in the mul domain, or canonical
@@ -298,45 +420,94 @@ extern "C"
     // digits. `ksk` only fixes the key ring and the gadget, so any key array
     // with both will do.
     void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly,
-                          uint64_t log_base, bool balanced);
+                          const GadgetParams *gadget_params);
     void gadget_digits_free(GadgetDigits *digits);
     // Digit `i` (in key order) of the same decomposition, for a caller that
     // computes the digits in parallel: written into `out`, an element of the
     // key ring, in the domain gadget_decompose leaves them in. Reads `ksk` and
     // `poly` only.
     void gadget_decompose_digit(ArithElement *out, RNS_MLWE *ksk, const ArithElement *poly,
-                                uint64_t i, uint64_t log_base, bool balanced);
+                                uint64_t i, const GadgetParams *gadget_params);
     // out -= sum_i Aut_gen(digit_i) * ksk[i]: the gadget product of
     // Aut_gen(poly), because permuted digits are a valid decomposition of the
     // permuted element (equal to decomposing Aut_gen(poly) up to the choice of
     // digit representatives). `gen` is odd and below 2N; 1 is the identity.
     void gadget_mul_subto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
                                        uint64_t gen);
+    // The same, adding: out += sum_i Aut_gen(digit_i) * ksk[i].
+    void gadget_mul_addto_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
+                                       uint64_t gen);
 
     // `ell` is the number of gadget keys per component of the MGSW key -- one
-    // per prime for the RNS gadget (`log_base` 0), one per prime and digit for
-    // the radix one -- and `log_base` and `balanced` are as in
+    // per digit `gadget_params` keep of the input's primes -- and
+    // `gadget_params` are those it was encrypted with, as in
     // `gadget_mul_addto_polynomial`.
     void mgsw_external_product(RNS_MLWE out, RNS_MLWE *mgsw, RNSc_MLWE in, uint64_t ell,
-                               uint64_t special_primes, uint64_t log_base, bool balanced);
+                               uint64_t special_primes, const GadgetParams *gadget_params);
     void mgsw_CMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, uint64_t ell,
-                   uint64_t special_primes, uint64_t log_base, bool balanced);
+                   uint64_t special_primes, const GadgetParams *gadget_params);
     void mgsw_NCMUX(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw, RNS_MLWE_KS_Key ksk,
-                    uint64_t ell, uint64_t special_primes, uint64_t log_base, bool balanced);
+                    uint64_t ell, uint64_t special_primes, const GadgetParams *gadget_params);
     void mgsw_CMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
-                            uint64_t ell, uint64_t special_primes, uint64_t log_base,
-                            bool balanced);
+                            uint64_t ell, uint64_t special_primes,
+                            const GadgetParams *gadget_params);
+    // out[i] = mgsw_CMUX_to_coeff(in1[i], in2[i]) for i < n, all with the one
+    // selector `mgsw`: canonical inputs and outputs, every out[i] distinct
+    // from the inputs. Up to `n_threads` threads (0: the library limit).
+    void mgsw_CMUX_batch(RNSc_MLWE *out, RNSc_MLWE *in1, RNSc_MLWE *in2, uint64_t n, RNS_MLWE *mgsw,
+                         uint64_t ell, const GadgetParams *gadget_params, uint64_t n_threads);
+    // Shifts sequences of samples by an encrypted amount d in [0, width],
+    // 1 <= width <= 3, given one-hot: keys[t - 1] is an MGSW key (as mgsw_CMUX
+    // takes one) of the bit [d = t], so at most one of them encrypts 1. Sequence
+    // s has lengths[s] + width inputs x_0, x_1, ... and lengths[s] outputs,
+    //
+    //   y_i = x_(i+w) + sum_t keys[t - 1] (x) (x_(i+w-t) - x_(i+w)),  w = width,
+    //
+    // which decrypts to x_(i+w-d). The sequences' inputs follow each other in
+    // `in`, their outputs in `out`. Input q is Aut_gens[q](in[q]), switched back
+    // with `aut`, where gens[q] != 1 (gens NULL: no automorphisms), and one
+    // sample may be several inputs. Inputs and outputs are canonical, the
+    // outputs allocated by the caller and distinct from the inputs. Every input
+    // is decomposed once for all the outputs that read it. Up to `n_threads`
+    // threads (0: the library limit), one sequence per task; the result does
+    // not depend on their number.
+    void mgsw_shift_sequences(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
+                              RNS_MLWE_KS_Key aut, const uint64_t *lengths, uint64_t n_sequences,
+                              RNS_MLWE *const *keys, uint64_t width, uint64_t ell,
+                              const GadgetParams *gadget_params, uint64_t n_threads);
     void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
                              RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
-                             uint64_t log_base, bool balanced);
-    void gp25_RGSW_monomial_mul(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                                RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
-                                bool balanced);
-    void gp25_RGSW_monomial_mul_mt(RNS_MLWE *p0, uint64_t in_N, RNS_MLWE **e, uint64_t r_prec,
-                                   RNS_MLWE_KS_Key ksk, uint64_t ell, uint64_t special_primes,
-                                   bool balanced, uint64_t num_threads);
-    void gp25_sub_a_mt(RNS_MLWE *p0, uint64_t in_N, uint64_t *a, RNS_MLWE *s_sign, uint64_t ell,
-                       uint64_t special_primes, bool balanced, uint64_t N, uint64_t num_threads);
+                             const GadgetParams *gadget_params);
+
+    // MGSW keys as arrays of (r + 1) * `width` samples, row j * width + k
+    // encrypting mu_j * g_k for the gadget elements g_k, with mu_j = -s_j * m
+    // for j < r and mu_r = m: the layout of `mgsw_external_product`'s key.
+    // Rows are in the mul domain over the key's ring; what these allocate the
+    // caller owns.
+
+    // The noiseless MGSW of `msg` (in the mul domain over `ring`): row j * width + k
+    // is zero but for component j (the body for j = r), which is msg times
+    // the gadget element `scales[k]` (one value per component, as
+    // arith_scalar_new takes it). It decrypts as m * G under any key of rank r.
+    void mgsw_trivial(RNS_MLWE *out, ArithRing ring, uint64_t r, const ArithElement *msg,
+                      uint64_t *const *scales, uint64_t width);
+
+    // The internal product: out[i] = a (x) b[i] for each of the `rows` rows of
+    // an MGSW key b, so `out` is an MGSW key of the product of the two
+    // messages, laid out as b and over b's ring. `a` (with `ell` gadget keys
+    // per component) must consume samples over that ring: with special
+    // primes, b's rows live over its key ring, so `a` belongs to a scheme
+    // where that ring is a level. Up to `n_threads` threads.
+    void mgsw_internal_product(RNS_MLWE *out, RNS_MLWE *a, uint64_t ell, RNS_MLWE *b, uint64_t rows,
+                               const GadgetParams *gadget_params, uint64_t n_threads);
+
+    // The MGSW key of Aut_gen(m) from that of m (`in`, gadget `width`):
+    // its m rows go through the automorphism and `aut` (Aut_gen(s) -> s),
+    // and the -s_j m rows are rebuilt from them through the relinearization
+    // key `rlk` (the quadratic terms -(s_p s_q) -> s, as for a product). Both
+    // keys consume samples over the rows' ring. Up to `n_threads` threads.
+    void mgsw_automorphism(RNS_MLWE *out, RNS_MLWE *in, uint64_t width, uint64_t gen,
+                           RNS_MLWE_KS_Key aut, RNS_MLWE_KS_Key rlk, uint64_t n_threads);
 
     // lwe
     LWE_Key lwe_alloc_key(uint64_t n, uint64_t mask, RNS_Base base);
@@ -351,8 +522,6 @@ extern "C"
     LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t mask, RNS_Base base);
     void lwe_linear_decrypt(uint64_t *out, LWE c, LWE_Key key);
     void lwe_subto(LWE out, LWE in);
-    LWE_KS_Key lwe_new_KS_key(LWE_Key out_key, LWE_Key in_key, uint64_t t, uint64_t base_bit);
-    void lwe_keyswitch(LWE out, LWE in, LWE_KS_Key ks_key);
 
 #ifdef __cplusplus
 }

@@ -217,12 +217,3 @@ void lwe_subto(LWE out, LWE in)
         out->b[i] = sub_modq(out->b[i], in->b[i], mod->q);
     }
 }
-
-// KS is disabled for LWE since we use mlwe_full_packing_keyswitch
-LWE_KS_Key lwe_new_KS_key(LWE_Key out_key, LWE_Key in_key, uint64_t t, uint64_t base_bit)
-{
-    assert(false);
-    return NULL;
-}
-
-void lwe_keyswitch(LWE out, LWE in, LWE_KS_Key ks_key) { assert(false); }

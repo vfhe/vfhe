@@ -11,8 +11,9 @@ of two dividing ``N/2``; ``n = N/2`` is the whole slot vector). Then
     A z = sum_j rot( sum_i rot(z, i) * rot(diag_(j*b+i), -j*b), j*b )
 
 so the plaintexts are rotated in the clear, the ``b`` baby rotations of ``z``
-share one decomposition (`MLWE_Scheme.automorphisms`), and the map costs
-``b + n/b`` rotations and one plaintext product per diagonal.
+share one decomposition (`MLWE_Scheme.automorphisms`), the giant rotations share
+one division by the special primes (`MLWE_Scheme.automorphism_sum`), and the
+map costs ``b + n/b`` rotations and one plaintext product per diagonal.
 
 [HS18] S. Halevi, V. Shoup. *Faster Homomorphic Linear Transformations in
 HElib.* CRYPTO 2018.
@@ -21,9 +22,12 @@ HElib.* CRYPTO 2018.
 from __future__ import annotations
 
 import cmath
+import itertools
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
+
+from vfhe.mlwe import PlaintextMatrix
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -33,6 +37,10 @@ if TYPE_CHECKING:
 
     from .ckks import CKKS_Ciphertext, CKKS_Scheme
 
+# Diagonals are encoded this many at a time, which bounds the converted copies
+# of non-buffer diagonals held at once.
+_ENCODE_CHUNK = 512
+
 
 class CKKS_LinearTransform:
     """A slot matrix encoded for one level, ready to apply to ciphertexts there.
@@ -40,7 +48,9 @@ class CKKS_LinearTransform:
     ``diagonals`` maps ``d`` to ``diag_d`` (length ``n``), or is an iterable of
     such pairs; only the nonzero diagonals need be given. Each is rotated,
     tiled to ``N/2`` slots and encoded once, in ``scheme.rings[lvl]`` at
-    ``scale`` (default: ``scaling_factor``). ``baby_steps`` is ``b`` (default:
+    ``scale`` (default: ``scaling_factor``), as :meth:`CKKS_Scheme.encode_batch`
+    does: a diagonal given as a buffer of complex doubles (a numpy
+    ``complex128`` array) is read in place. ``baby_steps`` is ``b`` (default:
     ``ceil(sqrt(n))``).
     """
 
@@ -53,6 +63,7 @@ class CKKS_LinearTransform:
         lvl: int = 0,
         scale: float | None = None,
         baby_steps: int | None = None,
+        n_threads: int = 0,
     ) -> None:
         pairs = (
             cast("Mapping[int, Sequence[complex]]", diagonals).items()
@@ -79,19 +90,34 @@ class CKKS_LinearTransform:
         ring = scheme.rings[lvl]
         # giant j -> baby i -> plaintext of rot(diag_(j*b+i), -j*b)
         self.plaintexts: dict[int, dict[int, RNSPolynomial]] = {}
-        for d, diag in _chain(first, items):
-            if not 0 <= d < n or len(diag) != n:
-                raise ValueError(
-                    f"diagonal {d} must have index below {n} and length {n}"
-                )
-            j, i = divmod(d, b)
-            if i in self.plaintexts.get(j, {}):
-                raise ValueError(f"diagonal {d} given twice")
-            cut = n - j * b  # rotated[t] = diag[t - j*b]
-            rotated = [*diag[cut:], *diag[:cut]]
-            pt = scheme.encode(rotated * (slots // n), ring=ring, scale=self.scale)
-            pt.to_NTT()
-            self.plaintexts.setdefault(j, {})[i] = pt
+        seen: set[int] = set()
+        pairs_left = _chain(first, items)
+        while chunk := list(itertools.islice(pairs_left, _ENCODE_CHUNK)):
+            for d, diag in chunk:
+                if not 0 <= d < n or len(diag) != n:
+                    raise ValueError(
+                        f"diagonal {d} must have index below {n} and length {n}"
+                    )
+                if d in seen:
+                    raise ValueError(f"diagonal {d} given twice")
+                seen.add(d)
+            # rotated[t] = diag[t - j*b]
+            shifts = [-(d // b) * b for d, _ in chunk]
+            pts = scheme._encode_rotated(  # noqa: SLF001 - same package
+                [diag for _, diag in chunk], shifts, ring, self.scale, n_threads
+            )
+            for (d, _), pt in zip(chunk, pts, strict=True):
+                j, i = divmod(d, b)
+                self.plaintexts.setdefault(j, {})[i] = pt
+        self._prepare()
+
+    def _prepare(self) -> None:
+        """Builds the matrix :meth:`apply` multiplies by from :attr:`plaintexts`."""
+        self._babies = sorted({i for row in self.plaintexts.values() for i in row})
+        self._giants = sorted(self.plaintexts)
+        self._matrix = PlaintextMatrix(
+            [[self.plaintexts[j].get(i) for i in self._babies] for j in self._giants]
+        )
 
     @property
     def rotations(self) -> list[int]:
@@ -111,9 +137,7 @@ class CKKS_LinearTransform:
 
         ``ksks[k]`` is the rotation key for ``k`` slots
         (`CKKS_Scheme.gen_rotation_key`), for every ``k`` in :attr:`rotations`. The
-        result's ``delta`` is the input's times ``scale``. Runs on up to
-        ``n_threads`` threads (0: the library limit, see
-        `lib.vfhe_set_num_threads`).
+        result's ``delta`` is the input's times ``scale``.
         """
         scheme = self.scheme
         if ciphertext.lvl != self.lvl or ciphertext.ring != scheme.rings[self.lvl]:
@@ -124,16 +148,15 @@ class CKKS_LinearTransform:
         missing = [k for k in self.rotations if k not in ksks]
         if missing:
             raise ValueError(f"missing rotation keys for {missing}")
-        two_n = 2 * scheme.N
         b = self.baby_steps
 
-        babies = sorted({i for row in self.plaintexts.values() for i in row})
+        babies = self._babies
         rotated = dict(
             zip(
                 [i for i in babies if i],
                 scheme.automorphisms(
                     ciphertext,
-                    [pow(5, i, two_n) for i in babies if i],
+                    [scheme.rotation_generator(i) for i in babies if i],
                     [ksks[i] for i in babies if i],
                     n_threads,
                 ),
@@ -141,23 +164,16 @@ class CKKS_LinearTransform:
             )
         )
         rotated[0] = ciphertext
-        giants = sorted(self.plaintexts)
+        giants = self._giants
         inner = scheme.linear_combinations(
-            [rotated[i] for i in babies],
-            [[self.plaintexts[j].get(i) for i in babies] for j in giants],
-            self.scale,
-            n_threads,
+            [rotated[i] for i in babies], self._matrix, n_threads, scale=self.scale
         )
-        terms = scheme.automorphism_batch(
+        return scheme.automorphism_sum(
             inner,
-            [pow(5, j * b, two_n) for j in giants],
+            [scheme.rotation_generator(j * b) for j in giants],
             [ksks[j * b] if j else None for j in giants],
             n_threads,
         )
-        out = terms[0]
-        for term in terms[1:]:
-            out += term
-        return out
 
     @classmethod
     def slot_to_coeff(

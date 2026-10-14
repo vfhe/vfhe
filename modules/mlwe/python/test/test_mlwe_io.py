@@ -13,7 +13,15 @@ import warnings
 import pytest
 from vfhe.arith import Polynomial, Ring
 from vfhe.arith import repr as Repr
-from vfhe.mlwe import LWE, MLWE, LWE_Key, MGSW_Scheme, MLWE_Key, MLWE_Scheme
+from vfhe.mlwe import (
+    LWE,
+    MLWE,
+    GadgetParams,
+    LWE_Key,
+    MGSW_Scheme,
+    MLWE_Key,
+    MLWE_Scheme,
+)
 from vfhe.util.io import Serializer
 
 N = 256
@@ -135,7 +143,7 @@ def test_module_rank(r):
 def test_key_switch_key(ghs, radix, profile):
     Rp, scheme, key = ghs
     key2 = scheme.key_gen_sparse(N // 8, 3.2)
-    ksk = scheme.gen_ksk(key2, key, radix_log_base=radix)
+    ksk = scheme.gen_ksk(key2, key, gadget_params=GadgetParams(radix))
     s = Serializer(profile)
     data = s.dumps(ksk)
     back = s.loads(data, schemes=scheme)
@@ -148,6 +156,33 @@ def test_key_switch_key(ghs, radix, profile):
         # One seed per gadget sample instead of its mask.
         unseeded = Serializer(profile, seeded=False).dumps(ksk)
         assert len(data) < 0.55 * len(unseeded)
+
+
+def test_key_switch_key_without_the_special_primes(ghs):
+    Rp, scheme, key = ghs
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    ksk = scheme.gen_ksk(key2, key, lvl=0, gadget_params=GadgetParams(4), hybrid=False)
+    back = Serializer().loads(Serializer().dumps(ksk), schemes=scheme)
+    m = Rp.random_element()
+    c = enc(scheme, Rp, m, key)
+    assert same(scheme.keyswitch(c, ksk), scheme.keyswitch(c, back))
+
+
+def test_key_switch_key_with_fewer_digits(ghs):
+    _Rp, scheme, key = ghs
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    last = len(scheme.rings) - 1
+    ksk = scheme.gen_ksk(
+        key2,
+        key,
+        lvl=last,
+        gadget_params=GadgetParams(4, 8),
+    )
+    back = Serializer().loads(Serializer().dumps(ksk), schemes=scheme)
+    assert back.gadget_params.digits == 8
+    ring = scheme.rings[last]
+    c = scheme.sample(ring.random_element(), key.at_ring(ring), lvl=last)
+    assert same(scheme.keyswitch(c, ksk), scheme.keyswitch(c, back))
 
 
 def test_relinearization_key_keeps_its_pass_through_slots(ghs):
@@ -188,6 +223,39 @@ def test_mgsw(ghs):
     m = Rp.random_element()
     c = enc(scheme, Rp, m, key)
     assert same(ct_id.external_product(c), back.external_product(c))
+
+
+def test_mgsw_scheme_with_fewer_digits():
+    scheme = MLWE_Scheme(Ring(N, prime_size=[50, 50], split_degree=1), special_primes=1)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    mgsw_scheme = MGSW_Scheme(
+        scheme,
+        gadget_params=GadgetParams(10, 3),
+    )
+    (one,) = mgsw_scheme.encrypt_constants([1], key)
+    back = Serializer().loads(Serializer().dumps(one), schemes=[scheme])
+    assert back.scheme.gadget_params.digits == 3
+    c = scheme.sample(scheme.rings[0].random_element(), key)
+    assert same(one.external_product(c), back.external_product(c))
+
+
+def test_grouped_digits_travel_with_keys_and_mgsw_schemes():
+    scheme = MLWE_Scheme(
+        Ring(N, prime_size=[45] * 3 + [50] * 2, split_degree=1), special_primes=2
+    )
+    key, key2 = (scheme.key_gen_sparse(N // 8, 3.2) for _ in range(2))
+    params = GadgetParams(primes_per_digit=2)
+    ksk = scheme.gen_ksk(key2, key, lvl=0, gadget_params=params)
+    mgsw_scheme = MGSW_Scheme(scheme, gadget_params=params)
+    (one,) = mgsw_scheme.encrypt_constants([1], key)
+    s = Serializer()
+    ksk_back = s.loads(s.dumps(ksk), schemes=scheme)
+    one_back = s.loads(s.dumps(one), schemes=[scheme])
+    assert ksk_back.gadget_params == params
+    assert one_back.scheme.gadget_params == params
+    c = scheme.sample(scheme.rings[0].random_element(), key)
+    assert same(scheme.keyswitch(c, ksk), scheme.keyswitch(c, ksk_back))
+    assert same(one.external_product(c), one_back.external_product(c))
 
 
 def test_secret_keys_only_through_dump_secret(ghs):
@@ -297,7 +365,7 @@ def test_another_process_with_another_base_order(ghs, tmp_path, profile):
     assert json.loads(out.stdout) == m.get_polynomial()
 
 
-def test_unseeded_encryption_is_still_available(ghs):
+def test_unseeded_encryption_on_request(ghs):
     Rp, scheme, key = ghs
     scheme.seeded_encryption = False
     try:

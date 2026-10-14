@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# GP25's symbols are prototyped in mlwe.h; the rest in fhe.h.
 vfhe_c_sources += files(
     'c/src/bfv.c',
     'c/src/cggi16.c',
     'c/src/gp25.c',
+    'c/src/ship.c',
 )
 vfhe_c_include_dirs += include_directories(
     'c/include',

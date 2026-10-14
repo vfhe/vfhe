@@ -146,6 +146,52 @@ void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint6
     }
 }
 
+/* out += sum_t a[t] * b[t] (mod q), with one reduction per element. A product of two values below
+ * q < 2^50 has a low 52-bit half and a high half below q^2 / 2^52; madd52lo and madd52hi add them
+ * to two 64-bit sums, which hold up to MOD_INNER_PRODUCT_MAX_TERMS terms. With the low sum's carry
+ * moved up the total is H 2^52 + L, L < 2^52, reduced as (H mod q) (2^52 mod q) + (L mod q). Each
+ * of those three reductions takes a value below (q - 1)^2, as _mm512_hexl_reduce_prod_50
+ * requires; for L that needs q > 2^26, so the dispatcher keeps smaller moduli on per-term
+ * products. */
+
+// acc + (hi 2^52 + lo) mod q, for the two sums above.
+static inline __m512i inner_product_reduce_50(__m512i lo, __m512i hi, __m512i acc, Modulus mod)
+{
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i low52b_mask = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i w1 = _mm512_set1_epi64(mod->mp_w1); // 2^52 mod q
+    hi = _mm512_add_epi64(hi, _mm512_srli_epi64(lo, 52));
+    lo = _mm512_and_epi64(lo, low52b_mask);
+    const __m512i h = _mm512_hexl_reduce_prod_50(_mm512_srli_epi64(hi, 52),
+                                                 _mm512_and_epi64(hi, low52b_mask), mod);
+    const __m512i folded = _mm512_hexl_reduce_prod_50(_mm512_madd52hi_epu64(zero, h, w1),
+                                                      _mm512_madd52lo_epu64(zero, h, w1), mod);
+    __m512i res = _mm512_add_epi64(folded, _mm512_hexl_reduce_prod_50(zero, lo, mod));
+    res = _mm512_min_epu64(res, _mm512_sub_epi64(res, q_vec));
+    res = _mm512_add_epi64(res, acc);
+    return _mm512_min_epu64(res, _mm512_sub_epi64(res, q_vec));
+}
+
+void mod_eltwise_inner_product_addto_50(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                        uint64_t terms, uint64_t n, Modulus mod)
+{
+    __m512i *outv = (__m512i *)out;
+    const __m512i zero = _mm512_setzero_si512();
+    const size_t n_vec = n / 8;
+    for (size_t i = 0; i < n_vec; i++)
+    {
+        __m512i lo = zero, hi = zero;
+        for (uint64_t t = 0; t < terms; t++)
+        {
+            const __m512i x = ((const __m512i *)a[t])[i], y = ((const __m512i *)b[t])[i];
+            lo = _mm512_madd52lo_epu64(lo, x, y);
+            hi = _mm512_madd52hi_epu64(hi, x, y);
+        }
+        outv[i] = inner_product_reduce_50(lo, hi, outv[i], mod);
+    }
+}
+
 /* `scale` and `fma` multiply by a scalar that does not vary over the array,
    and a fixed operand is what Shoup's form needs: precompute
    s' = floor(s * 2^52 / q) once, and the reduction per element is a
@@ -198,6 +244,49 @@ void mod_eltwise_fma_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n,
     {
         __m512i res = _mm512_add_epi64(outv[i], shoup_mul_50(inv[i], v_s, v_sp, q_vec, neg_q_vec));
         outv[i] = _mm512_min_epu64(res, _mm512_sub_epi64(res, q_vec));
+    }
+}
+
+void mod_eltwise_lifted_combination_50(uint64_t *out, const uint64_t *const *in,
+                                       const uint64_t *q_in, const uint64_t *scale, uint64_t m,
+                                       bool centered, uint64_t n, Modulus mod)
+{
+    const uint64_t p = mod->q;
+    uint64_t s[MOD_COMBINATION_MAX_TERMS], sp[MOD_COMBINATION_MAX_TERMS];
+    uint64_t half[MOD_COMBINATION_MAX_TERMS], h[MOD_COMBINATION_MAX_TERMS];
+    assert(m <= MOD_COMBINATION_MAX_TERMS);
+    for (uint64_t t = 0; t < m; t++)
+    {
+        assert(q_in[t] < (1ULL << 52));
+        s[t] = modq(scale[t], mod);
+        sp[t] = (uint64_t)(((unsigned __int128)s[t] << 52) / p);
+        half[t] = centered ? q_in[t] >> 1 : UINT64_MAX;
+        h[t] = negate_modq(mul_modq(s[t], modq(q_in[t], mod), mod), p);
+    }
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i low52b_mask = _mm512_set1_epi64((1ULL << 52) - 1);
+    const __m512i neg_p = _mm512_set1_epi64(-(int64_t)p);
+    // A copy no store to `out` can alias, so its constants stay in registers.
+    struct _Modulus m_copy = *mod;
+    for (uint64_t j = 0; j < n; j += 8)
+    {
+        // Each term is a lazy Shoup product in [0, 2p) plus the centering
+        // correction, below 3p < 2^52, so the 64-bit lanes sum them all
+        // without reducing until the end.
+        __m512i acc = zero;
+        for (uint64_t t = 0; t < m; t++)
+        {
+            const __m512i v = _mm512_loadu_si512((const void *)(in[t] + j));
+            const __m512i q_hat = _mm512_madd52hi_epu64(zero, _mm512_set1_epi64(sp[t]), v);
+            const __m512i r = _mm512_and_epi64(
+                _mm512_madd52lo_epu64(_mm512_madd52lo_epu64(zero, _mm512_set1_epi64(s[t]), v),
+                                      q_hat, neg_p),
+                low52b_mask);
+            const __mmask8 above = _mm512_cmpgt_epu64_mask(v, _mm512_set1_epi64(half[t]));
+            acc = _mm512_add_epi64(acc, r);
+            acc = _mm512_mask_add_epi64(acc, above, acc, _mm512_set1_epi64(h[t]));
+        }
+        _mm512_storeu_si512((void *)(out + j), _mm512_hexl_reduce_64b_50(acc, &m_copy));
     }
 }
 

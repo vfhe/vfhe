@@ -38,12 +38,24 @@ from vfhe.util.io import (
 
 from .lwe import LWE, LWE_Key, _native_limbs
 from .mgsw import MGSW, MGSW_Scheme
-from .mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
+from .mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set
 
 if TYPE_CHECKING:
     from collections.abc import Hashable, Sequence
 
 SEED_BYTES = 32
+
+
+def _gadget_meta(params: GadgetParams) -> dict[str, Any]:
+    return {
+        "log_base": params.log_base,
+        "digits": params.digits,
+        "primes_per_digit": params.primes_per_digit,
+    }
+
+
+def _gadget_params(meta: dict[str, Any]) -> GadgetParams:
+    return GadgetParams(meta["log_base"], meta["digits"], meta["primes_per_digit"])
 
 
 # --- schemes ---------------------------------------------------------------
@@ -143,7 +155,7 @@ class MGSWSchemeCodec(Codec):
 
     def identity(self, obj: MGSW_Scheme, /) -> tuple:
         inner = codec_for(obj.mlwe_scheme).identity(obj.mlwe_scheme)
-        return (inner, obj.ell, obj.radix_log_base)
+        return (inner, obj.ell, obj.gadget_params)
 
     def bindings(self, obj: MGSW_Scheme, /) -> list[Any]:
         return [obj.mlwe_scheme]
@@ -153,7 +165,7 @@ class MGSWSchemeCodec(Codec):
             {
                 "mlwe_scheme": ctx.ref(obj.mlwe_scheme),
                 "ell": obj.ell,
-                "radix_log_base": obj.radix_log_base,
+                **_gadget_meta(obj.gadget_params),
                 "balanced": obj.balanced,
             }
         )
@@ -162,15 +174,13 @@ class MGSWSchemeCodec(Codec):
         self, meta: dict, _payload: Payload, _children: list, ctx: ReadContext, /
     ):
         inner = ctx.deref(meta["mlwe_scheme"])
-        ident = (codec_for(inner).identity(inner), meta["ell"], meta["radix_log_base"])
+        params = _gadget_params(meta)
+        ident = (codec_for(inner).identity(inner), meta["ell"], params)
         found = ctx.bound(self.tag, ident)
         if found is not None:
             return found
         return MGSW_Scheme(
-            inner,
-            ell=meta["ell"],
-            radix_log_base=meta["radix_log_base"],
-            balanced=meta["balanced"],
+            inner, ell=meta["ell"], gadget_params=params, balanced=meta["balanced"]
         )
 
 
@@ -324,7 +334,7 @@ class KeySwitchKeyCodec(Codec):
     def encode(self, obj: MLWE_Set, ctx: WriteContext, /) -> Encoded:
         if obj.dim > 2:
             return Encoded(
-                {"log_base": obj.log_base, "balanced": obj.balanced},
+                {**_gadget_meta(obj.gadget_params), "balanced": obj.balanced},
                 children=vars(obj)["_children"],
             )
         lengths = [None if comp is None else len(comp) for comp in obj.mlwe]
@@ -332,7 +342,7 @@ class KeySwitchKeyCodec(Codec):
         batch = SampleBatch(samples, ctx)
         meta = {
             **batch.meta,
-            "log_base": obj.log_base,
+            **_gadget_meta(obj.gadget_params),
             "balanced": obj.balanced,
             "lengths": lengths,
         }
@@ -346,7 +356,7 @@ class KeySwitchKeyCodec(Codec):
             None if n is None else [next(samples) for _ in range(n)]
             for n in meta["lengths"]
         ]
-        return MLWE_Set(components, meta["log_base"] or None, meta["balanced"])
+        return MLWE_Set(components, _gadget_params(meta), meta["balanced"])
 
 
 class MGSWCodec(Codec):

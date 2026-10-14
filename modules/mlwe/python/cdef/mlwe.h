@@ -38,6 +38,16 @@ typedef struct _MLWE
 } *MLWE;
 typedef MLWE RNS_MLWE;
 
+// See mlwe.h: log_base 0 is the RNS gadget; digits 0 keeps every digit, and
+// fewer than a prime has needs an element over one prime.
+typedef struct
+{
+    uint64_t log_base;
+    uint64_t digits;
+    uint64_t primes_per_digit;
+    bool balanced;
+} GadgetParams;
+
 typedef struct _RNS_MLWE_Key
 {
     ArithElement *s;
@@ -90,9 +100,10 @@ void *mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask,
 void mlwe_RNS_mul_addto_by_poly(void *out, void *in, ArithElement *poly);
 void mlwe_RNS_mul_subto_by_poly(void *out, void *in, ArithElement *poly);
 void mlwe_RNS_mul_by_poly(void *out, void *in, ArithElement *poly);
-void mlwe_RNS_linear_combination(void *out, void *in, ArithElement *coeff, uint64_t n);
 void mlwe_multiply_batch(void *out, void *in1, void *in2, void *ksk, uint64_t n,
                          uint64_t n_threads);
+void mlwe_multiply_round_division_batch(void *out, void *in1, void *in2, void *ksk, void *to,
+                                        uint64_t n, uint64_t n_threads);
 void mlwe_round_division_batch(void *io, void *to, uint64_t n, uint64_t n_threads);
 void mlwe_RNSc_to_RNS_batch(void *io, uint64_t n, uint64_t n_threads);
 void mlwe_RNS_linear_combinations(void *out, void *in, ArithElement *coeff, uint64_t n_out,
@@ -110,31 +121,44 @@ void mlwe_round_division(void *out, void *to);
 void mlwe_mod_reduce(void *c, void *to);
 
 void *mlwe_extract_LWE(void *in, uint64_t idx);
-void *mlwe_new_RNS_ks_key(void *s, uint64_t count, uint64_t log_base, bool balanced);
+void *mlwe_new_RNS_ks_key(void *s, uint64_t count, const GadgetParams *gadget_params);
 void free_mlwe_RNS_ks_key(void *key);
-void mlwe_full_packing_keyswitch(void *out, void *in, uint64_t size, void *ksk, uint64_t lvl);
-void mlwe_full_packing_keyswitch_scaled(void *vec, uint64_t ell, void *ksks, uint64_t lvl);
+void mlwe_full_packing_keyswitch(void *out, void *in, uint64_t size, void *ksk);
+void mlwe_trace_pack(void *vec, uint64_t ell, void *ksks, uint64_t n_threads);
+void mlwe_ring_switch(void *out, void *in, uint64_t count, void *ksk);
 void mlwe_RNSc_GHS_hybrid_keyswitch(void *out, void *in, void *ksk, uint64_t lvl);
 void mlwe_automorphism_RNSc_GHS(void *out, void *in, uint64_t gen, void *ksk, uint64_t lvl);
 void *mlwe_hoist(void *in, void *ksk);
 void free_mlwe_hoisted(void *h);
-int mlwe_automorphism_RNSc_GHS_hoisted(void *out, void *h, uint64_t gen, void *ksk, uint64_t lvl);
 int mlwe_automorphisms_RNSc_GHS_hoisted(void *out, void *h, const uint64_t *gens, void *ksks,
-                                        uint64_t n, uint64_t lvl, uint64_t n_threads);
+                                        uint64_t n, uint64_t n_threads);
 void mlwe_automorphism_RNSc_GHS_batch(void *out, void *in, const uint64_t *gens, void *ksks,
-                                      uint64_t n, uint64_t lvl, uint64_t n_threads);
+                                      uint64_t n, uint64_t n_threads);
+int mlwe_automorphism_sum_RNSc_GHS(void *out, void *in, const uint64_t *gens, void *ksks,
+                                   uint64_t n, uint64_t n_threads);
+int mlwe_automorphism_mux_RNSc_GHS_batch(void *out, void *in, const uint64_t *gens, void *ksks,
+                                         uint64_t count, uint64_t n, uint64_t n_threads);
 void mlwe_partial_trace(void *out, void *in, uint64_t *gens, void *ksks, uint64_t size,
                         uint64_t lvl);
 void mlwe_trace(void *out, void *in, void *ksks, uint64_t lvl);
+void mlwe_normalized_trace(void *out, void *in, uint64_t n, void *ksks);
 uint64_t mlwe_extended_rank(uint64_t r);
 void mlwe_tensor_product(ArithElement *out, void *in1, void *in2);
 void mlwe_multiply(void *out, void *in1, void *in2, void *ksk);
 
 // --- mgsw ---
 void mgsw_external_product(void *out, void *mgsw, void *in, uint64_t ell, uint64_t special_primes,
-                           uint64_t log_base, bool balanced);
+                           const GadgetParams *gadget_params);
 void mgsw_CMUX(void *out, void *in1, void *in2, void *mgsw, uint64_t ell, uint64_t special_primes,
-               uint64_t log_base, bool balanced);
+               const GadgetParams *gadget_params);
+void mgsw_CMUX_batch(void *out, void *in1, void *in2, uint64_t n, void *mgsw, uint64_t ell,
+                     const GadgetParams *gadget_params, uint64_t n_threads);
 void mgsw_NCMUX(void *out, void *in1, void *in2, void *mgsw, void *ksk, uint64_t ell,
-                uint64_t special_primes, uint64_t log_base, bool balanced);
+                uint64_t special_primes, const GadgetParams *gadget_params);
 uint64_t gadget_radix_digits(uint64_t prime, uint64_t log_base);
+void mgsw_trivial(void *out, void *ring, uint64_t r, ArithElement *msg, uint64_t **scales,
+                  uint64_t width);
+void mgsw_internal_product(void *out, void *a, uint64_t ell, void *b, uint64_t rows,
+                           const GadgetParams *gadget_params, uint64_t n_threads);
+void mgsw_automorphism(void *out, void *in, uint64_t width, uint64_t gen, void *aut, void *rlk,
+                       uint64_t n_threads);

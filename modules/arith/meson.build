@@ -8,6 +8,8 @@ vfhe_c_sources += files(
     'c/src/number_theory.c',
     'c/src/util.c',
     # shared modular-arithmetic and transform kernels
+    'c/src/kernels/fft.c',
+    'c/src/kernels/fft_scalar.c',
     'c/src/kernels/interleave.c',
     'c/src/kernels/mod.c',
     'c/src/kernels/mod_basecvt.c',
@@ -50,6 +52,8 @@ vfhe_c_public_headers += files(
 )
 vfhe_c_unit_tests += files(
     'c/test/unit/test_arith_generic.c',
+    'c/test/unit/test_fft.c',
+    'c/test/unit/test_interleave.c',
     'c/test/unit/test_mod.c',
     'c/test/unit/test_ntt.c',
     'c/test/unit/test_number_theory.c',

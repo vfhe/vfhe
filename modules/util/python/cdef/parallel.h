@@ -4,3 +4,5 @@
 
 uint64_t vfhe_num_threads(void);
 void vfhe_set_num_threads(uint64_t n);
+uint64_t vfhe_set_local_num_threads(uint64_t n);
+uint64_t vfhe_local_num_threads(void);

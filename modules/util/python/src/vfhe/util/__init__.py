@@ -6,6 +6,8 @@
   reaches C through them.
 - `kernels` compiles your C into an engine of your own.
 - `io` serializes vfhe objects.
+- `parallel` sets how many threads vfhe uses.
+- `memory_pool` controls the pool that keeps the buffers vfhe releases.
 
 Importing `vfhe.util` imports none of them; import the one you use:
 

@@ -4,7 +4,6 @@
 containers and CKKS linear transforms through vfhe.util.io."""
 
 import random
-from typing import cast
 
 import pytest
 from vfhe.arith import Polynomial, Ring
@@ -18,8 +17,14 @@ from vfhe.fhe import (
     CKKS_LinearTransform,
     CKKS_Scheme,
 )
-from vfhe.mlwe import MLWE_Scheme, MLWE_Set
+from vfhe.mlwe import MLWE_Scheme
 from vfhe.util.io import Serializer
+
+
+def _mod_switch(v: int, q: int, p: int) -> int:
+    """``v`` scaled from ``Z_q`` to ``Z_p``, rounded half up."""
+    return ((2 * v * p + q) // (2 * q)) % p
+
 
 N = 64
 PROFILES = ["default", "compact", "fast"]
@@ -146,11 +151,10 @@ def test_cggi16_bootstrap_key():
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=False)
     cggi16 = CGGI16(out_scheme)
     bk = cggi16.generate_bootstrap_key(input_key.extract_lwe_key(), output_key)
-    bk.b_prec = 5
     s = Serializer("compact")
     data = s.dumps(bk)
     got = s.loads(data, schemes=[out_scheme, cggi16.mgsw_scheme])
-    assert got.b_prec == 5 and len(got.bk) == len(bk.bk)
+    assert len(got.bk) == len(bk.bk)
     assert (got.n, got.unfolding) == (256, 1)
     assert all(g.scheme is cggi16.mgsw_scheme for g in got.bk)
     for g, o in zip(got.bk, bk.bk, strict=True):
@@ -165,28 +169,100 @@ def test_cggi16_unfolded_bootstrap_key_layout():
     assert (got.n, got.unfolding, got.bk) == (7, 3, [])
 
 
-def test_gp25_sab_key():
-    from vfhe.fhe.gp25 import SAB_Key
-
-    Rq = Ring(256, prime_size=[50, 50, 50], split_degree=1)
-    out_scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=1, max_lvl=1)
-    output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
-    gp25 = GP25(out_scheme)
-    sab = SAB_Key()
-    sab.h, sab.b_prec, sab.r_prec = 3, 5, 2
-    one = Polynomial(gp25.mgsw_scheme.ring).from_array([1])
-    sab.s = [[[gp25.mgsw_scheme.encrypt(one, output_key)]]]
-    sab.s_sign = [[gp25.mgsw_scheme.encrypt(one, output_key)]]
-    packing_key = cast("MLWE_Set", out_scheme.gen_ksk(output_key, output_key, lvl=0))
-    sab.packing_key = packing_key
+@pytest.mark.parametrize("n", [N, 2 * N])
+def test_gp25_bootstrap_key(deterministic_prng, n):
+    # A loaded key bootstraps like the one it was saved from.
+    deterministic_prng(0x5AB00004)
+    io_ring = Ring(max(n, N), prime_size=[50, 50, 50, 50], split_degree=1)
+    rotation_ring = Ring(min(n, N), primes=list(io_ring.primes), split_degree=1)
+    if n < N:
+        io_ring, rotation_ring = rotation_ring, io_ring
+    io = MLWE_Scheme(io_ring, special_primes=1)
+    rotation = MLWE_Scheme(rotation_ring, special_primes=1, max_lvl=1)
+    input_key = GP25.sample_input_key(io, 3, 7, 3.2)
+    output_key = io.key_gen_sparse(16, 3.2)
+    rotation_key = rotation.key_gen_sparse(16, 3.2)
+    gp25 = GP25(rotation)
+    sab = gp25.generate_bootstrap_key(input_key, rotation_key, output_key, 3, 7)
     got = Serializer().loads(
-        Serializer().dumps(sab), schemes=[out_scheme, gp25.mgsw_scheme]
+        Serializer().dumps(sab), schemes=[io, rotation, gp25.mgsw_scheme]
     )
-    assert (got.h, got.b_prec, got.r_prec) == (3, 5, 2)
-    assert got.hw_reducing_key is None and got.trace_repack_key is None
+    assert (got.n, got.h, got.gap_bits) == (n, 3, 7)
+    assert (got.hw_reducing_lvl, got.output_lvl) == (len(io.rings) - 1, 0)
     assert all(
-        _same(a, b) for a, b in zip(got.s[0][0][0].obj, sab.s[0][0][0].obj, strict=True)
+        _same(a, b)
+        for a, b in zip(got.gaps[0][0][0].obj, sab.gaps[0][0][0].obj, strict=True)
     )
-    got_samples, samples = got.packing_key.mlwe[0], packing_key.mlwe[0]
-    assert got_samples is not None and samples is not None
-    assert all(_same(a, b) for a, b in zip(got_samples, samples, strict=True))
+    assert got.trace_repack_key is not None and got.output_switch_key is not None
+
+    q = rotation.rings[0].q_l
+    tv = gp25.test_vector([_mod_switch(t, 16, q) for t in range(8)])
+    msg = [k % 8 for k in range(n)]
+    c = io.sample(
+        Polynomial(io.rings[0]).from_bigint_array(
+            [_mod_switch(x, 16, io.rings[0].q_l) for x in msg]
+        ),
+        output_key,
+    ).round_division(lvl=len(io.rings) - 1)
+    for key in (sab, got):
+        out = gp25.bootstrap(c, tv, key)
+        d = io.linear_decrypt(out, output_key).get_polynomial()
+        assert [_mod_switch(v, q, 16) for v in d] == msg
+
+
+def test_gp25_bootstrap_key_with_two_bit_layers(deterministic_prng):
+    deterministic_prng(0x5AB0000E)
+    ring = Ring(N, prime_size=[50, 50, 50], split_degree=1)
+    io = MLWE_Scheme(ring, special_primes=1)
+    rotation = MLWE_Scheme(ring, special_primes=1, max_lvl=1)
+    input_key = GP25.sample_input_key(io, 3, 7, 3.2)
+    output_key = io.key_gen_sparse(16, 3.2)
+    rotation_key = rotation.key_gen_sparse(16, 3.2)
+    gp25 = GP25(rotation, bits_per_layer=2)
+    sab = gp25.generate_bootstrap_key(input_key, rotation_key, output_key, 3, 7)
+    got = Serializer().loads(
+        Serializer().dumps(sab), schemes=[io, rotation, gp25.mgsw_scheme]
+    )
+    assert (sab.bits_per_layer, got.bits_per_layer) == (2, 2)
+    assert len(got.gaps[0][0]) == 3 * 3 + 1  # three pairs and a single bit
+    q = rotation.rings[0].q_l
+    tv = gp25.test_vector([_mod_switch(t, 16, q) for t in range(8)])
+    msg = [k % 8 for k in range(N)]
+    c = io.sample(
+        Polynomial(io.rings[0]).from_bigint_array(
+            [_mod_switch(x, 16, io.rings[0].q_l) for x in msg]
+        ),
+        output_key,
+    ).round_division(lvl=len(io.rings) - 1)
+    out = gp25.bootstrap(c, tv, got)
+    d = io.linear_decrypt(out, output_key).get_polynomial()
+    assert [_mod_switch(v, q, 16) for v in d] == msg
+
+
+def test_gp25_bootstrap_key_without_an_output_key(deterministic_prng):
+    deterministic_prng(0x5AB0000B)
+    ring = Ring(N, prime_size=[50, 50, 50], split_degree=1)
+    io = MLWE_Scheme(ring, special_primes=1)
+    rotation = MLWE_Scheme(ring, special_primes=1, max_lvl=1)
+    input_key = GP25.sample_input_key(io, 3, 7, 3.2)
+    rotation_key = rotation.key_gen_sparse(16, 3.2)
+    gp25 = GP25(rotation)
+    sab = gp25.generate_bootstrap_key(input_key, rotation_key, None, 3, 7)
+    got = Serializer().loads(
+        Serializer().dumps(sab), schemes=[io, rotation, gp25.mgsw_scheme]
+    )
+    assert (got.hw_reducing_lvl, got.output_lvl) == (None, None)
+    assert got.hw_reducing_key is None and got.output_switch_key is None
+
+    q = rotation.rings[0].q_l
+    tv = gp25.test_vector([_mod_switch(t, 16, q) for t in range(8)])
+    msg = [k % 8 for k in range(N)]
+    c = io.sample(
+        Polynomial(io.rings[0]).from_bigint_array(
+            [_mod_switch(x, 16, io.rings[0].q_l) for x in msg]
+        ),
+        input_key,
+    )
+    (packed,) = gp25.repack(gp25.blind_rotate(c, tv, got), got)
+    d = rotation.linear_decrypt(packed, rotation_key).get_polynomial()
+    assert [_mod_switch(v, q, 16) for v in d] == msg

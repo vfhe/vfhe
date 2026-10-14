@@ -3,6 +3,7 @@
 
 vfhe_c_sources += files(
     'c/src/alloc.c',
+    'c/src/memory_pool.c',
     'c/src/parallel.c',
 )
 vfhe_c_include_dirs += include_directories(
@@ -10,14 +11,17 @@ vfhe_c_include_dirs += include_directories(
 )
 vfhe_c_public_headers += files(
     'c/include/alloc.h',
+    'c/include/memory_pool.h',
     'c/include/parallel.h',
     'c/include/x86_64.h',
 )
 vfhe_c_unit_tests += files(
     'c/test/unit/test_alloc.c',
+    'c/test/unit/test_memory_pool.c',
     'c/test/unit/test_parallel.c',
 )
 vfhe_python_cdefs += files(
+    'python/cdef/memory_pool.h',
     'python/cdef/parallel.h',
 )
 

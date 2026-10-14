@@ -183,6 +183,37 @@ void mod_eltwise_mul_addto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t
     }
 }
 
+void mod_eltwise_inner_product_addto(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                     uint64_t terms, uint64_t n, Modulus mod)
+{
+    const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
+    if (head < n)
+    {
+        uint64_t *at[terms > 0 ? terms : 1], *bt[terms > 0 ? terms : 1];
+        for (uint64_t t = 0; t < terms; t++)
+        {
+            at[t] = a[t] + head;
+            bt[t] = b[t] + head;
+        }
+        mod_eltwise_inner_product_addto_gen(out + head, at, bt, terms, n - head, mod);
+    }
+    if (head == 0)
+        return;
+    // One reduction per element needs the IFMA family and q > 2^26 (mod50.c); any other modulus
+    // takes per-term products.
+    if (mod_shoup_shift(mod->q) == MOD_SHIFT_50 && mod->q > (1ULL << 26))
+    {
+        for (uint64_t t = 0; t < terms; t += MOD_INNER_PRODUCT_MAX_TERMS)
+            mod_eltwise_inner_product_addto_50(
+                out, a + t, b + t,
+                terms - t < MOD_INNER_PRODUCT_MAX_TERMS ? terms - t : MOD_INNER_PRODUCT_MAX_TERMS,
+                head, mod);
+        return;
+    }
+    for (uint64_t t = 0; t < terms; t++)
+        mod_eltwise_mul_addto(out, a[t], b[t], head, mod);
+}
+
 void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
@@ -247,6 +278,32 @@ void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Mo
         mod_eltwise_fma_64(out, in, scale, n, mod);
         break;
     }
+}
+
+bool mod_eltwise_lifted_combination(uint64_t *out, const uint64_t *const *in, const uint64_t *q_in,
+                                    const uint64_t *scale, uint64_t m, bool centered, uint64_t n,
+                                    Modulus mod)
+{
+    // The 52-bit body: an output modulus of that family, inputs IFMA can
+    // multiply, and few enough terms that their lazy sum stays in the range
+    // its final reduction takes.
+    if (mod_shoup_shift(mod->q) != MOD_SHIFT_50 || m > 16)
+        return false;
+    for (uint64_t t = 0; t < m; t++)
+        if (q_in[t] >= (1ULL << 52))
+            return false;
+    const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
+    if (head)
+        mod_eltwise_lifted_combination_50(out, in, q_in, scale, m, centered, head, mod);
+    if (head < n)
+    {
+        const uint64_t *tail[MOD_COMBINATION_MAX_TERMS];
+        for (uint64_t t = 0; t < m; t++)
+            tail[t] = in[t] + head;
+        mod_eltwise_lifted_combination_gen(out + head, tail, q_in, scale, m, centered, n - head,
+                                           mod);
+    }
+    return true;
 }
 
 void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n, Modulus mod)

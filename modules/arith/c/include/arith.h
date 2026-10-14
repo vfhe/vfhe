@@ -234,6 +234,11 @@ extern "C"
                                Modulus mod);
     void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
                                Modulus mod);
+    // out[i] += sum_(t < terms) a[t][i] * b[t][i] (mod q) for i < n: element-wise inner
+    // products, with one reduction per element where the kernel family allows. Every value is
+    // below q; `out` aliases no input.
+    void mod_eltwise_inner_product_addto(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                         uint64_t terms, uint64_t n, Modulus mod);
     void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
     void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
     void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
@@ -784,27 +789,97 @@ extern "C"
     void pmf_vec_ntt_forward(PMFVector a, PMFNTTPlan plan);
     void pmf_vec_ntt_inverse(PMFVector a, PMFNTTPlan plan);
 
-    // Complex polynomials: n real parts followed by n imaginary parts. Root
-    // tables are loaded from size = 2n roots.
-    double **load_rous_CT(double *rous_real, double *rous_imag, uint64_t size);
-    void CT_NR(double *x, double **ws, uint64_t n);
-    double **load_rous_GS(double *rous_real, double *rous_imag, uint64_t size);
-    void GS_RN(double *x, double **ws, uint64_t n);
-    void bit_reverse_array(double *v, uint64_t N, uint32_t prec);
+    /* The negacyclic FFT over R[X]/(X^n + 1), n a power of two in [2, 2^20].
+       With m = n/2 and zeta = exp(i pi / n), the forward transform evaluates
+       f(X) = sum_j a_j X^j at the m points zeta^(4k+1):
+
+           u_k = f(zeta^(4k+1)),   k < m.
+
+       The other m evaluations are their conjugates, since the coefficients
+       are real. Multiplication in the ring is the elementwise complex product
+       of the u_k (fft_pointwise_mul).
+
+       A buffer is n doubles. Coefficients are in natural order; evaluations
+       are split, real parts in [0, m) and imaginary parts in [m, n), with u_k
+       at position brv(k) of each half (log2(m) bits). Both transforms work in
+       place, and the inverse includes the 1/m normalisation. Buffers must be
+       64-byte aligned (safe_aligned_malloc).
+
+       A plan is read-only once built and may be shared between threads. The
+       tables are at most 15 m doubles, built with O(m) trigonometric evaluations. */
+    typedef struct _FFT_Plan
+    {
+        uint64_t n;
+        uint64_t m;
+        uint64_t leaf; // recursion cutover, in complex elements
+        // ws[h + i] = exp(i pi (4 brv(i) + 1) / (4h)) for group i of the h at
+        // one level; wsn_im is -ws_im. Index 0 unused.
+        double *ws_re, *ws_im, *wsn_im;
+        // The last four stages' twiddles, one 8-lane vector per vector of data
+        // (m doubles each); NULL where the vector transform does not run.
+        double *ct4_re, *ct4_im, *ct2_re, *ct2_im, *ct1_re, *ct1_im;
+        double *gs4_re, *gs4_im, *gs2_re, *gs2_im, *gs1_re, *gs1_im;
+        double inv_m;
+    } *FFT_Plan;
+
+    // Returns NULL, explaining on stderr, for an n out of range.
+    FFT_Plan fft_new_plan(uint64_t n);
+    void fft_free_plan(FFT_Plan plan);
+    void fft_forward(double *x, FFT_Plan plan);
+    void fft_inverse(double *x, FFT_Plan plan);
+    // out = a * b in the evaluation domain; out may alias a or b.
+    void fft_pointwise_mul(double *out, const double *a, const double *b, FFT_Plan plan);
+
+    /* Complex polynomials (the canonical embedding): N complex values, real parts
+       followed by imaginary parts, over the FFT of length 2N. In coefficient
+       form value k is a_k + i a_(k+N), a the real coefficients of the
+       polynomial of degree < 2N; in slot form value j is the evaluation at
+       zeta^(5^j), zeta = exp(i pi / 2N).
+
+       complex_slot_positions writes the N positions, in fft_forward's
+       output, of the slots: out[j] is where zeta^(5^j) lands. */
+    void complex_slot_positions(uint32_t *out, uint64_t N);
+    // Coefficient form to slot form and back, in place. `slots` is
+    // complex_slot_positions(N) and `plan` the FFT of length 2N.
+    void complex_poly_fft(double *x, FFT_Plan plan, const uint32_t *slots);
+    void complex_poly_ifft(double *x, FFT_Plan plan, const uint32_t *slots);
     void complex_poly_scale_double(double *v, double scale, uint64_t N);
-    void complex_poly_round_to_RNS(RNS_Polynomial out, double *in, uint64_t N);
+    /* Rounds each of the N doubles of `in` to the nearest integer (ties to
+       even) and writes it, reduced, to `out` in the NTT domain. Exact at any
+       magnitude: a value beyond 64 bits is reduced as the integer it is.
+       Returns false, writing 0 for it, when a value is NaN or infinite. */
+    bool complex_poly_round_to_RNS(RNS_Polynomial out, double *in, uint64_t N);
     // Writes the N values as (real, imaginary) pairs, the layout of a C
     // `double _Complex` array. `out` holds 2N doubles.
     void complex_poly_to_interleaved(double *out, const double *in, uint64_t N);
-    void complex_polys_ifft_scale_round_to_RNS_batch(void **rows_in, void **outs_rns,
-                                                     uint64_t count, uint64_t n_complex,
-                                                     uint32_t log_prec, double **gs_ws,
-                                                     double temp_delta);
+    // For each k < count: the slot form rows_in[k] taken to coefficient form,
+    // multiplied by temp_delta and rounded into outs_rns[k] as
+    // complex_poly_round_to_RNS does. Returns false when a value to round is
+    // NaN or infinite. rows_in is not modified.
+    bool complex_polys_ifft_scale_round_to_RNS_batch(void **rows_in, void **outs_rns,
+                                                     uint64_t count, FFT_Plan plan,
+                                                     const uint32_t *slots, double temp_delta);
+    // For each k < count: the n = lengths[k] complex values at values[k], as
+    // (real, imaginary) pairs, rotated so that value shifts[k] mod n comes
+    // first and repeated to N values (n a power of two dividing N), taken as
+    // slots to coefficient form, multiplied by scale and rounded into outs[k]
+    // as complex_poly_round_to_RNS does. Returns false when a value to round
+    // is NaN or infinite. Runs on up to n_threads threads (0: the library
+    // limit).
+    bool complex_values_ifft_scale_round_to_RNS_batch(RNS_Polynomial *outs,
+                                                      const double *const *values,
+                                                      const uint64_t *lengths,
+                                                      const uint64_t *shifts, uint64_t count,
+                                                      FFT_Plan plan, const uint32_t *slots,
+                                                      double scale, uint64_t n_threads);
 
     // polynomial
     IntPolynomial polynomial_new_int_polynomial(uint64_t N);
     IntPolynomial *polynomial_new_int_polynomial_array(uint64_t size, uint64_t N);
     RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, RNS_Base base);
+    // A polynomial with only the rows of `rns_mask` allocated, as scratch for row-by-row work.
+    // Its mask must not grow beyond them. Free it with free_RNS_polynomial.
+    RNS_Polynomial polynomial_new_RNS_polynomial_rows(uint64_t N, uint64_t rns_mask, RNS_Base base);
     void polynomial_RNS_zero(RNS_Polynomial p);
     RNS_Polynomial *polynomial_new_array_of_RNS_polynomials(uint64_t N, uint64_t rns_mask,
                                                             uint64_t size, RNS_Base base);
@@ -878,6 +953,13 @@ extern "C"
     // `in` must be distinct and share a base.
     void polynomial_RNS_automorphism_index(uint32_t *idx, uint64_t N, uint64_t gen);
     void polynomial_RNS_permute(RNS_Polynomial out, RNS_Polynomial in, const uint32_t *idx);
+    /* The two permutations on the rows in `rows` alone, which must be rows of
+       `in`: they write those rows of `out` and touch nothing else, its mask
+       included, so different rows may be permuted at the same time. */
+    void polynomial_RNSc_permute_rows(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t gen,
+                                      uint64_t rows);
+    void polynomial_RNS_permute_rows(RNS_Polynomial out, RNS_Polynomial in, const uint32_t *idx,
+                                     uint64_t rows);
     void free_RNS_polynomial(void *p);
     void polynomial_RNSc_negate(RNSc_Polynomial out, RNSc_Polynomial in);
     void polynomial_add_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1,
@@ -891,6 +973,15 @@ extern "C"
                                     uint64_t l, uint64_t q, uint64_t bit_size, uint64_t i);
     void polynomial_mul_addto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
                                              RNS_Polynomial in2);
+    // out += a * b^T for matrices of ring elements in the mul domain, row-major: for r < rows
+    // and c < cols, out[r * cols + c] += sum_(t < inner) a[r * inner + t] * b[c * inner + t].
+    // It works on the rows of out[0]'s mask, which every out shares and keeps and every operand
+    // holds. On a fully split ring each element is one mod_eltwise_inner_product_addto, and the
+    // coefficients are taken in tiles so that each tile of b is read once for all rows of a. The
+    // outputs alias no operand.
+    void polynomial_matrix_mul_addto_RNS_polynomial(RNS_Polynomial *out, RNS_Polynomial const *a,
+                                                    RNS_Polynomial const *b, uint64_t rows,
+                                                    uint64_t inner, uint64_t cols);
 
     void free_polynomial(void *p);
     void array_to_RNS(RNS_Polynomial out, uint64_t **in);
@@ -945,7 +1036,39 @@ extern "C"
     void polynomial_scale_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t scale);
     void polynomial_scale_RNS_polynomial_RNS(RNS_Polynomial out, RNS_Polynomial in1,
                                              uint64_t *scale);
+    /* Approximate division by P, the product of the primes in
+       `divide_mask`, through the fast base conversion of x mod P
+       (centered). `_prepare` scales the rows of `in` that leave, in place;
+       `_rows` then writes, on each of `rows` that stays, round(x / P) plus
+       an error of at most half the number of primes divided by -- plus
+       `addend`'s row if it is not NULL -- to that row of `out`, which may
+       be `in` (finish with polynomial_round_division_RNSc_finish) or another
+       polynomial over the same base (whose mask is the caller's to set).
+       Different rows may be written at the same time. Unlike the round
+       division, not an exact rounding. `addend` is canonical. */
+    void polynomial_mod_down_RNSc_prepare(RNSc_Polynomial in, uint64_t divide_mask);
+    void polynomial_mod_down_RNSc_rows(RNSc_Polynomial out, RNSc_Polynomial in,
+                                       RNSc_Polynomial addend, uint64_t divide_mask, uint64_t rows);
     void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide_mask);
+    /* polynomial_round_division_RNSc_wo_free in three steps, so the rows that
+       stay can be divided independently: `_prepare` brings the rows that
+       leave to the values the division reads (each p's half added, and each
+       divided by the primes before it); `_rows` then divides the staying rows
+       in `rows`, which no other call may be dividing at the same time, and
+       reads only the rows that leave; `_finish` zeroes the rows that leave and
+       drops them from the mask. Together they give the same result. */
+    void polynomial_round_division_RNSc_prepare(RNSc_Polynomial out, uint64_t divide_mask);
+    void polynomial_round_division_RNSc_rows(RNSc_Polynomial out, uint64_t divide_mask,
+                                             uint64_t rows);
+    void polynomial_round_division_RNSc_finish(RNSc_Polynomial out, uint64_t divide_mask);
+    /* A view of `p` holding only the rows of `p` that `mask` selects: it
+       shares p's rows, so an operation on the view reads and writes those rows
+       of `p` and no other. The view lives in `storage`. An operation that
+       sets its output's mask sets the view's, never p's; an operation that
+       touches rows outside its operands' masks, such as
+       polynomial_RNSc_permute, must not be given a view. */
+    RNS_Polynomial polynomial_RNS_view(struct _RNS_Polynomial *storage, RNS_Polynomial p,
+                                       uint64_t mask);
     bool polynomial_eq(RNS_Polynomial a, RNS_Polynomial b);
     void polynomial_multo_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in);
     int polynomial_RNS_inverse(RNS_Polynomial out, RNS_Polynomial in);
@@ -954,6 +1077,21 @@ extern "C"
        still x mod p_idx, with E[d^2] = p_idx^2/12 against p_idx^2/3. */
     void polynomial_RNSc_mod_reduce_lifted_centered(RNSc_Polynomial out, RNSc_Polynomial in,
                                                     uint64_t idx);
+    /* A linear combination of lifted residues, on every active row i of `out`:
+
+           out_i = sum_{k in mask} factors[k * l + i] * [in_k]   (mod p_i),
+
+       l the base's prime count and [in_k] residue k of `in` as stored, in
+       [0, p_k), or centered in (-p_k/2, p_k/2] if `centered`. Every residue
+       in `mask` must be active in `in`, which must be canonical and distinct
+       from `out`; each factor is reduced modulo its row's prime, and a zero
+       one costs nothing. With in_k = x_k (M/p_k)^-1 mod p_k and factors
+       (M/p_k) mod p_i, M the product of the primes in `mask`, this is the
+       fast base conversion of x mod M: x + u M on every row, for m primes in
+       `mask` with x centered and |u| <= m/2 when centered, and with x in
+       [0, M) and u in [0, m) otherwise. */
+    void polynomial_RNSc_lifted_combination(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t mask,
+                                            const uint64_t *factors, bool centered);
     /* Digit `level` of residue `idx` of `in`, in base 2^log_base, written to
        every active row of `out`.
        `in` is in the coefficient domain and its row `idx` must be active; the
@@ -964,6 +1102,27 @@ extern "C"
        a wider base than `in`. */
     void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
                                          uint64_t log_base, uint64_t level);
+    /* The same digit of the residue rounded to the nearest multiple of
+       2^(log_base * dropped) first -- of (x + 2^(log_base * dropped - 1)) mod
+       p_idx -- so digits `dropped` and up are an approximate decomposition of
+       x whose error is at most half of that. `level` >= `dropped`; 0 dropped
+       is polynomial_RNSc_decompose_digit. */
+    void polynomial_RNSc_decompose_digit_rounded(RNSc_Polynomial out, RNSc_Polynomial in,
+                                                 uint64_t idx, uint64_t log_base, uint64_t level,
+                                                 uint64_t dropped);
+    /* Digit `level` of the balanced base-2^log_base representation of the
+       centered residue x in (-p_idx/2, p_idx/2]: every digit below the top
+       one in [-2^(log_base-1), 2^(log_base-1)), the top one (number
+       ceil(log2(p_idx)/log_base) - 1) taking what they leave, at most
+       2^(log_base-1) in absolute value, so the digits sum to x exactly and
+       have about a quarter of the unsigned ones' second moment. Digits
+       `dropped` and up are those of x rounded to the nearest multiple of
+       2^(log_base * dropped), as in polynomial_RNSc_decompose_digit_rounded.
+       A negative digit is written as its residue in each row of `out`; the
+       other preconditions are polynomial_RNSc_decompose_digit's. */
+    void polynomial_RNSc_decompose_digit_balanced(RNSc_Polynomial out, RNSc_Polynomial in,
+                                                  uint64_t idx, uint64_t log_base, uint64_t level,
+                                                  uint64_t dropped);
     void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in);
     void polynomial_RNS_broadcast_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t slot_idx);
     void polynomial_RNS_rotate_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t rot);

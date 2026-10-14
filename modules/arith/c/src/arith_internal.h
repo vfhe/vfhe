@@ -32,12 +32,33 @@ void ntt_free_precompute(uint64_t **ws, uint64_t **w_precon, uint64_t n);
 // out[2i] = even[i], out[2i + 1] = odd[i]. No modulus: the values pass through
 // unchanged, so the caller's reduction state is whatever it already was.
 void vec_interleave_u64(uint64_t *out, const uint64_t *even, const uint64_t *odd, uint64_t n);
+// k-way deinterleave, out[j][m] = in[j + k * m] for j < k and m < n: the
+// transpose of `in` read as n rows of k. The k outputs hold n words each and
+// alias neither one another nor `in`.
+void vec_deinterleave_u64(uint64_t *const *out, const uint64_t *in, uint64_t k, uint64_t n);
+void vec_deinterleave_u32(uint32_t *const *out, const uint32_t *in, uint64_t k, uint64_t n);
+// k-way interleave, the inverse of the deinterleave: out[j + k * m] =
+// in[j][m] for j < k and m < n, a NULL in[j] reading as n zeros.
+void vec_interleave_k_u64(uint64_t *out, const uint64_t *const *in, uint64_t k, uint64_t n);
+void vec_interleave_k_u32(uint32_t *out, const uint32_t *const *in, uint64_t k, uint64_t n);
+// k-way spread, out[k * m] = in[m] for m < n and the other words of out's
+// k * n zero. `out` does not alias `in`.
+void vec_spread_u64(uint64_t *out, const uint64_t *in, uint64_t k, uint64_t n);
+void vec_spread_u32(uint32_t *out, const uint32_t *in, uint64_t k, uint64_t n);
+
+// As int_array_to_RNS, for coefficients given in `count` signed limbs:
+// coefficient k is the sum over j of limbs[j][k] 2^(j limb_bits), reduced
+// exactly. Each limb is an array of N int64_t values.
+void int_limbs_to_RNS(RNS_Polynomial out, int64_t *const *limbs, uint64_t count,
+                      uint64_t limb_bits);
 
 void mod_eltwise_mul_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
                                Modulus mod);
 void mod_eltwise_mul_subto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
                                Modulus mod);
+void mod_eltwise_inner_product_addto_gen(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                         uint64_t terms, uint64_t n, Modulus mod);
 void mod_eltwise_scale_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_fma_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
@@ -49,10 +70,28 @@ void mod_eltwise_add_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n
 void mod_eltwise_sub_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_reduce_gen(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod);
 void mod_eltwise_reduce_signed_gen(uint64_t *out, int64_t *in, uint64_t n, Modulus mod);
+/* The terms a fused lifted combination takes at most (see
+   mod_eltwise_lifted_combination). */
+#define MOD_COMBINATION_MAX_TERMS 64
+void mod_eltwise_lifted_combination_gen(uint64_t *out, const uint64_t *const *in,
+                                        const uint64_t *q_in, const uint64_t *scale, uint64_t m,
+                                        bool centered, uint64_t n, Modulus mod);
 void mod_eltwise_reduce_centered_gen(uint64_t *out, uint64_t *in, uint64_t q_in, uint64_t n,
                                      Modulus mod);
 void mod_reduce_array_mp_gen(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
                              Modulus mod);
+
+// The low `bits` bits of x reversed, for bits <= 32.
+static inline uint64_t arith_bit_reverse(uint64_t x, uint64_t bits)
+{
+    uint32_t v = (uint32_t)x;
+    v = ((v >> 1) & 0x55555555u) | ((v & 0x55555555u) << 1);
+    v = ((v >> 2) & 0x33333333u) | ((v & 0x33333333u) << 2);
+    v = ((v >> 4) & 0x0F0F0F0Fu) | ((v & 0x0F0F0F0Fu) << 4);
+    v = ((v >> 8) & 0x00FF00FFu) | ((v & 0x00FF00FFu) << 8);
+    v = (v >> 16) | (v << 16);
+    return bits ? (uint64_t)(v >> (32 - bits)) : 0;
+}
 
 /* x in [0, q_in) as its centered representative x - [x > q_in / 2] * q_in,
    mod q. Adding neg_q_in = -q_in mod q instead keeps it one unsigned
@@ -108,6 +147,11 @@ static inline __m512i centered_shift(__m512i x, __m512i half, __m512i neg_q_in)
 
 void ntt_w32_precompute(NTT_Plan plan);
 void ntt_w32_free(NTT_Plan plan);
+
+// The scalar FFT (fft_scalar.c): fft_forward / fft_inverse where the vector
+// transform does not run, on the same tables and layout.
+void fft_forward_scalar(double *x, const struct _FFT_Plan *plan);
+void fft_inverse_scalar(double *x, const struct _FFT_Plan *plan);
 
 void ntt_scalar_precompute(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_t ***out_ws);
 void ntt_scalar_free_precompute(uint64_t **ws);
@@ -319,6 +363,16 @@ static inline bool rns_row_is_narrow(RNS_Base base, size_t i)
                                         (mod));                                                    \
     } while (0)
 
+/* out[j] = sum_t scale[t] * [in[t][j]] mod `mod`, [v] the residue v of
+   modulus q_in[t] as stored or, if `centered`, read in (-q_in/2, q_in/2], in
+   one pass over the rows; `out` may be one of them. At most
+   MOD_COMBINATION_MAX_TERMS terms. Returns false, writing nothing, where this
+   engine has no body for the moduli given, and the caller combines the
+   terms another way. */
+bool mod_eltwise_lifted_combination(uint64_t *out, const uint64_t *const *in, const uint64_t *q_in,
+                                    const uint64_t *scale, uint64_t m, bool centered, uint64_t n,
+                                    Modulus mod);
+
 // A signed 64-bit array reduced into one row: the samplers and the permutation.
 #define RNS_ROW_REDUCE_SIGNED(out, src, i, n, mod)                                                 \
     do                                                                                             \
@@ -396,8 +450,16 @@ void mod_reduce_array_mp_32(uint64_t *out, uint64_t *in_high, uint64_t *in_low, 
 void ntt_forward_50(uint64_t *out, uint64_t *in, NTT_Plan plan);
 void ntt_reverse_50(uint64_t *out, uint64_t *in, NTT_Plan plan);
 void mod_eltwise_mul_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+void mod_eltwise_lifted_combination_50(uint64_t *out, const uint64_t *const *in,
+                                       const uint64_t *q_in, const uint64_t *scale, uint64_t m,
+                                       bool centered, uint64_t n, Modulus mod);
+
 void mod_eltwise_mul_addto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod);
+// The most terms mod_eltwise_inner_product_addto_50 takes: its low sums stay below 2^64.
+#define MOD_INNER_PRODUCT_MAX_TERMS 4096
+void mod_eltwise_inner_product_addto_50(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
+                                        uint64_t terms, uint64_t n, Modulus mod);
 void mod_eltwise_scale_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_fma_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_50(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
 #include "alloc.h"
+#include "memory_pool.h"
 #include <crypto.h>
 #include <blake3.h>
 
@@ -229,11 +230,11 @@ RNS_Polynomial polynomial_new_RNS_polynomial(uint64_t N, uint64_t rns_mask, RNS_
         if (rns_row_is_narrow(base, i))
         {
             res->rows64[i] = NULL;
-            res->rows32[i] = (uint32_t *)safe_aligned_malloc(sizeof(uint32_t) * base->N);
+            res->rows32[i] = (uint32_t *)mempool_aligned_malloc(sizeof(uint32_t) * base->N);
         }
         else
         {
-            res->rows64[i] = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * base->N);
+            res->rows64[i] = (uint64_t *)mempool_aligned_malloc(sizeof(uint64_t) * base->N);
             res->rows32[i] = NULL;
         }
     }
@@ -315,12 +316,12 @@ void polynomial_RNS_zero(RNS_Polynomial p)
 void free_RNS_polynomial(void *p)
 {
     RNS_Polynomial pp = (RNS_Polynomial)p;
-    // One of the two is NULL for each row, and free(NULL) is a no-op, so this
-    // needs no width test and cannot go wrong if the base grew meanwhile.
+    // One of the two is NULL for each row, and releasing NULL is a no-op, so
+    // this needs no width test and cannot go wrong if the base grew meanwhile.
     for (size_t i = 0; i < pp->allocated_l; i++)
     {
-        free(pp->rows64[i]);
-        free(pp->rows32[i]);
+        mempool_free(pp->rows64[i], sizeof(uint64_t) * pp->base->N);
+        mempool_free(pp->rows32[i], sizeof(uint32_t) * pp->base->N);
     }
     free(pp->rows64);
     free(pp->rows32);
@@ -364,18 +365,37 @@ void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in)
 
 void int_array_to_RNS(RNS_Polynomial out, uint64_t *in)
 {
-    const uint64_t poly_size = out->base->N / out->base->split_degree;
-    uint64_t *temp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    int64_t *limbs[1] = {(int64_t *)in};
+    int_limbs_to_RNS(out, limbs, 1, 0);
+}
+
+void int_limbs_to_RNS(RNS_Polynomial out, int64_t *const *limbs, uint64_t count, uint64_t limb_bits)
+{
+    const uint64_t N = out->base->N;
+    const uint64_t poly_size = N / out->base->split_degree;
+    uint64_t *acc = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    uint64_t *next = count > 1 ? (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t)) : NULL;
     for (size_t i = 0; i < out->base->l; i++)
     {
         if (out->rns_mask & (1ULL << i))
         {
             Modulus mod = out->base->mods[i];
-            mod_eltwise_reduce_signed(temp, (int64_t *)in, out->base->N, mod);
-            RNS_ROW_SCATTER_SPLIT(out, temp, i, out->base->N, out->base->split_degree, poly_size);
+            // Horner from the top limb: acc = acc 2^limb_bits + limbs[j].
+            mod_eltwise_reduce_signed(acc, limbs[count - 1], N, mod);
+            const uint64_t radix = count > 1 ? power_mod(2, limb_bits, mod->q) : 0;
+            for (uint64_t j = count - 1; j-- > 0;)
+            {
+                mod_eltwise_reduce_signed(next, limbs[j], N, mod);
+                mod_eltwise_fma(next, acc, radix, N, mod);
+                uint64_t *t = acc;
+                acc = next;
+                next = t;
+            }
+            RNS_ROW_SCATTER_SPLIT(out, acc, i, N, out->base->split_degree, poly_size);
         }
     }
-    free(temp);
+    free(next);
+    free(acc);
     polynomial_RNSc_to_RNS(out, (RNSc_Polynomial)out);
 }
 
@@ -512,6 +532,93 @@ void polynomial_mul_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
     assert(out != in2);
     out->rns_mask = in1->rns_mask & in2->rns_mask;
     rns_product(out, in1, in2, RNS_BLOCK_SUBTO);
+}
+
+// The size of one tile of all the b operands of polynomial_matrix_mul_addto_RNS_polynomial,
+// small enough to stay in cache while every row of a uses it.
+#define MATRIX_TILE_BYTES (1 << 17)
+
+void polynomial_matrix_mul_addto_RNS_polynomial(RNS_Polynomial *out, RNS_Polynomial const *a,
+                                                RNS_Polynomial const *b, uint64_t rows,
+                                                uint64_t inner, uint64_t cols)
+{
+    if (rows == 0 || cols == 0 || inner == 0)
+        return;
+    RNS_Base base = out[0]->base;
+    const uint64_t N = base->N, mask = out[0]->rns_mask;
+    // Over a ring that does not split fully a product is a convolution of blocks: term by term.
+    if (base->split_degree != 1)
+    {
+        for (uint64_t r = 0; r < rows; r++)
+            for (uint64_t c = 0; c < cols; c++)
+                for (uint64_t t = 0; t < inner; t++)
+                {
+                    RNS_Polynomial o = out[r * cols + c];
+                    const uint64_t keep = o->rns_mask;
+                    polynomial_mul_addto_RNS_polynomial(o, a[r * inner + t], b[c * inner + t]);
+                    o->rns_mask = keep;
+                }
+        return;
+    }
+    uint64_t tile = MATRIX_TILE_BYTES / (cols * inner * sizeof(uint64_t));
+    tile = tile < MOD_MIN_VECTOR_LEN ? MOD_MIN_VECTOR_LEN : tile - tile % MOD_MIN_VECTOR_LEN;
+    uint64_t **a_rows = (uint64_t **)safe_malloc(2 * inner * sizeof(uint64_t *));
+    uint64_t **b_rows = a_rows + inner;
+    for (size_t i = 0; i < base->l; i++)
+    {
+        if (!(mask & (1ULL << i)))
+            continue;
+        Modulus mod = base->mods[i];
+        if (rns_row_is_narrow(base, i)) // 32-bit rows: term by term
+        {
+            for (uint64_t r = 0; r < rows; r++)
+                for (uint64_t c = 0; c < cols; c++)
+                    for (uint64_t t = 0; t < inner; t++)
+                        mod_eltwise_mul_addto_w32(out[r * cols + c]->rows32[i],
+                                                  a[r * inner + t]->rows32[i],
+                                                  b[c * inner + t]->rows32[i], N, mod);
+            continue;
+        }
+        for (uint64_t start = 0; start < N; start += tile)
+        {
+            const uint64_t len = N - start < tile ? N - start : tile;
+            for (uint64_t r = 0; r < rows; r++)
+            {
+                for (uint64_t t = 0; t < inner; t++)
+                    a_rows[t] = a[r * inner + t]->rows64[i] + start;
+                for (uint64_t c = 0; c < cols; c++)
+                {
+                    for (uint64_t t = 0; t < inner; t++)
+                        b_rows[t] = b[c * inner + t]->rows64[i] + start;
+                    mod_eltwise_inner_product_addto(out[r * cols + c]->rows64[i] + start, a_rows,
+                                                    b_rows, inner, len, mod);
+                }
+            }
+        }
+    }
+    free(a_rows);
+}
+
+RNS_Polynomial polynomial_new_RNS_polynomial_rows(uint64_t N, uint64_t rns_mask, RNS_Base base)
+{
+    RNS_Polynomial res = (RNS_Polynomial)safe_malloc(sizeof(*res));
+    res->rows64 = (uint64_t **)safe_malloc(sizeof(uint64_t *) * base->l);
+    res->rows32 = (uint32_t **)safe_malloc(sizeof(uint32_t *) * base->l);
+    for (size_t i = 0; i < base->l; i++)
+    {
+        res->rows64[i] = NULL;
+        res->rows32[i] = NULL;
+        if (!(rns_mask & (1ULL << i)))
+            continue;
+        if (rns_row_is_narrow(base, i))
+            res->rows32[i] = (uint32_t *)mempool_aligned_malloc(sizeof(uint32_t) * base->N);
+        else
+            res->rows64[i] = (uint64_t *)mempool_aligned_malloc(sizeof(uint64_t) * base->N);
+    }
+    res->base = base;
+    res->rns_mask = rns_mask;
+    res->allocated_l = base->l;
+    return res;
 }
 
 /* out *= in. The element-wise kernels read a lane before writing it, so the
@@ -1155,6 +1262,142 @@ void polynomial_RNSc_mod_reduce_lifted_centered(RNSc_Polynomial out, RNSc_Polyno
     }
 }
 
+// Row `k` of `in` reduced modulo prime `i` of `base`, read as a centered
+// residue if `centered`, into `buf` at row i's width.
+static void lift_row(void *buf, RNSc_Polynomial in, size_t k, RNS_Base base, size_t i,
+                     bool centered)
+{
+    const uint64_t N = base->N, q_in = in->base->mods[k]->q;
+    const Modulus mod = base->mods[i];
+    const bool out_narrow = rns_row_is_narrow(base, i), in_narrow = rns_row_is_narrow(in->base, k);
+    if (out_narrow && in_narrow)
+    {
+        if (centered)
+            mod_eltwise_reduce_centered_w32((uint32_t *)buf, in->rows32[k], q_in, N, mod);
+        else
+            mod_eltwise_reduce_w32((uint32_t *)buf, in->rows32[k], N, mod);
+    }
+    else if (out_narrow)
+    {
+        if (centered)
+            mod_eltwise_reduce_centered_narrow_from_wide((uint32_t *)buf, in->rows64[k], q_in, N,
+                                                         mod);
+        else
+            mod_eltwise_reduce_narrow_from_wide((uint32_t *)buf, in->rows64[k], N, mod);
+    }
+    else if (in_narrow)
+    {
+        if (centered)
+            mod_eltwise_reduce_centered_wide_from_narrow((uint64_t *)buf, in->rows32[k], q_in, N,
+                                                         mod);
+        else
+            mod_eltwise_reduce_wide_from_narrow((uint64_t *)buf, in->rows32[k], N, mod);
+    }
+    else
+    {
+        if (centered)
+            mod_eltwise_reduce_centered((uint64_t *)buf, in->rows64[k], q_in, N, mod);
+        else
+            mod_eltwise_reduce((uint64_t *)buf, in->rows64[k], N, mod);
+    }
+}
+
+// One term of a row combination: residue `prime` of `p` times `factor`.
+typedef struct
+{
+    RNSc_Polynomial p;
+    size_t prime;
+    uint64_t factor;
+} RowTerm;
+
+// Row `i` of `out` as the sum of the `m` terms, each lifted to p_i (centered
+// if `centered`), by the fused kernel. Returns false, writing nothing, when a
+// row involved is narrow or the engine has no body for these moduli.
+static bool combine_row(RNSc_Polynomial out, size_t i, const RowTerm *terms, uint64_t m,
+                        bool centered)
+{
+    RNS_Base base = out->base;
+    const uint64_t *rows[MOD_COMBINATION_MAX_TERMS];
+    uint64_t q_in[MOD_COMBINATION_MAX_TERMS], scale[MOD_COMBINATION_MAX_TERMS];
+    if (rns_row_is_narrow(base, i) || m > MOD_COMBINATION_MAX_TERMS)
+        return false;
+    for (uint64_t t = 0; t < m; t++)
+    {
+        if (rns_row_is_narrow(terms[t].p->base, terms[t].prime))
+            return false;
+        rows[t] = terms[t].p->rows64[terms[t].prime];
+        q_in[t] = terms[t].p->base->mods[terms[t].prime]->q;
+        scale[t] = terms[t].factor;
+    }
+    if (m == 0)
+    {
+        RNS_ROW_ZERO(out, i, base->N);
+        return true;
+    }
+    return mod_eltwise_lifted_combination(out->rows64[i], rows, q_in, scale, m, centered, base->N,
+                                          base->mods[i]);
+}
+
+// combine_row over the residues of `in` in `mask`, row i's factors in
+// `factors` (as polynomial_RNSc_lifted_combination takes them).
+static bool lifted_combination_row(RNSc_Polynomial out, size_t i, RNSc_Polynomial in, uint64_t mask,
+                                   const uint64_t *factors, bool centered)
+{
+    const uint64_t l = out->base->l;
+    RowTerm terms[MOD_COMBINATION_MAX_TERMS];
+    uint64_t m = 0;
+    for (size_t k = 0; k < l; k++)
+    {
+        const uint64_t factor = (mask >> k) & 1 ? factors[k * l + i] : 0;
+        if (!factor)
+            continue;
+        if (m == MOD_COMBINATION_MAX_TERMS)
+            return false;
+        terms[m++] = (RowTerm){in, k, factor};
+    }
+    return combine_row(out, i, terms, m, centered);
+}
+
+void polynomial_RNSc_lifted_combination(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t mask,
+                                        const uint64_t *factors, bool centered)
+{
+    RNS_Base base = out->base;
+    const uint64_t N = base->N, l = base->l;
+    assert(out != in && (in->rns_mask & mask) == mask);
+    void *lifted = NULL;
+    for (size_t i = 0; i < l; i++)
+    {
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        if (lifted_combination_row(out, i, in, mask, factors, centered))
+            continue;
+        // Term by term: lift, then multiply-add.
+        if (!lifted)
+            lifted = mempool_aligned_malloc(N * sizeof(uint64_t));
+        const bool narrow = rns_row_is_narrow(base, i);
+        RNS_ROW_ZERO(out, i, N);
+        for (size_t k = 0; k < l; k++)
+        {
+            const uint64_t factor = (mask >> k) & 1 ? factors[k * l + i] : 0;
+            if (!factor)
+                continue;
+            // Row i of `in` already holds the residue modulo p_i, centered or not.
+            const void *term = narrow ? (const void *)in->rows32[i] : (const void *)in->rows64[i];
+            if (k != i)
+            {
+                lift_row(lifted, in, k, base, i, centered);
+                term = lifted;
+            }
+            if (narrow)
+                mod_eltwise_fma_w32(out->rows32[i], (uint32_t *)term, factor, N, base->mods[i]);
+            else
+                mod_eltwise_fma(out->rows64[i], (uint64_t *)term, factor, N, base->mods[i]);
+        }
+    }
+    if (lifted)
+        mempool_free(lifted, N * sizeof(uint64_t));
+}
+
 void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in)
 {
     for (size_t i = 0; i < out->base->l; i++)
@@ -1166,17 +1409,32 @@ void polynomial_RNSc_mod_reduce(RNSc_Polynomial out, RNSc_Polynomial in)
     }
 }
 
-void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
-                                     uint64_t log_base, uint64_t level)
+// Digit `level` of residue `idx` plus `offset` mod its prime, broadcast to
+// every active row of `out`.
+static void decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                            uint64_t log_base, uint64_t level, uint64_t offset)
 {
-    uint64_t *tmp = (uint64_t *)safe_aligned_malloc(out->base->N * sizeof(uint64_t));
+    const uint64_t N = out->base->N;
+    uint64_t *tmp = (uint64_t *)mempool_aligned_malloc(N * sizeof(uint64_t));
     const uint64_t mask = (1ULL << log_base) - 1;
     const uint64_t shift = log_base * level;
+    const uint64_t q = in->base->mods[idx]->q;
     assert(in->rns_mask & (1ULL << idx));
+    assert(offset < q);
     if (rns_row_is_narrow(in->base, (size_t)idx))
-        rns_row_digit_narrow(tmp, in->rows32[idx], shift, mask, out->base->N);
+    {
+        if (offset)
+            rns_row_digit_offset_narrow(tmp, in->rows32[idx], shift, mask, offset, q, N);
+        else
+            rns_row_digit_narrow(tmp, in->rows32[idx], shift, mask, N);
+    }
     else
-        rns_row_digit_wide(tmp, in->rows64[idx], shift, mask, out->base->N);
+    {
+        if (offset)
+            rns_row_digit_offset_wide(tmp, in->rows64[idx], shift, mask, offset, q, N);
+        else
+            rns_row_digit_wide(tmp, in->rows64[idx], shift, mask, N);
+    }
     /* The digit is below 2^log_base and so below every prime, which is why one
        array serves every row: no reduction, just a store at the row's width. */
     for (size_t i = 0; i < out->base->l; i++)
@@ -1185,12 +1443,72 @@ void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, ui
         {
             assert((1ULL << log_base) <= out->base->mods[i]->q);
             if (rns_row_is_narrow(out->base, i))
-                mod_narrow_w32(out->rows32[i], tmp, out->base->N);
+                mod_narrow_w32(out->rows32[i], tmp, N);
             else
-                memcpy(out->rows64[i], tmp, sizeof(uint64_t) * out->base->N);
+                memcpy(out->rows64[i], tmp, sizeof(uint64_t) * N);
         }
     }
-    free(tmp);
+    mempool_free(tmp, N * sizeof(uint64_t));
+}
+
+void polynomial_RNSc_decompose_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                                     uint64_t log_base, uint64_t level)
+{
+    decompose_digit(out, in, idx, log_base, level, 0);
+}
+
+void polynomial_RNSc_decompose_digit_rounded(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                                             uint64_t log_base, uint64_t level, uint64_t dropped)
+{
+    assert(level >= dropped);
+    decompose_digit(out, in, idx, log_base, level, dropped ? 1ULL << (log_base * dropped - 1) : 0);
+}
+
+void polynomial_RNSc_decompose_digit_balanced(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t idx,
+                                              uint64_t log_base, uint64_t level, uint64_t dropped)
+{
+    const uint64_t N = out->base->N;
+    const uint64_t q = in->base->mods[idx]->q;
+    const uint64_t bits = (uint64_t)(64 - __builtin_clzll(q));
+    const uint64_t digits = (bits + log_base - 1) / log_base;
+    assert(in->rns_mask & (1ULL << idx));
+    assert(log_base > 0 && dropped <= level && level < digits);
+
+    // The offset turns the digits below and at `level` into unsigned ones
+    // (half a base each), and those under `dropped` into the rounding of what
+    // they leave out (half their span). The top digit gets no offset of its
+    // own, so it absorbs the carry and the value stays exact. Every offset is
+    // below 2^(log_base * (digits - 1)) < q, so nothing overflows.
+    const int64_t half = (int64_t)1 << (log_base - 1);
+    const uint64_t top = digits - 1;
+    int64_t offset = dropped ? (int64_t)1 << (log_base * dropped - 1) : 0;
+    for (uint64_t j = dropped; j <= level && j < top; j++)
+        offset += half << (log_base * j);
+    const int64_t mask = level < top ? (int64_t)((1ULL << log_base) - 1) : -1;
+
+    int64_t *tmp = (int64_t *)mempool_aligned_malloc(N * sizeof(int64_t));
+    if (rns_row_is_narrow(in->base, (size_t)idx))
+        rns_row_digit_balanced_narrow(tmp, in->rows32[idx], q, offset, log_base * level, mask,
+                                      level < top ? half : 0, N);
+    else
+        rns_row_digit_balanced_wide(tmp, in->rows64[idx], q, offset, log_base * level, mask,
+                                    level < top ? half : 0, N);
+    // A digit may be negative, so unlike the unsigned one it takes the row's
+    // prime added when it is. It is at most 2^(log_base - 1) in absolute
+    // value, below every prime that fits an unsigned digit.
+    for (size_t i = 0; i < out->base->l; i++)
+    {
+        if (out->rns_mask & (1ULL << i))
+        {
+            const uint64_t p = out->base->mods[i]->q;
+            assert((1ULL << log_base) <= p);
+            if (rns_row_is_narrow(out->base, i))
+                rns_row_store_small_signed_narrow(out->rows32[i], tmp, p, N);
+            else
+                rns_row_store_small_signed_wide(out->rows64[i], tmp, p, N);
+        }
+    }
+    mempool_free(tmp, N * sizeof(int64_t));
 }
 
 void polynomial_RNSc_decompose_small(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t log_base,
@@ -1280,58 +1598,186 @@ void polynomial_floor_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide
     free(tmp32);
 }
 
-void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide_mask)
+// Row i of `out` divided by the prime of row idx, rounding: row idx already
+// holds x + floor(p/2) mod p, and the two may differ in width, so the reduce
+// goes through a buffer of row i's width.
+static void round_division_row(RNSc_Polynomial out, size_t idx, size_t i, uint64_t *tmp,
+                               uint32_t *tmp32)
 {
-    uint64_t mask = divide_mask & out->rns_mask;
+    const uint64_t N = out->base->N;
+    const uint64_t p = out->base->mods[idx]->q, half_p = p / 2;
+    const uint64_t q = out->base->mods[i]->q;
+    const uint64_t inv_p = inverse_mod(p, q);
+    const uint64_t half_p_mod_q = half_p % q;
+    Modulus mod_i = out->base->mods[i];
+    if (rns_row_is_narrow(out->base, i))
+    {
+        rns_reduce_row_to32(tmp32, (RNS_Polynomial)out, idx, N, mod_i);
+        mod_eltwise_add_scalar_w32(out->rows32[i], out->rows32[i], half_p_mod_q, N, mod_i);
+        mod_eltwise_sub_w32(out->rows32[i], out->rows32[i], tmp32, N, mod_i);
+        mod_eltwise_scale_w32(out->rows32[i], out->rows32[i], inv_p, N, mod_i);
+    }
+    else
+    {
+        rns_reduce_row_to64(tmp, (RNS_Polynomial)out, idx, N, mod_i);
+        mod_eltwise_add_scalar(out->rows64[i], out->rows64[i], half_p_mod_q, N, mod_i);
+        mod_eltwise_sub(out->rows64[i], out->rows64[i], tmp, N, mod_i);
+        mod_eltwise_scale(out->rows64[i], out->rows64[i], inv_p, N, mod_i);
+    }
+}
+
+// Each prime that leaves divides every row after it in turn, so a row that
+// leaves later is first divided by the ones before it.
+void polynomial_round_division_RNSc_prepare(RNSc_Polynomial out, uint64_t divide_mask)
+{
+    const uint64_t mask = divide_mask & out->rns_mask;
     if (mask == 0)
         return;
-
     const uint64_t N = out->base->N;
     uint64_t *tmp = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
-    // as in the floor case, only the cross-modulus reduce can change width
     uint32_t *tmp32 = (uint32_t *)safe_aligned_malloc(N * sizeof(uint32_t));
-
     for (size_t idx = 0; idx < out->base->l; idx++)
     {
-        if (mask & (1ULL << idx))
+        if (!(mask & (1ULL << idx)))
+            continue;
+        const uint64_t half_p = out->base->mods[idx]->q / 2;
+        RNS_ROW_SCALAROP(mod_eltwise_add_scalar, out, out, half_p, idx, N, out->base->mods[idx]);
+        for (size_t i = idx + 1; i < out->base->l; i++)
         {
-            const uint64_t p = out->base->mods[idx]->q, half_p = p / 2;
-            RNS_ROW_SCALAROP(mod_eltwise_add_scalar, out, out, half_p, idx, N,
-                             out->base->mods[idx]);
-            for (size_t i = 0; i < out->base->l; i++)
-            {
-                if (out->rns_mask & (1ULL << i))
-                {
-                    if (i == idx)
-                        continue;
-                    const uint64_t q = out->base->mods[i]->q;
-                    const uint64_t inv_p = inverse_mod(p, q);
-                    const uint64_t half_p_mod_q = half_p % q;
-                    Modulus mod_i = out->base->mods[i];
-                    if (rns_row_is_narrow(out->base, i))
-                    {
-                        rns_reduce_row_to32(tmp32, (RNS_Polynomial)out, idx, N, mod_i);
-                        mod_eltwise_add_scalar_w32(out->rows32[i], out->rows32[i], half_p_mod_q, N,
-                                                   mod_i);
-                        mod_eltwise_sub_w32(out->rows32[i], out->rows32[i], tmp32, N, mod_i);
-                        mod_eltwise_scale_w32(out->rows32[i], out->rows32[i], inv_p, N, mod_i);
-                    }
-                    else
-                    {
-                        rns_reduce_row_to64(tmp, (RNS_Polynomial)out, idx, N, mod_i);
-                        mod_eltwise_add_scalar(out->rows64[i], out->rows64[i], half_p_mod_q, N,
-                                               mod_i);
-                        mod_eltwise_sub(out->rows64[i], out->rows64[i], tmp, N, mod_i);
-                        mod_eltwise_scale(out->rows64[i], out->rows64[i], inv_p, N, mod_i);
-                    }
-                }
-            }
-            RNS_ROW_ZERO(out, idx, N);
-            out->rns_mask &= ~(1ULL << idx);
+            if (mask & (1ULL << i))
+                round_division_row(out, idx, i, tmp, tmp32);
         }
     }
     free(tmp);
     free(tmp32);
+}
+
+void polynomial_round_division_RNSc_rows(RNSc_Polynomial out, uint64_t divide_mask, uint64_t rows)
+{
+    const uint64_t mask = divide_mask & out->rns_mask;
+    const uint64_t staying = rows & out->rns_mask & ~mask;
+    if (mask == 0 || staying == 0)
+        return;
+    const uint64_t N = out->base->N;
+    uint64_t *tmp = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    uint32_t *tmp32 = (uint32_t *)safe_aligned_malloc(N * sizeof(uint32_t));
+    for (size_t i = 0; i < out->base->l; i++)
+    {
+        if (!(staying & (1ULL << i)))
+            continue;
+        for (size_t idx = 0; idx < out->base->l; idx++)
+        {
+            if (mask & (1ULL << idx))
+                round_division_row(out, idx, i, tmp, tmp32);
+        }
+    }
+    free(tmp);
+    free(tmp32);
+}
+
+void polynomial_round_division_RNSc_finish(RNSc_Polynomial out, uint64_t divide_mask)
+{
+    const uint64_t mask = divide_mask & out->rns_mask;
+    for (size_t idx = 0; idx < out->base->l; idx++)
+    {
+        if (mask & (1ULL << idx))
+            RNS_ROW_ZERO(out, idx, out->base->N);
+    }
+    out->rns_mask &= ~mask;
+}
+
+// The product of the primes in `mask` other than `skip`, modulo `mod`.
+static uint64_t product_of_primes_mod(RNS_Base base, uint64_t mask, size_t skip, Modulus mod)
+{
+    uint64_t f = 1;
+    for (size_t m = 0; m < base->l; m++)
+        if (m != skip && (mask & (1ULL << m)))
+            f = mul_modq(f, modq(base->mods[m]->q, mod), mod);
+    return f;
+}
+
+void polynomial_mod_down_RNSc_prepare(RNSc_Polynomial out, uint64_t divide_mask)
+{
+    const uint64_t mask = divide_mask & out->rns_mask;
+    for (size_t k = 0; k < out->base->l; k++)
+    {
+        if (!(mask & (1ULL << k)))
+            continue;
+        Modulus mod = out->base->mods[k];
+        const uint64_t inverse =
+            inverse_mod(product_of_primes_mod(out->base, mask, k, mod), mod->q);
+        RNS_ROW_SCALAROP(mod_eltwise_scale, out, out, inverse, k, out->base->N, mod);
+    }
+}
+
+void polynomial_mod_down_RNSc_rows(RNSc_Polynomial out, RNSc_Polynomial in, RNSc_Polynomial addend,
+                                   uint64_t divide_mask, uint64_t rows)
+{
+    RNS_Base base = in->base;
+    const uint64_t mask = divide_mask & in->rns_mask, l = base->l, N = base->N;
+    const uint64_t staying = rows & in->rns_mask & ~mask;
+    if (mask == 0 || staying == 0)
+        return;
+    // Row i becomes (x_i - [x]_P lifted) P^-1 (+ the addend), and the lift's
+    // factor (P/p_k) times P^-1 is p_k^-1: one combination of the row itself,
+    // the prepared rows that leave and the addend's row.
+    uint64_t factors[l * l];
+    for (size_t i = 0; i < l; i++)
+    {
+        if (!(staying & (1ULL << i)))
+            continue;
+        Modulus mod = base->mods[i];
+        RowTerm terms[MOD_COMBINATION_MAX_TERMS];
+        uint64_t m = 0;
+        const uint64_t p_inverse = inverse_mod(product_of_primes_mod(base, mask, l, mod), mod->q);
+        terms[m++] = (RowTerm){in, i, p_inverse};
+        for (size_t k = 0; k < l; k++)
+        {
+            factors[k * l + i] =
+                (mask & (1ULL << k))
+                    ? negate_modq(inverse_mod(modq(base->mods[k]->q, mod), mod->q), mod->q)
+                    : 0;
+            if (factors[k * l + i] && m < MOD_COMBINATION_MAX_TERMS)
+                terms[m++] = (RowTerm){in, k, factors[k * l + i]};
+        }
+        if (addend && m < MOD_COMBINATION_MAX_TERMS)
+            terms[m++] = (RowTerm){addend, i, 1};
+        if (m == 1 + (uint64_t)__builtin_popcountll(mask) + (addend != NULL) &&
+            combine_row(out, i, terms, m, true))
+            continue;
+        // Term by term, as the combination falls back to.
+        RNSc_Polynomial lift = (RNSc_Polynomial)polynomial_new_RNS_polynomial(N, 1ULL << i, base);
+        polynomial_RNSc_lifted_combination(lift, in, mask, factors, true);
+        if (rns_row_is_narrow(base, i))
+        {
+            mod_eltwise_scale_w32(out->rows32[i], in->rows32[i], p_inverse, N, mod);
+            mod_eltwise_add_w32(out->rows32[i], out->rows32[i], lift->rows32[i], N, mod);
+            if (addend)
+                mod_eltwise_add_w32(out->rows32[i], out->rows32[i], addend->rows32[i], N, mod);
+        }
+        else
+        {
+            mod_eltwise_scale(out->rows64[i], in->rows64[i], p_inverse, N, mod);
+            mod_eltwise_add(out->rows64[i], out->rows64[i], lift->rows64[i], N, mod);
+            if (addend)
+                mod_eltwise_add(out->rows64[i], out->rows64[i], addend->rows64[i], N, mod);
+        }
+        free_RNS_polynomial((RNS_Polynomial)lift);
+    }
+}
+
+void polynomial_round_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide_mask)
+{
+    polynomial_round_division_RNSc_prepare(out, divide_mask);
+    polynomial_round_division_RNSc_rows(out, divide_mask, out->rns_mask);
+    polynomial_round_division_RNSc_finish(out, divide_mask);
+}
+
+RNS_Polynomial polynomial_RNS_view(struct _RNS_Polynomial *storage, RNS_Polynomial p, uint64_t mask)
+{
+    *storage = *p;
+    storage->rns_mask = p->rns_mask & mask;
+    return storage;
 }
 
 void polynomial_floor_division_RNSc(RNSc_Polynomial out)
@@ -1352,7 +1798,8 @@ void polynomial_round_division_RNSc(RNSc_Polynomial out)
     }
 }
 
-void polynomial_RNSc_permute(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t gen)
+void polynomial_RNSc_permute_rows(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t gen,
+                                  uint64_t rows)
 {
     assert(out != in);
     const uint64_t N = out->base->N, split_degree = out->base->split_degree;
@@ -1362,41 +1809,36 @@ void polynomial_RNSc_permute(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t g
     const uint64_t poly_size = out->base->N / out->base->split_degree;
     assert(gen < 2 * N);
     assert(gen > 0);
-    polynomial_RNS_zero((RNS_Polynomial)out);
+    assert((rows & ~in->rns_mask) == 0);
 
     int64_t *temp_signed = (int64_t *)safe_aligned_malloc(N * sizeof(int64_t));
-    out->rns_mask = in->rns_mask;
     for (size_t j = 0; j < out->base->l; j++)
     {
-        if (out->rns_mask & (1ULL << j))
-        {
-            Modulus mod = out->base->mods[j];
-            if (rns_row_is_narrow(in->base, j))
-                rns_row_permute_gather_narrow(temp_signed, in->rows32[j], gen, N, split_degree,
-                                              split_degree_log, poly_size);
-            else
-                rns_row_permute_gather_wide(temp_signed, in->rows64[j], gen, N, split_degree,
-                                            split_degree_log, poly_size);
-            RNS_ROW_REDUCE_SIGNED(out, temp_signed, j, N, mod);
-        }
+        if (!(rows & (1ULL << j)))
+            continue;
+        Modulus mod = out->base->mods[j];
+        if (rns_row_is_narrow(in->base, j))
+            rns_row_permute_gather_narrow(temp_signed, in->rows32[j], gen, N, split_degree,
+                                          split_degree_log, poly_size);
         else
-        {
-            RNS_ROW_ZERO(out, j, N);
-        }
+            rns_row_permute_gather_wide(temp_signed, in->rows64[j], gen, N, split_degree,
+                                        split_degree_log, poly_size);
+        RNS_ROW_REDUCE_SIGNED(out, temp_signed, j, N, mod);
     }
     free(temp_signed);
 }
 
-// The low `bits` bits of x reversed, for bits <= 32.
-static uint64_t rns_index_bit_reverse(uint64_t x, uint64_t bits)
+void polynomial_RNSc_permute(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t gen)
 {
-    uint32_t v = (uint32_t)x;
-    v = ((v >> 1) & 0x55555555u) | ((v & 0x55555555u) << 1);
-    v = ((v >> 2) & 0x33333333u) | ((v & 0x33333333u) << 2);
-    v = ((v >> 4) & 0x0F0F0F0Fu) | ((v & 0x0F0F0F0Fu) << 4);
-    v = ((v >> 8) & 0x00FF00FFu) | ((v & 0x00FF00FFu) << 8);
-    v = (v >> 16) | (v << 16);
-    return bits ? (uint64_t)(v >> (32 - bits)) : 0;
+    assert(out != in);
+    polynomial_RNS_zero((RNS_Polynomial)out);
+    out->rns_mask = in->rns_mask;
+    polynomial_RNSc_permute_rows(out, in, gen, in->rns_mask);
+    for (size_t j = 0; j < out->base->l; j++)
+    {
+        if (!(out->rns_mask & (1ULL << j)))
+            RNS_ROW_ZERO(out, j, out->base->N);
+    }
 }
 
 // Position p holds P(psi^(2 brv(p) + 1)); P(X) -> P(X^gen) takes position p
@@ -1410,25 +1852,37 @@ void polynomial_RNS_automorphism_index(uint32_t *idx, uint64_t N, uint64_t gen)
     const uint64_t mask_2n = 2 * N - 1;
     for (uint64_t p = 0; p < N; p++)
     {
-        const uint64_t point = (2 * rns_index_bit_reverse(p, log_n) + 1) * gen & mask_2n;
-        idx[p] = (uint32_t)rns_index_bit_reverse(point >> 1, log_n);
+        const uint64_t point = (2 * arith_bit_reverse(p, log_n) + 1) * gen & mask_2n;
+        idx[p] = (uint32_t)arith_bit_reverse(point >> 1, log_n);
+    }
+}
+
+void polynomial_RNS_permute_rows(RNS_Polynomial out, RNS_Polynomial in, const uint32_t *idx,
+                                 uint64_t rows)
+{
+    assert(out != in);
+    assert(out->base == in->base && out->base->split_degree == 1);
+    assert((rows & ~in->rns_mask) == 0);
+    const uint64_t N = out->base->N;
+    for (size_t j = 0; j < out->base->l; j++)
+    {
+        if (!(rows & (1ULL << j)))
+            continue;
+        if (rns_row_is_narrow(out->base, j))
+            rns_row_gather_narrow(out->rows32[j], in->rows32[j], idx, N);
+        else
+            rns_row_gather_wide(out->rows64[j], in->rows64[j], idx, N);
     }
 }
 
 void polynomial_RNS_permute(RNS_Polynomial out, RNS_Polynomial in, const uint32_t *idx)
 {
-    assert(out != in);
-    assert(out->base == in->base && out->base->split_degree == 1);
-    const uint64_t N = out->base->N;
     out->rns_mask = in->rns_mask;
+    polynomial_RNS_permute_rows(out, in, idx, in->rns_mask);
     for (size_t j = 0; j < out->base->l; j++)
     {
         if (!(out->rns_mask & (1ULL << j)))
-            RNS_ROW_ZERO(out, j, N);
-        else if (rns_row_is_narrow(out->base, j))
-            rns_row_gather_narrow(out->rows32[j], in->rows32[j], idx, N);
-        else
-            rns_row_gather_wide(out->rows64[j], in->rows64[j], idx, N);
+            RNS_ROW_ZERO(out, j, out->base->N);
     }
 }
 
@@ -1473,7 +1927,7 @@ void polynomial_RNSc_to_centered_doubles(double *out, RNSc_Polynomial in, double
         if (in->rns_mask & (1ULL << j))
             idx[L++] = j;
 
-    // One prime, the usual case after a level drop: the residue is the value.
+    // One prime: the residue is the value.
     if (L == 1)
     {
         const uint64_t q = in->base->mods[idx[0]]->q, half = (q - 1) / 2;

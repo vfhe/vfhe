@@ -9,7 +9,7 @@ import json
 import struct
 
 import pytest
-from vfhe.util.io import ALIGN, Codec, Encoded, Serializer, register
+from vfhe.util.io import ALIGN, CHECKSUM_BLAKE3, Codec, Encoded, Serializer, register
 
 
 class Blob:
@@ -205,22 +205,10 @@ def test_streams_through_file_objects(tmp_path):
         def read(self, n):
             return self._b.read(min(n, 7))
 
-    assert s.load(ReadOnly(path.read_bytes()))[0].data  # pyright: ignore[reportArgumentType] == b"q" * 1000
+    assert s.load(ReadOnly(path.read_bytes()))[0].data == b"q" * 1000  # pyright: ignore[reportArgumentType]
 
 
-def test_the_checksum_algorithm_is_recorded(monkeypatch):
-    from vfhe.util.io import _stream
-
-    def algorithm(data):
-        return struct.unpack_from("<I", data, 8)[0] >> 8 & 0xFF
-
-    with monkeypatch.context() as m:
-        m.setattr(_stream, "_CHECKSUMS", {1: _stream._CHECKSUMS[1]})
-        blake2 = Serializer().dumps(Blob(b"x"))
-    assert algorithm(blake2) == 1
-    import vfhe.crypto  # noqa: F401  # pyright: ignore[reportUnusedImport]
-
-    blake3 = Serializer().dumps(Blob(b"x"))
-    assert algorithm(blake3) == 2
-    for data in (blake2, blake3):
-        assert Serializer().loads(data).data == b"x"
+def test_the_checksum_algorithm_is_recorded():
+    data = Serializer().dumps(Blob(b"x"))
+    assert struct.unpack_from("<I", data, 8)[0] >> 8 & 0xFF == CHECKSUM_BLAKE3
+    assert Serializer().loads(data).data == b"x"

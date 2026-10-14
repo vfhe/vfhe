@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+"""Controls the library's memory pool: its capacity, wiping, and accounting.
+
+vfhe keeps the large buffers it releases, per thread, and hands them out again
+for the next request of the same size, instead of returning them to the C
+library and faulting fresh memory in on the next allocation. What it keeps
+over all threads is bounded by a capacity:
+
+- ``"auto"`` (the default): at most the most the library ever had in use at
+  once, so a repeating workload is served from the pool and, once its
+  buffers are released, the pool holds no more than the library's own peak.
+- a number of bytes.
+- ``0``: keep nothing; every buffer goes back to the C library.
+
+``VFHE_MEMPOOL_CAPACITY`` (bytes) sets the default.
+
+A released buffer keeps whatever it held until it is overwritten. With
+`set_wipe_on_release` every buffer is zeroed as it is released, at the cost
+of a pass over it; off by default (``VFHE_MEMPOOL_WIPE_ON_RELEASE=1`` turns it
+on).
+
+>>> from vfhe.util import memory_pool
+>>> memory_pool.set_capacity(1 << 30)
+>>> memory_pool.statistics().retained_bytes <= 1 << 30
+True
+"""
+
+from dataclasses import dataclass
+from typing import Literal
+
+from vfhe.util.bindings import ffi, lib
+
+__all__ = [
+    "MemoryPoolStatistics",
+    "capacity",
+    "release_all",
+    "set_capacity",
+    "set_wipe_on_release",
+    "statistics",
+    "wipe_on_release",
+]
+
+
+def set_capacity(n_bytes: int | Literal["auto"] | None = None) -> None:
+    """Bounds what the pool keeps, over all threads, to ``n_bytes``.
+
+    ``"auto"`` follows the library's peak use and ``0`` turns the pool off;
+    ``None`` restores the default (``VFHE_MEMPOOL_CAPACITY`` if set, else
+    ``"auto"``). Lowering the capacity below what the pool keeps releases it
+    all.
+    """
+    if n_bytes is None:
+        setting = lib.MEMPOOL_CAPACITY_DEFAULT
+    elif n_bytes == "auto":
+        setting = lib.MEMPOOL_CAPACITY_AUTO
+    elif isinstance(n_bytes, int) and 0 <= n_bytes < lib.MEMPOOL_CAPACITY_DEFAULT:
+        setting = n_bytes
+    else:
+        raise ValueError(
+            f'the capacity is a number of bytes, "auto" or None, got {n_bytes!r}'
+        )
+    lib.mempool_set_capacity(setting)
+
+
+def capacity() -> int | Literal["auto"]:
+    """Returns the capacity in force (see `set_capacity`)."""
+    setting = lib.mempool_capacity()
+    return "auto" if setting == lib.MEMPOOL_CAPACITY_AUTO else setting
+
+
+def set_wipe_on_release(enabled: bool | None = None) -> None:
+    """Zeroes every buffer as it is released to the pool, or stops doing so.
+
+    ``None`` restores the default: off, unless
+    ``VFHE_MEMPOOL_WIPE_ON_RELEASE=1``.
+    """
+    lib.mempool_set_wipe_on_release(-1 if enabled is None else int(bool(enabled)))
+
+
+def wipe_on_release() -> bool:
+    """Returns whether released buffers are zeroed (see `set_wipe_on_release`)."""
+    return bool(lib.mempool_wipe_on_release())
+
+
+def release_all() -> None:
+    """Returns every buffer the pool keeps, on every thread, to the C library."""
+    lib.mempool_release_all()
+
+
+@dataclass(frozen=True)
+class MemoryPoolStatistics:
+    """Holds a snapshot of the pool, over all threads."""
+
+    retained_bytes: int
+    """Kept by the pool, ready to be handed out."""
+    outstanding_bytes: int
+    """Handed out and not yet released to the pool."""
+    peak_outstanding_bytes: int
+    """The most ever outstanding at once; the ``"auto"`` capacity. Exact
+    while one thread uses the pool; with several it may miss a short-lived
+    peak by up to a few MiB per thread, as each thread shares its count in
+    steps."""
+    retention_limit_bytes: int
+    """What the capacity allows the pool to keep right now."""
+    hits: int
+    """Requests served from the pool."""
+    misses: int
+    """Requests passed to the C library."""
+
+
+def statistics() -> MemoryPoolStatistics:
+    """Returns the pool's current accounting (see `MemoryPoolStatistics`)."""
+    out = ffi.new("MempoolStatistics *")
+    lib.mempool_statistics(out)
+    return MemoryPoolStatistics(
+        retained_bytes=out.retained_bytes,
+        outstanding_bytes=out.outstanding_bytes,
+        peak_outstanding_bytes=out.peak_outstanding_bytes,
+        retention_limit_bytes=out.retention_limit_bytes,
+        hits=out.hits,
+        misses=out.misses,
+    )

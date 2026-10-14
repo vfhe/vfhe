@@ -8,7 +8,7 @@ from vfhe.arith import Polynomial, repr
 from vfhe.arith.number_theory import crt
 from vfhe.mlwe.lwe import LWE, LWE_Key, lib_lwe
 from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
-from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, lib_rlwe
+from vfhe.mlwe.mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, lib_rlwe
 from vfhe.util.bindings import ffi, lib
 
 
@@ -27,7 +27,6 @@ class CGGI16_Key:
 
     def __init__(self):
         self.bk: list[MGSW] = []
-        self.b_prec = 0
         self.n = 0
         self.unfolding = 1
         self._handles = None  # (bk, outer array, row arrays) passed to C
@@ -58,7 +57,7 @@ class CGGI16:
     encryption of ``s_i`` per coefficient.
 
     `functional_bootstrap` runs one rotation on the library's threads
-    (``lib.vfhe_set_num_threads``), all of them on every step;
+    (``vfhe.util.parallel.set_num_threads``), all of them on every step;
     `functional_bootstrap_batch` runs one rotation per thread, for
     throughput. Unfolding multiplies the work and the key traffic by
     ``(2^u - 1) / u`` and divides the number of steps by ``u``, so it pays
@@ -71,11 +70,15 @@ class CGGI16:
         scheme: MLWE_Scheme,
         gsw_ell: int | None = None,
         unfolding: int = 1,
+        gadget_params: GadgetParams | None = None,
     ):
+        """``gadget_params`` are the bootstrapping key's gadget (the RNS one by
+        default; see :class:`GadgetParams`), and the rotation decomposes
+        against it; the digits are balanced as ``scheme`` says."""
         if unfolding < 1:
             raise ValueError("unfolding must be at least 1")
         self.scheme = scheme
-        self.mgsw_scheme = MGSW_Scheme(scheme, ell=gsw_ell)
+        self.mgsw_scheme = MGSW_Scheme(scheme, ell=gsw_ell, gadget_params=gadget_params)
         self.ring = scheme.ring
         self.unfolding = unfolding
 
@@ -83,8 +86,8 @@ class CGGI16:
         self, input_key: MLWE_Key | LWE_Key, output_key: MLWE_Key, n_threads: int = 0
     ) -> CGGI16_Key:
         """The bootstrapping key for ``input_key``, encrypted under
-        ``output_key``: every MGSW key drawn in one batch on up to ``n_threads``
-        threads (0: the library limit), see :meth:`MGSW_Scheme.encrypt_constants`.
+        ``output_key``: every MGSW key drawn in one batch, see
+        :meth:`MGSW_Scheme.encrypt_constants`.
         """
         bk = CGGI16_Key()
         bk.unfolding = self.unfolding
@@ -147,8 +150,7 @@ class CGGI16:
             bk.native_handles(),
             bk.unfolding,
             first.gadget_size,
-            first.scheme.radix_log_base or 0,
-            first.scheme.balanced,
+            first.scheme.native_gadget_params,
         )
 
     def functional_bootstrap_wo_extract(

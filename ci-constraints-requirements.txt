@@ -44,7 +44,6 @@ mdurl==0.1.2
 meson==1.12.1
 meson-python==0.22.1
 more-itertools==11.1.0
-mpmath==1.4.1
 myst-parser==5.1.0
 nh3==0.3.7
 ninja==1.13.2

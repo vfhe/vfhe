@@ -147,7 +147,12 @@ class RNSRing(Ring):
             prime_size = [math.ceil(math.log2(p)) for p in active_primes]
             primes = active_primes
 
-        if primes is not None and prime_size is None:
+        # A pool given on its own fixes the sizes; with mod_size it is drawn
+        # from by size, as without it.
+        if primes is not None and (
+            prime_size is None
+            or (mod_size is None and not isinstance(prime_size, list))
+        ):
             prime_size = [math.ceil(math.log2(i)) for i in primes]
 
         if isinstance(prime_size, list):
@@ -174,6 +179,23 @@ class RNSRing(Ring):
             self.primes = primes[: self.ell]
         else:
             self.primes = self.gen_primes()
+
+        if self.split_degree > 1:
+            # See gen_prime: with an even multiplier the residues are not
+            # fields of size p^split_degree.
+            order = 2 * self.N // self.split_degree
+            even = [
+                p
+                for p in self.primes
+                if (p - 1) % order == 0 and (p - 1) // order % 2 == 0
+            ]
+            if even:
+                raise ValueError(
+                    f"primes {even} are 1 mod {2 * order}: with split_degree "
+                    f"{self.split_degree} a prime must be p = a * {order} + 1 "
+                    "with a odd, or X^N + 1 does not split into irreducible "
+                    f"factors of degree {self.split_degree}"
+                )
 
         self.q_l = math.prod(self.primes)
 
@@ -319,24 +341,52 @@ class RNSRing(Ring):
             split_degree=self.split_degree,
         )
 
-    # generates the RNS primes of size prime_size
+    # A prime p = a * rou_order + 1 below 2^prime_size, not in exclude_list,
+    # rou_order = 2N / split_degree, scanning a downwards.
+    #
+    # With split_degree d > 1, a must be odd. The point of d > 1 is soundness,
+    # not the transform: X^N + 1 must split mod p into the N/d irreducible
+    # factors X^d - zeta^(2j+1), zeta a primitive 2N/d-th root of unity, so
+    # that R_p is a product of fields of size p^d [CCCFGS25, Sec. 3.1]. That
+    # needs p - 1 of 2-adicity exactly log2(2N/d) -- a odd -- since otherwise
+    # zeta is a square and every factor splits further, leaving fields of size
+    # p only. An even a still
+    # gives a correct incomplete transform; the residue fields are what is lost.
+    #
+    # With d = 1 the ring splits into F_p anyway and any a will do. Full-size
+    # primes (at least 2^(prime_size - 1)) come first, odd a before even, so a
+    # ring with a full-size odd-a prime keeps it; a smaller prime is taken
+    # only when the size has none.
     @staticmethod
-    def gen_prime(rou_order, prime_size, exclude_list=None):
+    def gen_prime(rou_order, prime_size, exclude_list=None, *, split_degree):
         exclude_list = exclude_list if exclude_list is not None else []
-        a = ((2**prime_size - 1) // rou_order) | 1
-        a -= 2
-        while True:
-            candidate = a * rou_order + 1
-            if candidate not in exclude_list and is_prime(candidate):
-                return candidate
-            a -= 2
+        top = (2**prime_size - 1) // rou_order
+        # The largest a whose prime is below 2^(prime_size - 1).
+        low = ((1 << (prime_size - 1)) - 1) // rou_order
+        full_size = [((top | 1) - 2, low)]
+        smaller = [(low if low & 1 else low - 1, 0)]
+        if split_degree == 1:
+            full_size.append((top & ~1, low))
+            smaller.append((low & ~1, 0))
+        for first, stop in full_size + smaller:
+            for a in range(first, stop, -2):
+                candidate = a * rou_order + 1
+                if candidate not in exclude_list and is_prime(candidate):
+                    return candidate
+        raise ValueError(
+            f"no prime p = 1 (mod {rou_order}) below 2^{prime_size} is left; "
+            "use larger primes or a smaller ring"
+        )
 
     def gen_primes(self):
         primes = []
         for p_size in self.prime_size:
             primes.append(
                 RNSRing.gen_prime(
-                    2 * self.N // self.split_degree, p_size, exclude_list=primes
+                    2 * self.N // self.split_degree,
+                    p_size,
+                    exclude_list=primes,
+                    split_degree=self.split_degree,
                 )
             )
         return primes
@@ -448,7 +498,10 @@ class RNSPolynomial(Polynomial):
         keep = []  # keep row buffers alive across the (copying) C call
         for k, idx in enumerate(self.ring.prime_indices):
             p = self.ring.primes[k]
-            row = ffi.new("uint64_t[]", [v % p for v in array])
+            # Zero-initialized at the full degree, so a shorter array is
+            # padded with zero coefficients as in from_array.
+            row = ffi.new("uint64_t[]", self.ring.N)
+            row[0 : len(array)] = [v % p for v in array]
             keep.append(row)
             rows[idx] = row
         matrix = ffi.new("uint64_t*[]", rows)

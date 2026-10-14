@@ -12,14 +12,13 @@ from typing import IO, TYPE_CHECKING, Any
 from ._bytes import Payload, Sink, _Source
 from ._codec import codec_for, codec_for_tag
 from ._format import (
-    _CHECKSUM_PROVIDERS,
     _CHECKSUM_SHIFT,
-    _CHECKSUMS,
     _DIGEST,
     _HEADER,
     _RECORD,
     _REF_TAG,
     ALIGN,
+    CHECKSUM_BLAKE3,
     FLAG_CHECKSUM,
     FLAG_SECRET,
     KIND_DEFINITION,
@@ -41,11 +40,10 @@ if TYPE_CHECKING:
 
 
 def _checksum(algorithm: int) -> Callable[[], Any]:
-    if algorithm not in _CHECKSUMS and algorithm in _CHECKSUM_PROVIDERS:
-        importlib.import_module(_CHECKSUM_PROVIDERS[algorithm])
-    if algorithm not in _CHECKSUMS:
+    """A factory of hashers with ``update`` and a 32-byte ``digest``."""
+    if algorithm != CHECKSUM_BLAKE3:
         raise ValueError(f"unknown checksum algorithm {algorithm}")
-    return _CHECKSUMS[algorithm]
+    return importlib.import_module("vfhe.crypto").Blake3Stream
 
 
 class WriteContext:
@@ -123,8 +121,8 @@ class StreamWriter:
         self.options = options
         self.secret = secret
         self.ctx = WriteContext(self, options)
-        self.algorithm = max(_CHECKSUMS)
-        self._hasher = _CHECKSUMS[self.algorithm]
+        self.algorithm = CHECKSUM_BLAKE3
+        self._hasher = _checksum(self.algorithm)
 
     def header(self) -> None:
         flags = (

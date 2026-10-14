@@ -2,18 +2,19 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.crypto
 
-The basic cryptographic primitives every other module builds on: randomness
-and a vector commitment.
+The basic cryptographic primitives every other module builds on: randomness,
+hashing and a vector commitment.
 
 ## Randomness
 
-Two independent generators, both in `c/src/prng.c`, exposed to Python as two
-singletons in `python/src/vfhe/crypto/prng.py`:
+Two independent generators, in `c/src/prng.c` and `c/src/expand.c`, exposed
+to Python as two singletons in `python/src/vfhe/crypto/prng.py`:
 
 - `entropy` (`EntropyPRNG`) — the unpredictable stream. Seeds from RDRAND or
-  `/dev/urandom` and expands with BLAKE3, which is why this is the one module
-  that depends on BLAKE3. `bytes(n)`, `below(bound)`, `normal(sigma)`, and the
-  raw entry points behind them.
+  `/dev/urandom` and expands with AES-128 in counter mode where the CPU offers
+  AES and the build is not portable, with BLAKE3 otherwise. `bytes(n)`,
+  `below(bound)`, `below_many(count, bound)`, `normal(sigma)`, and the raw
+  entry points behind them.
 - `seeded` (`SeededPRNG`) — `below(bound, context, seed)` /
   `below_many(count, ...)` / `bytes(n, ...)`: values uniform in `[0, bound)`
   that are a pure function of `(context, seed)`, so both parties of a protocol
@@ -40,6 +41,11 @@ needs, reachable as `entropy.deterministic(seed)` — a context manager that
 pins the stream and restores hardware entropy on exit. It affects only the
 entropy-backed generator; a seeded draw is already a pure function of its
 arguments. Production never calls it.
+
+## Hashing
+
+- `c/src/hash.c` and `python/src/vfhe/crypto/hash.py`: `Blake3Stream`,
+  incremental BLAKE3 with the `hashlib` interface (`update`, `digest`).
 
 ## Vector commitment
 

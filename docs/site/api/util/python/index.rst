@@ -14,4 +14,6 @@ belongs to the same module.
    bindings
    kernels
    io
+   parallel
+   memory_pool
    info

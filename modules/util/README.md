@@ -25,12 +25,18 @@ and the C substrate every kernel calls.
   working set whole.
 - `python/src/vfhe/info/`: `python -m vfhe.info`, a JSON report of the install
   for bug reports.
-- `python/cdef/parallel.h`: what Python may call of the C below, the thread
-  limit.
+- `python/src/vfhe/util/parallel.py`: the thread limits from Python: the
+  library-wide one, and a local one per thread for a `with` block.
+- `python/src/vfhe/util/memory_pool.py`: the memory pool's capacity, wiping and
+  accounting from Python.
+- `python/cdef/parallel.h`, `python/cdef/memory_pool.h`: what Python may call
+  of the C below: the thread limits, and the memory pool's controls and its
+  allocator for the buffers Python owns.
 - `c/include/`, `c/src/`: allocation that exits on failure (`alloc`), the thread
-  limit and the parallel loop (`parallel`), and the `VFHE_HAVE_*` macros for
-  x86-64 vector extensions (`x86_64.h`). Randomness lives in `crypto`, index and
-  modulus helpers in `arith`.
+  limits and the parallel loop with its persistent thread pool (`parallel`),
+  the per-thread memory pool (`memory_pool`), and the `VFHE_HAVE_*` macros for
+  x86-64 vector extensions (`x86_64.h`). Randomness lives in `crypto`, index
+  and modulus helpers in `arith`.
 
 `util` depends on nothing above it: its headers include only libc. Anything
 needing an `arith` type belongs in `arith`.
@@ -41,6 +47,8 @@ needing an `arith` type belongs in `arith`.
 |---|---|---|
 | `VFHE_ENGINE` | `_engine`, on selection | the engine to load, by name; honoured without asking the CPU, so an emulator can run one the host lacks |
 | `VFHE_NUM_THREADS` | `parallel.c`, on first use | the thread limit when a positive integer; otherwise 1 |
+| `VFHE_MEMPOOL_CAPACITY` | `memory_pool.c`, on first use | the memory pool's capacity in bytes; otherwise it follows the peak in use |
+| `VFHE_MEMPOOL_WIPE_ON_RELEASE` | `memory_pool.c`, on first use | `1` zeroes every buffer released to the memory pool |
 | `VFHE_BUILD_DIR` | `kernels` | the build cache; default `$XDG_CACHE_HOME/vfhe`, else `~/.cache/vfhe` |
 | `XDG_CACHE_HOME` | `kernels` | where the default build cache goes |
 | `CC` | `kernels` | the compiler; default the one Python was built with, else `cc` |

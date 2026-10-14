@@ -64,10 +64,24 @@ class CKKSCiphertextCodec(SampleCodec):
 class SABKeyCodec(Codec):
     tag = "fhe.gp25_sab_key"
     types = (SAB_Key,)
-    _fields = ("s", "s_sign", "packing_key", "hw_reducing_key", "trace_repack_key")
+    _fields = (
+        "gaps",
+        "signs",
+        "automorphism_key",
+        "trace_repack_key",
+        "hw_reducing_key",
+        "output_switch_key",
+    )
 
     def encode(self, obj: SAB_Key, _ctx: WriteContext, /) -> Encoded:
-        meta = {"h": obj.h, "b_prec": obj.b_prec, "r_prec": obj.r_prec}
+        meta = {
+            "n": obj.n,
+            "h": obj.h,
+            "gap_bits": obj.gap_bits,
+            "bits_per_layer": obj.bits_per_layer,
+            "hw_reducing_lvl": obj.hw_reducing_lvl,
+            "output_lvl": obj.output_lvl,
+        }
         return Encoded(meta, children=[getattr(obj, f) for f in self._fields])
 
     def decode(
@@ -76,7 +90,10 @@ class SABKeyCodec(Codec):
         out = SAB_Key()
         for name, value in zip(self._fields, children, strict=True):
             setattr(out, name, value)
-        out.h, out.b_prec, out.r_prec = meta["h"], meta["b_prec"], meta["r_prec"]
+        out.n, out.h, out.gap_bits = meta["n"], meta["h"], meta["gap_bits"]
+        out.bits_per_layer = meta["bits_per_layer"]
+        out.hw_reducing_lvl = meta["hw_reducing_lvl"]
+        out.output_lvl = meta["output_lvl"]
         return out
 
 
@@ -85,11 +102,7 @@ class CGGI16KeyCodec(Codec):
     types = (CGGI16_Key,)
 
     def encode(self, obj: CGGI16_Key, _ctx: WriteContext, /) -> Encoded:
-        meta = {
-            "b_prec": obj.b_prec,
-            "n": obj.n,
-            "unfolding": obj.unfolding,
-        }
+        meta = {"n": obj.n, "unfolding": obj.unfolding}
         return Encoded(meta, children=[obj.bk])
 
     def decode(
@@ -97,10 +110,8 @@ class CGGI16KeyCodec(Codec):
     ):
         out = CGGI16_Key()
         (out.bk,) = children
-        out.b_prec = meta["b_prec"]
-        # A record without `n` and `unfolding` holds one key per coefficient.
-        out.n = meta.get("n", len(out.bk))
-        out.unfolding = meta.get("unfolding", 1)
+        out.n = meta["n"]
+        out.unfolding = meta["unfolding"]
         return out
 
 
@@ -131,8 +142,8 @@ class LinearTransformCodec(Codec):
         out.baby_steps, out.scale = meta["baby_steps"], meta["scale"]
         out.plaintexts = {}
         for (j, i), pt in zip(meta["layout"], children, strict=True):
-            pt.to_NTT()
             out.plaintexts.setdefault(j, {})[i] = pt
+        out._prepare()  # noqa: SLF001 - the codec belongs to the class
         return out
 
 

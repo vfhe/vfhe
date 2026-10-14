@@ -11,5 +11,6 @@ against them, and so does one built with ``vfhe.util.kernels``.
    :maxdepth: 1
 
    alloc
+   memory_pool
    parallel
    x86_64

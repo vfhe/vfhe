@@ -3,10 +3,14 @@
 
 vfhe_c_sources += files(
     'c/src/gadget_rns.c',
+    'c/src/keyswitch.c',
+    'c/src/keyswitch_batch.c',
+    'c/src/keyswitch_rns.c',
     'c/src/lwe.c',
     'c/src/mgsw.c',
     'c/src/mlwe.c',
     'c/src/mlwe_rns.c',
+    'c/src/rns_rows.c',
 )
 vfhe_c_include_dirs += include_directories(
     'c/include',

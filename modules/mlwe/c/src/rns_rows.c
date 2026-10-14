@@ -1,0 +1,329 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
+#include "rns_rows.h"
+
+#include "alloc.h"
+
+typedef struct
+{
+    uint64_t rows[64];
+    uint64_t n_rows, parts;
+    void (*body)(void *ctx, uint64_t row, uint64_t part);
+    void *ctx;
+} RowLoop;
+
+static void row_loop_item(void *ctx, uint64_t k)
+{
+    RowLoop *loop = (RowLoop *)ctx;
+    loop->body(loop->ctx, loop->rows[k / loop->parts], k % loop->parts);
+}
+
+void rns_rows_for(uint64_t N, uint64_t mask, uint64_t parts,
+                  void (*body)(void *ctx, uint64_t row, uint64_t part), void *ctx)
+{
+    RowLoop loop = {{0}, 0, parts, body, ctx};
+    for (uint64_t i = 0; i < 64; i++)
+    {
+        if (mask & (1ULL << i))
+            loop.rows[loop.n_rows++] = i;
+    }
+    vfhe_parallel_for(loop.n_rows * parts, N >= ROWS_MIN_N ? 0 : 1, row_loop_item, &loop);
+}
+
+uint64_t rns_rows_parts(uint64_t N, uint64_t rows, uint64_t items, uint64_t n_threads)
+{
+    const uint64_t threads = vfhe_threads_for(n_threads, UINT64_MAX);
+    if (N < ROWS_MIN_N || rows == 0 || threads <= rows || items <= 1)
+        return 1;
+    const uint64_t parts = (2 * threads + rows - 1) / rows;
+    return parts < items ? parts : items;
+}
+
+typedef struct
+{
+    uint64_t n;
+    const uint64_t *first; // [n + 1]: the first task of each item
+    uint64_t (*rows)[64];  // per item: its rows, in order
+    const uint64_t *parts;
+    void (*body)(void *ctx, uint64_t item, uint64_t row, uint64_t part);
+    void *ctx;
+} BatchRowLoop;
+
+static void batch_row_loop_item(void *ctx, uint64_t task)
+{
+    const BatchRowLoop *loop = (const BatchRowLoop *)ctx;
+    uint64_t lo = 0, hi = loop->n;
+    while (hi - lo > 1)
+    {
+        const uint64_t mid = (lo + hi) / 2;
+        if (loop->first[mid] <= task)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    const uint64_t k = task - loop->first[lo];
+    loop->body(loop->ctx, lo, loop->rows[lo][k / loop->parts[lo]], k % loop->parts[lo]);
+}
+
+void rns_rows_batch_for(uint64_t n, const uint64_t *masks, const uint64_t *parts,
+                        void (*body)(void *ctx, uint64_t item, uint64_t row, uint64_t part),
+                        void *ctx, uint64_t n_threads)
+{
+    uint64_t *first = (uint64_t *)safe_malloc((n + 1) * sizeof(uint64_t));
+    uint64_t (*rows)[64] = (uint64_t (*)[64])safe_malloc((n ? n : 1) * sizeof(*rows));
+    first[0] = 0;
+    for (uint64_t j = 0; j < n; j++)
+    {
+        uint64_t count = 0;
+        for (uint64_t i = 0; i < 64; i++)
+            if (masks[j] & (1ULL << i))
+                rows[j][count++] = i;
+        first[j + 1] = first[j] + count * parts[j];
+    }
+    BatchRowLoop loop = {n, first, rows, parts, body, ctx};
+    vfhe_parallel_for(first[n], n_threads, batch_row_loop_item, &loop);
+    free(rows);
+    free(first);
+}
+
+// The r + 1 elements of a sample: its mask components, then its body.
+typedef struct
+{
+    MLWE out, in;
+    ArithDomain to;
+    const uint8_t *convert; // per element: whether it changes domain
+} Conversion;
+
+static void convert_row(void *ctx, uint64_t row, uint64_t k)
+{
+    Conversion *c = (Conversion *)ctx;
+    if (!c->convert[k])
+        return;
+    struct _RNS_Polynomial out_storage, in_storage;
+    RNS_Polynomial in = mlwe_component_rows(c->in, k);
+    if (!(in->rns_mask & (1ULL << row)))
+        return;
+    RNS_Polynomial in_row = polynomial_RNS_view(&in_storage, in, 1ULL << row);
+    RNS_Polynomial out_row =
+        polynomial_RNS_view(&out_storage, mlwe_component_rows(c->out, k), 1ULL << row);
+    if (c->to == ARITH_DOMAIN_MUL)
+        polynomial_RNSc_to_RNS(out_row, (RNSc_Polynomial)in_row);
+    else
+        polynomial_RNS_to_RNSc((RNSc_Polynomial)out_row, in_row);
+}
+
+void mlwe_rns_convert(MLWE out, MLWE in, ArithDomain to)
+{
+    const uint64_t parts = in->r + 1;
+    uint8_t convert[parts];
+    uint64_t rows = 0;
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        ArithElement *x = mlwe_component(in, k);
+        convert[k] = x->domain != to;
+        if (convert[k])
+            rows |= arith_rns_polynomial(x)->rns_mask;
+        else if (out != in)
+            arith_copy(out->ring, mlwe_component(out, k), x);
+    }
+    Conversion c = {out, in, to, convert};
+    rns_rows_for(in->ring->N, rows, parts, convert_row, &c);
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        if (!convert[k])
+            continue;
+        mlwe_component_rows(out, k)->rns_mask = mlwe_component_rows(in, k)->rns_mask;
+        mlwe_component(out, k)->domain = to;
+    }
+}
+
+typedef struct
+{
+    MLWE out, in;
+    uint64_t gen;
+    const uint8_t *permute; // per element: whether it is permuted
+} Permutation;
+
+static void permute_row(void *ctx, uint64_t row, uint64_t k)
+{
+    Permutation *p = (Permutation *)ctx;
+    RNSc_Polynomial in = (RNSc_Polynomial)mlwe_component_rows(p->in, k);
+    if (p->permute[k] && (in->rns_mask & (1ULL << row)))
+        polynomial_RNSc_permute_rows((RNSc_Polynomial)mlwe_component_rows(p->out, k), in, p->gen,
+                                     1ULL << row);
+}
+
+void mlwe_rns_permute(MLWE out, MLWE in, uint64_t gen)
+{
+    const uint64_t parts = in->r + 1;
+    uint8_t permute[parts];
+    uint64_t rows = 0;
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        // As arith_permute: only a canonical element moves, and the rows it
+        // does not hold come out zero.
+        permute[k] = mlwe_component(in, k)->domain == ARITH_DOMAIN_CANONICAL;
+        if (!permute[k])
+            continue;
+        RNS_Polynomial x = mlwe_component_rows(in, k);
+        RNS_Polynomial y = mlwe_component_rows(out, k);
+        struct _RNS_Polynomial outside = *y;
+        outside.rns_mask = ~x->rns_mask & ((y->base->l < 64 ? 1ULL << y->base->l : 0) - 1);
+        polynomial_RNS_zero(&outside);
+        y->rns_mask = x->rns_mask;
+        rows |= x->rns_mask;
+    }
+    Permutation p = {out, in, gen, permute};
+    rns_rows_for(in->ring->N, rows, parts, permute_row, &p);
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        if (permute[k])
+            mlwe_component(out, k)->domain = ARITH_DOMAIN_CANONICAL;
+    }
+}
+
+typedef struct
+{
+    MLWE c;
+    uint64_t divide_mask;
+    const uint8_t *divide; // per element: whether it is divided
+} RoundDivision;
+
+static void round_division_row(void *ctx, uint64_t row, uint64_t k)
+{
+    RoundDivision *d = (RoundDivision *)ctx;
+    if (d->divide[k])
+        polynomial_round_division_RNSc_rows((RNSc_Polynomial)mlwe_component_rows(d->c, k),
+                                            d->divide_mask, 1ULL << row);
+}
+
+void mlwe_rns_round_division(MLWE out, ArithRing to)
+{
+    const uint64_t parts = out->r + 1;
+    // As arith_round_division: the destination's mask says what stays, and
+    // only a canonical element moves.
+    const uint64_t divide_mask = arith_rns_ring_mask(out->ring) & ~arith_rns_ring_mask(to);
+    uint8_t divide[parts];
+    uint64_t staying = 0;
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        divide[k] = mlwe_component(out, k)->domain == ARITH_DOMAIN_CANONICAL;
+        if (!divide[k])
+            continue;
+        RNSc_Polynomial p = (RNSc_Polynomial)mlwe_component_rows(out, k);
+        polynomial_round_division_RNSc_prepare(p, divide_mask);
+        staying |= p->rns_mask & ~divide_mask;
+    }
+    RoundDivision d = {out, divide_mask, divide};
+    rns_rows_for(out->ring->N, staying, parts, round_division_row, &d);
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        if (divide[k])
+            polynomial_round_division_RNSc_finish((RNSc_Polynomial)mlwe_component_rows(out, k),
+                                                  divide_mask);
+    }
+    out->ring = to;
+}
+
+typedef struct
+{
+    MLWE out, in;
+    const ArithElement *const *addend;
+    uint64_t divide_mask;
+} ModDown;
+
+static void mod_down_row(void *ctx, uint64_t row, uint64_t k)
+{
+    const ModDown *d = (const ModDown *)ctx;
+    const ArithElement *addend = d->addend ? d->addend[k] : NULL;
+    polynomial_mod_down_RNSc_rows((RNSc_Polynomial)mlwe_component_rows(d->out, k),
+                                  (RNSc_Polynomial)mlwe_component_rows(d->in, k),
+                                  addend ? (RNSc_Polynomial)arith_rns_polynomial(addend) : NULL,
+                                  d->divide_mask, 1ULL << row);
+}
+
+void mlwe_rns_mod_down(MLWE out, MLWE in, const ArithElement *const *addend)
+{
+    const uint64_t parts = in->r + 1;
+    const uint64_t staying = arith_rns_ring_mask(out->ring);
+    const uint64_t divide_mask = arith_rns_ring_mask(in->ring) & ~staying;
+    assert(out->r == in->r && (arith_rns_ring_mask(in->ring) & staying) == staying);
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        assert(mlwe_component(in, k)->domain == ARITH_DOMAIN_CANONICAL);
+        assert(!addend || !addend[k] || addend[k]->domain == ARITH_DOMAIN_CANONICAL);
+        polynomial_mod_down_RNSc_prepare((RNSc_Polynomial)mlwe_component_rows(in, k), divide_mask);
+    }
+    ModDown d = {out, in, addend, divide_mask};
+    rns_rows_for(out->ring->N, staying, parts, mod_down_row, &d);
+    for (uint64_t k = 0; k < parts; k++)
+    {
+        mlwe_component_rows(out, k)->rns_mask = staying;
+        mlwe_component(out, k)->domain = ARITH_DOMAIN_CANONICAL;
+    }
+}
+
+typedef struct
+{
+    ArithElement *out;
+    MLWE in1, in2;
+} TensorProduct;
+
+// The products of mlwe_tensor_product, on one row of every operand.
+static void tensor_product_row(void *ctx, uint64_t row, uint64_t part)
+{
+    (void)part;
+    TensorProduct *t = (TensorProduct *)ctx;
+    const uint64_t r = t->in1->r, R = mlwe_extended_rank(r);
+    const uint64_t mask = 1ULL << row;
+    struct _RNS_Polynomial a1_storage[r + 1], a2_storage[r + 1], out_storage[R + 1];
+    RNS_Polynomial a1[r + 1], a2[r + 1], o[R + 1];
+    for (uint64_t k = 0; k <= r; k++)
+    {
+        a1[k] = polynomial_RNS_view(&a1_storage[k], mlwe_component_rows(t->in1, k), mask);
+        a2[k] = polynomial_RNS_view(&a2_storage[k], mlwe_component_rows(t->in2, k), mask);
+    }
+    for (uint64_t k = 0; k <= R; k++)
+        o[k] = polynomial_RNS_view(&out_storage[k], arith_rns_polynomial(&t->out[k]), mask);
+    // a[r] is the body b.
+    for (uint64_t k = 0; k <= R; k++)
+    {
+        uint64_t i, j;
+        const bool cross = mlwe_tensor_slot_factors(r, k, &i, &j);
+        polynomial_mul_RNS_polynomial(o[k], a1[i], a2[j]);
+        if (cross)
+            polynomial_mul_addto_RNS_polynomial(o[k], a1[j], a2[i]);
+    }
+}
+
+int mlwe_rns_tensor_product(ArithElement *out, MLWE in1, MLWE in2)
+{
+    const uint64_t r = in1->r, R = mlwe_extended_rank(r);
+    const ArithDomain mul = arith_mul_domain(in1->ring);
+    const uint64_t mask = arith_rns_polynomial(&in1->b)->rns_mask;
+    for (uint64_t k = 0; k <= r; k++)
+    {
+        const ArithElement *x = mlwe_component(in1, k), *y = mlwe_component(in2, k);
+        if (x->domain != mul || y->domain != mul || arith_rns_polynomial(x)->rns_mask != mask ||
+            arith_rns_polynomial(y)->rns_mask != mask)
+            return -1;
+    }
+    TensorProduct t = {out, in1, in2};
+    rns_rows_for(in1->ring->N, mask, 1, tensor_product_row, &t);
+    for (uint64_t k = 0; k <= R; k++)
+    {
+        arith_rns_polynomial(&out[k])->rns_mask = mask;
+        out[k].domain = mul;
+    }
+    return 0;
+}
+
+void mlwe_rns_halve(MLWE c)
+{
+    RNS_Polynomial b = arith_rns_polynomial(&c->b);
+    uint64_t half[64] = {0};
+    for (size_t i = 0; i < b->base->l; i++)
+        if (b->rns_mask & (1ULL << i))
+            half[i] = (b->base->mods[i]->q + 1) / 2;
+    mlwe_scale_RNS_mlwe_RNS(c, half);
+}

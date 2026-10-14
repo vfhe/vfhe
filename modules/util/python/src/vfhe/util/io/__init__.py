@@ -35,11 +35,9 @@ from ._bytes import Payload, Sink
 from ._codec import Codec, Encoded, codec_for, codec_for_tag, register
 from ._format import (
     ALIGN,
-    CHECKSUM_BLAKE2B,
     CHECKSUM_BLAKE3,
     FLAG_CHECKSUM,
     FLAG_SECRET,
-    register_checksum,
 )
 from ._options import PROFILES, Options, options_for
 from ._stream import ReadContext, StreamReader, StreamWriter, WriteContext
@@ -138,7 +136,6 @@ class Serializer:
 
 __all__ = [
     "ALIGN",
-    "CHECKSUM_BLAKE2B",
     "CHECKSUM_BLAKE3",
     "FLAG_CHECKSUM",
     "FLAG_SECRET",
@@ -154,5 +151,4 @@ __all__ = [
     "codec_for",
     "codec_for_tag",
     "register",
-    "register_checksum",
 ]

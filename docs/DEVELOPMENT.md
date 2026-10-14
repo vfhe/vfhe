@@ -397,7 +397,7 @@ Releasing section.
 ### Dependencies
 
 - **Selection.** The runtime surface is deliberately small (`cffi`,
-  `protobuf`, `mpmath`), and anything else must earn its place in review.
+  `protobuf`), and anything else must earn its place in review.
   Version floors state the oldest supported release, raised only when a newer
   feature is required.
 - **Obtaining.** Python dependencies are declared in `pyproject.toml`

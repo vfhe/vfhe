@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Characterization tests for the (reverted) vfhe.arith over the cffi boundary.
+"""Characterization tests for vfhe.arith over the cffi boundary.
 
 Python big ints are the exact oracle: negacyclic schoolbook for the ring
 product, CRT for reconstruction. Also covers domain conversion, automorphism,
 slot inversion, the CKKS complex FFT roundtrip, and the multiprecision bridge.
 """
 
+import cmath
 import math
 import random
 from fractions import Fraction
@@ -233,6 +234,30 @@ def test_centered_doubles_match_the_exact_crt(sizes, n):
         assert out[k] == pytest.approx(centered / 2, rel=1e-14, abs=0)
 
 
+def test_a_ring_from_its_primes_alone():
+    # One of the four documented ways to give the modulus, and the way to
+    # build rings of two dimensions over the same primes.
+    big = Ring(128, prime_size=[50, 45, 40], split_degree=1)
+    small = Ring(64, primes=list(big.primes), split_degree=1)
+    assert small.primes == big.primes
+    assert small.prime_size == [50, 45, 40]
+    assert small.base != big.base
+
+
+def test_short_arrays_are_padded_with_zeros():
+    R = Ring(64, prime_size=[50, 50], split_degree=1)
+    big = (1 << 90) + 7
+    zeros = [0] * (R.N - 2)
+    for _ in range(8):  # freed rows full of non-zero values to land on
+        Polynomial(R).from_bigint_array([R.q_l - 1] * R.N)
+        assert Polynomial(R).from_bigint_array([0, big]).get_polynomial() == [
+            0,
+            big,
+            *zeros,
+        ]
+        assert Polynomial(R).from_array([0, 5]).get_polynomial() == [0, 5, *zeros]
+
+
 def test_encode_rounding_is_round_half_to_even():
     # The native rounding (vectorized on avx512ifma) against Python's round.
     cring = ComplexRing(32)
@@ -247,42 +272,76 @@ def test_encode_rounding_is_round_half_to_even():
     assert native.get_polynomial(signed=True) == [round(v) for v in values]
 
 
-def _brv(x, bits):
-    return int(bin(x)[2:].rjust(bits, "0")[::-1], 2) if bits else 0
+@pytest.mark.parametrize("n, split_degree", [(64, 1), (64, 2), (4, 1)])
+def test_encode_rounding_is_exact_beyond_64_bits(n, split_degree):
+    # Doubles of 2^63 and up are integers that no int64_t holds: they are
+    # reduced exactly, in limbs, up to the largest double. One large value
+    # sits alone in a vector of eight; the small values next to the large ones
+    # still round to nearest even. n = 4 is shorter than a vector.
+    cring = ComplexRing(n // 2)
+    R = Ring(n, prime_size=[30, 60, 50], split_degree=split_degree)
+    Q = math.prod(R.primes)
+    large = [2.0**63, 2.0**124, math.nextafter(2.0**124, 0), 2.0**186, 1.5 * 2.0**1000]
+    large += [math.nextafter(math.inf, 0)]  # the largest double: 17 limbs
+    large += [rng.uniform(1, 2) * 2.0 ** rng.randrange(53, 1023) for _ in range(20)]
+    if n == 4:
+        values = [-large[-1], 2.5, -3.5, large[5]]
+    else:
+        values = [rng.uniform(-(2**40), 2**40) for _ in range(n)]
+        values[0:6] = [k + 0.5 for k in range(-3, 3)]  # ties
+        values[13] = -large[0]
+        for i, v in zip(range(16, n, 2), large, strict=False):
+            values[i] = rng.choice([-1, 1]) * v
+    cp = ComplexPolynomial(cring)
+    for i in range(n):
+        cp.obj[i] = values[i]
+    native = cp.round_to_RNS_cpp(R)
+    assert native.get_polynomial() == [round(v) % Q for v in values]
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_encode_refuses_a_non_finite_value(bad):
+    cring = ComplexRing(32)
+    R = Ring(64, prime_size=[60], split_degree=1)
+    cp = ComplexPolynomial(cring)
+    cp.obj[5] = bad
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        cp.round_to_RNS_cpp(R)
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        cring.values_ifft_scale_round_to_RNS_batch([[1.0] * 32, [bad] * 32], R, 2.0**20)
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        cring.values_ifft_scale_round_to_RNS_batch([[1.0] * 32], R, bad)
 
 
 def _complex_fft_oracle(v, n, inverse):
-    """The scalar CT_NR (forward) / GS_RN (inverse) transforms, in Python."""
-    rous = ComplexRing.gen_special_rous_hp(2 * n)
-    ws = [r**-1 for r in rous] if inverse else rous
-    logn = int(math.log2(n))
-    x = list(v)
+    """The canonical embedding by its definition, in Python. Coefficient form
+    holds c_k = a_k + i a_(k+n), a the 2n real coefficients; slot j is the
+    evaluation at zeta^(5^j), zeta = exp(i pi / 2n)."""
+    two_n = 2 * n
+    zeta = [cmath.exp(1j * math.pi * t / two_n) for t in range(2 * two_n)]
+    exponents = [pow(5, j, 2 * two_n) for j in range(n)]
     if inverse:
-        x = [x[_brv(i, logn)] for i in range(n)]
-        t, m = 1, n
-        while m > 1:
-            h = m >> 1
-            for i in range(h):
-                for j in range(2 * i * t, 2 * i * t + t):
-                    u, w = x[j], x[j + t]
-                    x[j], x[j + t] = u + w, (u - w) * ws[h + i]
-            t, m = t << 1, h
-        return [c / n for c in x]
-    t, m = n, 1
-    while m < n:
-        t >>= 1
-        for i in range(m):
-            for j in range(2 * i * t, 2 * i * t + t):
-                u, w = x[j], x[j + t] * ws[m + i]
-                x[j], x[j + t] = u + w, u - w
-        m <<= 1
-    return [x[_brv(i, logn)] for i in range(n)]
+        # The other n evaluations are the conjugates, at zeta^(-5^j).
+        a = [
+            2
+            / two_n
+            * sum(
+                s * zeta[(-e * k) % (2 * two_n)]
+                for s, e in zip(v, exponents, strict=True)
+            ).real
+            for k in range(two_n)
+        ]
+        return [complex(a[k], a[k + n]) for k in range(n)]
+    a = [c.real for c in v] + [c.imag for c in v]
+    return [
+        sum(a[k] * zeta[(e * k) % (2 * two_n)] for k in range(two_n)) for e in exponents
+    ]
 
 
 @pytest.mark.parametrize("cN", [1, 2, 4, 8, 16, 32])
 def test_complex_fft_matches_oracle(cN):
-    # Below 8 values the vectorized transform cannot run and its table
-    # loader cannot be built, so this length range crosses that cutover.
+    # Below 16 values the scalar FFT runs, so this range crosses the cutover
+    # to the vector one.
     cring = ComplexRing(cN)
     slots = [complex(rng.uniform(-5, 5), rng.uniform(-5, 5)) for _ in range(cN)]
     cp = ComplexPolynomial(cring).from_array(slots)
@@ -656,6 +715,52 @@ def test_ring_follows_a_replaced_registry(monkeypatch):
     assert (a - a) == 0
 
 
+def test_a_fully_split_ring_prefers_a_full_size_even_multiplier():
+    # Below 2^17 the primes a * 2^14 + 1 with odd a are 81921, 49153 and 16385,
+    # none of them prime. Fully split, 65537 = 4 * 2^14 + 1 serves; split in
+    # degree-2 factors, a must be odd, so there is no prime.
+    from vfhe.arith.impl.rns.polynomial import RNSRing
+
+    assert RNSRing.gen_prime(1 << 14, 17, split_degree=1) == 65537
+    with pytest.raises(ValueError, match="no prime"):
+        RNSRing.gen_prime(1 << 14, 17, split_degree=2)
+    # Below 2^16 the only odd-multiplier prime 1 mod 2^12 is 12289, of 14
+    # bits; fully split, the full-size 40961 = 10 * 2^12 + 1 comes first.
+    assert RNSRing.gen_prime(1 << 12, 16, split_degree=1) == 40961
+    assert RNSRing.gen_prime(1 << 12, 16, split_degree=2) == 12289
+    # A ring that has a full-size odd-multiplier prime keeps it.
+    first = RNSRing.gen_prime(1 << 14, 30, split_degree=1)
+    assert first == RNSRing.gen_prime(1 << 14, 30, split_degree=2)
+    assert first % (1 << 15) == 1 << 14 | 1 and first < 1 << 30
+
+    ring = Ring(1 << 13, prime_size=[17], split_degree=1)
+    assert ring.primes == [65537]
+    # The transform is sound: a product by 1 + 5 X^3 is a shift and a scale.
+    N, q = ring.N, 65537
+    a = [random.randrange(q) for _ in range(N)]  # noqa: S311 - test data
+    b = [1, 0, 0, 5] + [0] * (N - 4)
+    product = (
+        Polynomial(ring).from_array(a) * Polynomial(ring).from_array(b)
+    ).get_polynomial()
+    shifted = [-a[N - 3 + i] for i in range(3)] + a[: N - 3]
+    assert product == [(x + 5 * y) % q for x, y in zip(a, shifted, strict=True)]
+
+
+def test_a_partially_split_ring_refuses_an_even_multiplier_prime():
+    # 40961 = 20 * 2^11 + 1: fine fully split at N = 2^11, but split in degree
+    # 2 the factors X^2 - zeta are not irreducible, since a = 20 is even.
+    from vfhe.arith.impl.rns.polynomial import RNSRing
+
+    N = 1 << 11
+    assert Ring(N, primes=[40961], split_degree=1).primes == [40961]
+    with pytest.raises(ValueError, match="a odd"):
+        Ring(N, primes=[40961], split_degree=2)
+    odd = RNSRing.gen_prime(N, 30, split_degree=2)
+    assert Ring(N, primes=[odd], split_degree=2).primes == [odd]
+    with pytest.raises(ValueError, match="a odd"):
+        Ring(N, primes=[odd, 40961], split_degree=2)
+
+
 def _cross_base_rings(n, plaintext_bits, other_bits, aux_bits):
     """A source and a destination ring sharing only their first prime.
 
@@ -668,7 +773,11 @@ def _cross_base_rings(n, plaintext_bits, other_bits, aux_bits):
     dst = Ring(n, prime_size=[plaintext_bits, *other_bits], split_degree=1)
     aux = []
     for bits in aux_bits:
-        aux.append(RNSRing.gen_prime(2 * n, bits, exclude_list=dst.primes + aux))
+        aux.append(
+            RNSRing.gen_prime(
+                2 * n, bits, exclude_list=dst.primes + aux, split_degree=1
+            )
+        )
     src = Ring(n, primes=aux, prime_size=aux_bits, split_degree=1).union(
         dst.quotient_ring(ell=1)
     )

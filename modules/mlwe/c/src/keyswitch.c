@@ -1,0 +1,602 @@
+// SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
+// SPDX-License-Identifier: Apache-2.0
+#include "mlwe.h"
+#include "rns_rows.h"
+#include "alloc.h"
+#include <parallel.h>
+
+// Key switching and the operations built on it: the GHS hybrid key switch
+// (a BV one when the key lives in the sample's own ring), automorphisms --
+// single, hoisted, batched and summed --, the trace, packing through the
+// trace, and ring switching. Everything here works one whole ring element at
+// a time through arith_*, except that RNS hybrid key switches go to
+// keyswitch_batch.c and the halvings of the normalized trace and trace packing
+// to rns_rows.c; the gadget products are gadget_rns.c's, and what needs
+// residues is in keyswitch_rns.c.
+
+// GHS hybrid key switch. The product must accumulate in the ring the key
+// lives in: `out` is only guaranteed to be allocated for its own, narrower
+// ring, so it accumulates in scratch over the key's ring, and only the
+// finished result -- already back in `in`'s ring -- reaches `out`.
+void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk, uint64_t lvl)
+{
+    (void)lvl;
+    assert(in != out);
+    if (mlwe_is_rns_hybrid_keyswitch(out, ksk))
+    {
+        KeySwitch ks = {out, in, ksk, NULL, false};
+        mlwe_rns_hybrid_keyswitch_batch(&ks, 1, 0);
+        return;
+    }
+    // Scratch of its own: the key is shared across threads, so nothing
+    // hanging off it may be written.
+    RNSc_MLWE acc = mlwe_alloc_sample(ksk->ring, out->r);
+    ArithRing target = in->ring;
+
+    // compute -a_i^T * ksk_i. A NULL ksk->s[i] marks a component that keeps
+    // the target key (e.g. the linear part during relinearization); it is
+    // copied through below instead of being key-switched.
+    mlwe_RNS_trivial_sample_of_zero(acc);
+    for (size_t i = 0; i < in->r; i++)
+    {
+        if (ksk->s[i] != NULL)
+        {
+            gadget_mul_subto_polynomial(acc, ksk->s[i], &in->a[i], &ksk->gadget_params);
+        }
+    }
+    // The components that keep the target key stay in the base ring, so they
+    // are added *after* the rescale (never divided out), in the same pass:
+    // the k-th pass-through a-component lands in out->a[k], and in->b always
+    // passes through.
+    const ArithElement *addend[out->r + 1];
+    for (size_t k = 0; k <= out->r; k++)
+        addend[k] = NULL;
+    size_t keep_idx = 0;
+    for (size_t i = 0; i < in->r; i++)
+    {
+        if (ksk->s[i] == NULL)
+            addend[keep_idx++] = &in->a[i];
+    }
+    addend[out->r] = &in->b;
+
+    // convert to RNSc and rescale into out, in in's ring
+    assert(out->ring == target);
+    mlwe_RNS_to_RNSc(acc, acc);
+    mlwe_mod_down(out, acc, addend);
+    free_mlwe_RNS_sample(acc);
+}
+
+void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
+                                uint64_t lvl)
+{
+    if (mlwe_is_rns_hybrid_keyswitch(out, ksk))
+    {
+        mlwe_rns_automorphism_batch(&out, &in, &gen, &ksk, 1, 0);
+        return;
+    }
+    RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, out->r);
+    if (out->ring->impl == ARITH_IMPL_RNS)
+        mlwe_rns_permute(tmp, in, gen);
+    else
+    {
+        for (size_t i = 0; i < out->r; i++)
+        {
+            arith_permute(out->ring, &tmp->a[i], &in->a[i], gen);
+        }
+        arith_permute(out->ring, &tmp->b, &in->b, gen);
+    }
+    mlwe_RNSc_GHS_hybrid_keyswitch(out, tmp, ksk, lvl);
+    free_mlwe_RNS_sample(tmp);
+}
+
+struct _MLWE_Hoisted
+{
+    RNSc_MLWE in;
+    // One per component; empty for a component the key passes through.
+    GadgetDigits *digits;
+    ArithRing key_ring;
+    GadgetParams gadget_params;
+};
+
+MLWE_Hoisted mlwe_hoist(RNSc_MLWE in, RNS_MLWE_KS_Key ksk)
+{
+    assert(ksk->count == in->r);
+    MLWE_Hoisted h = (MLWE_Hoisted)safe_malloc(sizeof(*h));
+    h->in = mlwe_alloc_sample(in->ring, in->r);
+    mlwe_copy_RNSc_sample(h->in, in);
+    h->key_ring = ksk->ring;
+    h->gadget_params = ksk->gadget_params;
+    h->digits = (GadgetDigits *)safe_malloc(in->r * sizeof(GadgetDigits));
+    for (size_t i = 0; i < in->r; i++)
+    {
+        if (ksk->s[i] == NULL)
+            h->digits[i] = (GadgetDigits){NULL, 0};
+        else
+            gadget_decompose(&h->digits[i], ksk->s[i], &in->a[i], &ksk->gadget_params);
+    }
+    return h;
+}
+
+void free_mlwe_hoisted(MLWE_Hoisted h)
+{
+    for (size_t i = 0; i < h->in->r; i++)
+        gadget_digits_free(&h->digits[i]);
+    free(h->digits);
+    free_mlwe_RNS_sample(h->in);
+    free(h);
+}
+
+static int mlwe_hoisted_fits(MLWE_Hoisted h, RNS_MLWE_KS_Key ksk)
+{
+    if (ksk->ring != h->key_ring || ksk->gadget_params.log_base != h->gadget_params.log_base ||
+        ksk->gadget_params.digits != h->gadget_params.digits ||
+        gadget_primes_per_digit(&ksk->gadget_params) !=
+            gadget_primes_per_digit(&h->gadget_params) ||
+        ksk->count != h->in->r)
+        return 0;
+    for (size_t i = 0; i < h->in->r; i++)
+    {
+        if ((ksk->s[i] == NULL) != (h->digits[i].n == 0))
+            return 0;
+    }
+    return 1;
+}
+
+// Like mlwe_automorphism_RNSc_GHS, but reusing the decomposition in `h`.
+int mlwe_automorphism_RNSc_GHS_hoisted(RNSc_MLWE out, MLWE_Hoisted h, uint64_t gen,
+                                       RNS_MLWE_KS_Key ksk)
+{
+    if (!mlwe_hoisted_fits(h, ksk))
+        return -1;
+    RNSc_MLWE in = h->in;
+    RNSc_MLWE acc = mlwe_alloc_sample(ksk->ring, out->r);
+    mlwe_RNS_trivial_sample_of_zero(acc);
+    for (size_t i = 0; i < in->r; i++)
+    {
+        if (ksk->s[i] != NULL)
+            gadget_mul_subto_automorphism(acc, ksk->s[i], &h->digits[i], gen);
+    }
+    mlwe_RNS_to_RNSc(acc, acc);
+
+    // The pass-through components and b, permuted, are added after the
+    // rescale, as the key switch does.
+    ArithElement permuted[out->r + 1];
+    const ArithElement *addend[out->r + 1];
+    for (size_t k = 0; k <= out->r; k++)
+        addend[k] = NULL;
+    size_t keep_idx = 0;
+    for (size_t i = 0; i < in->r; i++)
+    {
+        if (ksk->s[i] == NULL)
+        {
+            arith_new(in->ring, &permuted[keep_idx]);
+            arith_permute(in->ring, &permuted[keep_idx], &in->a[i], gen);
+            addend[keep_idx] = &permuted[keep_idx];
+            keep_idx++;
+        }
+    }
+    arith_new(in->ring, &permuted[out->r]);
+    arith_permute(in->ring, &permuted[out->r], &in->b, gen);
+    addend[out->r] = &permuted[out->r];
+
+    assert(out->ring == in->ring);
+    mlwe_mod_down(out, acc, addend);
+    for (size_t k = 0; k <= out->r; k++)
+    {
+        if (addend[k])
+            arith_free(in->ring, &permuted[k]);
+    }
+    free_mlwe_RNS_sample(acc);
+    return 0;
+}
+
+typedef struct
+{
+    RNSc_MLWE *out;
+    MLWE_Hoisted h;
+    RNSc_MLWE *in;
+    const uint64_t *gens;
+    RNS_MLWE_KS_Key *ksks;
+} AutomorphismJobs;
+
+static void hoisted_automorphism_job(void *ctx, uint64_t i)
+{
+    AutomorphismJobs *jobs = (AutomorphismJobs *)ctx;
+    mlwe_automorphism_RNSc_GHS_hoisted(jobs->out[i], jobs->h, jobs->gens[i], jobs->ksks[i]);
+}
+
+int mlwe_automorphisms_RNSc_GHS_hoisted(RNSc_MLWE *out, MLWE_Hoisted h, const uint64_t *gens,
+                                        RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads)
+{
+    for (uint64_t i = 0; i < n; i++)
+    {
+        if (!mlwe_hoisted_fits(h, ksks[i]))
+            return -1;
+    }
+    AutomorphismJobs jobs = {out, h, NULL, gens, ksks};
+    vfhe_parallel_for(n, n_threads, hoisted_automorphism_job, &jobs);
+    return 0;
+}
+
+static void automorphism_job(void *ctx, uint64_t i)
+{
+    AutomorphismJobs *jobs = (AutomorphismJobs *)ctx;
+    RNSc_MLWE out = jobs->out[i];
+    RNSc_MLWE in = jobs->in[i];
+    // A mul-domain input is converted into `out`, which then serves as the
+    // input: the automorphism reads its input before writing.
+    if (mlwe_domain(in) == ARITH_DOMAIN_MUL)
+    {
+        mlwe_RNS_to_RNSc(out, in);
+        in = out;
+    }
+    if (jobs->gens[i] == 1)
+    {
+        if (in != out)
+            mlwe_copy_RNSc_sample(out, in);
+    }
+    else
+        mlwe_automorphism_RNSc_GHS(out, in, jobs->gens[i], jobs->ksks[i], 0);
+}
+
+void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
+                                      RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads)
+{
+    // Row by row over the whole batch when every sample is a hybrid key
+    // switch over RNS rings; a generator 1 (a copy, with no key) or another
+    // kind of key sends the batch through the sample-by-sample path instead.
+    bool batch = true;
+    for (uint64_t i = 0; i < n && batch; i++)
+        batch = gens[i] != 1 && mlwe_is_rns_hybrid_keyswitch(out[i], ksks[i]);
+    if (batch)
+    {
+        mlwe_rns_automorphism_batch(out, in, gens, ksks, n, n_threads);
+        return;
+    }
+    AutomorphismJobs jobs = {out, NULL, in, gens, ksks};
+    vfhe_parallel_for(n, n_threads, automorphism_job, &jobs);
+}
+
+// Each worker sums a contiguous range of terms: key-switch products in the
+// keys' ring (`acc`, mul domain) and pass-through parts in the output ring
+// (`kept`, canonical). The ranges are added afterwards and `acc` is divided
+// down once.
+typedef struct
+{
+    RNS_MLWE *in;
+    const uint64_t *gens;
+    RNS_MLWE_KS_Key *ksks;
+    uint64_t n, n_ranges;
+    RNS_MLWE *acc;
+    RNSc_MLWE *kept;
+    ArithRing ring;
+} AutomorphismSum;
+
+static void automorphism_sum_job(void *ctx, uint64_t k)
+{
+    AutomorphismSum *sum = (AutomorphismSum *)ctx;
+    RNS_MLWE acc = sum->acc[k];
+    RNSc_MLWE kept = sum->kept[k];
+    const uint64_t r = kept->r;
+    RNSc_MLWE canonical = NULL;
+    RNSc_MLWE permuted = mlwe_alloc_sample(sum->ring, r);
+    mlwe_RNS_trivial_sample_of_zero(acc);
+    for (size_t j = 0; j < r; j++)
+        arith_zero_in(sum->ring, &kept->a[j], ARITH_DOMAIN_CANONICAL);
+    arith_zero_in(sum->ring, &kept->b, ARITH_DOMAIN_CANONICAL);
+
+    for (uint64_t i = k * sum->n / sum->n_ranges; i < (k + 1) * sum->n / sum->n_ranges; i++)
+    {
+        RNSc_MLWE in = sum->in[i];
+        if (mlwe_domain(in) == ARITH_DOMAIN_MUL)
+        {
+            if (canonical == NULL)
+                canonical = mlwe_alloc_sample(sum->ring, r);
+            mlwe_RNS_to_RNSc(canonical, in);
+            in = canonical;
+        }
+        if (sum->gens[i] == 1)
+        {
+            mlwe_addto_RNSc_sample(kept, in);
+            continue;
+        }
+        for (size_t j = 0; j < r; j++)
+            arith_permute(sum->ring, &permuted->a[j], &in->a[j], sum->gens[i]);
+        arith_permute(sum->ring, &permuted->b, &in->b, sum->gens[i]);
+
+        RNS_MLWE_KS_Key ksk = sum->ksks[i];
+        size_t keep_idx = 0;
+        for (size_t j = 0; j < r; j++)
+        {
+            if (ksk->s[j] != NULL)
+                gadget_mul_subto_polynomial(acc, ksk->s[j], &permuted->a[j], &ksk->gadget_params);
+            else
+            {
+                arith_add(sum->ring, &kept->a[keep_idx], &kept->a[keep_idx], &permuted->a[j]);
+                keep_idx++;
+            }
+        }
+        arith_add(sum->ring, &kept->b, &kept->b, &permuted->b);
+    }
+    free_mlwe_RNS_sample(permuted);
+    if (canonical != NULL)
+        free_mlwe_RNS_sample(canonical);
+}
+
+int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *gens,
+                                   RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t n_threads)
+{
+    // All key products share one accumulator, so the keys must agree on its
+    // ring and on which components pass through.
+    RNS_MLWE_KS_Key first = NULL;
+    for (uint64_t i = 0; i < n; i++)
+    {
+        if (gens[i] == 1)
+            continue;
+        RNS_MLWE_KS_Key ksk = ksks[i];
+        if (ksk == NULL || ksk->count != out->r)
+            return -1;
+        if (first == NULL)
+            first = ksk;
+        else if (ksk->ring != first->ring)
+            return -1;
+        for (size_t j = 0; j < out->r; j++)
+        {
+            if ((ksk->s[j] == NULL) != (first->s[j] == NULL))
+                return -1;
+        }
+    }
+
+    const uint64_t n_ranges = n == 0 ? 1 : vfhe_threads_for(n_threads, n);
+    AutomorphismSum sum = {in, gens, ksks, n, n_ranges, NULL, NULL, out->ring};
+    sum.acc = (RNS_MLWE *)safe_malloc(n_ranges * sizeof(RNS_MLWE));
+    sum.kept = (RNSc_MLWE *)safe_malloc(n_ranges * sizeof(RNSc_MLWE));
+    for (uint64_t k = 0; k < n_ranges; k++)
+    {
+        // With no keyed term, `acc` is zero over out's ring.
+        sum.acc[k] = mlwe_alloc_sample(first != NULL ? first->ring : out->ring, out->r);
+        sum.kept[k] = mlwe_alloc_sample(out->ring, out->r);
+    }
+    vfhe_parallel_for(n_ranges, n_threads, automorphism_sum_job, &sum);
+
+    RNS_MLWE acc = sum.acc[0];
+    RNSc_MLWE kept = sum.kept[0];
+    for (uint64_t k = 1; k < n_ranges; k++)
+    {
+        mlwe_add_RNS_sample(acc, acc, sum.acc[k]);
+        mlwe_addto_RNSc_sample(kept, sum.kept[k]);
+    }
+    const ArithElement *addend[out->r + 1];
+    for (size_t k = 0; k <= out->r; k++)
+        addend[k] = k < out->r ? &kept->a[k] : &kept->b;
+    mlwe_RNS_to_RNSc(acc, acc);
+    mlwe_mod_down(out, acc, addend);
+
+    for (uint64_t k = 0; k < n_ranges; k++)
+    {
+        free_mlwe_RNS_sample(sum.acc[k]);
+        free_mlwe_RNS_sample(sum.kept[k]);
+    }
+    free(sum.acc);
+    free(sum.kept);
+    return 0;
+}
+
+// Whether `ksk` is a multiplexer key for rank `r` that can share an
+// accumulator and a decomposition with `first`.
+static int automorphism_mux_fits(RNS_MLWE_KS_Key first, RNS_MLWE_KS_Key ksk, uint64_t r)
+{
+    if (ksk == NULL || ksk->count != r + 1 || ksk->ring != first->ring ||
+        ksk->gadget_params.log_base != first->gadget_params.log_base ||
+        ksk->gadget_params.digits != first->gadget_params.digits ||
+        gadget_primes_per_digit(&ksk->gadget_params) !=
+            gadget_primes_per_digit(&first->gadget_params))
+        return 0;
+    for (size_t i = 0; i <= r; i++)
+    {
+        if (ksk->s[i] == NULL)
+            return 0;
+    }
+    return 1;
+}
+
+// Whether the n keys of one multiplexer fit each other.
+static int automorphism_mux_keys_fit(RNS_MLWE_KS_Key *ksks, uint64_t n, uint64_t r)
+{
+    if (n == 0)
+        return 0;
+    for (uint64_t d = 0; d < n; d++)
+    {
+        if (!automorphism_mux_fits(ksks[0], ksks[d], r))
+            return 0;
+    }
+    return 1;
+}
+
+// Key d switches from (b_d Aut_d(s), b_d) to s, so its product with the
+// permuted digits decrypts to b_d (Aut_d(b) - <Aut_d(a), Aut_d(s)>): the mask
+// components are subtracted, as in a key switch, and the body added.
+static void automorphism_mux(RNSc_MLWE out, RNSc_MLWE in, const uint64_t *gens,
+                             RNS_MLWE_KS_Key *ksks, uint64_t n)
+{
+    const uint64_t r = in->r;
+    RNSc_MLWE canonical = NULL;
+    if (mlwe_domain(in) == ARITH_DOMAIN_MUL)
+    {
+        canonical = mlwe_alloc_sample(in->ring, r);
+        mlwe_RNS_to_RNSc(canonical, in);
+        in = canonical;
+    }
+    const GadgetParams *gadget_params = &ksks[0]->gadget_params;
+    GadgetDigits digits[r + 1];
+    for (size_t i = 0; i <= r; i++)
+        gadget_decompose(&digits[i], ksks[0]->s[i], i < r ? &in->a[i] : &in->b, gadget_params);
+    if (canonical != NULL)
+        free_mlwe_RNS_sample(canonical);
+
+    RNS_MLWE acc = mlwe_alloc_sample(ksks[0]->ring, r);
+    mlwe_RNS_trivial_sample_of_zero(acc);
+    for (uint64_t d = 0; d < n; d++)
+    {
+        for (size_t i = 0; i < r; i++)
+            gadget_mul_subto_automorphism(acc, ksks[d]->s[i], &digits[i], gens[d]);
+        gadget_mul_addto_automorphism(acc, ksks[d]->s[r], &digits[r], gens[d]);
+    }
+    for (size_t i = 0; i <= r; i++)
+        gadget_digits_free(&digits[i]);
+    mlwe_RNS_to_RNSc(acc, acc);
+    mlwe_mod_down(out, acc, NULL);
+    free_mlwe_RNS_sample(acc);
+}
+
+typedef struct
+{
+    RNSc_MLWE *out, *in;
+    const uint64_t *gens;
+    RNS_MLWE_KS_Key *ksks;
+    uint64_t n;
+} AutomorphismMuxes;
+
+// Item i of the batch: one multiplexer on one worker.
+static void automorphism_mux_job(void *ctx, uint64_t i)
+{
+    const AutomorphismMuxes *jobs = (const AutomorphismMuxes *)ctx;
+    automorphism_mux(jobs->out[i], jobs->in[i], jobs->gens, jobs->ksks + i * jobs->n, jobs->n);
+}
+
+// Checks every item's keys first, so a refusal writes nothing.
+int mlwe_automorphism_mux_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint64_t *gens,
+                                         RNS_MLWE_KS_Key *ksks, uint64_t count, uint64_t n,
+                                         uint64_t n_threads)
+{
+    for (uint64_t i = 0; i < count; i++)
+    {
+        if (!automorphism_mux_keys_fit(ksks + i * n, n, in[i]->r))
+            return -1;
+    }
+    AutomorphismMuxes jobs = {out, in, gens, ksks, n};
+    vfhe_parallel_for(count, n_threads, automorphism_mux_job, &jobs);
+    return 0;
+}
+
+void mlwe_partial_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t *gens, RNS_MLWE_KS_Key *ksks,
+                        uint64_t size, uint64_t lvl)
+{
+    RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, out->r);
+    mlwe_copy_RNSc_sample(tmp, in);
+    for (size_t i = 0; i < size; i++)
+    {
+        mlwe_automorphism_RNSc_GHS(out, tmp, gens[i], ksks[i], lvl);
+        mlwe_addto_RNSc_sample(tmp, out);
+    }
+    mlwe_copy_RNSc_sample(out, tmp);
+    free_mlwe_RNS_sample(tmp);
+}
+
+void mlwe_trace(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key *ksks, uint64_t lvl)
+{
+    const uint64_t log_N = (uint64_t)log2(in->ring->N);
+    uint64_t *gens = (uint64_t *)malloc(log_N * sizeof(uint64_t));
+    for (size_t i = 1; i <= log_N; i++)
+        gens[i - 1] = (1ULL << (log_N - i + 1)) + 1;
+    mlwe_partial_trace(out, in, gens, ksks, log_N, lvl);
+    free(gens);
+}
+
+// The trace evaluation of [AP13], one automorphism per level of the
+// power-of-two tower, with the halving of [LY26]'s reverse homomorphic trace:
+// each level halves the sample before adding its automorphism, so h + Aut(h)
+// is the sample itself where the automorphism fixes a coefficient and zero
+// where it negates one, whatever the value of h. The generators ascend,
+// 2^k + 1 from k = log2(n) + 1, so a coefficient is only ever merely permuted
+// before the level that zeroes it, and once zeroed it is fixed by every level
+// after: the junk a halving leaves (up to q/2, exact since q is odd) never
+// survives.
+void mlwe_normalized_trace(RNSc_MLWE out, RNSc_MLWE in, uint64_t n, RNS_MLWE_KS_Key *ksks)
+{
+    const uint64_t N = in->ring->N;
+    assert(n >= 1 && N % n == 0 && (n & (n - 1)) == 0);
+    assert(in->ring->impl == ARITH_IMPL_RNS);
+    const uint64_t log_N = (uint64_t)__builtin_ctzll(N), log_n = (uint64_t)__builtin_ctzll(n);
+    RNSc_MLWE acc = mlwe_alloc_sample(in->ring, in->r);
+    RNSc_MLWE image = mlwe_alloc_sample(in->ring, in->r);
+    mlwe_copy_RNSc_sample(acc, in);
+    for (uint64_t k = log_n + 1; k <= log_N; k++)
+    {
+        mlwe_rns_halve(acc);
+        mlwe_automorphism_RNSc_GHS(image, acc, (1ULL << k) + 1, ksks[k - 1], 0);
+        mlwe_addto_RNSc_sample(acc, image);
+    }
+    mlwe_copy_RNSc_sample(out, acc);
+    free_mlwe_RNS_sample(acc);
+    free_mlwe_RNS_sample(image);
+}
+
+// The packing of [CDKS21] (PackLWEs) with the difference of each level
+// halved before its automorphism [LY26]: a level computes
+// h + Aut(h) + X^t odd with h = (even - X^t odd) / 2, t = N >> ell. Where the
+// automorphism fixes a coefficient, h + Aut(h) is twice h, which is the
+// difference itself; where it negates one, the sum is zero. Either holds for
+// any value of h, so halving modulo q (exact, q odd) is enough, even where a
+// coefficient of the difference is odd and its half is near q/2. The packed
+// values keep their scale, and a level's key-switch noise is added once
+// instead of being doubled by every level above it.
+// Level m of the recursion packs, for every r < 2^(ell - m), the class of
+// indices r mod 2^(ell - m): its even half is already packed into vec[r] and
+// its odd half into vec[r + 2^(ell - m)]. The classes of one level are
+// independent, so a level is one parallel loop over them.
+typedef struct
+{
+    RNSc_MLWE *vec;
+    RNS_MLWE_KS_Key *ksks;
+    uint64_t m, stride;
+} TracePackLevel;
+
+static void trace_pack_job(void *ctx, uint64_t r)
+{
+    const TracePackLevel *level = (const TracePackLevel *)ctx;
+    RNSc_MLWE packed = level->vec[r];
+    RNSc_MLWE odd = level->vec[r + level->stride];
+    RNSc_MLWE shifted = mlwe_alloc_sample(packed->ring, packed->r);
+    RNSc_MLWE image = mlwe_alloc_sample(packed->ring, packed->r);
+    mlwe_RNSc_mul_by_xai(shifted, odd, packed->ring->N >> level->m);
+    mlwe_sub_RNSc_sample(packed, packed, shifted);
+    mlwe_rns_halve(packed);
+    mlwe_automorphism_RNSc_GHS(image, packed, (1ULL << level->m) + 1, level->ksks[level->m - 1], 0);
+    mlwe_addto_RNSc_sample(packed, image);
+    mlwe_addto_RNSc_sample(packed, shifted);
+    free_mlwe_RNS_sample(shifted);
+    free_mlwe_RNS_sample(image);
+}
+
+void mlwe_trace_pack(RNSc_MLWE *vec, uint64_t ell, RNS_MLWE_KS_Key *ksks, uint64_t n_threads)
+{
+    if (ell == 0)
+        return;
+    assert(vec[0]->ring->impl == ARITH_IMPL_RNS);
+    for (uint64_t m = 1; m <= ell; m++)
+    {
+        TracePackLevel level = {vec, ksks, m, 1ULL << (ell - m)};
+        vfhe_parallel_for(level.stride, n_threads, trace_pack_job, &level);
+    }
+}
+
+// Ring switching [GHPS12]: the subring map into the key ring's dimension,
+// then a key switch, which may change the rank, from the key the map leaves
+// the sample under. Going down, the map reads the sample as one of higher rank
+// over the subring, where [GHPS12] key-switches into the subring first and
+// then takes the trace of the ciphertext.
+void mlwe_ring_switch(RNSc_MLWE out, RNSc_MLWE *in, uint64_t count, RNS_MLWE_KS_Key ksk)
+{
+    const uint64_t N = in[0]->ring->N, n = out->ring->N;
+    const uint64_t rank = N >= n ? in[0]->r * (N / n) : in[0]->r;
+    assert(ksk->count == rank);
+    assert(N < n || count == 1);
+    RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, rank);
+    if (N >= n)
+        mlwe_project_subring(tmp, in[0]);
+    else
+        mlwe_embed_subring(tmp, in, count);
+    mlwe_RNSc_GHS_hybrid_keyswitch(out, tmp, ksk, 0);
+    free_mlwe_RNS_sample(tmp);
+}

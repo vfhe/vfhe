@@ -18,6 +18,8 @@ from vfhe.util.bindings import ffi
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from vfhe.mlwe import PlaintextMatrix
+
 
 class CKKS_Scheme(MLWE_Scheme):
     def __init__(
@@ -45,7 +47,7 @@ class CKKS_Scheme(MLWE_Scheme):
             balanced=balanced,
         )
         self.scaling_factor = scaling_factor
-        self.complex_ring = ComplexRing(self.ring.N // 2, True)
+        self.complex_ring = ComplexRing(self.ring.N // 2)
 
     def encode(
         self,
@@ -59,26 +61,48 @@ class CKKS_Scheme(MLWE_Scheme):
         ``len(values)`` must divide ``N/2``; fewer values are repeated to fill the
         slots (sparse packing), and ``decode(..., slots=len(values))`` reads them
         back. ``ring`` is the plaintext's ring (default: level 0's) and ``scale``
-        multiplies the values (default: ``scaling_factor``).
+        multiplies the values (default: ``scaling_factor``). A contiguous buffer
+        of complex doubles (a numpy ``complex128`` array) is read in place.
         """
+        return self.encode_batch([values], ring=ring, scale=scale)[0]
+
+    def encode_batch(
+        self,
+        values: Sequence[Sequence[complex | float]],
+        *,
+        ring: RNSRing | None = None,
+        scale: float | None = None,
+        n_threads: int = 0,
+    ) -> list[RNSPolynomial]:
+        """:meth:`encode` of each of ``values``, in one native call."""
+        return self._encode_rotated(values, None, ring, scale, n_threads)
+
+    def _encode_rotated(
+        self,
+        values: Sequence[Sequence[complex | float]],
+        shifts: Sequence[int] | None,
+        ring: RNSRing | None,
+        scale: float | None,
+        n_threads: int,
+    ) -> list[RNSPolynomial]:
+        """:meth:`encode_batch`, with ``values[k]`` rotated left by ``shifts[k]``
+        slots first."""
         ring = self.ring if ring is None else ring
         if ring.N != self.ring.N:
             raise ValueError(
                 f"Expected a ring of dimension {self.ring.N}, got {ring.N}"
             )
-        slots = self.ring.N // 2
-        if not values or slots % len(values):
-            raise ValueError(
-                f"Expected a number of values dividing {slots}, got {len(values)}"
-            )
-        c_poly = ComplexPolynomial(self.complex_ring)
-        c_poly.from_array(list(values) * (slots // len(values)))
-        c_poly.IFFT()
-        c_poly *= self.scaling_factor if scale is None else scale
-        poly = c_poly.round_to_RNS_cpp(ring)
-        # Restrict the RNS mask of the encoded polynomial to the primes of `ring`
-        ffi.cast("RNS_Polynomial", poly.obj).rns_mask = ring.mask
-        return poly
+        polys = self.complex_ring.values_ifft_scale_round_to_RNS_batch(
+            values,
+            ring,
+            self.scaling_factor if scale is None else scale,
+            shifts,
+            n_threads,
+        )
+        for poly in polys:
+            # Restrict the RNS mask of the encoded polynomial to the primes of `ring`
+            ffi.cast("RNS_Polynomial", poly.obj).rns_mask = ring.mask
+        return polys
 
     def decode(
         self,
@@ -134,9 +158,11 @@ class CKKS_Scheme(MLWE_Scheme):
         To keep decoding cheap, the plaintext is returned over the fewest primes
         that hold it: the lowest level (a quotient of the ciphertext's ring) whose
         modulus exceeds ``2 * delta * message_bound``. ``message_bound`` bounds the
-        slots' magnitude; by default it is what the last level holds at the
-        scheme's scaling factor, so ordinary ciphertexts drop to the last level and
-        those with a larger ``delta`` (e.g. unrescaled products) stay higher.
+        slots' magnitude; by default it is what the smallest level holds at the
+        scheme's scaling factor, so ordinary ciphertexts drop to that level and
+        those with a larger ``delta`` (e.g. unrescaled products) stay higher. A
+        level with less than two bits above the scaling factor cannot hold a
+        message and does not count as the smallest.
         ``drop=False`` keeps every prime.
         """
         if not drop:
@@ -152,9 +178,11 @@ class CKKS_Scheme(MLWE_Scheme):
         whose modulus holds a plaintext of size ``delta * message_bound``.
         """
         if message_bound is None:
-            # What the last level holds at the scheme's scale, one bit spare.
-            last_bits = math.log2(math.prod(self.rings[-1].primes))
-            bound_bits = last_bits - math.log2(self.scaling_factor) - 2
+            # What the smallest level that has room holds at the scheme's
+            # scale, one bit spare.
+            scale_bits = math.log2(self.scaling_factor)
+            room = [math.log2(math.prod(r.primes)) - scale_bits - 2 for r in self.rings]
+            bound_bits = min((b for b in room if b >= 0), default=max(room))
         else:
             bound_bits = math.log2(message_bound)
         needed_bits = 1 + math.log2(delta) + bound_bits
@@ -169,25 +197,29 @@ class CKKS_Scheme(MLWE_Scheme):
         return best
 
     def rotate(
-        self, ciphertext: CKKS_Ciphertext, k: int, ksk: MLWE_Set | list[MLWE_Set]
+        self,
+        ciphertext: CKKS_Ciphertext,
+        k: int,
+        ksk: MLWE_Set | list[MLWE_Set],
+        n_threads: int = 0,
     ) -> CKKS_Ciphertext:
         """Rotates the slots of the ciphertext by k steps."""
-        N = self.ring.N
-        # Galois generator for rotation by k slots is 5^k mod 2N
-        # The rotation group generated by 5 has order N/2
-        k_mod = k % (N // 2)
-        gen = pow(5, k_mod, 2 * N)
-        return self.automorphism(ciphertext, gen, ksk)
+        return self.automorphism(ciphertext, self.rotation_generator(k), ksk, n_threads)
 
     def gen_rotation_key(
         self, key: MLWE_Key, k: int, n_threads: int = 0
     ) -> MLWE_Set | list[MLWE_Set]:
         """Generates the rotation key (automorphism key-switching key) for rotation
-        by k slots, on up to ``n_threads`` threads (0: the library limit)."""
+        by k slots."""
+        return self.gen_ksk_automorphism(
+            key, key, self.rotation_generator(k), n_threads=n_threads
+        )
+
+    def rotation_generator(self, k: int) -> int:
+        """The Galois element ``5^k mod 2N`` that rotates the slots by ``k``
+        steps; 5 has order ``N/2``, so ``k`` is taken mod ``N/2``."""
         N = self.ring.N
-        k_mod = k % (N // 2)
-        gen = pow(5, k_mod, 2 * N)
-        return self.gen_ksk_automorphism(key, key, gen, n_threads=n_threads)
+        return pow(5, k % (N // 2), 2 * N)
 
     def multiply_plain(
         self,
@@ -219,17 +251,19 @@ class CKKS_Scheme(MLWE_Scheme):
         The ciphertexts must share one ``delta``, and the coefficients must all be
         encoded at ``scale`` (default: ``scaling_factor``).
         """
-        return self.linear_combinations(cts, [coefficients], scale, n_threads=1)[0]
+        outs = self.linear_combinations(cts, [coefficients], n_threads=1, scale=scale)
+        return outs[0]
 
     def linear_combinations(
         self,
         cts: Sequence[CKKS_Ciphertext],
-        rows: Sequence[Sequence[RNSPolynomial | None]],
-        scale: float | None = None,
+        rows: Sequence[Sequence[RNSPolynomial | None]] | PlaintextMatrix,
         n_threads: int = 0,
+        *,
+        scale: float | None = None,
     ) -> list[CKKS_Ciphertext]:
-        """One :meth:`linear_combination` of ``cts`` per row of coefficients, on up to
-        ``n_threads`` threads (0: the library limit). ``None`` skips a term.
+        """One :meth:`linear_combination` of ``cts`` per row of coefficients.
+        ``None`` skips a term.
         """
         if any(c.delta != cts[0].delta for c in cts):
             raise ValueError("the ciphertexts must share one scaling factor")
@@ -240,19 +274,23 @@ class CKKS_Scheme(MLWE_Scheme):
         return outs
 
     def conjugate(
-        self, ciphertext: CKKS_Ciphertext, ksk: MLWE_Set | list[MLWE_Set]
+        self,
+        ciphertext: CKKS_Ciphertext,
+        ksk: MLWE_Set | list[MLWE_Set],
+        n_threads: int = 0,
     ) -> CKKS_Ciphertext:
         """Conjugates every slot."""
-        return self.automorphism(ciphertext, 2 * self.N - 1, ksk)
+        return self.automorphism(ciphertext, 2 * self.N - 1, ksk, n_threads)
 
     def gen_conjugation_key(
         self, key: MLWE_Key, n_threads: int = 0
     ) -> MLWE_Set | list[MLWE_Set]:
-        """Generates the key-switching key :meth:`conjugate` needs, on up to
-        ``n_threads`` threads (0: the library limit)."""
+        """Generates the key-switching key :meth:`conjugate` needs."""
         return self.gen_ksk_automorphism(key, key, 2 * self.N - 1, n_threads=n_threads)
 
-    def rescale(self, ciphertext: CKKS_Ciphertext) -> CKKS_Ciphertext:
+    def rescale(
+        self, ciphertext: CKKS_Ciphertext, n_threads: int = 0
+    ) -> CKKS_Ciphertext:
         """Rescale down one level: move the next ring in the chain of rings.
 
         Levels start at 0 and grow as primes are consumed, so a rescale
@@ -271,15 +309,14 @@ class CKKS_Scheme(MLWE_Scheme):
             return self.rational_rescale(ciphertext)
 
         dropped = math.prod(p for p in current_ring.primes if p not in next_ring.primes)
-        ciphertext.round_division(lvl=next_lvl)
+        ciphertext.round_division(lvl=next_lvl, n_threads=n_threads)
         ciphertext.delta = ciphertext.delta / dropped
         return ciphertext
 
     def rescale_batch(
         self, cts: Sequence[CKKS_Ciphertext], n_threads: int = 0
     ) -> list[CKKS_Ciphertext]:
-        """:meth:`rescale` of each ciphertext (distinct, at one level), on up to
-        ``n_threads`` threads (0: the library limit).
+        """:meth:`rescale` of each ciphertext (distinct, at one level).
 
         In place like :meth:`rescale`, except on non-nested chains, where
         :meth:`rational_rescale` returns new ciphertexts one at a time.
@@ -305,11 +342,12 @@ class CKKS_Scheme(MLWE_Scheme):
         in1: CKKS_Ciphertext,
         in2: MLWE,
         ksk: MLWE_Set | list[MLWE_Set] | None = None,
+        n_threads: int = 0,
     ) -> CKKS_Ciphertext:
         """:meth:`MLWE_Scheme.multiply` (not rescaled), with ``delta`` set to the
         product of the operands'.
         """
-        out = super().multiply(in1, in2, ksk)
+        out = super().multiply(in1, in2, ksk, n_threads)
         out.delta = in1.delta * cast("CKKS_Ciphertext", in2).delta
         return out
 
@@ -319,13 +357,21 @@ class CKKS_Scheme(MLWE_Scheme):
         rhs: Sequence[MLWE],
         ksk: MLWE_Set | list[MLWE_Set] | None = None,
         n_threads: int = 0,
+        *,
+        lvl: int | None = None,
     ) -> list[CKKS_Ciphertext]:
-        """``lhs[i] * rhs[i]`` for every ``i``, relinearized with ``ksk`` but not
-        rescaled, on up to ``n_threads`` threads (0: the library limit).
+        """``lhs[i] * rhs[i]`` for every ``i``, relinearized with ``ksk``.
+
+        Not rescaled, unless ``lvl`` is given: each product is then rescaled to
+        that level, whose ring must be a quotient of the operands'.
         """
-        outs = super().multiply_batch(lhs, rhs, ksk, n_threads)
+        dropped = 1
+        if lvl is not None and lhs:
+            kept = self.rings[lvl].primes
+            dropped = math.prod(p for p in lhs[0].ring.primes if p not in kept)
+        outs = super().multiply_batch(lhs, rhs, ksk, n_threads, lvl=lvl)
         for out, a, b in zip(outs, lhs, rhs, strict=True):
-            out.delta = a.delta * cast("CKKS_Ciphertext", b).delta
+            out.delta = a.delta * cast("CKKS_Ciphertext", b).delta / dropped
         return outs
 
     def product(
@@ -337,9 +383,7 @@ class CKKS_Scheme(MLWE_Scheme):
         each, instead of ``n - 1``. Each product is relinearized with :attr:`rlk`
         and rescaled. When a tree level has an odd count, its last factor is carried
         down a level unmultiplied (:meth:`MLWE.mod_reduce`, on a copy), which needs
-        nested levels unless ``n`` is a power of two. Each tree level's products run
-        on up to ``n_threads`` threads (0: the library limit, see
-        `lib.vfhe_set_num_threads`).
+        nested levels unless ``n`` is a power of two.
         """
         n = len(cts)
         if n == 0:
@@ -363,10 +407,13 @@ class CKKS_Scheme(MLWE_Scheme):
             return layer[0].copy()
         while len(layer) > 1:
             carry = layer[-1] if len(layer) % 2 else None
-            products = self.multiply_batch(
-                layer[0::2][: len(layer) // 2], layer[1::2], self.rlk, n_threads
-            )
-            layer = self.rescale_batch(products, n_threads)
+            lhs, rhs = layer[0::2][: len(layer) // 2], layer[1::2]
+            next_lvl = layer[0].lvl + 1
+            if self.rings[next_lvl].is_quotient_ring(layer[0].ring):
+                layer = self.multiply_batch(lhs, rhs, self.rlk, n_threads, lvl=next_lvl)
+            else:
+                products = self.multiply_batch(lhs, rhs, self.rlk, n_threads)
+                layer = self.rescale_batch(products, n_threads)
             if carry is not None:
                 layer.append(carry.copy().mod_reduce(lvl=layer[0].lvl))
         return layer[0]

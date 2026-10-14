@@ -18,9 +18,5 @@ void prng_expand_key(uint8_t key[16], const char *context, const uint8_t *seed, 
                      const uint64_t *label, uint64_t label_len);
 void prng_expand_below(uint64_t *out, uint64_t count, uint64_t start, uint64_t bound,
                        const uint8_t key[16]);
-void prng_expand_below32(uint32_t *out, uint64_t count, uint64_t start, uint64_t bound,
-                         const uint8_t key[16]);
-void prng_aes128_ctr(uint8_t *out, uint64_t count, uint64_t first, uint64_t attempt,
-                     const uint8_t key[16]);
 void vfhe_prng_set_deterministic_seed(uint64_t seed);
 void vfhe_prng_clear_deterministic_seed(void);

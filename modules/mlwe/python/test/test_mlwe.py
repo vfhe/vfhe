@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Characterization tests for the (reverted) vfhe.mlwe over the cffi boundary.
+"""Characterization tests for vfhe.mlwe over the cffi boundary.
 
 Encrypt/decrypt roundtrips, homomorphic add/sub/mul-by-poly, BV and GHS
 key-switching, automorphism, ciphertext multiplication (relinearization), the
@@ -12,6 +12,7 @@ import functools
 import math
 import operator
 import random
+from collections import Counter
 from typing import cast
 
 import pytest
@@ -23,13 +24,18 @@ from vfhe.mlwe import (
     LWE,
     MGSW,
     MLWE,
+    CMUX_batch,
+    GadgetParams,
     LWE_Key,
     MGSW_Scheme,
+    MLWE_Key,
     MLWE_Scheme,
     MLWE_Set,
+    PlaintextMatrix,
 )
 from vfhe.mlwe.io import seed_still_holds
-from vfhe.util.bindings import ffi, lib
+from vfhe.util import parallel
+from vfhe.util.bindings import ffi
 
 N = 256
 
@@ -72,6 +78,26 @@ def _mul_error(Rq, Rp, scheme, m_out, m1, m2):
     P_poly = Polynomial(Rp).from_bigint_array([P] + [0] * (Rp.N - 1))
     diff = (m_out - m1 * m2 * P_poly).get_polynomial(signed=True)
     return max(abs(c) for c in diff)
+
+
+@pytest.mark.parametrize("special_primes", [0, 1, 2, 3])
+def test_level_chain_reaches_one_prime(special_primes):
+    ring = Ring(64, prime_size=[30] * 4, split_degree=1)
+    scheme = MLWE_Scheme(ring, special_primes=special_primes)
+    assert [r.ell for r in scheme.rings] == list(range(4 - special_primes, 0, -1))
+    assert scheme.special_primes == special_primes
+
+
+def test_level_chain_of_one_prime():
+    scheme = MLWE_Scheme(Ring(64, prime_size=[30], split_degree=1))
+    assert [r.ell for r in scheme.rings] == [1]
+
+
+@pytest.mark.parametrize("special_primes, max_lvl", [(4, None), (1, 4), (1, 0)])
+def test_level_chain_is_checked(special_primes, max_lvl):
+    ring = Ring(64, prime_size=[30] * 4, split_degree=1)
+    with pytest.raises(ValueError):
+        MLWE_Scheme(ring, special_primes=special_primes, max_lvl=max_lvl)
 
 
 def test_encrypt_decrypt_add_sub_mul(bv):
@@ -190,6 +216,38 @@ def test_mgsw_cmux(bv, bit):
     assert scheme.linear_decrypt(out, key).round_division(Rp) == m[bit]
 
 
+@pytest.mark.parametrize("bit", [0, 1])
+@pytest.mark.parametrize("setup", ["bv", "ghs"])
+def test_cmux_batch_is_the_cmux_of_each_pair(request, setup, bit):
+    _Rq, Rp, scheme = request.getfixturevalue(setup)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    (selector,) = MGSW_Scheme(scheme).encrypt_constants([bit], key)
+    m = [[Rp.random_element() for _ in range(5)] for _ in range(2)]
+    c0 = [enc(scheme, Rp, x, key) for x in m[0]]
+    c1 = [enc(scheme, Rp, x, key) for x in m[1]]
+    expected = [CMUX(a, b, selector) for a, b in zip(c0, c1, strict=True)]
+    for n_threads in (1, 3, 0):
+        out = CMUX_batch(c0, c1, selector, n_threads)
+        assert all(_same_sample(x, y) for x, y in zip(out, expected, strict=True))
+    for x, want in zip(out, m[bit], strict=True):
+        assert scheme.linear_decrypt(x, key).round_division(Rp) == want
+    assert CMUX_batch([], [], selector) == []
+
+
+def test_cmux_batch_refuses_mismatched_inputs(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    (one,) = MGSW_Scheme(scheme).encrypt_constants([1], key)
+    c = enc(scheme, Rp, Rp.random_element(), key)
+    low = c.copy().round_division(lvl=1)
+    with pytest.raises(ValueError, match="same length"):
+        CMUX_batch([c, c], [c], one)
+    with pytest.raises(ValueError, match="one level"):
+        CMUX_batch([c], [low], one)
+    with pytest.raises(ValueError, match="level 1"):
+        CMUX_batch([low], [low], one)
+
+
 # --- the RNS gadget's digit -------------------------------------------------
 #
 # `balanced`, on by default, takes residue j centered, in (-p_j/2, p_j/2];
@@ -220,8 +278,38 @@ def test_balanced_is_the_default(bv):
     assert MGSW_Scheme(plain, balanced=True).balanced
 
 
-def _digits(poly, ring, balanced):
-    """The RNS gadget's digits of ``poly``, in the order it takes them, in ``ring``."""
+def _radix_digits(r, p, log_base, balanced):
+    """The base-``2^log_base`` digits of the residue ``r`` mod ``p``, lowest
+    first: of ``r`` itself, or balanced ones of its centered value, each
+    taken with a carry into the next, the top one taking what is left."""
+    count = -(-p.bit_length() // log_base)
+    if not balanced or log_base == 1:
+        return [(r >> (log_base * k)) % (1 << log_base) for k in range(count)]
+    base, x, digits = 1 << log_base, r - p if r > p // 2 else r, []
+    for _ in range(count - 1):
+        digit = (x + base // 2) % base - base // 2
+        digits.append(digit)
+        x = (x - digit) // base
+    return [*digits, x]
+
+
+def _group_digit(group, balanced):
+    """The fast base conversion out of the product of ``group``'s primes, one
+    value per coefficient: ``sum_k [x_k (Q/p_k)^-1]_{p_k} * Q/p_k``, each
+    bracket centered if ``balanced``."""
+    modulus = math.prod(p for p, _ in group)
+    terms = []
+    for p, row in group:
+        rest = modulus // p
+        scaled = [r * pow(rest, -1, p) % p for r in row]
+        if balanced:
+            scaled = [v - p if v > p // 2 else v for v in scaled]
+        terms.append([v * rest for v in scaled])
+    return [sum(column) for column in zip(*terms, strict=True)]
+
+
+def _digits(poly, ring, balanced, log_base=None, per_digit=1):
+    """The gadget's digits of ``poly``, in the order it takes them, in ``ring``."""
     poly.to_coeff()
     residues = sorted(
         zip(
@@ -231,6 +319,24 @@ def _digits(poly, ring, balanced):
             strict=True,
         )
     )
+    if per_digit > 1:
+        return [
+            Polynomial(ring).from_bigint_array(
+                _group_digit(
+                    [(p, row) for _, p, row in residues[start : start + per_digit]],
+                    balanced,
+                )
+            )
+            for start in range(0, len(residues), per_digit)
+        ]
+    if log_base:
+        return [
+            Polynomial(ring).from_bigint_array(list(column))
+            for _, p, row in residues
+            for column in zip(
+                *(_radix_digits(r, p, log_base, balanced) for r in row), strict=True
+            )
+        ]
     return [
         Polynomial(ring).from_bigint_array(
             [r - p if balanced and r > p // 2 else r for r in row]
@@ -239,12 +345,18 @@ def _digits(poly, ring, balanced):
     ]
 
 
-def _gadget_product(keys, polys, balanced):
+def _gadget_product(keys, polys, balanced, params):
     """``sum_i sum_j d_j(polys[i]) * keys[i][j]``, as its ``a`` and ``b``."""
     products = [
         (d * k.get_a_poly(0), d * k.get_b_poly())
         for row, poly in zip(keys, polys, strict=True)
-        for d, k in zip(_digits(poly, row[0].ring, balanced), row, strict=True)
+        for d, k in zip(
+            _digits(
+                poly, row[0].ring, balanced, params.log_base, params.primes_per_digit
+            ),
+            row,
+            strict=True,
+        )
     ]
     return [
         functools.reduce(operator.add, terms) for terms in zip(*products, strict=True)
@@ -256,26 +368,43 @@ def _coeffs(poly):
     return poly.get_polynomial()
 
 
+@pytest.mark.parametrize(
+    "params",
+    [
+        GadgetParams(),
+        GadgetParams(1),
+        GadgetParams(4),
+        GadgetParams(13),
+        GadgetParams(primes_per_digit=2),
+        GadgetParams(primes_per_digit=3),
+    ],
+    ids=["rns", "radix1", "radix4", "radix13", "groups2", "groups3"],
+)
 @pytest.mark.parametrize("balanced", [False, True])
-def test_gadget_products_take_the_chosen_digit(balanced):
+def test_gadget_products_take_the_chosen_digit(balanced, params):
     """A key switch and a CMUX, recomputed from their digits.
 
     Without special primes nothing is rounded, so both are exactly the gadget
     products of their digits -- with ``balanced=False``, of the ``[0, p_j)``
-    residues the RNS gadget took before it had the option.
+    residues (or their unsigned radix digits) the gadget took before it had
+    the option. Grouped digits are fast base conversions, which are exact
+    only up to a multiple of their group's modulus that the gadget element
+    removes: the product checks that the conversion is the centered (or
+    uncentered) one, not just some lift.
     """
     _Rq, Rp, scheme = _rank_scheme(N, 1, 0, balanced=balanced)
     key = scheme.key_gen_sparse(N // 8, SIGMA)
     key_out = scheme.key_gen_sparse(N // 8, SIGMA)
 
-    ksk = cast("MLWE_Set", scheme.gen_ksk(key_out, key, lvl=0))
+    ksk = cast("MLWE_Set", scheme.gen_ksk(key_out, key, lvl=0, gadget_params=params))
     c = enc(scheme, Rp, Rp.random_element(), key)
-    a, b = _gadget_product([ksk.mlwe[0]], [c.get_a_poly(0)], balanced)
+    a, b = _gadget_product([ksk.mlwe[0]], [c.get_a_poly(0)], balanced, params)
     out = scheme.keyswitch(c, ksk)
     assert _coeffs(out.get_a_poly(0)) == _coeffs(-a)
     assert _coeffs(out.get_b_poly()) == _coeffs(c.get_b_poly() - b)
 
-    selector = MGSW_Scheme(scheme).encrypt(Polynomial(Rp).from_array(ONE), key)
+    mgsw_scheme = MGSW_Scheme(scheme, gadget_params=params)
+    selector = mgsw_scheme.encrypt(Polynomial(Rp).from_array(ONE), key)
     c0, c1 = (enc(scheme, Rp, Rp.random_element(), key) for _ in range(2))
     diff = c1 - c0
     ell = selector.gadget_size
@@ -283,6 +412,7 @@ def test_gadget_products_take_the_chosen_digit(balanced):
         [selector.obj[:ell], selector.obj[ell:]],
         [diff.get_a_poly(0), diff.get_b_poly()],
         balanced,
+        params,
     )
     out = CMUX(c0, c1, selector)
     assert _coeffs(out.get_a_poly(0)) == _coeffs(c0.get_a_poly(0) + a)
@@ -373,6 +503,31 @@ def test_keyswitch_noise_of_either_digit(bv):
     _assert_balanced_saves_a_bit(measured, scheme.ring.primes, scheme.r)
 
 
+def test_keyswitch_noise_of_either_radix_digit(bv):
+    """The radix gadget's balanced digits, ``(2^(2w) + 2) / 12`` of second
+    moment against about ``2^(2w) / 3`` for the unsigned ones."""
+    _Rq, Rp, scheme = bv
+    params = GadgetParams(9)
+
+    def operations(key):
+        key_out = scheme.key_gen_sparse(N // 8, SIGMA)
+        ksk = scheme.gen_ksk(key_out, key, lvl=0, gadget_params=params)
+        plain = MLWE_Set(ksk.mlwe, gadget_params=params, balanced=False)
+        return key_out, [
+            functools.partial(scheme.keyswitch, ksk=k) for k in (ksk, plain)
+        ]
+
+    balanced, plain = _added_noise(scheme, Rp, operations)
+    spans = [
+        min(9, p.bit_length() - 9 * k)
+        for p in scheme.ring.primes
+        for k in range(-(-p.bit_length() // 9))
+    ]
+    variance = N * SIGMA**2 * sum((2 ** (2 * b) + 2) / 12 for b in spans)
+    assert abs(balanced - 0.5 * math.log2(variance)) < 0.25
+    assert abs(plain - balanced - 1) < 0.4
+
+
 def test_external_product_noise_of_either_digit(bv):
     _Rq, Rp, scheme = bv
 
@@ -403,6 +558,22 @@ def _rank_scheme(N_r, r, special_primes, balanced=True):
         Rq, special_primes=special_primes, module_rank=r, balanced=balanced
     )
     return Rq, Rp, scheme
+
+
+@pytest.mark.parametrize("r, N_r", [(1, N), *RANK_DIMS])
+def test_key_gen_draws_a_uniform_ternary_key(r, N_r):
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, 1)
+    key = scheme.key_gen(3.2)
+    assert len(key.key) == r and all(len(poly) == N_r for poly in key.key)
+    coeffs = [c for poly in key.key for c in poly]
+    assert set(coeffs) <= {-1, 0, 1}
+    # N * r = 256 coefficients: each value 85 +- 7.5 (one standard deviation).
+    assert all(abs(coeffs.count(v) - len(coeffs) / 3) < 40 for v in (-1, 0, 1))
+    m = Rp.random_element()
+    assert scheme.linear_decrypt(enc(scheme, Rp, m, key), key).round_division(Rp) == m
+    assert key.key != scheme.key_gen(3.2).key
+    with pytest.raises(ValueError, match="distribution"):
+        scheme.key_gen(3.2, distribution="binary")
 
 
 def _rank_key(scheme, N_r, r):
@@ -592,6 +763,20 @@ def test_lwe_key_encrypts_with_its_noise_parameter_only():
     assert ffi.cast("LWE_Key", extracted.obj).sigma == 2.5
 
 
+def test_lwe_mask_is_uniform():
+    # 3 * 2^30 + 1 sits at 3/4 of 2^32: mapping 32 random bits onto it gives
+    # some values two preimages and others one.
+    q = 3 * 2**30 + 1
+    ring = Ring(4096, primes=[q], prime_size=[32], split_degree=1)
+    key = LWE_Key(ring, sec_sigma=3.2, err_sigma=3.2)
+    values = [v for _ in range(32) for v in LWE(ring=ring, m=[0], key=key).get_a()[0]]
+    assert all(v < q for v in values)
+    counts = Counter(v * 4 // q for v in values)
+    expected = len(values) / 4
+    assert len(counts) == 4
+    assert all(abs(c - expected) < 0.02 * expected for c in counts.values())
+
+
 def test_lwe_limbs_follow_the_ring_over_a_populated_base():
     # A ring built after another one holds primes the base registered first,
     # so its prime indices do not ascend and do not start at 0. Every limb has
@@ -647,7 +832,7 @@ def test_keyswitch_radix_gadget(scheme_fixture, request):
     m0 = Rp.random_element()
     c0 = enc(scheme, Rp, m0, key)
 
-    ksk = scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE)
+    ksk = scheme.gen_ksk(key2, key, gadget_params=GadgetParams(RADIX_LOG_BASE))
     assert _keys_per_component(ksk, c0.lvl) == _radix_keys(
         scheme.special_rings[c0.lvl], RADIX_LOG_BASE
     )
@@ -670,7 +855,7 @@ def test_keyswitch_radix_beats_the_rns_gadget():
 
     radix = scheme.keyswitch(
         enc(scheme, Rp, m0, key),
-        scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE),
+        scheme.gen_ksk(key2, key, gadget_params=GadgetParams(RADIX_LOG_BASE)),
     )
     assert scheme.linear_decrypt(radix, key2).round_division(Rp) == m0
 
@@ -687,7 +872,7 @@ def test_keyswitch_radix_module_rank(r, N_r, special_primes):
     m0 = Rp.random_element()
     c0 = enc(scheme, Rp, m0, key)
 
-    ksk = scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE)
+    ksk = scheme.gen_ksk(key2, key, gadget_params=GadgetParams(RADIX_LOG_BASE))
     c_out = scheme.keyswitch(c0, ksk)
     assert c_out.r == r
     assert scheme.linear_decrypt(c_out, key2).round_division(Rp) == m0
@@ -699,7 +884,9 @@ def test_mlwe_multiplication_radix_rlk(scheme_fixture, request):
     Rq, Rp, scheme = request.getfixturevalue(scheme_fixture)
     key = scheme.key_gen_sparse(N // 8, 3.2)
     s_0 = key.poly[0]
-    scheme.rlk = scheme.gen_rlk(key, [-(s_0 * s_0)], radix_log_base=RADIX_LOG_BASE)
+    scheme.rlk = scheme.gen_rlk(
+        key, [-(s_0 * s_0)], gadget_params=GadgetParams(RADIX_LOG_BASE)
+    )
 
     m1 = Polynomial(Rp).from_array(_ternary(N))
     m2 = Polynomial(Rp).from_array(_ternary(N))
@@ -713,7 +900,7 @@ def test_mlwe_multiplication_radix_rlk(scheme_fixture, request):
 def test_mgsw_external_product_radix(bv):
     _Rq, Rp, scheme = bv
     key = scheme.key_gen_sparse(N // 8, 3.2)
-    mgsw_scheme = MGSW_Scheme(scheme, radix_log_base=RADIX_LOG_BASE)
+    mgsw_scheme = MGSW_Scheme(scheme, gadget_params=GadgetParams(RADIX_LOG_BASE))
 
     m1 = Rp.random_element()
     ct1 = enc(scheme, Rp, m1, key)
@@ -723,6 +910,740 @@ def test_mgsw_external_product_radix(bv):
 
     res = ct_id.external_product(ct1)
     assert scheme.linear_decrypt(res, key).round_division(Rp) == m1
+
+
+@pytest.mark.parametrize("radix", [None, RADIX_LOG_BASE])
+def test_mgsw_products_at_a_level(ghs, radix):
+    # A key encrypted for a level multiplies that level's samples, and what
+    # it produces stays at that level.
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    one, zero = MGSW_Scheme(
+        scheme, gadget_params=GadgetParams(radix)
+    ).encrypt_constants([1, 0], key, lvl=1)
+    m = [Rp.random_element() for _ in range(2)]
+    c = [enc(scheme, Rp, x, key).round_division(lvl=1) for x in m]
+
+    for out, expected in (
+        (one.external_product(c[0]), m[0]),
+        (CMUX(c[0], c[1], one), m[1]),
+        (CMUX(c[0], c[1], zero), m[0]),
+    ):
+        assert out.lvl == 1
+        assert out.ring == scheme.rings[1]
+        assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+
+
+def _subring(Rq, *positions):
+    """The quotient of ``Rq`` keeping the primes at the given positions."""
+    mask = 0
+    for i in positions:
+        mask |= 1 << Rq.prime_indices[i]
+    return Rq.quotient_ring(mask=mask)
+
+
+def _enc_at(scheme, lvl, Rp, m, key):
+    ring = scheme.rings[lvl]
+    delta = ring.modulus_ratio(Rp, return_pointer=True)
+    return scheme.sample(m.scaled_lift(ring, delta=delta), key, lvl=lvl)
+
+
+@pytest.mark.parametrize("special", [0, 1, 2])
+@pytest.mark.parametrize("radix", [None, RADIX_LOG_BASE])
+def test_mgsw_products_wherever_the_special_prime_sits(special, radix):
+    # The gadget covers the level's primes, wherever the special prime sits
+    # among them in the base.
+    Rq = Ring(N, prime_size=[45, 45, 45], split_degree=1)
+    level = [i for i in range(3) if i != special]
+    scheme = MLWE_Scheme([_subring(Rq, *level)], special_rings=[Rq], special_primes=1)
+    Rp = _subring(Rq, level[0])
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    one, zero = MGSW_Scheme(
+        scheme, gadget_params=GadgetParams(radix)
+    ).encrypt_constants([1, 0], key)
+    m = [Rp.random_element() for _ in range(2)]
+    c = [_enc_at(scheme, 0, Rp, x, key) for x in m]
+
+    for out, expected in (
+        (one.external_product(c[0]), m[0]),
+        (CMUX(c[0], c[1], one), m[1]),
+        (CMUX(c[0], c[1], zero), m[0]),
+    ):
+        assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+
+
+@pytest.mark.parametrize("levels", [((0, 1), (2, 3)), ((2, 3), (0, 1))])
+def test_samples_at_a_level_sharing_no_prime_with_level_0(levels):
+    Rq = Ring(N, prime_size=[45] * 5, split_degree=1)
+    scheme = MLWE_Scheme(
+        [_subring(Rq, *lv) for lv in levels],
+        special_rings=[_subring(Rq, *lv, 4) for lv in levels],
+        special_primes=1,
+    )
+    key = scheme.key_gen(3.2)
+    other = scheme.key_gen(3.2)
+    for lvl, lv in enumerate(levels):
+        Rp = _subring(Rq, lv[0])
+        m = Rp.random_element()
+        c = _enc_at(scheme, lvl, Rp, m, key)
+        assert scheme.linear_decrypt(c, key).round_division(Rp) == m
+        switched = scheme.keyswitch(
+            _enc_at(scheme, lvl, Rp, m, other), scheme.gen_ksk(key, other, lvl=lvl)
+        )
+        assert scheme.linear_decrypt(switched, key).round_division(Rp) == m
+
+
+def _linear_decryption(scheme, c, key):
+    decryption = scheme.linear_decrypt(c, key)
+    decryption.to_coeff()
+    return decryption
+
+
+def _bits(before, after) -> float:
+    """log2 of the largest coefficient of ``after - before``."""
+    return math.log2(
+        max(1, *(abs(x) for x in (after - before).get_polynomial(signed=True)))
+    )
+
+
+@pytest.mark.parametrize("balanced", [False, True])
+def test_grouped_digits_at_every_level(balanced):
+    """Every gadget product over two primes per digit, at every level, with a
+    special modulus a little larger than a group: what each adds stays at the
+    rounding floor, as with a digit per prime, at half the keys (the last
+    group of an odd level has one prime)."""
+    Rq = Ring(N, prime_size=[45] * 4 + [50] * 2, split_degree=1)
+    scheme = MLWE_Scheme(Rq, special_primes=2, balanced=balanced)
+    params = GadgetParams(primes_per_digit=2)
+    key, key_out = (scheme.key_gen_sparse(N // 8, SIGMA) for _ in range(2))
+    ksk = scheme.gen_ksk(key_out, key, gadget_params=params)
+    aut = scheme.gen_ksk_automorphism(key, key, 5, gadget_params=params)
+    mgsw_scheme = MGSW_Scheme(scheme, gadget_params=params)
+    scheme.rlk = scheme.gen_rlk(key, key, gadget_params=params)
+
+    for lvl, ring in enumerate(scheme.rings):
+        assert _keys_per_component(ksk, lvl) == -(-ring.ell // 2) + 1
+        c = scheme.sample(ring.random_element(), key, lvl=lvl)
+        before = _linear_decryption(scheme, c, key)
+        rotated = before.automorphism(5)
+        one, zero = mgsw_scheme.encrypt_constants([1, 0], key, lvl=lvl)
+        assert one.gadget_size == -(-ring.ell // 2)
+        other = scheme.sample(ring.random_element(), key, lvl=lvl)
+        product = before * _linear_decryption(scheme, other, key)
+        product.to_coeff()
+        for out, out_key, expected in (
+            (c * other, key, product),
+            (scheme.keyswitch(c, ksk), key_out, before),
+            (scheme.automorphism(c, 5, aut), key, rotated),
+            (scheme.automorphisms(c, [5], [aut])[0], key, rotated),
+            (one.external_product(c), key, before),
+            (CMUX(other, c, one), key, before),
+            (CMUX(c, other, zero), key, before),
+        ):
+            assert out.lvl == lvl
+            assert _bits(expected, _linear_decryption(scheme, out, out_key)) < 8
+
+
+def test_grouped_digits_need_a_large_enough_special_modulus():
+    """Three 45-bit primes per digit against 100 bits of special modulus: a
+    digit of about the group's 135 bits leaves about 2^35 times the keys'
+    error after the division by P, and nothing stops it."""
+    Rq = Ring(N, prime_size=[45] * 3 + [50] * 2, split_degree=1)
+    scheme = MLWE_Scheme(Rq, special_primes=2)
+    key, key_out = (scheme.key_gen_sparse(N // 8, SIGMA) for _ in range(2))
+    c = scheme.sample(scheme.rings[0].random_element(), key)
+    before = _linear_decryption(scheme, c, key)
+    noise = [
+        _bits(
+            before,
+            _linear_decryption(
+                scheme,
+                scheme.keyswitch(
+                    c,
+                    scheme.gen_ksk(
+                        key_out,
+                        key,
+                        lvl=0,
+                        gadget_params=GadgetParams(primes_per_digit=a),
+                    ),
+                ),
+                key_out,
+            ),
+        )
+        for a in (1, 3)
+    ]
+    assert noise[0] < 8
+    assert noise[1] - noise[0] > 30
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"primes_per_digit": 0}, {"log_base": 4, "primes_per_digit": 2}],
+)
+def test_grouped_digits_are_checked(kwargs):
+    with pytest.raises(ValueError):
+        GadgetParams(**kwargs)
+
+
+def _monomial_poly(ring, exponent, minus_one=False):
+    """``X^exponent`` (minus 1) over ``ring``, from the definition."""
+    n, e = ring.N, exponent % (2 * ring.N)
+    coeffs = [0] * n
+    coeffs[e % n] = 1 if e < n else -1
+    if minus_one:
+        coeffs[0] -= 1
+    return Polynomial(ring).from_bigint_array(coeffs)
+
+
+@pytest.mark.parametrize("minus_one", [False, True])
+@pytest.mark.parametrize("ntt", [False, True])
+def test_multiply_by_monomial(ghs, ntt, minus_one):
+    """Every component times the monomial, for exponents in and outside
+    [0, 2N), at a level and over the special ring; the result
+    keeps the input's ring, level and representation."""
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, SIGMA)
+    samples = [
+        scheme.sample(scheme.rings[0].random_element(), key),
+        scheme.sample(scheme.rings[1].random_element(), key, lvl=1),
+        MLWE.from_components(
+            scheme,
+            [scheme.special_rings[0].random_element()],
+            scheme.special_rings[0].random_element(),
+        ),
+    ]
+    for c in samples:
+        c.to_NTT() if ntt else c.to_coeff()
+        for exponent in (0, 1, N - 1, N, 2 * N - 1, 2 * N + 3, -5):
+            out = c.multiply_by_monomial(exponent, minus_one=minus_one)
+            assert (out.ring, out.lvl, out.repr) == (c.ring, c.lvl, c.repr)
+            monomial = _monomial_poly(c.ring, exponent, minus_one)
+            for got, x in (
+                (out.get_a_poly(0), c.get_a_poly(0)),
+                (out.get_b_poly(), c.get_b_poly()),
+            ):
+                assert _coeffs(got) == _coeffs(x * monomial)
+
+
+@pytest.mark.parametrize("minus_one", [False, True])
+def test_mgsw_multiply_by_monomial(ghs, minus_one):
+    """An MGSW of 1 times X^e is an MGSW of X^e (or X^e - 1): its external
+    product multiplies by that, from rows in either representation, and the
+    two give the same rows."""
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, SIGMA)
+    (one,) = MGSW_Scheme(scheme).encrypt_constants([1], key)
+    m = Rp.random_element()
+    c = enc(scheme, Rp, m, key)
+    for exponent in (3, N + 7, -1):
+        from_ntt = one.multiply_by_monomial(exponent, minus_one)
+        coeff_rows = MGSW(one.scheme, obj=[row.copy() for row in one.obj])
+        coeff_rows.to_coeff()
+        from_coeff = coeff_rows.multiply_by_monomial(exponent, minus_one)
+        from_coeff.to_NTT()
+        for a, b in zip(from_ntt.obj, from_coeff.obj, strict=True):
+            assert _coeffs(a.get_b_poly()) == _coeffs(b.get_b_poly())
+        out = from_ntt.external_product(c)
+        expected = m * _monomial_poly(Rp, exponent, minus_one)
+        assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+
+
+def test_mgsw_products_refuse_another_level(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    (one,) = MGSW_Scheme(scheme).encrypt_constants([1], key)
+    c = enc(scheme, Rp, Rp.random_element(), key).round_division(lvl=1)
+    with pytest.raises(ValueError, match="level 1"):
+        one.external_product(c)
+    with pytest.raises(ValueError, match="level 1"):
+        CMUX(c, c, one)
+
+
+@pytest.mark.parametrize("count", [N // 16, N])
+def test_trace_pack(ghs, count):
+    # Sample k carries k + 1 in its constant coefficient and noise-sized junk
+    # elsewhere; packing keeps the constants, at k * N / count and at their
+    # scale, with the noise of log2(count) key switches.
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    log_n = N.bit_length() - 1
+    ksk = scheme.gen_ksk_trace(
+        key, key, gens=[(1 << j) + 1 for j in range(1, log_n + 1)], lvl=0
+    )
+    delta = 1 << 60
+    vec = [
+        scheme.sample(
+            Polynomial(scheme.rings[0]).from_bigint_array(
+                [(k + 1) * delta] + [entropy.below(1 << 40) for _ in range(N - 1)]
+            ),
+            key,
+        )
+        for k in range(count)
+    ]
+    d = scheme.linear_decrypt(scheme.trace_pack(vec, ksk), key).get_polynomial(
+        signed=True
+    )
+    stride = N // count
+    for k in range(count):
+        assert round(d[k * stride] / delta) == k + 1
+    # Each of the log2(count) levels halves before it switches, so the noise
+    # stays a few bits of key switching rather than doubling level by level.
+    noise = max(abs(d[k * stride] - (k + 1) * delta) for k in range(count))
+    assert noise.bit_length() <= (6 if count < N else 8)
+
+
+def test_trace_pack_does_not_depend_on_the_thread_count(ghs):
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    log_n = N.bit_length() - 1
+    ksk = scheme.gen_ksk_trace(
+        key, key, gens=[(1 << j) + 1 for j in range(1, log_n + 1)], lvl=0
+    )
+    vec = [
+        scheme.sample(Polynomial(scheme.rings[0]).from_array([k + 1]), key)
+        for k in range(N // 4)
+    ]
+    packed = [
+        scheme.trace_pack([c.copy() for c in vec], ksk, n_threads)
+        for n_threads in (1, 3, 0)
+    ]
+    assert _same_sample(packed[0], packed[1])
+    assert _same_sample(packed[0], packed[2])
+
+
+@pytest.mark.parametrize("n", [1, 4, N // 2])
+def test_normalized_trace(ghs, n):
+    # A message in every coefficient keeps those at the multiples of N / n,
+    # at their scale, and loses the rest, with the noise of log2(N / n) key
+    # switches.
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    log_n = N.bit_length() - 1
+    ksk = scheme.gen_ksk_trace(
+        key, key, gens=[(1 << j) + 1 for j in range(1, log_n + 1)], lvl=0
+    )
+    delta = 1 << 60
+    rng = random.Random(n)  # noqa: S311 - test data, not a key
+    msg = [rng.randrange(-1000, 1000) for _ in range(N)]
+    c = scheme.sample(
+        Polynomial(scheme.rings[0]).from_bigint_array([m * delta for m in msg]), key
+    )
+    d = scheme.linear_decrypt(scheme.normalized_trace(c, ksk, n), key).get_polynomial(
+        signed=True
+    )
+    step = N // n
+    expected = [msg[j] if j % step == 0 else 0 for j in range(N)]
+    assert [round(x / delta) for x in d] == expected
+    # Each level halves before it switches, so the noise stays a few bits of
+    # key switching rather than doubling level by level.
+    noise = max(abs(x - e * delta) for x, e in zip(d, expected, strict=True))
+    assert noise.bit_length() <= 6
+
+
+def test_normalized_trace_needs_a_power_of_two(ghs):
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    c = scheme.sample(Polynomial(scheme.rings[0]).from_array([1]), key)
+    with pytest.raises(ValueError, match="power of two"):
+        scheme.normalized_trace(c, [], 3)
+
+
+def test_trace_pack_needs_a_power_of_two(ghs):
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    c = scheme.sample(Polynomial(scheme.rings[0]).from_array([1]), key)
+    with pytest.raises(ValueError, match="power of two"):
+        scheme.trace_pack([c, c, c], [])
+
+
+# --- LWE extraction and the packing key switch -------------------------------
+
+
+def _mod_switch(v, q, p):
+    return round((v * p) / q) % p
+
+
+def _schemes_on_shared_primes(*shapes, prime_size=(50, 50, 50), special_primes=1):
+    """One scheme per ``(dimension, rank)`` in ``shapes``, all on the same
+    primes: drawn for the largest dimension (an NTT prime for twice it serves
+    every smaller one) and given to the others, whose rings have bases of
+    their own."""
+    big = max(d for d, _ in shapes)
+    rings = {big: Ring(big, prime_size=list(prime_size), split_degree=1)}
+    schemes = []
+    for d, r in shapes:
+        if d not in rings:
+            rings[d] = Ring(d, primes=list(rings[big].primes), split_degree=1)
+        schemes.append(
+            MLWE_Scheme(rings[d], special_primes=special_primes, module_rank=r)
+        )
+    return schemes
+
+
+def test_lwe_extraction():
+    N = 256
+    Rq = Ring(N, prime_size=[50, 50, 50], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=1)
+    key = scheme.key_gen_sparse(64, 3.2, ternary=True)
+    lwe_key = key.extract_lwe_key()
+
+    msg_coeffs = [((i + 1) * 123) % Rp.primes[0] for i in range(N)]
+    msg = Polynomial(Rp).from_array(msg_coeffs)
+    delta = Rq.modulus_ratio(Rp, return_pointer=True)
+    rlwe_sample = scheme.sample(msg.scaled_lift(Rq, delta=delta), key)
+
+    for idx in [0, 1, N // 2, N - 1]:
+        lwe_sample = scheme.extract_lwe(rlwe_sample, idx)
+        decryption = lwe_sample.linear_decrypt(lwe_key, recompose=True)
+        res = _mod_switch(decryption, Rq.q_l, Rp.primes[0])
+        diff = (res - msg_coeffs[idx]) % Rp.primes[0]
+        diff = min(diff, Rp.primes[0] - diff)
+        assert diff < 1000
+
+
+def test_lwe_extraction_over_a_populated_base():
+    N = 256
+    _, _, scheme = _scheme_over_a_populated_base()
+    Rq = scheme.rings[0]
+    Rp = Rq.quotient_ring(ell=1)
+    key = scheme.key_gen_sparse(64, 3.2, ternary=True)
+    lwe_key = key.extract_lwe_key()
+
+    msg_coeffs = [((i + 1) * 123) % Rp.primes[0] for i in range(N)]
+    msg = Polynomial(Rp).from_array(msg_coeffs)
+    delta = Rq.modulus_ratio(Rp, return_pointer=True)
+    rlwe_sample = scheme.sample(msg.scaled_lift(Rq, delta=delta), key)
+
+    for idx in [0, 1, N // 2, N - 1]:
+        lwe_sample = scheme.extract_lwe(rlwe_sample, idx)
+        decryption = lwe_sample.linear_decrypt(lwe_key, recompose=True)
+        res = _mod_switch(decryption, Rq.q_l, Rp.primes[0])
+        diff = (res - msg_coeffs[idx]) % Rp.primes[0]
+        assert min(diff, Rp.primes[0] - diff) < 1000
+
+
+def _check_packing(out_scheme, output_key, count, gadget_params=None):
+    Rq = out_scheme.rings[0]
+    lwe_key = LWE_Key(ring=Rq, sec_sigma=3.2, err_sigma=3.2, n=Rq.N)
+    packing_key = out_scheme.gen_packing_ksk(
+        output_key, lwe_key, gadget_params=gadget_params
+    )
+    extracted = []
+    for i in range(count):
+        m_i = _mod_switch((i * 137), 2000, Rq.q_l)
+        extracted.append(LWE(ring=Rq, m=[m_i % q for q in Rq.primes], key=lwe_key))
+
+    out_repacked = out_scheme.packing_keyswitch(extracted, packing_key)
+    out_coeffs = out_scheme.linear_decrypt(out_repacked, output_key).get_polynomial()
+    for j in range(Rq.N):
+        expected = (j * 137) % 2000 if j < count else 0
+        m_j = _mod_switch(out_coeffs[j], Rq.q_l, 2000)
+        diff = (m_j - expected) % 2000
+        assert min(diff, 2000 - diff) <= 5
+
+
+@pytest.mark.parametrize("balanced", [False, True])
+@pytest.mark.parametrize("keygen_threads", [1, 4])
+def test_packing_ksk(balanced, keygen_threads):
+    Rq = Ring(256, prime_size=[50, 50, 50], split_degree=1)
+    out_scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=4, balanced=balanced)
+    output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
+    parallel.set_num_threads(keygen_threads)
+    try:
+        _check_packing(out_scheme, output_key, 256)
+    finally:
+        parallel.set_num_threads()
+
+
+def test_packing_ksk_radix():
+    Rq = Ring(256, prime_size=[50, 50], split_degree=1)
+    out_scheme = MLWE_Scheme(Rq, special_primes=0, max_lvl=1)
+    output_key = out_scheme.key_gen_sparse(64, 3.2)
+    _check_packing(out_scheme, output_key, 256, gadget_params=GadgetParams(10))
+
+
+def test_packing_ksk_over_a_populated_base():
+    _, _, out_scheme = _scheme_over_a_populated_base(module_rank=4)
+    output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
+    _check_packing(out_scheme, output_key, 256)
+
+
+@pytest.mark.parametrize("n", [16, 128])
+def test_packing_samples_of_another_dimension(n):
+    # Samples extracted from R_N packed into R_n: the two rings have their own
+    # bases, so the primes are matched by value.
+    N = 64
+    io, rotation = _schemes_on_shared_primes((n, 1), (N, 2))
+    output_key = io.key_gen_sparse(16 * io.r, 3.2)
+    rotation_key = rotation.key_gen_sparse(16 * rotation.r, 3.2)
+    ring = rotation.rings[0]
+    assert ring.base != io.rings[0].base
+    delta = 1 << 70
+    count = min(n, 40)
+    extracted = [
+        rotation.extract_lwe(
+            rotation.sample(
+                Polynomial(ring).from_bigint_array([(k + 1) * delta]), rotation_key
+            ),
+            0,
+        )
+        for k in range(count)
+    ]
+    packing_key = io.gen_packing_ksk(output_key, rotation_key.extract_lwe_key())
+    out = io.packing_keyswitch(extracted, packing_key)
+    d = io.linear_decrypt(out, output_key).get_polynomial(signed=True)
+    assert [round(x / delta) for x in d] == [k + 1 for k in range(count)] + [0] * (
+        n - count
+    )
+
+
+# --- Ring switching -----------------------------------------------------------
+#
+# Between R_N and R_n, N = k n, through the subring Z[X^k]: down keeps the
+# coefficients k m of the message, up embeds it with Y = X^k. The subring maps
+# only move coefficients, so the noise left is the key switch's.
+
+RING_SWITCH_DELTA = 1 << 70
+
+
+def _ring_switch_case(src, dst, lvl=0, **key_options):
+    """Encrypts a message in every coefficient under a key of ``src`` at
+    ``lvl``, switches it to ``dst`` and returns (message, decryption in
+    units of the scale, noise bits)."""
+    key_src = src.key_gen_sparse(16 * src.r, 3.2)
+    key_dst = dst.key_gen_sparse(16 * dst.r, 3.2)
+    out_lvl = dst.level_with_primes(src.rings[lvl])
+    ksk = dst.gen_ring_switch_key(key_dst, key_src, out_lvl, **key_options)
+    rng = random.Random(0xC0FFEE)  # noqa: S311 - test data, not a key
+    msg = [rng.randrange(-1000, 1000) for _ in range(src.N)]
+    poly = Polynomial(src.rings[lvl]).from_bigint_array(
+        [m * RING_SWITCH_DELTA for m in msg]
+    )
+    out = dst.ring_switch(src.sample(poly, key_src, lvl=lvl), ksk)
+    assert out.lvl == out_lvl
+    assert out.ring.N == dst.N
+    d = dst.linear_decrypt(out, key_dst).get_polynomial(signed=True)
+    got = [round(x / RING_SWITCH_DELTA) for x in d]
+    noise = max(abs(x - g * RING_SWITCH_DELTA) for x, g in zip(d, got, strict=True))
+    return msg, got, noise.bit_length()
+
+
+def _switched(msg, n):
+    """What a switch of ``msg`` to dimension ``n`` decrypts to."""
+    N = len(msg)
+    if n <= N:
+        return msg[:: N // n]
+    k = n // N
+    return [msg[m // k] if m % k == 0 else 0 for m in range(n)]
+
+
+@pytest.mark.parametrize(
+    ("N_from", "n_to"), [(256, 64), (256, 128), (64, 256), (128, 128)]
+)
+@pytest.mark.parametrize(("rank_from", "rank_to"), [(1, 1), (2, 1), (1, 3)])
+def test_ring_switch(N_from, n_to, rank_from, rank_to):
+    src, dst = _schemes_on_shared_primes((N_from, rank_from), (n_to, rank_to))
+    msg, got, noise = _ring_switch_case(src, dst)
+    assert got == _switched(msg, n_to)
+    assert noise < 16
+
+
+@pytest.mark.parametrize("direction", ["down", "up"])
+def test_ring_switch_at_a_level(direction):
+    dims = [(256, 1), (64, 2)] if direction == "down" else [(64, 2), (256, 1)]
+    src, dst = _schemes_on_shared_primes(*dims, prime_size=(50, 50, 50, 50))
+    msg, got, _ = _ring_switch_case(src, dst, lvl=1)
+    assert got == _switched(msg, dst.N)
+
+
+@pytest.mark.parametrize("hybrid", [True, False])
+def test_ring_switch_radix(hybrid):
+    src, dst = _schemes_on_shared_primes((256, 1), (64, 1))
+    msg, got, noise = _ring_switch_case(
+        src, dst, gadget_params=GadgetParams(RADIX_LOG_BASE), hybrid=hybrid
+    )
+    assert got == _switched(msg, 64)
+    if not hybrid:
+        # Without the special prime the digits' products stay: a BV switch.
+        assert noise > 16
+
+
+@pytest.mark.parametrize("count", [2, 3, 4])
+def test_ring_switch_up_interleaves_several_samples(count):
+    # Up by k = 4: sample i lands at coefficients i + 4 m, the rest are zero.
+    src, dst = _schemes_on_shared_primes((64, 2), (256, 1))
+    key_src = src.key_gen_sparse(32, 3.2)
+    key_dst = dst.key_gen_sparse(16, 3.2)
+    ksk = dst.gen_ring_switch_key(key_dst, key_src, 0)
+    rng = random.Random(count)  # noqa: S311 - test data, not a key
+    msgs = [[rng.randrange(-1000, 1000) for _ in range(64)] for _ in range(count)]
+    samples = [
+        src.sample(
+            Polynomial(src.rings[0]).from_bigint_array(
+                [m * RING_SWITCH_DELTA for m in msg]
+            ),
+            key_src,
+        )
+        for msg in msgs
+    ]
+    out = dst.ring_switch(samples, ksk)
+    d = dst.linear_decrypt(out, key_dst).get_polynomial(signed=True)
+    expected = [msgs[c % 4][c // 4] if c % 4 < count else 0 for c in range(256)]
+    assert [round(x / RING_SWITCH_DELTA) for x in d] == expected
+
+
+def test_ring_switch_takes_several_samples_only_going_up():
+    src, dst = _schemes_on_shared_primes((256, 1), (64, 1))
+    key_src = src.key_gen_sparse(16, 3.2)
+    key_dst = dst.key_gen_sparse(16, 3.2)
+    ksk = dst.gen_ring_switch_key(key_dst, key_src, 0)
+    c = src.sample(Polynomial(src.rings[0]).from_array([1]), key_src)
+    with pytest.raises(ValueError, match="at most n / N samples"):
+        dst.ring_switch([c, c], ksk)
+    up_src, up_dst = _schemes_on_shared_primes((64, 1), (128, 1))
+    up_key_src = up_src.key_gen_sparse(16, 3.2)
+    up_ksk = up_dst.gen_ring_switch_key(up_dst.key_gen_sparse(16, 3.2), up_key_src, 0)
+    c = up_src.sample(Polynomial(up_src.rings[0]).from_array([1]), up_key_src)
+    with pytest.raises(ValueError, match="at most n / N samples"):
+        up_dst.ring_switch([c, c, c], up_ksk)
+
+
+def test_ring_switch_checks_its_key():
+    src, dst = _schemes_on_shared_primes((256, 1), (64, 1), prime_size=(50, 50, 50, 50))
+    wide, _ = _schemes_on_shared_primes((256, 2), (64, 1))
+    key_src = src.key_gen_sparse(16, 3.2)
+    key_dst = dst.key_gen_sparse(16, 3.2)
+    c = src.sample(Polynomial(src.rings[0]).from_array([1]), key_src)
+    with pytest.raises(ValueError, match="ring-switch key"):
+        # A key for another level.
+        dst.ring_switch(c, dst.gen_ring_switch_key(key_dst, key_src, 1))
+    with pytest.raises(ValueError, match="ring-switch key"):
+        # A key for a source of another rank.
+        key_wide = wide.key_gen_sparse(16, 3.2)
+        dst.ring_switch(c, dst.gen_ring_switch_key(key_dst, key_wide, 0))
+
+
+# --- MGSW x MGSW, automorphisms, trivial MGSW ---------------------------------
+#
+# Without special primes an MGSW's rows live in the ring it multiplies, so
+# every operation takes keys of level 0 (with the radix gadget, which is what
+# keeps BV noise down). With special primes the rows live over the key ring,
+# which is a level only of a scheme with one more special prime: the second
+# scheme of `_two_schemes`, holding the same secret.
+
+
+def _monomial(ring, e):
+    return Polynomial(ring).from_array([0] * e + [1] + [0] * (ring.N - e - 1))
+
+
+def _bv_mgsw(module_rank=1):
+    Rq = Ring(N, prime_size=[45, 45, 45], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=module_rank)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    mgsw = MGSW_Scheme(scheme, gadget_params=GadgetParams(RADIX_LOG_BASE))
+    keys = {
+        "aut": lambda g: scheme.gen_ksk_automorphism(
+            key, key, g, lvl=0, gadget_params=GadgetParams(RADIX_LOG_BASE)
+        ),
+        "rlk": lambda: scheme.gen_rlk(
+            key, key, lvl=0, gadget_params=GadgetParams(RADIX_LOG_BASE)
+        ),
+    }
+    return Rp, scheme, key, mgsw, mgsw, key, keys
+
+
+def _two_schemes(module_rank=1):
+    base = Ring(N, prime_size=[45, 45, 45, 50, 50], split_degree=1)
+    scheme = MLWE_Scheme(
+        base.quotient_ring(ell=4), special_primes=1, module_rank=module_rank
+    )
+    rows = MLWE_Scheme(base, special_primes=1, module_rank=module_rank)
+    assert rows.rings[0].mask == scheme.special_rings[0].mask
+    Rp = scheme.rings[0].quotient_ring(ell=1)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    rows_key = MLWE_Key(key.key, key.sigma_err, rows)
+    keys = {
+        "aut": lambda g: rows.gen_ksk_automorphism(rows_key, rows_key, g, lvl=0),
+        "rlk": lambda: rows.gen_rlk(rows_key, rows_key, lvl=0),
+    }
+    return Rp, scheme, key, MGSW_Scheme(scheme), MGSW_Scheme(rows), rows_key, keys
+
+
+CASES = {"bv_radix": _bv_mgsw, "special_primes": _two_schemes}
+
+
+def _check_product(scheme, Rp, key, mgsw, factor):
+    m = Rp.random_element()
+    out = mgsw.external_product(enc(scheme, Rp, m, key))
+    assert scheme.linear_decrypt(out, key).round_division(Rp) == m * factor
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("module_rank", [1, 2])
+def test_mgsw_trivial(case, module_rank):
+    Rp, scheme, key, mgsw, _, _, _ = CASES[case](module_rank)
+    _check_product(scheme, Rp, key, mgsw.trivial(_monomial(Rp, 5)), _monomial(Rp, 5))
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("module_rank", [1, 2])
+def test_mgsw_internal_product(case, module_rank):
+    Rp, scheme, key, mgsw, rows_mgsw, rows_key, _ = CASES[case](module_rank)
+    a = rows_mgsw.encrypt(_monomial(Rp, 2), rows_key)
+    b = mgsw.encrypt(_monomial(Rp, 3), key)
+    product = a.internal_product(b)
+    assert len(product.obj) == len(b.obj)
+    assert all(x.ring == y.ring for x, y in zip(product.obj, b.obj, strict=True))
+    _check_product(scheme, Rp, key, product, _monomial(Rp, 5))
+    # From a trivial key, as a chain of monomial keys starts: X^2 * X^(N-1)
+    # wraps to -X.
+    chain = a.internal_product(mgsw.trivial(_monomial(Rp, N - 1)))
+    _check_product(scheme, Rp, key, chain, -_monomial(Rp, 1))
+
+
+@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("module_rank", [1, 2])
+@pytest.mark.parametrize("g", [5, 2 * N - 1])
+def test_mgsw_automorphism(case, module_rank, g):
+    Rp, scheme, key, mgsw, _, _, keys = CASES[case](module_rank)
+    m = Rp.random_element()
+    c = mgsw.encrypt(m, key)
+    out = mgsw.automorphism(c, g, keys["aut"](g), keys["rlk"]())
+    _check_product(scheme, Rp, key, out, m.automorphism(g))
+
+
+def test_mgsw_internal_product_refuses_rows_it_cannot_consume():
+    _Rp, _scheme, key, mgsw, _, _, _ = _two_schemes()
+    b = mgsw.encrypt(_monomial(_Rp, 1), key)
+    with pytest.raises(ValueError, match="cannot multiply the other's rows"):
+        b.internal_product(b)
+
+
+@pytest.mark.parametrize("module_rank", [1, 2])
+def test_mlwe_from_components(ghs, module_rank):
+    # Rebuilt from temporaries in either domain, a sample decrypts as the
+    # original; its components come back as they went in.
+    _Rq, Rp, scheme = ghs
+    scheme = MLWE_Scheme(scheme.rings[0], special_primes=0, module_rank=module_rank)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    m = Rp.random_element()
+    c = enc(scheme, Rp, m, key)
+    c.to_coeff()
+    a = [c.get_a_poly(j) for j in range(module_rank)]
+    a[0].to_NTT()
+    rebuilt = MLWE.from_components(scheme, a, c.get_b_poly())
+    assert rebuilt.lvl == 0 and rebuilt.r == module_rank
+    assert scheme.linear_decrypt(rebuilt, key).round_division(Rp) == m
+    rebuilt.to_coeff()
+    for j in range(module_rank):
+        assert (
+            rebuilt.get_a_poly(j).get_coeff_matrix()
+            == c.get_a_poly(j).get_coeff_matrix()
+        )
+    with pytest.raises(ValueError, match="body's ring"):
+        MLWE.from_components(scheme, [Polynomial(Rp).from_array([1])], c.get_b_poly())
 
 
 def test_keyswitch_radix_single_component():
@@ -739,7 +1660,7 @@ def test_keyswitch_radix_single_component():
     c1 = enc(scheme, Rp, Rp.random_element(), key).round_division(lvl=1)
     assert c1.ell == 1
 
-    ksk = scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE)
+    ksk = scheme.gen_ksk(key2, key, gadget_params=GadgetParams(RADIX_LOG_BASE))
     assert _keys_per_component(ksk, c1.lvl) == _radix_keys(
         scheme.special_rings[c1.lvl], RADIX_LOG_BASE
     )
@@ -765,12 +1686,217 @@ def test_keyswitch_radix_at_a_level(ghs):
     c1 = enc(scheme, Rp, m0, key).round_division(lvl=1)
     assert c1.lvl == 1
 
-    ksk = scheme.gen_ksk(key2, key, radix_log_base=RADIX_LOG_BASE)
+    ksk = scheme.gen_ksk(key2, key, gadget_params=GadgetParams(RADIX_LOG_BASE))
     assert _keys_per_component(ksk, c1.lvl) == _radix_keys(
         scheme.special_rings[c1.lvl], RADIX_LOG_BASE
     )
     c_out = scheme.keyswitch(c1, ksk)
     assert scheme.linear_decrypt(c_out, key2).round_division(Rp) == m0
+
+
+@pytest.mark.parametrize("lvl", [0, 1])
+@pytest.mark.parametrize("radix", [4, RADIX_LOG_BASE])
+def test_keyswitch_without_the_special_primes(ghs, lvl, radix):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    m0 = Rp.random_element()
+    c = enc(scheme, Rp, m0, key)
+    if lvl:
+        c.round_division(lvl=lvl)
+    ksk = scheme.gen_ksk(
+        key2, key, lvl=lvl, gadget_params=GadgetParams(radix), hybrid=False
+    )
+    # The key never reaches the special prime.
+    assert all(x.ring == scheme.rings[lvl] for x in ksk.mlwe[0])
+    c_out = scheme.keyswitch(c, ksk)
+    assert c_out.ring == c.ring
+    assert scheme.linear_decrypt(c_out, key2).round_division(Rp) == m0
+
+
+def test_keyswitch_without_the_special_primes_at_one_prime(ghs):
+    # At the last level the plaintext ring is the whole ring, so check the
+    # noise the key switch adds instead of a decryption.
+    _Rq, _Rp, scheme = ghs
+    lvl = len(scheme.rings) - 1
+    ring = scheme.rings[lvl]
+    assert ring.ell == 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    c = scheme.sample(ring.random_element(), key.at_ring(ring), lvl=lvl)
+    ksk = scheme.gen_ksk(
+        key2, key, lvl=lvl, gadget_params=GadgetParams(4), hybrid=False
+    )
+    diff = scheme.linear_decrypt(scheme.keyswitch(c, ksk), key2) - (
+        scheme.linear_decrypt(c, key)
+    )
+    assert max(abs(x) for x in diff.get_polynomial(signed=True)) < 2**20
+
+
+# --- the approximate gadget decomposition (fewer digits) ---------------------
+#
+# Over one prime the radix gadget may keep only its top digits: the residue
+# is rounded to a multiple of 2^(w d), d the digits left out, which adds at
+# most 2^(w d - 1) per coefficient times the key switched from (N/8
+# coefficients in {-1, 0, 1}).
+
+
+def _every_digit(prime, w):
+    return -(-prime.bit_length() // w)
+
+
+def _one_prime_switch_error(scheme, key, key2, lvl, switch):
+    ring = scheme.rings[lvl]
+    c = scheme.sample(ring.random_element(), key.at_ring(ring), lvl=lvl)
+    diff = scheme.linear_decrypt(switch(c), key2) - scheme.linear_decrypt(c, key)
+    return max(abs(x) for x in diff.get_polynomial(signed=True))
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_keyswitch_with_fewer_digits(ghs, hybrid):
+    _Rq, _Rp, scheme = ghs
+    lvl = len(scheme.rings) - 1
+    assert scheme.rings[lvl].ell == 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    w = 4
+    every = _every_digit(scheme.rings[lvl].primes[0], w)
+    key_ring = (scheme.special_rings if hybrid else scheme.rings)[lvl]
+    errors = []
+    for dropped in (0, 3, 6):
+        digits = every - dropped
+        ksk = scheme.gen_ksk(
+            key2,
+            key,
+            lvl=lvl,
+            gadget_params=GadgetParams(w, digits),
+            hybrid=hybrid,
+        )
+        assert ksk.gadget_params.digits == digits
+        # Every prime of the key's ring keeps that many, at most what it has.
+        assert len(ksk.mlwe[0]) == sum(
+            min(digits, _every_digit(p, w)) for p in key_ring.primes
+        )
+        errors.append(
+            _one_prime_switch_error(
+                scheme, key, key2, lvl, lambda c, k=ksk: scheme.keyswitch(c, k)
+            )
+        )
+        rounding = (N // 8) * (1 << (w * dropped - 1)) if dropped else 0
+        assert errors[-1] < rounding + 2**20
+    # The error is the dropped part's: it grows with it.
+    assert errors[2] > 1 << (w * 6 - 2)
+
+
+def test_fewer_digits_are_rounded(ghs):
+    # Switching away from the key 1, the error is the dropped part itself,
+    # coefficient by coefficient: at most half a step when rounded, where
+    # truncating would reach a whole one.
+    _Rq, _Rp, scheme = ghs
+    lvl = len(scheme.rings) - 1
+    one = MLWE_Key([[1] + [0] * (N - 1)], 3.2, scheme)
+    key2 = scheme.key_gen_sparse(N // 8, 3.2)
+    w, dropped = 4, 6
+    digits = _every_digit(scheme.rings[lvl].primes[0], w) - dropped
+    ksk = scheme.gen_ksk(
+        key2,
+        one,
+        lvl=lvl,
+        gadget_params=GadgetParams(w, digits),
+        hybrid=False,
+    )
+    error = _one_prime_switch_error(
+        scheme, one, key2, lvl, lambda c: scheme.keyswitch(c, ksk)
+    )
+    assert error < (1 << (w * dropped - 1)) + 2**14
+    assert error > 1 << (w * dropped - 2)
+
+
+def test_automorphism_with_fewer_digits(ghs):
+    _Rq, _Rp, scheme = ghs
+    lvl = len(scheme.rings) - 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    g = 5
+    digits = _every_digit(scheme.rings[lvl].primes[0], 4) - 3
+    ksk = scheme.gen_ksk_automorphism(
+        key,
+        key,
+        g,
+        lvl=lvl,
+        gadget_params=GadgetParams(4, digits),
+    )
+    ring = scheme.rings[lvl]
+    c = scheme.sample(ring.random_element(), key.at_ring(ring), lvl=lvl)
+    out = scheme.automorphism(c, g, ksk)
+    diff = scheme.linear_decrypt(out, key) - scheme.linear_decrypt(c, key).automorphism(
+        g
+    )
+    assert (
+        max(abs(x) for x in diff.get_polynomial(signed=True)) < (N // 8) * 2**11 + 2**20
+    )
+
+
+def test_mgsw_with_fewer_digits():
+    # A scheme whose level 0 is one prime: 5 radix-2^10 digits, 3 kept.
+    scheme = MLWE_Scheme(Ring(N, prime_size=[50, 50], split_degree=1), special_primes=1)
+    assert scheme.rings[0].ell == 1
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    mgsw = MGSW_Scheme(
+        scheme,
+        gadget_params=GadgetParams(10, 3),
+    )
+    assert mgsw.gadget_size(0) == 3
+    three = Polynomial(scheme.rings[0]).from_array([0, 0, 0, 1])
+    (one,) = mgsw.encrypt_constants([1], key)
+    x3 = mgsw.encrypt(three, key)
+    assert x3.gadget_size == 3
+    ring = scheme.rings[0]
+    c = scheme.sample(ring.random_element(), key)
+    decryption = scheme.linear_decrypt(c, key)
+    bound = (N // 8) * 2**19 * 4 + 2**20
+    for selector, expected in ((one, decryption), (x3, decryption * three)):
+        diff = scheme.linear_decrypt(selector.external_product(c), key) - expected
+        assert max(abs(x) for x in diff.get_polynomial(signed=True)) < bound
+
+
+def test_digits_are_checked(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    last = len(scheme.rings) - 1
+    with pytest.raises(ValueError, match="one prime"):
+        scheme.gen_ksk(
+            key,
+            key,
+            lvl=0,
+            gadget_params=GadgetParams(4, 1),
+        )
+    with pytest.raises(ValueError, match="log_base must be at least 1"):
+        GadgetParams(0)
+    assert GadgetParams(4, 8) == GadgetParams(log_base=4, digits=8)
+    with pytest.raises(ValueError, match="radix gadget"):
+        scheme.gen_ksk(key, key, lvl=last, gadget_params=GadgetParams(digits=1))
+    with pytest.raises(ValueError, match="at least one"):
+        scheme.gen_ksk(
+            key,
+            key,
+            lvl=last,
+            gadget_params=GadgetParams(25, 0),
+        )
+    # As many digits as every prime has is the exact decomposition, at any
+    # level.
+    exact = scheme.gen_ksk(key, key, lvl=0, gadget_params=GadgetParams(10))
+    every = scheme.gen_ksk(
+        key,
+        key,
+        lvl=0,
+        gadget_params=GadgetParams(10, 6),
+    )
+    assert len(every.mlwe[0]) == len(exact.mlwe[0])
+    m = Rp.random_element()
+    c = enc(scheme, Rp, m, key)
+    assert (
+        scheme.linear_decrypt(scheme.keyswitch(c, every), key).round_division(Rp) == m
+    )
 
 
 def test_round_division_moves_the_native_ring(ghs):
@@ -815,7 +1941,8 @@ def _log2_noise(scheme, out, c, gen, key):
 def _check_hoisted(scheme, Rp, key, m0, c, radix):
     gens = [1, 5, 25, 2 * scheme.N - 1]
     ksks = [
-        scheme.gen_ksk_automorphism(key, key, g, radix_log_base=radix) for g in gens
+        scheme.gen_ksk_automorphism(key, key, g, gadget_params=GadgetParams(radix))
+        for g in gens
     ]
     hoisted = scheme.automorphisms(c, gens, ksks)
     for gen, ksk, out in zip(gens, ksks, hoisted, strict=True):
@@ -873,7 +2000,9 @@ def test_hoisted_automorphisms_refuse_a_key_of_another_gadget(ghs):
     c = enc(scheme, Rp, Rp.random_element(), key)
     ksks = [
         scheme.gen_ksk_automorphism(key, key, 5),
-        scheme.gen_ksk_automorphism(key, key, 25, radix_log_base=RADIX_LOG_BASE),
+        scheme.gen_ksk_automorphism(
+            key, key, 25, gadget_params=GadgetParams(RADIX_LOG_BASE)
+        ),
     ]
     with pytest.raises(ValueError, match="gadget"):
         scheme.automorphisms(c, [5, 25], ksks)
@@ -884,9 +2013,9 @@ def test_hoisted_automorphisms_refuse_a_key_of_another_gadget(ghs):
 @pytest.fixture
 def threads():
     """Lets the test's parallel calls use up to 8 threads (vfhe defaults to 1)."""
-    lib.vfhe_set_num_threads(8)
+    parallel.set_num_threads(8)
     yield
-    lib.vfhe_set_num_threads(0)
+    parallel.set_num_threads()
 
 
 @pytest.mark.parametrize("n_threads", [1, 0])
@@ -898,11 +2027,233 @@ def test_automorphism_batch(ghs, n_threads):
     cts = [enc(scheme, Rp, m, key) for m in ms]
     gens = [5, 1, 25, 2 * N - 1]
     ksks = [None if g == 1 else scheme.gen_ksk_automorphism(key, key, g) for g in gens]
+    # NTT-domain inputs are accepted and not modified.
+    cts[0].to_NTT()
+    cts[1].to_NTT()
     outs = scheme.automorphism_batch(cts, gens, ksks, n_threads)
+    assert [c.repr for c in cts] == [repr.ntt, repr.ntt, repr.coeff, repr.coeff]
     for m, g, out in zip(ms, gens, outs, strict=True):
+        assert out.repr == repr.coeff
         assert scheme.linear_decrypt(out, key).round_division(Rp) == m.automorphism(g)
     with pytest.raises(ValueError, match="no key"):
         scheme.automorphism_batch(cts[:1], [5], [None])
+
+
+def _same_sample(c1, c2):
+    a, b = c1.copy(), c2.copy()
+    a.to_coeff()
+    b.to_coeff()
+    return (
+        a.r == b.r
+        and all(a.get_a_poly(i) == b.get_a_poly(i) for i in range(a.r))
+        and a.get_b_poly() == b.get_b_poly()
+    )
+
+
+def _check_automorphism_sum(scheme, Rp, key, gens, radix, n_threads):
+    ms = [Rp.random_element() for _ in gens]
+    cts = [enc(scheme, Rp, m, key) for m in ms]
+    for c in cts[::2]:
+        c.to_NTT()
+    domains = [c.repr for c in cts]
+    ksks = [
+        None
+        if g == 1
+        else scheme.gen_ksk_automorphism(key, key, g, gadget_params=GadgetParams(radix))
+        for g in gens
+    ]
+    out = scheme.automorphism_sum(cts, gens, ksks, n_threads)
+    assert [c.repr for c in cts] == domains
+    assert out.repr == repr.coeff and out.lvl == cts[0].lvl and out.ring == cts[0].ring
+    expected = sum(
+        (m.automorphism(g) for m, g in zip(ms, gens, strict=True)),
+        start=Polynomial(Rp).from_array([0] * Rp.N),
+    )
+    assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+    return cts, ksks, out
+
+
+@pytest.mark.parametrize("radix", [None, RADIX_LOG_BASE])
+@pytest.mark.usefixtures("threads")
+def test_automorphism_sum(ghs, radix):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    gens = [5, 1, 25, 2 * N - 1, 125, 1, 3]
+    cts, ksks, out = _check_automorphism_sum(scheme, Rp, key, gens, radix, 1)
+    # The key products are summed exactly before the single division, so the
+    # result does not depend on how the terms are split between threads.
+    for n_threads in (2, 3, 0):
+        assert _same_sample(scheme.automorphism_sum(cts, gens, ksks, n_threads), out)
+
+
+def test_automorphism_sum_mixes_digit_choices(ghs):
+    # Each term uses its own key's digit choice, so keys with and without
+    # centered digits can share one sum.
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    gens = [5, 25, 125, 2 * N - 1]
+    ms = [Rp.random_element() for _ in gens]
+    cts = [enc(scheme, Rp, m, key) for m in ms]
+    ksks = []
+    for i, g in enumerate(gens):
+        scheme.balanced = i % 2 == 0
+        ksks.append(scheme.gen_ksk_automorphism(key, key, g))
+    out = scheme.automorphism_sum(cts, gens, ksks)
+    expected = sum(
+        (m.automorphism(g) for m, g in zip(ms, gens, strict=True)),
+        start=Polynomial(Rp).from_array([0] * Rp.N),
+    )
+    assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+@pytest.mark.usefixtures("threads")
+def test_automorphism_sum_module_rank(r, N_r):
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    key = _rank_key(scheme, N_r, r)
+    _check_automorphism_sum(scheme, Rp, key, [5, 1, 25], None, 0)
+
+
+def test_automorphism_sum_without_a_key_switch_is_the_plain_sum(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    out = scheme.automorphism_sum(cts, [1, 1, 1], [None, None, None])
+    assert _same_sample(out, cts[0] + cts[1] + cts[2])
+
+
+def test_automorphism_sum_refusals(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(2)]
+    ksk5 = scheme.gen_ksk_automorphism(key, key, 5)
+    ksk25 = scheme.gen_ksk_automorphism(key, key, 25)
+    with pytest.raises(ValueError, match="no key"):
+        scheme.automorphism_sum(cts, [5, 25], [ksk5, None])
+    # A key for another level is over another ring.
+    with pytest.raises(ValueError, match="ring"):
+        scheme.automorphism_sum(cts, [5, 25], [ksk5[0], ksk25[1]])
+    lower = cts[1].copy().round_division(lvl=1)
+    with pytest.raises(ValueError, match="share"):
+        scheme.automorphism_sum([cts[0], lower], [5, 25], [ksk5, ksk25])
+
+
+def _check_automorphism_mux(scheme, Rp, key, gens, bits, radix=None, lvl=0):
+    m0 = Rp.random_element()
+    c = enc(scheme, Rp, m0, key)
+    if lvl:
+        c.round_division(lvl=lvl)
+    ksks = scheme.gen_automorphism_mux_keys(
+        key, list(zip(gens, bits, strict=True)), lvl, GadgetParams(radix)
+    )
+    out = scheme.automorphism_mux(c, gens, ksks)
+    assert out.repr == repr.coeff and out.lvl == c.lvl and out.ring == c.ring
+    expected = sum(
+        (m0.automorphism(g) for g, b in zip(gens, bits, strict=True) if b),
+        start=Polynomial(Rp).from_array([0] * Rp.N),
+    )
+    assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+    return c, ksks, out
+
+
+@pytest.mark.parametrize("radix", [None, RADIX_LOG_BASE])
+@pytest.mark.parametrize(
+    "bits", [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0], [1, 0, 1, 0]]
+)
+def test_automorphism_mux(ghs, radix, bits):
+    # The sum of the automorphisms whose bits are set: one, none, or several.
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    _check_automorphism_mux(scheme, Rp, key, [5, 1, 25, 2 * N - 1], bits, radix)
+
+
+def test_automorphism_mux_costs_an_automorphism_in_noise(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    gens = [25, 5, 1, 125]
+    c, _ksks, out = _check_automorphism_mux(scheme, Rp, key, gens, [0, 1, 0, 0])
+    alone = scheme.automorphism(c, 5, scheme.gen_ksk_automorphism(key, key, 5))
+    assert (
+        _log2_noise(scheme, out, c, 5, key) <= _log2_noise(scheme, alone, c, 5, key) + 2
+    )
+
+
+def test_automorphism_mux_at_a_level(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    _check_automorphism_mux(scheme, Rp, key, [1, 5, 25], [0, 0, 1], lvl=1)
+
+
+@pytest.mark.parametrize("r, N_r", RANK_DIMS)
+def test_automorphism_mux_module_rank(r, N_r):
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    key = _rank_key(scheme, N_r, r)
+    _check_automorphism_mux(scheme, Rp, key, [5, 1, 25], [0, 0, 1])
+
+
+@pytest.mark.parametrize("n_threads", [1, 0])
+@pytest.mark.usefixtures("threads")
+def test_automorphism_mux_batch(ghs, n_threads):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    gens = [1, 5, 25]
+    choices = [0, 2, 1, 2]
+    ms = [Rp.random_element() for _ in choices]
+    cts = [enc(scheme, Rp, m, key) for m in ms]
+    flat = scheme.gen_automorphism_mux_keys(
+        key, [(g, int(d == x)) for x in choices for d, g in enumerate(gens)], 0
+    )
+    ksks = [flat[i * 3 : i * 3 + 3] for i in range(len(choices))]
+    # NTT-domain inputs are accepted and not modified.
+    cts[0].to_NTT()
+    outs = scheme.automorphism_mux_batch(cts, gens, ksks, n_threads)
+    assert cts[0].repr == repr.ntt
+    for m, x, out in zip(ms, choices, outs, strict=True):
+        assert out.repr == repr.coeff
+        expected = m.automorphism(gens[x])
+        assert scheme.linear_decrypt(out, key).round_division(Rp) == expected
+    # Each item runs on one worker, so the batch matches single calls, in
+    # place or not.
+    for c, keys, out in zip(cts, ksks, outs, strict=True):
+        assert _same_sample(scheme.automorphism_mux(c, gens, keys), out)
+    scheme.automorphism_mux_batch(cts, gens, ksks, n_threads, in_place=True)
+    for c, out in zip(cts, outs, strict=True):
+        assert _same_sample(c, out)
+
+
+def test_automorphism_mux_keys_are_drawn_alike(ghs):
+    # Keys with bit 0 are fresh, distinct samples, like the others.
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ksks = scheme.gen_automorphism_mux_keys(key, [(5, 0), (5, 1), (5, 0)], 0)
+    samples = [x for k in ksks for component in k.mlwe for x in component]
+    assert len({x.seed for x in samples}) == len(samples)
+    digests = [_ksk_digests(k) for k in ksks]
+    assert digests[0] != digests[1] != digests[2] != digests[0]
+    with pytest.raises(ValueError, match="bit"):
+        scheme.gen_automorphism_mux_keys(key, [(5, 2)], 0)
+
+
+def test_automorphism_mux_refusals(ghs):
+    _Rq, Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    c = enc(scheme, Rp, Rp.random_element(), key)
+    (k0,) = scheme.gen_automorphism_mux_keys(key, [(5, 1)], 0)
+    (k1,) = scheme.gen_automorphism_mux_keys(key, [(5, 1)], 1)
+    (radix,) = scheme.gen_automorphism_mux_keys(
+        key, [(25, 0)], 0, GadgetParams(RADIX_LOG_BASE)
+    )
+    with pytest.raises(ValueError, match="level"):
+        scheme.automorphism_mux(c, [5], [k1])
+    with pytest.raises(ValueError, match="gadget"):
+        scheme.automorphism_mux(c, [5, 25], [k0, radix])
+    # An automorphism key passes the body through: not a multiplexer key.
+    with pytest.raises(ValueError, match="multiplexer"):
+        scheme.automorphism_mux(c, [5], [scheme.gen_ksk_automorphism(key, key, 5, 0)])
+    with pytest.raises(ValueError, match="generator"):
+        scheme.automorphism_mux(c, [4], [k0])
+    with pytest.raises(ValueError, match="one key per generator"):
+        scheme.automorphism_mux(c, [5, 25], [k0])
 
 
 @pytest.mark.parametrize("n_threads", [1, 0])
@@ -926,11 +2277,63 @@ def test_linear_combinations(bv, n_threads):
         assert scheme.linear_decrypt(out, key) == expected
 
 
+@pytest.mark.parametrize("n_threads", [1, 0])
+@pytest.mark.usefixtures("threads")
+def test_linear_combinations_with_a_prepared_matrix(bv, n_threads):
+    _Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ring = scheme.rings[0]
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    small = [Polynomial(ring).from_array(_ternary(N)) for _ in range(4)]
+    rows = [[small[0], None, small[1]], [None, small[2], small[3]]]
+    matrix = PlaintextMatrix(rows)
+    assert all(p.repr == repr.ntt for p in small)
+    expected = scheme.linear_combinations(cts, rows, n_threads)
+    for _ in range(2):
+        outs = scheme.linear_combinations(cts, matrix, n_threads)
+        for out, exp in zip(outs, expected, strict=True):
+            assert _same_sample(out, exp)
+    with pytest.raises(ValueError, match="one coefficient per ciphertext"):
+        scheme.linear_combinations(cts[:2], matrix)
+    with pytest.raises(ValueError, match="one length"):
+        PlaintextMatrix([[small[0]], [small[1], small[2]]])
+    other = Polynomial(scheme.rings[1]).from_array(_ternary(N))
+    with pytest.raises(ValueError, match="one ring"):
+        PlaintextMatrix([[small[0], other]])
+
+
+@pytest.mark.parametrize("scheme_fixture", ["bv", "ghs"])
+@pytest.mark.parametrize("n_threads", [1, 0])
+@pytest.mark.usefixtures("threads")
+def test_multiply_batch_divided_to_a_level(scheme_fixture, n_threads, request):
+    # The fused call matches the two batch calls bit for bit: it only skips a
+    # forward and inverse transform that cancel.
+    _Rq, Rp, scheme = request.getfixturevalue(scheme_fixture)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    s_0 = key.poly[0]
+    rlk = scheme.gen_rlk(key, [-(s_0 * s_0)])
+    cts = [
+        enc(scheme, Rp, Polynomial(Rp).from_array(_ternary(N)), key) for _ in range(4)
+    ]
+    cts[1].to_NTT()
+    # cts[0] appears twice, cts[2] and cts[3] once, in either domain.
+    lhs, rhs = [cts[0], cts[0], cts[2]], [cts[1], cts[0], cts[3]]
+    fused = scheme.multiply_batch(lhs, rhs, rlk, n_threads, lvl=1)
+    assert all(c.repr == repr.ntt for c in cts)
+    separate = scheme.round_division_batch(scheme.multiply_batch(lhs, rhs, rlk), 1)
+    for f, s_ in zip(fused, separate, strict=True):
+        assert f.lvl == 1 and f.ring == scheme.rings[1] and f.repr == repr.coeff
+        assert ffi.cast("MLWE", f.obj).ring == scheme.rings[1].arith_ring
+        assert _same_sample(f, s_)
+    with pytest.raises(ValueError, match="key"):
+        scheme.multiply_batch(lhs, rhs, None, lvl=1)
+
+
 def test_gen_ksk_rejects_a_radix_larger_than_the_primes(bv):
     _Rq, _Rp, scheme = bv
     key = scheme.key_gen_sparse(N // 8, 3.2)
     with pytest.raises(ValueError, match="smallest prime"):
-        scheme.gen_ksk(key, key, radix_log_base=64)
+        scheme.gen_ksk(key, key, gadget_params=GadgetParams(64))
 
 
 def test_special_primes_of_a_ring_that_is_not_the_first_of_its_base():
@@ -948,7 +2351,7 @@ def test_special_primes_of_a_ring_that_is_not_the_first_of_its_base():
     assert scheme.special_rings[0].ell == scheme.rings[0].ell + 1
 
 
-def _scheme_over_a_populated_base():
+def _scheme_over_a_populated_base(module_rank=1):
     """A GHS scheme whose ring is not the first built over its base.
 
     Its working primes' base indices do not ascend -- the first is new, the
@@ -959,7 +2362,7 @@ def _scheme_over_a_populated_base():
     """
     Ring(N, prime_size=[43, 43, 53], split_degree=1)
     Rq = Ring(N, prime_size=[37, 43, 43, 53], split_degree=1)
-    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=1)
+    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=module_rank)
     work = scheme.rings[0].prime_indices
     special = set(scheme.special_rings[0].prime_indices) - set(work)
     assert work != sorted(work)
@@ -972,7 +2375,7 @@ def test_keyswitch_over_a_populated_base(radix_log_base):
     _Rq, Rp, scheme = _scheme_over_a_populated_base()
     key = scheme.key_gen_sparse(N // 8, 3.2)
     key2 = scheme.key_gen_sparse(N // 8, 3.2)
-    ksk = scheme.gen_ksk(key2, key, radix_log_base=radix_log_base)
+    ksk = scheme.gen_ksk(key2, key, gadget_params=GadgetParams(radix_log_base))
 
     m0 = Rp.random_element()
     c0 = enc(scheme, Rp, m0, key)
@@ -986,7 +2389,9 @@ def test_multiplication_over_a_populated_base(radix_log_base):
     Rq, Rp, scheme = _scheme_over_a_populated_base()
     key = scheme.key_gen_sparse(N // 8, 3.2)
     s_0 = key.poly[0]
-    scheme.rlk = scheme.gen_rlk(key, [-(s_0 * s_0)], radix_log_base=radix_log_base)
+    scheme.rlk = scheme.gen_rlk(
+        key, [-(s_0 * s_0)], gadget_params=GadgetParams(radix_log_base)
+    )
 
     m1 = Polynomial(Rp).from_array(_ternary(N))
     m2 = Polynomial(Rp).from_array(_ternary(N))
@@ -1001,7 +2406,7 @@ def test_multiplication_over_a_populated_base(radix_log_base):
 def test_mgsw_external_product_over_a_populated_base(radix_log_base):
     _Rq, Rp, scheme = _scheme_over_a_populated_base()
     key = scheme.key_gen_sparse(N // 8, 3.2)
-    mgsw_scheme = MGSW_Scheme(scheme, radix_log_base=radix_log_base)
+    mgsw_scheme = MGSW_Scheme(scheme, gadget_params=GadgetParams(radix_log_base))
 
     m1 = Rp.random_element()
     ct1 = enc(scheme, Rp, m1, key)
@@ -1061,6 +2466,126 @@ def test_keygen_does_not_depend_on_the_thread_count(r, N_r):
     _Rq, _Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
     keys = [_every_key(scheme, n_threads) for n_threads in (1, 3, 0)]
     assert keys[0] == keys[1] == keys[2]
+
+
+@pytest.mark.parametrize("lvl", [0, 1])
+@pytest.mark.usefixtures("threads")
+def test_keygen_without_the_special_primes_does_not_depend_on_the_thread_count(
+    ghs, lvl
+):
+    """Pinned, a ``hybrid=False`` key is the same on 1, 3 and 8 threads, and
+    stays in the level's own ring on each."""
+    _Rq, _Rp, scheme = ghs
+
+    def bv_key(n_threads):
+        with entropy.deterministic(0x7EAD5):
+            key = scheme.key_gen_sparse(N // 8, 3.2)
+            key2 = scheme.key_gen_sparse(N // 8, 3.2)
+            ksk = scheme.gen_ksk(
+                key2,
+                key,
+                lvl=lvl,
+                gadget_params=GadgetParams(4),
+                n_threads=n_threads,
+                hybrid=False,
+            )
+        assert all(c.ring == scheme.rings[lvl] for c in ksk.mlwe[0])
+        return _ksk_digests(ksk)
+
+    keys = [bv_key(n_threads) for n_threads in (1, 3, 0)]
+    assert keys[0] == keys[1] == keys[2]
+
+
+@pytest.mark.parametrize("radix", [None, 9])
+@pytest.mark.parametrize("r", [1, 2])
+@pytest.mark.usefixtures("threads")
+def test_single_operations_do_not_depend_on_the_thread_count(radix, r):
+    """A key switch, an automorphism, a product, a division and hoisted
+    automorphisms split over the primes give the same samples on 1, 3 and 8
+    threads. N = 4096 is large enough for them to run in parallel."""
+    n = 4096
+    Rq = Ring(n, prime_size=[45] * 5 + [50], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=1, module_rank=r)
+    with entropy.deterministic(0x1A7E):
+        key = scheme.key_gen_sparse(n * r // 8, 3.2)
+        key2 = scheme.key_gen_sparse(n * r // 8, 3.2)
+        ksk = scheme.gen_ksk(key2, key, gadget_params=GadgetParams(radix))
+        auts = [
+            scheme.gen_ksk_automorphism(key, key, g, gadget_params=GadgetParams(radix))
+            for g in (5, 25)
+        ]
+        rlk = scheme.gen_rlk(key, key, gadget_params=GadgetParams(radix))
+        c = enc(scheme, Rp, Rp.random_element(), key)
+
+    def run(n_threads):
+        out = [scheme.keyswitch(c.copy(), ksk, n_threads)]
+        out.append(scheme.automorphism(c.copy(), 5, auts[0], n_threads))
+        prod = scheme.multiply(c.copy(), c.copy(), rlk, n_threads)
+        out.append(prod.copy())
+        out.append(prod.round_division(lvl=1, n_threads=n_threads))
+        with parallel.local_num_threads(n_threads):
+            out += scheme.automorphisms(c.copy(), [5, 25], auts)
+        for x in out:
+            x.to_coeff()
+        return _digests(out)
+
+    runs = [run(n_threads) for n_threads in (1, 3, 0)]
+    assert runs[0] == runs[1] == runs[2]
+    m_out = scheme.linear_decrypt(scheme.keyswitch(c.copy(), ksk, 3), key2)
+    assert m_out.round_division(Rp) == scheme.linear_decrypt(
+        c.copy(), key
+    ).round_division(Rp)
+
+
+@pytest.mark.parametrize(
+    "gadget", [GadgetParams(), GadgetParams(9), GadgetParams(primes_per_digit=2)]
+)
+@pytest.mark.parametrize("r", [1, 2])
+def test_batches_do_not_depend_on_the_thread_count(gadget, r):
+    """Batches of products (divided and not) and of automorphisms under
+    different keys, inputs in both domains, give the same samples on 1, 3
+    and 32 threads -- per sample, by rows, and with the digits split into
+    groups -- and the same as one operation at a time."""
+    n = 4096
+    Rq = Ring(n, prime_size=[45] * 5 + [50, 50], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=2, module_rank=r)
+    gens = [5, 25, 125]
+    with entropy.deterministic(0xBA7C):
+        key = scheme.key_gen_sparse(n * r // 8, 3.2)
+        auts = [
+            scheme.gen_ksk_automorphism(key, key, g, gadget_params=gadget) for g in gens
+        ]
+        rlk = scheme.gen_rlk(key, key, gadget_params=gadget)
+        cs = [enc(scheme, Rp, Rp.random_element(), key) for _ in gens]
+    cs[1].to_NTT()
+
+    def run(n_threads):
+        out = scheme.multiply_batch(
+            [c.copy() for c in cs], [c.copy() for c in cs[::-1]], rlk, n_threads, lvl=1
+        )
+        out += scheme.multiply_batch(
+            [cs[0].copy(), cs[1].copy()], [cs[2].copy(), cs[0].copy()], rlk, n_threads
+        )
+        out += scheme.automorphism_batch([c.copy() for c in cs], gens, auts, n_threads)
+        for x in out:
+            x.to_coeff()
+        return _digests(out)
+
+    parallel.set_num_threads(32)
+    try:
+        runs = [run(n_threads) for n_threads in (1, 3, 0)]
+        single = [
+            scheme.multiply(cs[0].copy(), cs[2].copy(), rlk).round_division(lvl=1),
+            scheme.automorphism(cs[1].copy(), gens[1], auts[1]),
+        ]
+    finally:
+        parallel.set_num_threads()
+    assert runs[0] == runs[1] == runs[2]
+    for x in single:
+        x.to_coeff()
+    assert _digests(single) == [runs[0][0], runs[0][6]]
 
 
 @pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])

@@ -247,6 +247,46 @@ static void RNS_FN(rns_row_digit)(uint64_t *out, const RNS_W *in, uint64_t shift
         out[i] = (in[i] >> shift) & mask;
 }
 
+// The same digit of every coefficient plus `offset` mod q (offset < q).
+static void RNS_FN(rns_row_digit_offset)(uint64_t *out, const RNS_W *in, uint64_t shift,
+                                         uint64_t mask, uint64_t offset, uint64_t q, uint64_t N)
+{
+    for (uint64_t i = 0; i < N; i++)
+    {
+        uint64_t v = (uint64_t)in[i] + offset;
+        v -= q & (0 - (uint64_t)(v >= q));
+        out[i] = (v >> shift) & mask;
+    }
+}
+
+// A signed digit of every coefficient's centered residue: the residue x in
+// [0, q) is moved to (-q/2, q/2], `offset` added, and the result shifted
+// arithmetically, masked and lowered by `half`. With offset the sum of half *
+// 2^(log_base*j) over the digits below and at this one, that is the balanced
+// digit in [-half, half); the caller passes an all-ones mask and half 0 for
+// the top digit, which takes whatever the lower digits leave.
+static void RNS_FN(rns_row_digit_balanced)(int64_t *out, const RNS_W *in, uint64_t q,
+                                           int64_t offset, uint64_t shift, int64_t mask,
+                                           int64_t half, uint64_t N)
+{
+    const uint64_t above = q >> 1;
+    for (uint64_t i = 0; i < N; i++)
+    {
+        const uint64_t x = in[i];
+        const int64_t centered = (int64_t)x - (int64_t)(q & (0 - (uint64_t)(x > above)));
+        out[i] = (((centered + offset) >> shift) & mask) - half;
+    }
+}
+
+// Signed values of magnitude below q stored as residues mod q: one
+// conditional add each.
+static void RNS_FN(rns_row_store_small_signed)(RNS_W *out, const int64_t *in, uint64_t q,
+                                               uint64_t N)
+{
+    for (uint64_t i = 0; i < N; i++)
+        out[i] = (RNS_W)((uint64_t)in[i] + (q & (uint64_t)(in[i] >> 63)));
+}
+
 // Scatter a reduced 64-bit array into the split layout of one row.
 static void RNS_FN(rns_row_scatter_split)(RNS_W *out, const uint64_t *in, uint64_t N,
                                           uint64_t split_degree, uint64_t poly_size)
