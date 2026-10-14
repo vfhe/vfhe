@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from vfhe.crypto import entropy, hash_bytes
 
@@ -243,6 +243,40 @@ def oracle_closure(oracles) -> list:
     return list(seen.values())
 
 
+class Implicit:
+    """An implicit oracle: a handle with variables and no content of its own.
+
+    It is the *head* of exactly one statement of a reduction (`Statement.head`),
+    and its table is whatever that statement's relation computes from the
+    statement's other oracles (`Relation.compute_head`). On the prover's side
+    the table lives in `Prover.witnesses` once computed; the verifier has
+    nothing of it, and never queries it: an evaluation claim on it is held by
+    the Composer of the reduction until the layer of its head, never routed to
+    a protocol (`IOP.protocol_for` refuses one that gets through). `kind`
+    exists only for that refusal; `digest()` lets a statement carrying the
+    handle seed a Fiat-Shamir chain in tests, the handle's identity being its
+    variables.
+    """
+
+    kind = OracleKind.implicit
+    public = False
+
+    def __init__(self, variables: list) -> None:
+        self.variables = list(variables)
+
+    @property
+    def num_vars(self) -> int:
+        return len(self.variables)
+
+    def digest(self) -> bytes:
+        return _chain(
+            [b"implicit-handle"] + [element_digest(v) for v in self.variables]
+        )
+
+    def __repr__(self) -> str:
+        return f"Implicit(vars={self.num_vars})"
+
+
 class Relation:
     """An indexed relation R: a set of (index, instance, witness) triples.
 
@@ -260,16 +294,40 @@ class Relation:
     relation's language: it enumerates the hypercube or queries the oracle
     directly. It is what tests run and what the verifier is entitled to do on
     the fully-reduced leaf statements — not the succinct verifier.
+
+    A relation may declare that one of its oracles is determined by the
+    others: `head_index` names that position in `oracles`, and
+    `compute_head(statement)` computes its table from the other oracles of
+    the statement (given concrete tables, the prover view). A statement of
+    such a relation may then carry that oracle as its `head` (an `Implicit`
+    handle), and `with_start` derives the companion relation and the
+    `start` method the Composer uses. `check` ignores the head: it decides
+    the relation on whatever the statement's oracles are.
+
+    A relation with a head must be constructible from its index alone, as
+    `type(r)(index=r.index)`: its start relation rebuilds it that way.
     """
 
     name = "abstract"
     fields: tuple[str, ...] = ()
+    head_index: int | None = None
+    Start: ClassVar[type[Relation]]  # set by `with_start`
+    base: ClassVar[type[Relation]]  # on a start relation: what it derives from
 
     def __init__(self, index=None):
         self.index = index
 
     def check(self, statement: Statement) -> bool:
         raise NotImplementedError
+
+    def compute_head(self, statement: Statement):
+        """The head's table from the statement's other oracles (prover view)."""
+        raise NotImplementedError(f"{type(self).__name__} has no head to compute")
+
+    def start(self, statement: Statement, claims: list[Statement]) -> Statement:
+        """The started statement of a headed `statement` with the evaluation
+        claims on its head; installed by `with_start`."""
+        raise NotImplementedError(f"{type(self).__name__} has no start relation")
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(index={self.index!r})"
@@ -389,6 +447,11 @@ class Statement:
     form a DAG whose leaves the verifier decides (piop.md §5). `path` names
     this statement's position in the DAG (root `""`; j-th child of `p` is
     `f"{p}/{j}"`), identical on both sides, and namespaces the transcript.
+    `head`, structural like `parents` and `path` (not a field, never
+    digested), marks the statement as *headed*: the oracle at the relation's
+    `head_index` is an `Implicit` handle whose table the relation computes
+    from the others, and a Composer consumes the evaluation claims on it at
+    this statement's layer. `None` (the default) is an ordinary statement.
     """
 
     def __init__(
@@ -396,6 +459,7 @@ class Statement:
         relation: Relation,
         parents: tuple[Statement, ...] = (),
         path: str = "",
+        head: Implicit | None = None,
         **fields,
     ):
         self.relation = relation
@@ -409,6 +473,7 @@ class Statement:
             )
         # Canonical (relation-declared) order — what Fiat-Shamir will hash.
         self.fields = {n: fields[n] for n in relation.fields if n in fields}
+        self.head = _checked_head(relation, self.fields, head)
         self._children = 0  # counter handing out child paths
 
     def __getattr__(self, name: str):
@@ -431,9 +496,14 @@ class Statement:
             default=len(point),
         )
 
-    def reduce_to(self, relation: Relation | type[Relation], **fields) -> Statement:
+    def reduce_to(
+        self,
+        relation: Relation | type[Relation],
+        head: Implicit | None = None,
+        **fields,
+    ) -> Statement:
         """Emit a statement this one reduces to, inheriting the oracles."""
-        return _reduce((self,), relation, **fields)
+        return _reduce((self,), relation, head=head, **fields)
 
     def _fork(self) -> Statement:
         """A per-party view of this statement: same public content, fresh
@@ -442,7 +512,11 @@ class Statement:
         root would hand the second party's children the next counter values,
         desynchronizing the path-namespaced transcript labels."""
         return Statement(
-            self.relation, parents=self.parents, path=self.path, **self.fields
+            self.relation,
+            parents=self.parents,
+            path=self.path,
+            head=self.head,
+            **self.fields,
         )
 
     async def resolved(self) -> Statement:
@@ -471,14 +545,36 @@ class Statement:
         return self.relation.check(self)
 
     def __repr__(self) -> str:
+        head = "" if self.head is None else f", head={self.head!r}"
         return (
             f"Statement({self.relation.name}, path={self.path!r}, "
-            f"vars={self.num_vars}, fields={list(self.fields)})"
+            f"vars={self.num_vars}, fields={list(self.fields)}{head})"
         )
 
 
+def _checked_head(relation: Relation, fields: dict, head) -> Implicit | None:
+    """`head` validated against the relation: None, or the `Implicit` handle at
+    the relation's `head_index` among the statement's oracles."""
+    if head is None:
+        return None
+    if relation.head_index is None:
+        raise TypeError(f"{type(relation).__name__} declares no head_index")
+    if not isinstance(head, Implicit):
+        raise TypeError("a head must be an Implicit oracle")
+    oracles = fields.get("oracles") or ()
+    if relation.head_index >= len(oracles) or oracles[relation.head_index] is not head:
+        raise ValueError(
+            f"the head must be the oracle at position {relation.head_index} "
+            "of the statement's oracles"
+        )
+    return head
+
+
 def _reduce(
-    parents: tuple[Statement, ...], relation: Relation | type[Relation], **fields
+    parents: tuple[Statement, ...],
+    relation: Relation | type[Relation],
+    head: Implicit | None = None,
+    **fields,
 ) -> Statement:
     """One output statement of a reduction step, child-pathed off parents[0]."""
     if isinstance(relation, type):
@@ -488,7 +584,100 @@ def _reduce(
         fields["oracles"] = first.fields.get("oracles", ())
     path = f"{first.path}/{first._children}"
     first._children += 1
-    return Statement(relation, parents=tuple(parents), path=path, **fields)
+    return Statement(relation, parents=tuple(parents), path=path, head=head, **fields)
+
+
+def _with_head_table(statement: Statement, base: Relation, table) -> Statement:
+    """`statement` as `base`'s ideal decider sees it once the head is known:
+    the base relation's fields, with `table` in the head's place among the
+    oracles and no head (every oracle is a table now)."""
+    assert base.head_index is not None
+    oracles = list(statement.oracles)
+    oracles[base.head_index] = table
+    fields = {n: statement.fields[n] for n in base.fields if n in statement.fields}
+    fields["oracles"] = tuple(oracles)
+    return Statement(base, **fields)
+
+
+def with_start(cls: type[Relation]) -> type[Relation]:
+    """Class decorator: derive the *start relation* of a relation with a head.
+
+    For `R` with head `u` and other oracles `dep`, `R.Start` is the relation
+
+        R_start(dep; (r_j, y_j)_j)  :=  R(F(dep); dep)  and  F(dep)~(r_j) = y_j
+                                        for every j,  F = R.compute_head,
+
+    that is `R` with its head *bound* to the oracle it defines, plus
+    evaluation claims on that oracle (k >= 1 of them) at points the statement
+    carries as data. Its statements are `R`'s with two more fields, `points`
+    and `values`; the oracles and the head are the same. The decider is
+    generic: materialize the head with `compute_head`, decide `R` with that
+    table in the head's place (the residual), then one `Relation_Eval` check
+    per claim. The decorator also installs `R.start(statement, claims)`, which
+    builds the started statement from a headed statement and the `Relation_Eval`
+    claims on its head (the Composer calls it once per head, at its layer); the
+    started statement is a child of the statement, with the claims as further
+    parents. A sequentially composable PIOP for `R` is a PIOP for `R.Start`,
+    registered against that class.
+    """
+    if cls.head_index is None:
+        raise TypeError(f"{cls.__name__} declares no head_index; nothing to start")
+    base_cls = cls
+
+    class Start(Relation):
+        name = base_cls.name + "_start"
+        fields = (*base_cls.fields, "points", "values")
+        head_index = base_cls.head_index
+        base = base_cls
+
+        def compute_head(self, statement: Statement):
+            return base_cls(index=self.index).compute_head(statement)
+
+        def check(self, statement: Statement) -> bool:
+            points, values = statement.points, statement.values
+            if not points or len(points) != len(values):  # k >= 1, paired
+                return False
+            base = base_cls(index=self.index)
+            head = base.compute_head(statement)
+            if not _with_head_table(statement, base, head).check():
+                return False
+            return all(
+                Statement(
+                    Relation_Eval(), oracles=(head,), point=dict(p), value=v
+                ).check()
+                for p, v in zip(points, values, strict=True)
+            )
+
+    Start.__name__ = base_cls.__name__ + ".Start"
+    Start.__qualname__ = base_cls.__qualname__ + ".Start"
+    Start.__doc__ = f"The start relation of {base_cls.__name__} (`with_start`)."
+
+    def start(self, statement: Statement, claims: list[Statement]) -> Statement:
+        """The started statement: `statement` (headed) with the evaluation
+        claims on its head, as a statement of `Start`."""
+        if not isinstance(statement.relation, base_cls):
+            raise TypeError(f"not a statement of {base_cls.__name__}")
+        if not claims:
+            raise ValueError("a started statement carries at least one claim")
+        if statement.head is None:
+            raise ValueError("only a headed statement can be started")
+        for c in claims:
+            if not isinstance(c.relation, Relation_Eval):
+                raise TypeError("the claims on a head are Relation_Eval statements")
+            if Relation_Eval.subject(c) is not statement.head:
+                raise ValueError("a claim is not on this statement's head")
+        return _reduce(
+            (statement, *claims),
+            Start(index=self.index),
+            head=statement.head,
+            **statement.fields,
+            points=[c.point for c in claims],
+            values=[c.value for c in claims],
+        )
+
+    cls.Start = Start
+    cls.start = start
+    return cls
 
 
 class Protocol:
@@ -1011,6 +1200,12 @@ class IOP:
         """The protocol discharging `statement`, None if it is terminal."""
         relation = statement.relation
         if isinstance(relation, Relation_Eval):
+            if isinstance(Relation_Eval.subject(statement), Implicit):
+                raise RuntimeError(
+                    "an evaluation claim on an implicit oracle reached the driver; "
+                    "claims on a head are consumed by the Composer of the "
+                    "reduction that heads it"
+                )
             kind = Relation_Eval.kind(statement)
             if kind is OracleKind.public:
                 return None
