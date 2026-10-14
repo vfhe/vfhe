@@ -6,6 +6,7 @@ from .fs import FS_Verifier
 from .lookup import Lookup, Relation_Lookup
 from .piop import (
     IOP,
+    Implicit,
     OracleKind,
     Party,
     Proof,
@@ -24,6 +25,7 @@ from .piop import (
     Verifier,
     element_digest,
     oracle_kind,
+    with_start,
 )
 from .range import RangeDecomposition, Relation_Range
 from .sumcheck import Sumcheck, SumcheckProd
@@ -33,6 +35,7 @@ __all__ = [
     "GKR",
     "IOP",
     "FS_Verifier",
+    "Implicit",
     "ImplicitEval",
     "ImplicitOracle",
     "Lookup",
@@ -62,4 +65,5 @@ __all__ = [
     "VirtualOracle",
     "element_digest",
     "oracle_kind",
+    "with_start",
 ]

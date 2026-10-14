@@ -87,8 +87,9 @@ class Relation_Circuit(Relation):
     name = "circuit"
     fields = ("oracles", "output")
 
-    def __init__(self, circuit: gkr.Circuit) -> None:
-        super().__init__(index=circuit)
+    def __init__(self, index: gkr.Circuit) -> None:
+        # Named `index`, the keyword a relation with a head is rebuilt with.
+        super().__init__(index=index)
 
     @property
     def circuit(self) -> gkr.Circuit:
