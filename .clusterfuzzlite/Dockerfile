@@ -6,6 +6,6 @@ WORKDIR $SRC/vfhe
 
 RUN git submodule update --init external/blake3/blake3 external/unity/unity
 
-RUN python3 -m pip install --no-cache-dir --constraint ci-constraints-requirements.txt meson ninja
+RUN python3 -m pip install --no-cache-dir --require-hashes -r .clusterfuzzlite/requirements.txt
 
 COPY .clusterfuzzlite/build.sh $SRC/
