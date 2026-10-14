@@ -3,18 +3,39 @@
 """Sequential composition: headed statements and implicit oracles, the
 start relation derived by `with_start`, and the Composer."""
 
+import random
+
 import pytest
-from vfhe.arith import MLE, MLE_Variable
+from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import (
     IOP,
     Implicit,
+    OracleKind,
     Protocol,
     Relation,
     Relation_Eval,
+    Relation_Sum,
+    Relation_Zero,
     Statement,
+    Sumcheck,
+    VirtualEval,
+    VirtualOracle,
+    compose,
     element_digest,
     with_start,
 )
+from vfhe.piop.virtual import _eq_weights, _one_of
+
+
+class _IntDomain:
+    """Deterministic integer challenges (any nonzero integer is exceptional
+    for exact integer arithmetic), so a rejection is reproducible."""
+
+    def __init__(self, seed=0):
+        self._rng = random.Random(seed)
+
+    def random_exceptional(self):
+        return self._rng.randrange(2, 1 << 20)
 
 
 def _vars(*names):
@@ -23,6 +44,17 @@ def _vars(*names):
 
 def _table(variables, values):
     return MLE(variables=list(variables), evaluations=list(values))
+
+
+def _like(t, values, public=False):
+    """A table over `t`'s variables and domain."""
+    return MLE(
+        ring=t.ring,
+        field=t.field,
+        variables=list(t.variables),
+        evaluations=values,
+        public=public,
+    )
 
 
 def _at(f, point):
@@ -43,9 +75,7 @@ class _Hadamard(Relation):
 
     def compute_head(self, statement):
         _, b, c = statement.oracles
-        return _table(
-            b.variables, [x * y for x, y in zip(b.table, c.table, strict=True)]
-        )
+        return _like(b, [x * y for x, y in zip(b.table, c.table, strict=True)])
 
 
 @with_start
@@ -268,3 +298,381 @@ def test_protocol_for_refuses_a_claim_on_an_implicit_oracle():
         Relation_Eval(), oracles=(_table(x, [1, 2]),), point={x[0]: 1}, value=2
     )
     assert iop.protocol_for(table) is not None
+
+
+# --- the Composer ----------------------------------------------------------
+
+
+class _HadamardStart(Protocol):
+    """The Hadamard tail, a sequentially composable PIOP for `_Hadamard.Start`:
+    each claim (b ∘ c)~(r) = y becomes the sum claim sum_i b(i) c(i) eq(i, r)
+    = y, one sumcheck per claim (the simplest batching), which ends in claims
+    on b and c (eq is public). Sound for any r: the identity is exact."""
+
+    name = "hadamard_start"
+    reduces_to = (Relation_Sum,)
+
+    async def prove(self, prover, statements):
+        return self._sums(statements)
+
+    async def verify(self, verifier, statements):
+        return self._sums(statements)
+
+    def _sums(self, statements):
+        (s,) = statements
+        _, b, c = s.oracles
+        out = []
+        for point, value in zip(s.points, s.values, strict=True):
+            r = [point[v] for v in s.head.variables]
+            eq = _like(b, _eq_weights(r, _one_of([b])), public=True)
+            g = VirtualOracle.product([b, c, eq])
+            out.append(self.reduce([s], oracles=[g], value=value))
+        return out
+
+
+class _Chain(Relation):
+    """sum_i b(i) (d ∘ e)(i) = total over tables b, d, e. Its protocol is a
+    composition with the Hadamard product d ∘ e as an implicit oracle."""
+
+    name = "chain"
+    fields = ("oracles", "total")
+
+    def check(self, statement):
+        b, d, e = statement.oracles
+        prods = [x * y * z for x, y, z in zip(b.table, d.table, e.table, strict=True)]
+        return sum(prods) == statement.total
+
+
+def _chain_layering(root):
+    b, d, e = root.oracles
+    c = Implicit(b.variables)
+    product = VirtualOracle.product([b, c])
+    return [
+        [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
+        [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)],
+    ]
+
+
+def _chain_instance(ring=None, total=290, relation=None):
+    x = _vars("x0", "x1")
+    b = MLE(ring=ring, variables=x, evaluations=[1, 2, 3, 4])
+    d = MLE(ring=ring, variables=x, evaluations=[5, 6, 7, 8])
+    e = MLE(ring=ring, variables=x, evaluations=[2, 3, 4, 5])
+    # d ∘ e = [10, 18, 28, 40]; sum b * (d ∘ e) = 10 + 36 + 84 + 160 = 290
+    return Statement(relation or _Chain(), oracles=(b, d, e), total=total)
+
+
+def _iop(domain, layering=_chain_layering, **kw):
+    iop = IOP(domain=domain, **kw)
+    iop.register(_Chain, compose(layering, name="chain"))
+    iop.register(_Hadamard.Start, _HadamardStart())
+    iop.register(Relation_Sum, Sumcheck())
+    iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+    return iop
+
+
+def test_composed_chain_ideal_model(monkeypatch):
+    calls = []
+    compute_head = _Hadamard.compute_head
+    monkeypatch.setattr(
+        _Hadamard,
+        "compute_head",
+        lambda self, s: calls.append(s) or compute_head(self, s),
+    )
+    stmt = _chain_instance()
+    assert stmt.check()
+    iop = _iop(_IntDomain())
+    assert iop.run(stmt)  # the three terminal claims decided by the driver
+    assert len(calls) == 1  # the prover, once
+    (c,) = [o for o in iop.prover.witnesses if isinstance(o, Implicit)]
+    assert list(iop.prover.witnesses[c].table) == [10, 18, 28, 40]
+    order = iop.transcript.order
+    # L0's sumcheck, its virtual-eval values, then the tail's sumcheck
+    assert order[0] == "sumcheck/0/g0"
+    assert order.index("virtual/0/0/vals") < order.index("sumcheck/1/0/0/g0")
+    assert not _iop(_IntDomain(1)).run(_chain_instance(total=291))
+
+
+class _ChainB(_Chain):
+    """sum_i b(i) (b ∘ e)(i) = total: b is read by both layers."""
+
+    name = "chain_b"
+
+    def check(self, statement):
+        b, _, e = statement.oracles
+        prods = [x * x * z for x, z in zip(b.table, e.table, strict=True)]
+        return sum(prods) == statement.total
+
+
+def _chain_b_layering(root):
+    b, _, e = root.oracles
+    c = Implicit(b.variables)
+    product = VirtualOracle.product([b, c])
+    return [
+        [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
+        [root.reduce_to(_Hadamard, oracles=(c, b, e), head=c)],
+    ]
+
+
+def test_composed_outputs_reach_the_driver():
+    sizes = []
+
+    class _Bundle(Protocol):
+        reduces_from = Relation_Eval
+        batching = True
+
+        async def prove(self, prover, statements):
+            sizes.append(len(statements))
+            return []
+
+        async def verify(self, verifier, statements):
+            sizes.append(len(statements))
+            assert all(s.check() for s in statements)
+            return []
+
+    iop = _iop(_IntDomain())
+    iop.register(_ChainB, compose(_chain_b_layering, name="chain_b"))
+    iop.register(Relation_Eval, _Bundle())
+    # b ∘ e = [2, 6, 12, 20]; sum b * that = 2 + 12 + 36 + 80 = 130
+    stmt = _chain_instance(total=130, relation=_ChainB())
+    assert stmt.check()
+    assert iop.run(stmt)
+    # The composed protocol returns every claim on a table: two on b (one
+    # per layer), one on e; the driver bundles them per oracle, both parties.
+    assert sorted(sizes) == [1, 1, 2, 2]
+
+
+def test_composed_chain_fiat_shamir():
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    stmt = _chain_instance(ring)
+    proof = _iop(ring, fiat_shamir=True).prove(stmt)
+    assert _iop(ring, fiat_shamir=True).verify(stmt, proof)
+    assert proof.digest() == _iop(ring, fiat_shamir=True).prove(stmt).digest()
+    bad = _chain_instance(ring, total=291)
+    assert not _iop(ring, fiat_shamir=True).verify(bad, proof)
+    assert not _iop(ring, fiat_shamir=True).run(bad)
+
+
+def test_layering_rules_are_checked():
+    def twice(root):  # rule 1: c heads two statements
+        _, d, e = root.oracles
+        c = Implicit(d.variables)
+        return [
+            [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)],
+            [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)],
+        ]
+
+    def shallow(root):  # rule 2: the sum reads c (through the virtual
+        b, d, e = root.oracles  # oracle) but sits below c's layer
+        c = Implicit(b.variables)
+        product = VirtualOracle.product([b, c])
+        return [
+            [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)],
+            [root.reduce_to(Relation_Sum, oracles=[product], value=1)],
+        ]
+
+    def unclaimed(root):  # a head nobody queries
+        _, d, e = root.oracles
+        c = Implicit(d.variables)
+        return [[root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)]]
+
+    cases = ((twice, "rule 1"), (shallow, "rule 2"), (unclaimed, "no claim"))
+    for bad, error in cases:
+        with pytest.raises((ValueError, RuntimeError), match=error):
+            _iop(_IntDomain(), layering=bad).run(_chain_instance())
+
+
+@with_start
+class _DoubleHadamard(Relation):
+    """c = d ∘ (d ∘ e), head c; its composable protocol is itself composed,
+    with the inner product d ∘ e as an implicit oracle of its own."""
+
+    name = "double"
+    fields = ("oracles",)
+    head_index = 0
+
+    def check(self, statement):
+        c, d, e = statement.oracles
+        want = [x * x * y for x, y in zip(d.table, e.table, strict=True)]
+        return list(c.table) == want
+
+    def compute_head(self, statement):
+        _, d, e = statement.oracles
+        return _like(d, [x * x * y for x, y in zip(d.table, e.table, strict=True)])
+
+
+def _double_start_layering(started):
+    # started: a statement of _DoubleHadamard.Start, head c, with claims on c
+    c, d, e = started.oracles
+    m = Implicit(d.variables)
+    return [
+        [started.reduce_to(_Hadamard, oracles=(c, d, m), head=c)],
+        [started.reduce_to(_Hadamard, oracles=(m, d, e), head=m)],
+    ]
+
+
+class _Chain2(_Chain):
+    """sum_i b(i) (d ∘ (d ∘ e))(i) = total."""
+
+    name = "chain2"
+
+    def check(self, statement):
+        b, d, e = statement.oracles
+        prods = [
+            x * y * y * z for x, y, z in zip(b.table, d.table, e.table, strict=True)
+        ]
+        return sum(prods) == statement.total
+
+
+def _chain2_layering(root):
+    b, d, e = root.oracles
+    c = Implicit(b.variables)
+    product = VirtualOracle.product([b, c])
+    return [
+        [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
+        [root.reduce_to(_DoubleHadamard, oracles=(c, d, e), head=c)],
+    ]
+
+
+def _iop2(domain):
+    iop = _iop(domain)
+    iop.register(_Chain2, compose(_chain2_layering, name="chain2"))
+    iop.register(_DoubleHadamard.Start, compose(_double_start_layering, "double"))
+    return iop
+
+
+def test_nested_composition(monkeypatch):
+    calls = []
+    for cls in (_Hadamard, _DoubleHadamard):
+        original = cls.compute_head
+        monkeypatch.setattr(
+            cls,
+            "compute_head",
+            lambda self, s, f=original: calls.append(type(self).name) or f(self, s),
+        )
+    # d ∘ e = [10, 18, 28, 40]; d ∘ (d ∘ e) = [50, 108, 196, 320];
+    # sum b * that = 50 + 216 + 588 + 1280 = 2134
+    stmt = _chain_instance(total=2134, relation=_Chain2())
+    assert stmt.check()
+    iop = _iop2(_IntDomain())
+    assert iop.run(stmt)
+    # The outer pass computed c; the inner pass computed m and left c alone.
+    assert sorted(calls) == ["double", "hadamard"]
+    tables = sorted(
+        list(t.table)
+        for o, t in iop.prover.witnesses.items()
+        if isinstance(o, Implicit)
+    )
+    assert tables == [[10, 18, 28, 40], [50, 108, 196, 320]]
+    assert not _iop2(_IntDomain(1)).run(_chain_instance(total=2135, relation=_Chain2()))
+
+
+def test_a_false_head_is_rejected(monkeypatch):
+    # The prover computes a wrong table for c and claims the total that
+    # table gives: the tail's sumcheck, bound to the real b and d, e through
+    # the virtual oracle, catches it. Error about 8 / 2^20 per run; the
+    # integer domain is deterministic, so the pinned seed makes it exact.
+    def wrong(_self, statement):
+        _, b, c = statement.oracles
+        table = [x * y for x, y in zip(b.table, c.table, strict=True)]
+        table[0] += 1
+        return _like(b, table)
+
+    monkeypatch.setattr(_Hadamard, "compute_head", wrong)
+    assert not _iop(_IntDomain(0)).run(_chain_instance(total=291))
+
+
+@with_start
+class _Triple(Relation):
+    """c = d ∘ (d ∘ m), head c, over tables d and an oracle m that may be a
+    head of the enclosing reduction; composable protocol composed."""
+
+    name = "triple"
+    fields = ("oracles",)
+    head_index = 0
+
+    def check(self, statement):
+        c, d, m = statement.oracles
+        want = [x * x * y for x, y in zip(d.table, m.table, strict=True)]
+        return list(c.table) == want
+
+    def compute_head(self, statement):
+        _, d, m = statement.oracles
+        return _like(d, [x * x * y for x, y in zip(d.table, m.table, strict=True)])
+
+
+def _triple_start_layering(started):
+    c, d, m = started.oracles  # m: a head of the enclosing reduction
+    k = Implicit(d.variables)
+    return [
+        [started.reduce_to(_Hadamard, oracles=(c, d, k), head=c)],
+        [started.reduce_to(_Hadamard, oracles=(k, d, m), head=k)],
+    ]
+
+
+class _Chain3(_Chain):
+    """sum_i b(i) (d ∘ (d ∘ (d ∘ e)))(i) = total."""
+
+    name = "chain3"
+
+    def check(self, statement):
+        b, d, e = statement.oracles
+        prods = [
+            x * y * y * y * z for x, y, z in zip(b.table, d.table, e.table, strict=True)
+        ]
+        return sum(prods) == statement.total
+
+
+def _chain3_layering(root):
+    b, d, e = root.oracles
+    c, m2 = Implicit(b.variables), Implicit(b.variables)
+    product = VirtualOracle.product([b, c])
+    return [
+        [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
+        [root.reduce_to(_Triple, oracles=(c, d, m2), head=c)],
+        [root.reduce_to(_Hadamard, oracles=(m2, d, e), head=m2)],
+    ]
+
+
+def _iop3(domain, **kw):
+    iop = _iop(domain, **kw)
+    iop.register(_Chain3, compose(_chain3_layering, name="chain3"))
+    iop.register(_Triple.Start, compose(_triple_start_layering, "triple"))
+    return iop
+
+
+def test_nested_composition_reads_an_outer_head():
+    # m2 = d ∘ e = [10, 18, 28, 40] is a head of the outer reduction, read by
+    # the inner layering of _Triple.Start, whose own head is k = d ∘ m2 =
+    # [50, 108, 196, 320]; c = d ∘ k = [250, 648, 1372, 2560];
+    # sum b * c = 250 + 1296 + 4116 + 10240 = 15902.
+    stmt = _chain_instance(total=15902, relation=_Chain3())
+    assert stmt.check()
+    iop = _iop3(_IntDomain())
+    assert iop.run(stmt)
+    tables = sorted(
+        list(t.table)
+        for o, t in iop.prover.witnesses.items()
+        if isinstance(o, Implicit)
+    )
+    assert tables == [[10, 18, 28, 40], [50, 108, 196, 320], [250, 648, 1372, 2560]]
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    stmt = _chain_instance(ring, total=15902, relation=_Chain3())
+    proof = _iop3(ring, fiat_shamir=True).prove(stmt)
+    assert _iop3(ring, fiat_shamir=True).verify(stmt, proof)
+    assert not _iop3(_IntDomain(1)).run(
+        _chain_instance(total=15903, relation=_Chain3())
+    )
+
+
+def test_a_terminal_statement_reading_a_head_is_refused():
+    # A layer statement with no protocol is an output for the driver, unless
+    # it reads an implicit oracle, which the verifier could never decide.
+    def bad(root):  # Zero has no protocol here, and reads c
+        b, d, e = root.oracles
+        c = Implicit(d.variables)
+        zero = root.reduce_to(Relation_Zero, oracles=[VirtualOracle.product([b, c])])
+        return [[zero], [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)]]
+
+    with pytest.raises(RuntimeError, match="no protocol"):
+        _iop(_IntDomain(), layering=bad).run(_chain_instance())

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.piop public API re-exports.
 from .circuit import GKR, Relation_Circuit
+from .composer import compose
 from .fs import FS_Verifier
 from .lookup import Lookup, Relation_Lookup
 from .piop import (
@@ -63,6 +64,7 @@ __all__ = [
     "Verifier",
     "VirtualEval",
     "VirtualOracle",
+    "compose",
     "element_digest",
     "oracle_kind",
     "with_start",
