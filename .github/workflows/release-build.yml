@@ -51,7 +51,7 @@ jobs:
       - name: Check package metadata
         run: twine check --strict dist/*.tar.gz
       - name: Upload sdist artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           if-no-files-found: error
           name: dist-sdist
@@ -91,7 +91,7 @@ jobs:
       - name: Check package metadata
         run: twine check --strict dist/*.whl
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           if-no-files-found: error
           name: dist-wheels-${{ matrix.os }}-${{ matrix.python }}
