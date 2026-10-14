@@ -8,13 +8,16 @@ from vfhe.circuit import add_gate, gkr, mul_gate
 from vfhe.piop import (
     GKR,
     IOP,
-    ImplicitEval,
     OracleKind,
+    OutputTest,
     Relation_Circuit,
+    Relation_Equal,
     Relation_Eval,
+    Relation_Layer,
     Relation_Sum,
     Statement,
     Sumcheck,
+    SumDefStart,
     VirtualEval,
 )
 from vfhe.polycom import Basefold, BasefoldEval, FoldableRS
@@ -44,7 +47,7 @@ def _instance(ring: RNSRing, scheme: Basefold):
         public=True,
     )
     scheme.commit(w_in)  # the scheme records commitment and opening
-    return Statement(Relation_Circuit(_circuit()), oracles=[w_in], output=out)
+    return Statement(Relation_Circuit(_circuit()), oracles=(out, w_in))
 
 
 def _iop(ring: RNSRing, scheme: Basefold, bundles: list, fiat_shamir=False) -> IOP:
@@ -55,9 +58,10 @@ def _iop(ring: RNSRing, scheme: Basefold, bundles: list, fiat_shamir=False) -> I
 
     iop = IOP(domain=ring, fiat_shamir=fiat_shamir)
     iop.register(Relation_Circuit, GKR())
+    iop.register(Relation_Equal, OutputTest())
+    iop.register(Relation_Layer.Start, SumDefStart())
     iop.register(Relation_Sum, Sumcheck())
     iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
-    iop.register(Relation_Eval, ImplicitEval(), kind=OracleKind.implicit)
     iop.register(Relation_Eval, _Counting(scheme, rep=4))
     return iop
 

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Relation_Circuit and the GKR protocol over vfhe.circuit's protobuf
 circuits: the ideal model over plain tables, the ring domain under
-Fiat-Shamir, and the shape of the reduction (claims per layer)."""
+Fiat-Shamir, the shape of the reduction (claims per layer), and the
+message sequence, pinned."""
 
 import random
 
@@ -12,14 +13,20 @@ from vfhe.circuit import add_gate, gkr, mul_gate
 from vfhe.piop import (
     GKR,
     IOP,
-    ImplicitEval,
+    GKR_Start,
+    Implicit,
     OracleKind,
+    OutputTest,
     Protocol,
+    Relation,
     Relation_Circuit,
+    Relation_Equal,
     Relation_Eval,
+    Relation_Layer,
     Relation_Sum,
     Statement,
     Sumcheck,
+    SumDefStart,
     VirtualEval,
 )
 
@@ -46,10 +53,16 @@ def _circuit():
 def _iop(domain, **kw):
     iop = IOP(domain=domain, **kw)
     iop.register(Relation_Circuit, GKR())
+    iop.register(Relation_Circuit.Start, GKR_Start())
+    iop.register(Relation_Equal, OutputTest())
+    iop.register(Relation_Layer.Start, SumDefStart())
     iop.register(Relation_Sum, Sumcheck())
     iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
-    iop.register(Relation_Eval, ImplicitEval(), kind=OracleKind.implicit)
     return iop
+
+
+def _vars(*names):
+    return [MLE_Variable(n) for n in names]
 
 
 def _instance(ring=None, inputs=(1, 2, 3, 4), output=None, public_output=True):
@@ -59,15 +72,19 @@ def _instance(ring=None, inputs=(1, 2, 3, 4), output=None, public_output=True):
     out = [a + b + c * d, 0] if output is None else output
     w_in = MLE(ring=ring, variables=w, evaluations=list(inputs))
     out_mle = MLE(ring=ring, variables=o, evaluations=out, public=public_output)
-    return Statement(Relation_Circuit(_circuit()), oracles=[w_in], output=out_mle)
+    return Statement(Relation_Circuit(_circuit()), oracles=(out_mle, w_in))
 
 
 def test_relation_circuit_decider():
     assert _instance().check()
     assert not _instance(output=[16, 0]).check()
-    (w_in,) = _instance().oracles
-    tables = Relation_Circuit(_circuit()).layer_tables(w_in)
-    assert tables == [[1, 2, 3, 4], [3, 12], [15, 0]]
+    out, w_in = _instance().oracles
+    relation = Relation_Circuit(_circuit())
+    assert relation.layer_tables(w_in) == [[1, 2, 3, 4], [3, 12], [15, 0]]
+    # The output as the head of a statement: computed from the input.
+    head = Implicit(out.variables)
+    headed = Statement(relation, oracles=(head, w_in), head=head)
+    assert list(relation.compute_head(headed).table) == [15, 0]
 
 
 def test_gkr_ideal_model():
@@ -86,14 +103,21 @@ def test_gkr_ideal_model():
     stmt = _instance()
     assert iop.run(stmt)
     # Both claims on the input arrive together, on the input oracle.
-    (w_in,) = stmt.oracles
+    _, w_in = stmt.oracles
     assert len(terminal) == 2 and all(s.oracles[0] is w_in for s in terminal)
     assert all(s.check() for s in terminal)
     order = iop.transcript.order
-    assert order[0] == "gkr/r0"  # the output point, one challenge
+    assert order[0] == "equal/0/r0"  # the output test's point, one challenge
     # layer 1 (one claim, no RLC) then layer 0 (two claims, two RLC challenges)
-    assert "sumcheck/0/0/g0" in order
-    assert any(label.endswith("/a0") for label in order)
+    assert order[1] == "sumcheck/1/0/0/g0"
+    assert "sumdef/2/0/a0" in order and "sumdef/2/0/a1" in order
+    # The prover computed and stored both layers' tables.
+    heads = sorted(
+        list(t.table)
+        for o, t in iop.prover.witnesses.items()
+        if isinstance(o, Implicit)
+    )
+    assert heads == [[3, 12], [15, 0]]
     assert not _iop(_IntDomain()).run(_instance(output=[16, 0]))
 
 
@@ -112,7 +136,7 @@ def test_gkr_non_public_output_emits_two_claims():
     iop.register(Relation_Eval, _Record())
     stmt = _instance(public_output=False)
     assert iop.run(stmt)
-    assert "gkr/out" in iop.transcript.order
+    assert "equal/0/out" in iop.transcript.order
     assert kinds.count(OracleKind.plain) == 3  # two on the input, one on the output
 
 
@@ -153,7 +177,7 @@ def test_xmult_gate_layer_tables_and_proof():
     assert Relation_Circuit(xm).layer_tables(w_in) == [[1, 2, 3, 4], [11, 0]]
     assert Relation_Circuit(expanded).layer_tables(w_in)[-1] == [11, 0]
     out = MLE(variables=[MLE_Variable("o0")], evaluations=[11, 0], public=True)
-    stmt = Statement(Relation_Circuit(xm), oracles=[w_in], output=out)
+    stmt = Statement(Relation_Circuit(xm), oracles=(out, w_in))
     assert stmt.check()
     iop = _iop(_IntDomain())
     assert iop.run(stmt)
@@ -163,7 +187,7 @@ def test_xmult_gate_layer_tables_and_proof():
     assert all(len(iop.transcript.entries[k].result()) == 3 for k in rounds)
     bad = MLE(variables=[MLE_Variable("o0")], evaluations=[12, 0], public=True)
     assert not _iop(_IntDomain()).run(
-        Statement(Relation_Circuit(xm), oracles=[w_in], output=bad)
+        Statement(Relation_Circuit(xm), oracles=(bad, w_in))
     )
 
 
@@ -172,12 +196,12 @@ def test_gkr_dense_and_libra_strategies_agree(monkeypatch):
 
     ring = Ring(1024, prime_size=[49], split_degree=4)
     stmt = _instance(ring=ring)
-    (w_in,) = stmt.oracles
-    assert isinstance(stmt.relation, Relation_Circuit)
-    layer = GKR.layers(stmt.relation, w_in, ring)[0]
-    (z,) = layer.variables
-    body = layer.instantiate({z: ring.random_exceptional()})
-    assert isinstance(body.prover_view({}), _LibraProver)
+    # The deepest layer's statement: its body reads the input table itself.
+    *_, bottom = GKR().layers(stmt._fork(), _iop(ring))
+    head, body = bottom[0].oracles
+    (z,) = head.variables
+    instantiated = body.evaluate({z: ring.random_exceptional()}, in_place=False)
+    assert isinstance(instantiated.prover_view({}), _LibraProver)
     from vfhe.piop import VirtualOracle
 
     digests = {}
@@ -225,9 +249,210 @@ def test_gkr_wide_layers_run_in_linear_time():
         evaluations=last,
         public=True,
     )
-    stmt = Statement(relation, oracles=[w_in], output=out)
+    stmt = Statement(relation, oracles=(out, w_in))
     iop = _iop(_IntDomain())
     assert iop.run(stmt)
     last[0] += 1
     bad = MLE(variables=out.variables, evaluations=last, public=True)
-    assert not _iop(_IntDomain()).run(Statement(relation, oracles=[w_in], output=bad))
+    assert not _iop(_IntDomain()).run(Statement(relation, oracles=(bad, w_in)))
+
+
+# The transcript values of the two-layer circuit under _IntDomain(0), with
+# a public and with a plain output: what the protocol sent before it became
+# a composition (labels changed, values did not).
+_MESSAGES = [
+    885442,
+    (-2656323, -10625292, -18594261),
+    403960,
+    (-3219147373563, 0, 3219147373563),
+    794774,
+    (3635643, 7152969),
+    933490,
+    441003,
+    (8003495100435, -1455177928458, -16734573667127),
+    42452,
+    (-30888334298413737, -5245219721000459968040, -10490902741755771067379),
+    271495,
+    (
+        115646090843763747649818,
+        -19637278236501905948295225080,
+        -49093311237345608634485712518,
+    ),
+    1012365,
+    (
+        -117075939110956042625760349752,
+        -5031492543592486215067923393532399106400,
+        -10063004967161078387276906090334575977248,
+    ),
+    536112,
+    (585443, 2084590),
+]
+
+
+@pytest.mark.parametrize("public_output", [True, False])
+def test_gkr_message_sequence_is_pinned(public_output):
+    iop = _iop(_IntDomain(0))
+    assert iop.run(_instance(public_output=public_output))
+    t = iop.transcript
+    values = [t.entries[label].result() for label in t.order]
+    expected = _MESSAGES if public_output else [_MESSAGES[0], -13281615, *_MESSAGES[1:]]
+    assert values == expected
+
+
+def test_gkr_start_proves_a_started_circuit():
+    # A circuit statement started by claims on its output: the composable
+    # form, as a larger reduction would use it. Here the started statement
+    # is the root and the driver decides the claims on the input.
+    stmt = _instance()
+    out, w_in = stmt.oracles
+    head = Implicit(out.variables)
+    headed = Statement(Relation_Circuit(_circuit()), oracles=(head, w_in), head=head)
+    (o,) = out.variables
+    claims = [
+        Statement(Relation_Eval(), oracles=(head,), point={o: r}, value=(1 - r) * 15)
+        for r in (3, 7)
+    ]
+    started = headed.relation.start(headed, claims)
+    assert started.check()
+    iop = _iop(_IntDomain())
+    assert iop.run(started)
+    assert iop.transcript.order[0] == "sumdef/0/0/0/a0"  # the two claims combined
+    wrong = Statement(Relation_Eval(), oracles=(head,), point={o: 3}, value=1)
+    bad = headed.relation.start(headed, [wrong, claims[1]])
+    assert not bad.check()
+    assert not _iop(_IntDomain(1)).run(bad)
+
+
+def test_gkr_rejects_an_output_oracle_of_the_wrong_size():
+    # check() refuses a 2-variable output for a 1-variable output layer, and
+    # so must the protocol (the layer identity would silently pad).
+    _, w_in = _instance().oracles
+    out = MLE(variables=_vars("o0", "o1"), evaluations=[15, 0, 0, 0], public=True)
+    stmt = Statement(Relation_Circuit(_circuit()), oracles=(out, w_in))
+    assert not stmt.check()
+    with pytest.raises(ValueError, match="output"):
+        _iop(_IntDomain()).run(stmt)
+
+
+def test_layer_compute_head_matches_the_generic_route():
+    from vfhe.piop import Relation_SumDef
+
+    stmt = _instance()
+    *_, bottom = GKR().layers(stmt._fork(), _iop(_IntDomain()))
+    (layer0,) = bottom
+    fast = layer0.relation.compute_head(layer0)
+    generic = Relation_SumDef().compute_head(layer0)
+    assert list(fast.table) == list(generic.table) == [3, 12]
+    assert layer0.head is not None
+    assert fast.variables == generic.variables == layer0.head.variables
+
+
+def test_output_test_soundness_error():
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    stmt = _instance(ring=ring)
+    equal, *_ = GKR().layers(stmt._fork(), _iop(ring))
+    assert OutputTest().soundness_error(equal[0], ring) == 1 / ring.exceptional_set_size
+    assert GKR().soundness_error(stmt, ring) == 1 / ring.exceptional_set_size
+    assert GKR_Start().soundness_error(stmt, ring) == 0
+
+
+# --- example (a) of the proposal: a circuit composed of three circuits -----
+
+_C2 = gkr.Circuit(
+    num_inputs=4, layers=[gkr.Layer(gates=[add_gate(0, 1), mul_gate(2, 3)])]
+)
+_C1 = gkr.Circuit(
+    num_inputs=2,
+    layers=[
+        gkr.Layer(gates=[mul_gate(0, 1), add_gate(0, 1)]),
+        gkr.Layer(gates=[add_gate(0, 1), mul_gate(0, 0)]),
+    ],
+)
+_C0 = gkr.Circuit(num_inputs=2, layers=[gkr.Layer(gates=[mul_gate(0, 1)])])
+
+
+def _chain_output(values):
+    """y = C0(C1(C2(x))) on the table `values`."""
+    from vfhe.circuit.export import layer_bit_sizes
+
+    for c in (_C2, _C1, _C0):
+        m = MLE(
+            variables=_vars(*[f"t{i}" for i in range(layer_bit_sizes(c)[0])]),
+            evaluations=values,
+        )
+        values = Relation_Circuit(c).layer_tables(m)[-1]
+    return list(values)
+
+
+class _ThreeCircuits(Relation):
+    """y = C0(C1(C2(x))), with C0, C1, C2 headed at their outputs in turn."""
+
+    name = "three_circuits"
+    fields = ("oracles",)
+
+    def check(self, statement):
+        y, x = statement.oracles
+        return list(y.table) == _chain_output(list(x.table))
+
+
+def _three_layering(root):
+    from vfhe.circuit.export import layer_bit_sizes
+
+    y, x = root.oracles
+    m1 = Implicit(_vars(*[f"m1_{i}" for i in range(layer_bit_sizes(_C1)[-1])]))
+    m2 = Implicit(_vars(*[f"m2_{i}" for i in range(layer_bit_sizes(_C2)[-1])]))
+    return [
+        [root.reduce_to(Relation_Circuit(_C0), oracles=(y, m1))],
+        [root.reduce_to(Relation_Circuit(_C1), oracles=(m1, m2), head=m1)],
+        [root.reduce_to(Relation_Circuit(_C2), oracles=(m2, x), head=m2)],
+    ]
+
+
+def _three_instance(ring=None, tweak=0, public=True):
+    from vfhe.piop import compose
+
+    x = MLE(ring=ring, variables=_vars("x0", "x1"), evaluations=[1, 2, 3, 4])
+    out = _chain_output([1, 2, 3, 4])
+    out[0] += tweak
+    y = MLE(ring=ring, variables=_vars("y0"), evaluations=out, public=public)
+    return Statement(_ThreeCircuits(), oracles=(y, x)), compose(
+        _three_layering, "three"
+    )
+
+
+@pytest.mark.parametrize("public", [True, False])
+def test_three_circuits_compose(public):
+    # C0 headless (GKR with its output test), C1 and C2 started (GKR_Start),
+    # the intermediate oracles m1 = C1(m2), m2 = C2(x) implicit.
+    stmt, protocol = _three_instance(public=public)
+    assert stmt.check()
+    iop = _iop(_IntDomain())
+    iop.register(_ThreeCircuits, protocol)
+    assert iop.run(stmt)
+    heads = sorted(
+        list(t.table)
+        for o, t in iop.prover.witnesses.items()
+        if isinstance(o, Implicit)
+    )
+    # m2 = C2(x) = [3, 12]; C1's two layers: [36, 15] then [51, 1296]; C0's
+    # output layer [66096, 0]; the intermediate GKR layers are heads too.
+    assert [3, 12] in heads and [36, 15] in heads and [51, 1296] in heads
+    bad, protocol = _three_instance(tweak=1, public=public)
+    iop = _iop(_IntDomain(1))
+    iop.register(_ThreeCircuits, protocol)
+    assert not iop.run(bad)
+
+
+def test_three_circuits_fiat_shamir():
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    stmt, protocol = _three_instance(ring)
+
+    def iop():
+        fs = _iop(ring, fiat_shamir=True)
+        fs.register(_ThreeCircuits, protocol)
+        return fs
+
+    proof = iop().prove(stmt)
+    assert iop().verify(stmt, proof)
+    bad, _ = _three_instance(ring, tweak=1)
+    assert not iop().verify(bad, proof)
