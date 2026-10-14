@@ -1,7 +1,14 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.piop public API re-exports.
-from .circuit import GKR, Relation_Circuit
+from .circuit import (
+    GKR,
+    GKR_Start,
+    OutputTest,
+    Relation_Circuit,
+    Relation_Equal,
+    Relation_Layer,
+)
 from .composer import compose
 from .fs import FS_Verifier
 from .lookup import Lookup, Relation_Lookup
@@ -43,11 +50,13 @@ __all__ = [
     "GKR",
     "IOP",
     "FS_Verifier",
+    "GKR_Start",
     "Implicit",
     "ImplicitEval",
     "ImplicitOracle",
     "Lookup",
     "OracleKind",
+    "OutputTest",
     "Party",
     "Proof",
     "Protocol",
@@ -56,7 +65,9 @@ __all__ = [
     "Rejection",
     "Relation",
     "Relation_Circuit",
+    "Relation_Equal",
     "Relation_Eval",
+    "Relation_Layer",
     "Relation_Lookup",
     "Relation_Range",
     "Relation_Sum",

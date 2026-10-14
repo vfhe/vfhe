@@ -45,6 +45,7 @@ from collections import defaultdict
 from collections.abc import Callable
 
 from .piop import (
+    IOP,
     Implicit,
     Party,
     Protocol,
@@ -68,14 +69,22 @@ def compose(layering: Layering, name: str = "composed") -> Protocol:
 
 
 class Composed(Protocol):
-    """The protocol `compose` builds; see the module docstring."""
+    """The protocol `compose` builds; see the module docstring. A subclass
+    whose reduction depends on the IOP it runs in (its domain, say) overrides
+    `layers` instead of passing a layering."""
 
     reduces_from = None
     reduces_to = ()
 
-    def __init__(self, layering: Layering, name: str = "composed") -> None:
+    def __init__(self, layering: Layering | None, name: str = "composed") -> None:
         self.layering = layering
         self.name = name
+
+    def layers(self, root: Statement, iop: IOP) -> list[list[Statement]]:
+        """The layered reduction of `root`."""
+        if self.layering is None:
+            raise NotImplementedError(f"{type(self).__name__} has no layering")
+        return self.layering(root)
 
     async def prove(
         self, prover: Prover, statements: list[Statement]
@@ -92,7 +101,9 @@ class Composed(Protocol):
     ) -> list[Statement]:
         (root,) = statements
         await root.resolved()
-        layers = self.layering(root)  # the same layered DAG on both parties
+        iop = party.iop
+        assert iop is not None
+        layers = self.layers(root, iop)  # the same layered DAG on both parties
         heads = _check_rules(layers)
         if half == "prove":
             assert isinstance(party, Prover)
