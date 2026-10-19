@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Relation_Circuit and the GKR protocol over vfhe.circuit's protobuf
+"""Relation_CircuitSparseIndex and the GKR protocol over vfhe.circuit's protobuf
 circuits: the ideal model over plain tables, the ring domain under
 Fiat-Shamir, the shape of the reduction (claims per layer), and the
 message sequence, pinned."""
@@ -19,7 +19,6 @@ from vfhe.piop import (
     OutputTest,
     Protocol,
     Relation,
-    Relation_Circuit,
     Relation_Equal,
     Relation_Eval,
     Relation_Layer,
@@ -29,6 +28,7 @@ from vfhe.piop import (
     SumDefStart,
     VirtualEval,
 )
+from vfhe.piop.circuit import Relation_CircuitSparseIndex
 
 
 class _IntDomain:
@@ -52,8 +52,8 @@ def _circuit():
 
 def _iop(domain, **kw):
     iop = IOP(domain=domain, **kw)
-    iop.register(Relation_Circuit, GKR())
-    iop.register(Relation_Circuit.Start, GKR_Start())
+    iop.register(Relation_CircuitSparseIndex, GKR())
+    iop.register(Relation_CircuitSparseIndex.Start, GKR_Start())
     iop.register(Relation_Equal, OutputTest())
     iop.register(Relation_Layer.Start, SumDefStart())
     iop.register(Relation_Sum, Sumcheck())
@@ -73,7 +73,7 @@ def _instance(ring=None, inputs=(1, 2, 3, 4), output=None, public_output=True):
     w_in = MLE(ring=ring, variables=w, evaluations=list(inputs))
     out_mle = MLE(ring=ring, variables=o, evaluations=out, public=public_output)
     return Statement(
-        Relation_Circuit.indexed(_circuit(), ring), oracles=(out_mle, w_in)
+        Relation_CircuitSparseIndex.indexed(_circuit(), ring), oracles=(out_mle, w_in)
     )
 
 
@@ -81,7 +81,7 @@ def test_relation_circuit_decider():
     assert _instance().check()
     assert not _instance(output=[16, 0]).check()
     out, w_in = _instance().oracles
-    relation = Relation_Circuit.indexed(_circuit(), None)
+    relation = Relation_CircuitSparseIndex.indexed(_circuit(), None)
     assert relation.layer_tables(w_in) == [[1, 2, 3, 4], [3, 12], [15, 0]]
     # The output as the head of a statement: computed from the input.
     head = Implicit(out.variables)
@@ -176,13 +176,15 @@ def test_xmult_gate_layer_tables_and_proof():
     xm, expanded = _dot_circuit()
     w = [MLE_Variable(f"w{i}") for i in range(2)]
     w_in = MLE(variables=w, evaluations=[1, 2, 3, 4])
-    assert Relation_Circuit.indexed(xm, None).layer_tables(w_in) == [
+    assert Relation_CircuitSparseIndex.indexed(xm, None).layer_tables(w_in) == [
         [1, 2, 3, 4],
         [11, 0],
     ]
-    assert Relation_Circuit.indexed(expanded, None).layer_tables(w_in)[-1] == [11, 0]
+    assert Relation_CircuitSparseIndex.indexed(expanded, None).layer_tables(w_in)[
+        -1
+    ] == [11, 0]
     out = MLE(variables=[MLE_Variable("o0")], evaluations=[11, 0], public=True)
-    stmt = Statement(Relation_Circuit.indexed(xm, None), oracles=(out, w_in))
+    stmt = Statement(Relation_CircuitSparseIndex.indexed(xm, None), oracles=(out, w_in))
     assert stmt.check()
     iop = _iop(_IntDomain())
     assert iop.run(stmt)
@@ -192,7 +194,7 @@ def test_xmult_gate_layer_tables_and_proof():
     assert all(len(iop.transcript.entries[k].result()) == 3 for k in rounds)
     bad = MLE(variables=[MLE_Variable("o0")], evaluations=[12, 0], public=True)
     assert not _iop(_IntDomain()).run(
-        Statement(Relation_Circuit.indexed(xm, None), oracles=(bad, w_in))
+        Statement(Relation_CircuitSparseIndex.indexed(xm, None), oracles=(bad, w_in))
     )
 
 
@@ -247,7 +249,7 @@ def test_gkr_wide_layers_run_in_linear_time():
     w = [MLE_Variable(f"w{i}") for i in range(6)]
     inputs = [rng.randrange(1, 1000) for _ in range(n)]
     w_in = MLE(variables=w, evaluations=inputs)
-    relation = Relation_Circuit.indexed(circuit, None)
+    relation = Relation_CircuitSparseIndex.indexed(circuit, None)
     last = relation.layer_tables(w_in)[-1]
     out = MLE(
         variables=[MLE_Variable(f"o{i}") for i in range(5)],
@@ -312,7 +314,9 @@ def test_gkr_start_proves_a_started_circuit():
     out, w_in = stmt.oracles
     head = Implicit(out.variables)
     headed = Statement(
-        Relation_Circuit.indexed(_circuit(), None), oracles=(head, w_in), head=head
+        Relation_CircuitSparseIndex.indexed(_circuit(), None),
+        oracles=(head, w_in),
+        head=head,
     )
     (o,) = out.variables
     claims = [
@@ -335,7 +339,9 @@ def test_gkr_rejects_an_output_oracle_of_the_wrong_size():
     # so must the protocol (the layer identity would silently pad).
     _, w_in = _instance().oracles
     out = MLE(variables=_vars("o0", "o1"), evaluations=[15, 0, 0, 0], public=True)
-    stmt = Statement(Relation_Circuit.indexed(_circuit(), None), oracles=(out, w_in))
+    stmt = Statement(
+        Relation_CircuitSparseIndex.indexed(_circuit(), None), oracles=(out, w_in)
+    )
     assert not stmt.check()
     with pytest.raises(ValueError, match="output"):
         _iop(_IntDomain()).run(stmt)
@@ -387,7 +393,7 @@ def _chain_output(values):
             variables=_vars(*[f"t{i}" for i in range(layer_bit_sizes(c)[0])]),
             evaluations=values,
         )
-        values = Relation_Circuit.indexed(c, None).layer_tables(m)[-1]
+        values = Relation_CircuitSparseIndex.indexed(c, None).layer_tables(m)[-1]
     return list(values)
 
 
@@ -406,7 +412,9 @@ def _three_layering(domain):
     """The layering, indexing the three circuits in `domain`."""
     from vfhe.circuit.export import layer_bit_sizes
 
-    c0, c1, c2 = (Relation_Circuit.indexed(c, domain) for c in (_C0, _C1, _C2))
+    c0, c1, c2 = (
+        Relation_CircuitSparseIndex.indexed(c, domain) for c in (_C0, _C1, _C2)
+    )
 
     def layering(root):
         y, x = root.oracles
