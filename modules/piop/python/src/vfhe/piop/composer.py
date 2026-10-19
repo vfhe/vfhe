@@ -248,7 +248,8 @@ def _statement_view(statement: Statement, witnesses: dict) -> Statement:
         if viewed is not relation.index:
             relation = type(relation)(index=viewed)
     fields = dict(statement.fields)
-    fields["oracles"] = oracles
+    if "oracles" in fields:  # a relation with no instance oracles has none to view
+        fields["oracles"] = oracles
     return Statement(
         relation,
         parents=statement.parents,

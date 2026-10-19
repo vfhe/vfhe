@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Layered arithmetic circuits as a relation, proven GKR-style (piop.md §4).
 
-`Relation_Circuit` is circuit satisfiability: the input oracle evaluates,
-under the circuit in the relation's `index`, to the output oracle, its head.
-The index also holds the circuit's wiring predicates, built once for a
-domain by the indexer (`wiring_predicates`, through `indexed`), as an index
-is in [CHMMVW20]. `GKR` is its protocol [GKR15; Tha22, §4.6], a composition
-(`composer.py`):
+`Relation_CircuitSparseIndex` is circuit satisfiability: the input oracle
+evaluates, under the circuit in the relation's `index`, to the output
+oracle, its head. The index also holds the circuit's wiring predicates,
+built once for a domain by the indexer (`wiring_predicates`, through
+`indexed`), as an index is in [CHMMVW20], public sparse tables the verifier
+evaluates; `Relation_Circuit` is the same relation with the predicates
+committed through one dense index oracle (`sparse.py`), its protocol the
+two-layer `dense_layering` whose first layer is this one. `GKR` is the
+protocol of `Relation_CircuitSparseIndex` [GKR15; Tha22, §4.6], a
+composition (`composer.py`):
 the *output test*, a headless statement `Relation_Equal(out, W_d)` whose
 protocol `OutputTest` reduces "the output oracle equals the output layer" to
 one evaluation claim on the layer at a random point; then, one layer per
@@ -61,6 +65,7 @@ from .piop import (
     _hypercube,
     with_start,
 )
+from .sparse import dense_relation
 from .virtual import Relation_SumDef, VirtualOracle, _table_like, resolve_table
 
 if TYPE_CHECKING:
@@ -130,19 +135,20 @@ def _eval_layer(layer, prev: list, size: int) -> list:
 
 
 @with_start
-class Relation_Circuit(Relation):
+class Relation_CircuitSparseIndex(Relation):
     """The input oracle evaluates, under the circuit in the index, to the
     output oracle: `oracles = (out, w_in)`, `out` a table over s_out
     variables (public, committed, or plain, or the implicit head of a headed
     statement) and `w_in` one over s_in variables. The index is the circuit
     description and its wiring predicates, `("circuit", "predicates")`, the
-    latter the tuple `wiring_predicates` builds, which `GKR`'s layer bodies
+    latter the tuple `wiring_predicates` builds -- the sparse index field,
+    public tables or restrictions of a master -- which `GKR`'s layer bodies
     read; `indexed(circuit, domain)` is the indexer. The ideal decider
     evaluates the circuit gate by gate over the input table; `compute_head`
     returns its output table, so a circuit can define an implicit oracle of
     a larger reduction."""
 
-    name = "circuit"
+    name = "circuit_sp"
     fields = ("oracles",)
     index_fields = ("circuit", "predicates")
     sparse_index_fields = ("predicates",)
@@ -196,6 +202,21 @@ class Relation_Circuit(Relation):
     def compute_head(self, statement: Statement):
         out, w_in = statement.oracles
         return _table_like([w_in], out.variables, self.layer_tables(w_in)[-1])
+
+
+_Dense = dense_relation(Relation_CircuitSparseIndex)
+_Dense.name = "circuit"
+_Dense.__doc__ = """Circuit satisfiability with the wiring predicates committed
+through one dense index oracle: `Relation_CircuitSparseIndex` with its
+`"predicates"` replaced by `("dense", "shape", "speval")`, the index
+`("circuit", "dense", "shape", "speval")`; `oracles = (out, w_in)` and the
+head `out` as there. The decider decodes the predicates once through the
+realization and decides the sparse-index relation; `compute_head` is its
+(the output table from the input through the circuit). Its protocol is
+`compose(dense_layering)`, registered against this class and its `Start`:
+`GKR` runs in the first layer over restrictions of the master, the
+realization's protocol in the second (`sparse.py`)."""
+Relation_Circuit = with_start(_Dense)
 
 
 @with_start
@@ -326,7 +347,7 @@ class OutputTest(Protocol):
 
 
 class GKR(Composed):
-    """`Relation_Circuit` as a layered reduction: the output test in L_0, then
+    """`Relation_CircuitSparseIndex` as a layered reduction: the output test in L_0, then
     the gate layers from the output layer down, one `Relation_Layer`
     statement per layer headed at the layer's implicit oracle; the input
     oracle is `w_in` itself. Registered protocols it relies on: `OutputTest`
@@ -334,7 +355,7 @@ class GKR(Composed):
     sumcheck and `VirtualEval`."""
 
     name = "gkr"
-    reduces_from: type[Relation] = Relation_Circuit
+    reduces_from: type[Relation] = Relation_CircuitSparseIndex
 
     def __init__(self) -> None:
         super().__init__(None, self.name)
@@ -358,12 +379,13 @@ class GKR(Composed):
 
 
 class GKR_Start(GKR):
-    """The sequentially composable form of `GKR`, for `Relation_Circuit.Start`:
+    """The sequentially composable form of `GKR`, for
+    `Relation_CircuitSparseIndex.Start`:
     the gate layers alone, the top one started by the claims the statement
     carries on its head, the output oracle."""
 
     name = "gkr_start"
-    reduces_from: type[Relation] = Relation_Circuit.Start
+    reduces_from: type[Relation] = Relation_CircuitSparseIndex.Start
 
     def soundness_error(self, statement: Statement, domain) -> float | None:
         """No random evaluation of its own: the layers' errors only."""

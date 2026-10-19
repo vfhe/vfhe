@@ -301,7 +301,7 @@ class Implicit:
         return f"Implicit(vars={self.num_vars})"
 
 
-def _map_oracles(value, fn: Callable):
+def _map_oracles(value, fn: Callable) -> Any:
     """`value` with `fn` applied to every oracle in it: the structural map
     over an index, walking tuples, lists and mappings and duck-typing an
     oracle on a `variables` attribute (a table, a defined oracle, an
@@ -370,6 +370,12 @@ class Relation:
     head_index: int | str | None = None
     Start: ClassVar[type[Relation]]  # set by `with_start`
     base: ClassVar[type[Relation]]  # on a start relation: what it derives from
+    # On a relation with a dense index (`sparse.dense_relation`): the relation
+    # with sparse index oracles it is built on.
+    inner: ClassVar[type[Relation]]
+    # On a relation whose index holds a family of sparse tables: the names of
+    # the index fields holding them.
+    sparse_index_fields: tuple[str, ...] = ()
 
     def __init__(self, index=None):
         if self.index_fields:
@@ -816,6 +822,8 @@ def with_start(cls: type[_R]) -> type[_R]:
     Start.__name__ = base_cls.__name__ + ".Start"
     Start.__qualname__ = base_cls.__qualname__ + ".Start"
     Start.__doc__ = f"The start relation of {base_cls.__name__} (`with_start`)."
+    if hasattr(base_cls, "inner"):  # a dense-index relation: its layering reads it
+        Start.inner = base_cls.inner
 
     def start(self, statement: Statement, claims: list[Statement]) -> Statement:
         """The started statement: `statement` (headed) with the evaluation
