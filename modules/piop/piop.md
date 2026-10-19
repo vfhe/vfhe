@@ -76,7 +76,7 @@ The module mirrors this vocabulary directly:
 | literature                  | `vfhe.piop`                                    |
 | --------------------------- | ---------------------------------------------- |
 | relation `R`                | a `Relation` instance                     |
-| index `i`                   | `Relation.index` (optional, preprocessed)  |
+| index `i`                   | `Relation.index`, over the names `Relation.index_fields` declares (or one opaque object) |
 | instance `x`                | `Statement`; fields declared by `Relation.fields` |
 | witness `w`                 | held by `Prover` (`witnesses`), never on the statement |
 | membership test `(x,w) ∈ R` | `Relation.check(statement)`                |
@@ -92,6 +92,22 @@ statement:
    relation object is also the natural home for the index and for the
    "ideal" decider `check()` used by tests and by the end of a reduction
    chain.
+
+**The index of a relation.** A relation declares its index fields beside
+its instance fields (`index_fields`, in canonical order): its index is then
+a mapping over exactly those names, validated by the constructor as
+`Statement` validates `fields`, stored in the declared order and digested in
+that order (`index_digest`, cached on the instance, since an index is built
+once and reused across runs — the verifier key of [CHMMVW20]); a relation
+declaring none keeps one opaque object. The oracles among the index values
+— *index oracles*, found by `index_oracles()` through tuples, lists and
+mappings, duck-typed on a `variables` attribute — are oracles of every
+statement of the relation wherever the framework reads a statement's
+oracles (§4, §5). The index is where public, preprocessable data goes: a
+circuit description with its wiring predicates
+(`Relation_CircuitSparseIndex`), the dense table that commits them
+(`Relation_Circuit`), the table size of a lookup. A statement reads it as
+`statement.index`.
 
 In an in-process IOP the `oracles` list holds the actual `MLE` objects — the
 same data an honest prover knows in full. The oracle *discipline* (the
@@ -141,11 +157,12 @@ starts from a handful of relation kinds. In all of them `f` is (an MLE of) an
   the oracle. Commitment-only claims have no witness-free decider and must
   not be left terminal.
 
-- **`Relation_Circuit`** — index: a layered arithmetic circuit
+- **`Relation_CircuitSparseIndex`** — index: a layered arithmetic circuit
   (`vfhe.circuit`: fan-in-2 ADD and MUL gates and XMULT inner-product gates
-  `Σ_i in[l_i]·in[r_i]`, the generalized gates of zkCNN [LXZ21, §4]);
-  instance `oracles = (out, w_in)`: the input oracle evaluates under the
-  circuit to the output oracle. `out` is the relation's *head* (§5): its
+  `Σ_i in[l_i]·in[r_i]`, the generalized gates of zkCNN [LXZ21, §4]) and its
+  wiring predicates, sparse tables built once by the indexer
+  (`indexed(circuit, domain)`); instance `oracles = (out, w_in)`: the input
+  oracle evaluates under the circuit to the output oracle. `out` is the relation's *head* (§5): its
   table is computed from `w_in` (`compute_head`), so a circuit can define
   an implicit oracle of a larger reduction. Discharged by `GKR` [GKR15;
   Tha22, §4.6] (`circuit.py`), a *composition* (§5): the output test
@@ -156,6 +173,13 @@ starts from a handful of relation kinds. In all of them `f` is (an MLE of) an
   helper so that circuit satisfiability can be a factor of a larger product
   of relations, the target of another reduction, or the head of a
   statement of one.
+- **`Relation_Circuit`** — the same relation with the predicates committed
+  through one dense index oracle: index `("circuit", "dense", "shape",
+  "speval")`, the dense table, the shape of the family of predicates and
+  the realization decoding one from the other (§7, `sparse.py`). Discharged
+  by `compose(dense_layering)`: `Relation_CircuitSparseIndex` over
+  restrictions of a master oracle in the first layer, run by `GKR`, then
+  the realization's statement headed at the master.
 - **`Relation_SumDef`** — instance `oracles = (L, G)`:
   `L(z) = Σ_{b ∈ {0,1}^m} G(z, b)` on the hypercube, a *sum definition* of
   the head `L` by a virtual oracle `G` (below) over `L`'s variables `z` and
@@ -216,7 +240,7 @@ exactly one statement of a reduction (`Statement.head`, §5), and that
 statement is its definition — `L(z) = Σ_{b} G(z, b)` for a virtual oracle
 `G` over the free variables `z` and the summed ones `b`
 (`Relation_SumDef`), or the output of a circuit on an input oracle
-(`Relation_Circuit`). The verifier has nothing of `L` but the statement,
+(`Relation_CircuitSparseIndex`). The verifier has nothing of `L` but the statement,
 and making `L(r)` explicit takes a protocol for it — for a sum
 definition, a sumcheck. The multilinear extension of a layer of gate
 values is of this second kind even when the gates are local, because
@@ -267,6 +291,30 @@ work per layer is `O(#wires + 2^{s_x} + 2^{s_y})` instead of the dense
 *in the round variable* (two factors of a term reading `x_i`, not the
 length of the longest product), so both strategies agree node for node.
 
+Index oracles (§3) have the same kinds. A table in a root's index is
+`public`, when the verifier evaluates it, or `committed`: `Basefold.commit`
+tags the table it records with `kind = committed` and its `commitment`, so
+that a claim carrying the table is `committed` to `oracle_kind` whether it
+carries the commitment or the tagged table, the root digest records the
+table by its commitment and never by its entries (a verifier seeds
+Fiat–Shamir without reading a committed predicate table), and the scheme's
+record still maps the table to its opening. The two marks exclude each
+other — they are two discharges of a claim, not two properties of a table —
+so committing a `public` table is refused, and so is a table carrying both
+marks. The index a layering builds for a child statement may also hold an
+`implicit` oracle (the head of a deeper statement, or the relation's own,
+§5) and a `virtual` one when it is a *restriction*:
+`VirtualOracle.restriction(P, variables, fixed)` reads one member of a
+family of tables packed into one oracle `P` over slot variables `T` and
+table variables `X`, member `i` being `P(bin(i), X)` — one constituent, one
+term of coefficient 1, a map fixing some of `P`'s variables to 0/1
+constants and renaming the rest. The slot is a variable map and nothing
+more: a claim on the member is rewritten by `VirtualEval` into a claim on
+`P` at `(bin(i), x)`, and on the prover's side `resolve_table` resolves the
+restriction to a slice of `P`'s table (`SparseMLE.restrict` for a sparse
+one, a partial evaluation for a dense one), which `prover_view` keeps
+sparse for the two-phase strategy.
+
 Each subclass implements `check(statement)`: the *ideal* (non-succinct)
 membership test that simply enumerates the hypercube or queries the oracle.
 This is the decider a test suite runs, and the check the verifier is entitled
@@ -296,8 +344,10 @@ composition") composes reductions over products. Both directions occur:
   Spooner).
 
 ```text
-Relation_Circuit ─(GKR = Composed: OutputTest, then per layer Relation_Layer.Start)─▶ Relation_Eval^2 (w_in) [× Relation_Eval (out)]
-Relation_Circuit.Start ─(GKR_Start = Composed: per layer Relation_Layer.Start)─────▶ Relation_Eval^2 (w_in)
+Relation_Circuit ─(dense_layering = Composed: Relation_CircuitSparseIndex, then Relation_SpEval.Start)─▶ Relation_Eval^2 (w_in) [× Relation_Eval (out)] × Relation_Eval^* (P_dense)
+Relation_CircuitSparseIndex ─(GKR = Composed: OutputTest, then per layer Relation_Layer.Start)─▶ Relation_Eval^2 (w_in) [× Relation_Eval (out)] [× Relation_Eval^* (the predicates' master)]
+Relation_CircuitSparseIndex.Start ─(GKR_Start = Composed: per layer Relation_Layer.Start)─────▶ Relation_Eval^2 (w_in) [× Relation_Eval^* (the predicates' master)]
+Relation_SpEval.Start ─(a realization's protocol)─▶ Relation_Eval^* (P_dense)
 Relation_Equal ───(OutputTest, sample r)─▶ Relation_Eval (output layer) [× Relation_Eval (output)]
 Relation_SumDef.Start ─(SumDefStart, k challenges)─▶ Relation_Sum
 Relation_Zero ────(zerocheck, sample r)──▶ Relation_Sum
@@ -401,8 +451,10 @@ transcript.
   oracle reaching `protocol_for` is an error, §4). Start relations are
   keyed like any other, by exact type, so a subclass's start relation has
   its own entry: `Relation_SumDef.Start` and `Relation_Layer.Start` get
-  `SumDefStart`, `Relation_Equal` gets `OutputTest`, `Relation_Circuit`
-  gets `GKR` and `Relation_Circuit.Start` gets `GKR_Start`.
+  `SumDefStart`, `Relation_Equal` gets `OutputTest`,
+  `Relation_CircuitSparseIndex` gets `GKR` and its `Start` `GKR_Start`,
+  `Relation_Circuit` and its `Start` get `compose(dense_layering)`, and a
+  realization's `Relation_SpEval.Start` gets that realization's protocol.
 - **Drivers.** Both parties run the same worklist loop over the DAG's
   frontier: take the first statement that is not *parked*, hand the
   registered protocol its bundle, push the outputs; statements with no
@@ -460,8 +512,9 @@ every run (`_check_rules`):
 
 1. every implicit oracle heads exactly one statement;
 2. a statement in `L_l` reads, besides its own head, only non-implicit
-   oracles and heads of deeper layers — through virtual oracles too
-   (`oracle_closure`).
+   oracles and heads of deeper layers — through virtual oracles
+   (`oracle_closure`) and through its relation's index
+   (`statement_oracles`) too.
 
 An implicit oracle that no statement of the layering heads belongs to an
 enclosing composition and counts as non-implicit for the rules. The run is
@@ -490,10 +543,30 @@ the same on both parties, except for the first step:
   protocol that reads a head of this reduction is refused: nothing could
   decide it.
 
+Everything above reads a statement's oracles through `statement_oracles`:
+its instance oracles followed by the index oracles of its relation (§3). So
+a head reached through an index counts for rule 2; the driver's parking
+rule sees a claim a frontier statement can produce through its index; the
+prover view (`_statement_view`) replaces the index oracles as it replaces
+the instance ones — a virtual oracle rebuilt over resolved constituents, an
+implicit one by its stored table — and hands `compute_head` a statement
+whose relation is rebuilt over the viewed index (`type(r)(index=viewed)`,
+the convention a relation with a head already follows), the relation thus
+reading its index as it reads the oracles; and a terminal statement reading
+a head through its index is refused. A relation may also name its *head* by
+an index field: `head_index` is an `int`, a position in `oracles`, or a
+`str`, the name of the index entry holding it, and a statement of such a
+relation derives its head from that entry — an `Implicit` makes it headed,
+a table an ordinary statement, and a `head=` passed must be the entry. The
+Composer is unchanged by it: the head map, the rules and the routing are
+keyed on the oracle object, wherever it sits. A root's index holds tables,
+never an implicit oracle — except the head of a started root — and the
+runners refuse one that does.
+
 A composed protocol is an ordinary protocol to the driver: one statement
 in, the leftover statements out. Hence **nesting**: a relation whose
 protocol is composed can itself head a statement of another reduction
-(`Relation_Circuit`, head `out`). Its `R.Start` protocol is then composed
+(`Relation_CircuitSparseIndex`, head `out`). Its `R.Start` protocol is then composed
 too (`GKR_Start`): the claims the started statement carries seed the
 claims on its head, and its statements may read the heads of the
 enclosing reduction. A reduction that depends on the IOP it runs in (its
@@ -852,25 +925,32 @@ the two round-message strategies (`_ProverVirtual`, `_LibraProver`; §4).
 `VirtualOracle.strategy` (`"auto"` / `"dense"` / `"libra"`) pins one; the
 tests assert message-for-message agreement between them.
 
-### `Relation_Circuit` / `GKR` (`circuit.py`)
+### `Relation_CircuitSparseIndex` / `Relation_Circuit` / `GKR` (`circuit.py`)
 
 Circuit satisfiability over the protobuf circuits of `vfhe.circuit`
-(imported lazily), with the wiring tables of `vfhe.circuit.export` as
-public oracles: a table indexed `z‖x‖y` (y in the low bits) is the MLE over
-the variables `[y…, x…, z…]`, so the framework's LSB-first tables need no
-reordering. `Relation_Circuit` has `oracles = (out, w_in)` and head `out`;
-`layer_tables(w_in)` evaluates the circuit gate by gate, which serves both
-the ideal decider and `compute_head`.
+(imported lazily), with the wiring tables of `vfhe.circuit.export` as index
+oracles: a table indexed `z‖x‖y` (y in the low bits) is the MLE over the
+variables `[y…, x…, z…]`, so the framework's LSB-first tables need no
+reordering. `Relation_CircuitSparseIndex` has `oracles = (out, w_in)` and
+head `out`, and the index `("circuit", "predicates")`: the circuit and the
+tuple `(lin_0, xmult_0, …, lin_{d-1}, xmult_{d-1})` the indexer
+`indexed(circuit, domain)` builds once (`wiring_predicates`), public sparse
+tables over variables of their own, the sparse index field
+(`sparse_index_fields = ("predicates",)`). `layer_tables(w_in)` evaluates
+the circuit gate by gate, which serves both the ideal decider and
+`compute_head`.
 
-`GKR` is a `Composed` subclass (§5) whose `layers(root, iop)` is an
-instance method, since the sparse predicates are built in the IOP's
-domain. Layer `L_0` is the output test `Relation_Equal(out, W_d)`, `W_d` a
+`GKR` is a `Composed` subclass (§5) whose `layers(root, iop)` reads the
+predicates from the root's index and renames each into its layer body
+through the body's map (a predicate's own variables to the body's `z`, `x`
+and `y`), so the index may hold public tables or restrictions of a master
+(§4) and `GKR` runs the same. Layer `L_0` is the output test `Relation_Equal(out, W_d)`, `W_d` a
 fresh `Implicit` handle for the output layer; then comes one
 `Relation_Layer` statement per gate layer, from the output layer down,
 headed at that layer's implicit oracle and reading the one below, the
 bottom one reading `w_in` itself. The layering first checks that `out`
 and `w_in` have the numbers of variables the circuit's layer sizes
-require. `GKR_Start`, registered for `Relation_Circuit.Start`, is the same
+require. `GKR_Start`, registered for `Relation_CircuitSparseIndex.Start`, is the same
 layering without the output test: the top layer is headed at `out` itself
 and started by the claims the statement carries. `GKR` refuses a started
 statement and `GKR_Start` an unstarted one. Per layer the Composer starts
@@ -887,7 +967,68 @@ The predicates come from `vfhe.circuit.export.sparse_wiring` (one nonzero
 per wire read; the dense `wiring_tables` remain as their materialization),
 the summed variables are listed `x` first then `y`, and the prover runs
 the two-phase strategy, unchanged by the composition; the verifier's
-end-of-layer cost is the sparse evaluation of the two predicates.
+end-of-layer cost is the sparse evaluation of the two predicates when they
+are public.
+
+`Relation_Circuit` is `dense_relation(Relation_CircuitSparseIndex)` (below),
+decorated with `with_start`: the index `("circuit", "dense", "shape",
+"speval")`, the same instance and head, `compute_head` the sparse-index
+relation's. Its protocol is `compose(dense_layering)`, registered against
+it and its `Start`; a small circuit keeps its predicates public and runs
+`Relation_CircuitSparseIndex` as before, a large one commits them and runs
+`Relation_Circuit`, and nothing in `GKR` changes between the two.
+
+### `FamilyShape`, `Relation_SpEval`, `dense_relation` / `dense_layering` (`sparse.py`)
+
+The pattern for sparse index oracles committed through one dense one (§4),
+with no encoding fixed by the framework. `FamilyShape({field: width or
+(widths…)})` is the shape of a family of sparse tables — the slots in
+order, their widths, which sparse index fields they fill — and nothing
+else: data in the index, with a `digest()` by the widths and no `variables`
+attribute. It builds the master's handle (`implicit()`, over `selectors`
+`T`, `⌈log₂ a⌉` of them, and `xs` `X`, the largest width), each member as a
+restriction of the master (`restriction(P, i)`: `T = bin(i)`, the padding
+fixed to 0, the rest renamed) and their placement in the sparse fields
+(`place(P)`); `FamilyShape.of(index, fields)` reads the widths off the
+tables an index holds, and the master's index of entry `k` of slot `i` is
+`i ‖ k` with `i` in the low bits (`index_of`).
+
+`Relation_SpEval` is the abstract sparse-evaluation relation: index
+`("sparse", "dense", "shape")`, the head named by `"sparse"` (§5), no
+instance fields, `compute_head` the *decoding* of the master from the dense
+table — abstract — and a generic decider comparing nonzeros. It is the
+relation `R_speval` of [CCCFGS26] with its index turned inside out: the
+dense oracle in the index beside the sparse one it defines, a claim naming
+its polynomial in the `T` coordinate of its point. A *realization*
+subclasses it, implements `compute_head`, holds its parameters as class
+attributes (the layering builds it over the three index fields and nothing
+else), is decorated with `with_start` itself (the registry keys on the
+exact class) and registers against its `Start` a sequentially composable
+protocol: any number of claims on the master, none of them a query to it,
+every challenge drawn by the protocol, ending in evaluation claims on the
+dense table carried in `oracles` — bundled by the driver for the
+commitment scheme, or terminal when the table is plain. The tests hold a
+basic one (`val` and `ind` in one dense table, one sumcheck of degree
+`m + 1` per claim); a realization with sublinear verification is a module
+built on this one (§8).
+
+`dense_relation(inner)` derives from a relation with `sparse_index_fields`
+the relation whose index is `inner`'s non-sparse fields followed by
+`"dense"`, `"shape"` and `"speval"` (the realization, a class, digested by
+its qualified name), with `inner`'s instance fields and head, a decider
+that decodes once and decides `inner` with the slices in place, and
+`inner`'s `compute_head`; the class comes back undecorated, `inner` kept as
+its `inner` attribute (which `with_start` copies to the start relation).
+`dense_layering(root)` is its protocol as a layered reduction (§5): `L_0`
+the inner relation over the root's instance fields with its sparse fields
+holding `place(P)` for a fresh master `P`, headed at the root's head when
+the root is started — the Composer then starts it with the root's claims,
+as it starts the top layer of `GKR_Start` — and `L_1` the realization over
+`(P, P_dense, shape)`, headed at `P` through its index. Inside `L_0` the
+claims the inner protocol leaves on the restrictions are rewritten by
+`VirtualEval` into claims on `P`, which head no statement of the inner
+layering and come back to this Composer, which holds them for `L_1`; no
+message, no challenge, soundness error 0.
 
 ### `Statement.head`, `with_start`, `Composed` (`piop.py`, `composer.py`)
 
@@ -984,10 +1125,17 @@ therefore lives inside the PCS's evaluation protocol
    bookkeeping loops and the sparse `evaluate` in C (every round is
    already the `k = 2` shape the native product kernel covers, so a
    general-`k` kernel is no longer on GKR's path); products-form round
-   messages in C for the dense strategy; committing to circuit-dependent
-   predicates for sublinear verification (a sparse-evaluation protocol
-   registered for the `committed` kind); the line-restriction 2-to-1
-   [Tha22, §4.5.2] should a single-point opening ever pay.
+   messages in C for the dense strategy; a sparse-evaluation realization
+   with sublinear verification — the framework side is in place
+   (`Relation_SpEval`, `dense_relation`, `dense_layering`, §7, with a basic
+   realization in the tests), and the protocol of [CCCFGS26] for it, with
+   its packing and its sumcheck over challenges from a small subset of
+   `R_q`, belongs to a module built on this one, as a `Relation_SpEval`
+   subclass registered against its `Start`; it takes one claim per sparse
+   polynomial, so running GKR over it also needs a layer protocol that
+   takes the common point at the layer oracle first, as the classic line
+   reduction does; the line-restriction 2-to-1 [Tha22, §4.5.2] should a
+   single-point opening ever pay.
 4. **Lookup relation**: done (`lookup.py`, `range.py`; see
    [range.md](range.md)). `Relation_Lookup` reduces, by offline memory
    checking over four grand products, to two `Relation_Sum` claims over
@@ -1106,6 +1254,11 @@ therefore lives inside the PCS's evaluation protocol
   over Infinite and Non-Commutative Rings*. TCC 2022, LNCS 13747,
   pp. 497–525, Springer, 2022. ePrint 2022/587.
   <https://eprint.iacr.org/2022/587>
+- **[CCCFGS26]** Ignacio Cascudo, Anamaria Costache, Daniele Cozzo, Dario
+  Fiore, Antonio Guimarães, Eduardo Soria-Vazquez. *Batch, Pack, and Prove:
+  More Efficient Verifiable Computation for CKKS*. ASIACRYPT 2026, to appear.
+  (Cited for its sparse-evaluation relation and the protocol proving it
+  through one committed dense polynomial, the realization §8 names.)
 - **[CCCFGS25]** Ignacio Cascudo, Anamaria Costache, Daniele Cozzo, Dario
   Fiore, Antonio Guimarães, Eduardo Soria-Vazquez. *Verifiable Computation
   for Approximate Homomorphic Encryption Schemes*. CRYPTO 2025, LNCS 16006,
