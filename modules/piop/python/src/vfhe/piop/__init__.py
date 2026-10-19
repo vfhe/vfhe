@@ -6,6 +6,7 @@ from .circuit import (
     GKR_Start,
     OutputTest,
     Relation_Circuit,
+    Relation_CircuitSparseIndex,
     Relation_Equal,
     Relation_Layer,
 )
@@ -33,9 +34,11 @@ from .piop import (
     Verifier,
     element_digest,
     oracle_kind,
+    statement_oracles,
     with_start,
 )
 from .range import RangeDecomposition, Relation_Range
+from .sparse import FamilyShape, Relation_SpEval, dense_layering, dense_relation
 from .sumcheck import Sumcheck, SumcheckProd
 from .virtual import (
     Relation_SumDef,
@@ -49,6 +52,7 @@ __all__ = [
     "IOP",
     "Composed",
     "FS_Verifier",
+    "FamilyShape",
     "GKR_Start",
     "Implicit",
     "Lookup",
@@ -62,11 +66,13 @@ __all__ = [
     "Rejection",
     "Relation",
     "Relation_Circuit",
+    "Relation_CircuitSparseIndex",
     "Relation_Equal",
     "Relation_Eval",
     "Relation_Layer",
     "Relation_Lookup",
     "Relation_Range",
+    "Relation_SpEval",
     "Relation_Sum",
     "Relation_SumDef",
     "Relation_SumProd",
@@ -82,7 +88,10 @@ __all__ = [
     "VirtualEval",
     "VirtualOracle",
     "compose",
+    "dense_layering",
+    "dense_relation",
     "element_digest",
     "oracle_kind",
+    "statement_oracles",
     "with_start",
 ]

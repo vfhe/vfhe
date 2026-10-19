@@ -14,6 +14,25 @@ versions may contain breaking changes.
 
 ### Added
 
+- Add indexed relations to `vfhe.piop`: a relation declares `index_fields`,
+  its index is then a mapping over exactly those names, and the oracles
+  among its values (`Relation.index_oracles`, `statement_oracles`) are
+  oracles of every statement of the relation -- read by the parking rule,
+  the Composer's rules and routing, and the prover view, and digested in the
+  declared order (`Relation.index_digest`). `Relation.head_index` may name
+  an index field, and a statement then derives its head from that entry.
+  `SparseMLE.restrict` slices a sparse table at 0/1 constants;
+  `VirtualOracle.restriction` reads one member of a family of tables packed
+  into one master oracle over slot and table variables, and `resolve_table`
+  resolves it to a slice. New in `vfhe.piop.sparse`: `FamilyShape`, the
+  shape of such a family; `Relation_SpEval`, the abstract sparse-evaluation
+  relation "the sparse master is what the dense index oracle encodes", every
+  encoding being a subclass with its own `compute_head` and a protocol
+  registered against its `Start`; `dense_relation`, deriving from a relation
+  with sparse index oracles the relation whose index holds the dense oracle,
+  the shape and the realization; `dense_layering`, its two-layer protocol.
+  `Relation_Circuit` is now that relation for circuits: the wiring predicates
+  committed through one dense index oracle, GKR running in the first layer.
 - Add sequential composition to `vfhe.piop`: a statement may carry a `head`,
   an implicit oracle (`Implicit`) its relation computes from the statement's
   other oracles (`Relation.head_index`, `compute_head`); `with_start` derives
@@ -329,6 +348,24 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: `Relation_Circuit` with public wiring predicates is now
+  `Relation_CircuitSparseIndex`, built by `indexed(circuit, domain)`: its
+  index is the mapping `("circuit", "predicates")`, the predicates built
+  once by the indexer and read into each layer body through a renaming map;
+  `GKR` / `GKR_Start` are registered against it and its `Start`, and
+  `GKR.layers` no longer needs the IOP's domain. `Relation_Circuit` is the
+  dense-index relation derived from it, proven by `compose(dense_layering)`
+  registered against it and its `Start`. The `.index` of `Relation_Layer`
+  (`("circuit", "layer", "lin", "xmult")`), `Relation_Lookup` (`("beta",)`)
+  and `Relation_Range` (`("bound", "chunks")`) is a mapping over those
+  names. A committed table carries `kind = OracleKind.committed` and its
+  `commitment`, set by `Basefold.commit`, which refuses a table marked
+  `public`, and `oracle_kind` refuses a table carrying both marks; the root
+  digest records a committed table by its commitment, so every Fiat-Shamir
+  proof whose root has a declared index or a committed oracle differs from
+  those of `9a8e0f8`. `resolve_table` returns a sparse table as it is and
+  resolves restrictions; `prover_view` classifies a constituent as sparse by
+  its resolved table.
 - **BREAKING**: `Relation_Circuit`'s instance is `oracles = (out, w_in)`,
   the output first and the relation's head, instead of `oracles = (w_in,)`
   with a separate `output` field; its constructor's parameter is `index`.
