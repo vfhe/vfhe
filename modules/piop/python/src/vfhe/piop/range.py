@@ -138,6 +138,7 @@ class Relation_Range(Relation):
 
     name = "range"
     fields = ("oracles",)
+    index_fields = ("bound", "chunks")
 
     def __init__(self, bound: int, chunks: int) -> None:
         if bound <= 1 or bound & (bound - 1):
@@ -149,22 +150,17 @@ class Relation_Range(Relation):
                 f"c must divide log2(B): log2({bound}) = {bound.bit_length() - 1} "
                 f"is not a multiple of {chunks}"
             )
-        super().__init__(index=(bound, chunks))
-
-    # `Relation.index` is deliberately untyped in the base class -- it holds
-    # whatever a relation needs -- so a subclass narrows it where it reads it,
-    # the way `Relation_Circuit.circuit` does (`circuit.py`). The constructor
-    # above is what makes these casts honest.
+        super().__init__(index={"bound": bound, "chunks": chunks})
 
     @property
     def bound(self) -> int:
         """The coefficient bound `B`."""
-        return cast("tuple[int, int]", self.index)[0]
+        return cast("int", self.index["bound"])
 
     @property
     def chunks(self) -> int:
         """The number of base-`beta` digits per coefficient, `c`."""
-        return cast("tuple[int, int]", self.index)[1]
+        return cast("int", self.index["chunks"])
 
     @property
     def beta(self) -> int:

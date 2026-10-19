@@ -72,14 +72,16 @@ def _instance(ring=None, inputs=(1, 2, 3, 4), output=None, public_output=True):
     out = [a + b + c * d, 0] if output is None else output
     w_in = MLE(ring=ring, variables=w, evaluations=list(inputs))
     out_mle = MLE(ring=ring, variables=o, evaluations=out, public=public_output)
-    return Statement(Relation_Circuit(_circuit()), oracles=(out_mle, w_in))
+    return Statement(
+        Relation_Circuit.indexed(_circuit(), ring), oracles=(out_mle, w_in)
+    )
 
 
 def test_relation_circuit_decider():
     assert _instance().check()
     assert not _instance(output=[16, 0]).check()
     out, w_in = _instance().oracles
-    relation = Relation_Circuit(_circuit())
+    relation = Relation_Circuit.indexed(_circuit(), None)
     assert relation.layer_tables(w_in) == [[1, 2, 3, 4], [3, 12], [15, 0]]
     # The output as the head of a statement: computed from the input.
     head = Implicit(out.variables)
@@ -174,10 +176,13 @@ def test_xmult_gate_layer_tables_and_proof():
     xm, expanded = _dot_circuit()
     w = [MLE_Variable(f"w{i}") for i in range(2)]
     w_in = MLE(variables=w, evaluations=[1, 2, 3, 4])
-    assert Relation_Circuit(xm).layer_tables(w_in) == [[1, 2, 3, 4], [11, 0]]
-    assert Relation_Circuit(expanded).layer_tables(w_in)[-1] == [11, 0]
+    assert Relation_Circuit.indexed(xm, None).layer_tables(w_in) == [
+        [1, 2, 3, 4],
+        [11, 0],
+    ]
+    assert Relation_Circuit.indexed(expanded, None).layer_tables(w_in)[-1] == [11, 0]
     out = MLE(variables=[MLE_Variable("o0")], evaluations=[11, 0], public=True)
-    stmt = Statement(Relation_Circuit(xm), oracles=(out, w_in))
+    stmt = Statement(Relation_Circuit.indexed(xm, None), oracles=(out, w_in))
     assert stmt.check()
     iop = _iop(_IntDomain())
     assert iop.run(stmt)
@@ -187,7 +192,7 @@ def test_xmult_gate_layer_tables_and_proof():
     assert all(len(iop.transcript.entries[k].result()) == 3 for k in rounds)
     bad = MLE(variables=[MLE_Variable("o0")], evaluations=[12, 0], public=True)
     assert not _iop(_IntDomain()).run(
-        Statement(Relation_Circuit(xm), oracles=(bad, w_in))
+        Statement(Relation_Circuit.indexed(xm, None), oracles=(bad, w_in))
     )
 
 
@@ -242,7 +247,7 @@ def test_gkr_wide_layers_run_in_linear_time():
     w = [MLE_Variable(f"w{i}") for i in range(6)]
     inputs = [rng.randrange(1, 1000) for _ in range(n)]
     w_in = MLE(variables=w, evaluations=inputs)
-    relation = Relation_Circuit(circuit)
+    relation = Relation_Circuit.indexed(circuit, None)
     last = relation.layer_tables(w_in)[-1]
     out = MLE(
         variables=[MLE_Variable(f"o{i}") for i in range(5)],
@@ -306,7 +311,9 @@ def test_gkr_start_proves_a_started_circuit():
     stmt = _instance()
     out, w_in = stmt.oracles
     head = Implicit(out.variables)
-    headed = Statement(Relation_Circuit(_circuit()), oracles=(head, w_in), head=head)
+    headed = Statement(
+        Relation_Circuit.indexed(_circuit(), None), oracles=(head, w_in), head=head
+    )
     (o,) = out.variables
     claims = [
         Statement(Relation_Eval(), oracles=(head,), point={o: r}, value=(1 - r) * 15)
@@ -328,7 +335,7 @@ def test_gkr_rejects_an_output_oracle_of_the_wrong_size():
     # so must the protocol (the layer identity would silently pad).
     _, w_in = _instance().oracles
     out = MLE(variables=_vars("o0", "o1"), evaluations=[15, 0, 0, 0], public=True)
-    stmt = Statement(Relation_Circuit(_circuit()), oracles=(out, w_in))
+    stmt = Statement(Relation_Circuit.indexed(_circuit(), None), oracles=(out, w_in))
     assert not stmt.check()
     with pytest.raises(ValueError, match="output"):
         _iop(_IntDomain()).run(stmt)
@@ -380,7 +387,7 @@ def _chain_output(values):
             variables=_vars(*[f"t{i}" for i in range(layer_bit_sizes(c)[0])]),
             evaluations=values,
         )
-        values = Relation_Circuit(c).layer_tables(m)[-1]
+        values = Relation_Circuit.indexed(c, None).layer_tables(m)[-1]
     return list(values)
 
 
@@ -395,17 +402,23 @@ class _ThreeCircuits(Relation):
         return list(y.table) == _chain_output(list(x.table))
 
 
-def _three_layering(root):
+def _three_layering(domain):
+    """The layering, indexing the three circuits in `domain`."""
     from vfhe.circuit.export import layer_bit_sizes
 
-    y, x = root.oracles
-    m1 = Implicit(_vars(*[f"m1_{i}" for i in range(layer_bit_sizes(_C1)[-1])]))
-    m2 = Implicit(_vars(*[f"m2_{i}" for i in range(layer_bit_sizes(_C2)[-1])]))
-    return [
-        [root.reduce_to(Relation_Circuit(_C0), oracles=(y, m1))],
-        [root.reduce_to(Relation_Circuit(_C1), oracles=(m1, m2), head=m1)],
-        [root.reduce_to(Relation_Circuit(_C2), oracles=(m2, x), head=m2)],
-    ]
+    c0, c1, c2 = (Relation_Circuit.indexed(c, domain) for c in (_C0, _C1, _C2))
+
+    def layering(root):
+        y, x = root.oracles
+        m1 = Implicit(_vars(*[f"m1_{i}" for i in range(layer_bit_sizes(_C1)[-1])]))
+        m2 = Implicit(_vars(*[f"m2_{i}" for i in range(layer_bit_sizes(_C2)[-1])]))
+        return [
+            [root.reduce_to(c0, oracles=(y, m1))],
+            [root.reduce_to(c1, oracles=(m1, m2), head=m1)],
+            [root.reduce_to(c2, oracles=(m2, x), head=m2)],
+        ]
+
+    return layering
 
 
 def _three_instance(ring=None, tweak=0, public=True):
@@ -416,7 +429,7 @@ def _three_instance(ring=None, tweak=0, public=True):
     out[0] += tweak
     y = MLE(ring=ring, variables=_vars("y0"), evaluations=out, public=public)
     return Statement(_ThreeCircuits(), oracles=(y, x)), compose(
-        _three_layering, "three"
+        _three_layering(ring), "three"
     )
 
 

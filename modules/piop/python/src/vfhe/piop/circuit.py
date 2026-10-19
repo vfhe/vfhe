@@ -4,7 +4,10 @@
 
 `Relation_Circuit` is circuit satisfiability: the input oracle evaluates,
 under the circuit in the relation's `index`, to the output oracle, its head.
-`GKR` is its protocol [GKR15; Tha22, §4.6], a composition (`composer.py`):
+The index also holds the circuit's wiring predicates, built once for a
+domain by the indexer (`wiring_predicates`, through `indexed`), as an index
+is in [CHMMVW20]. `GKR` is its protocol [GKR15; Tha22, §4.6], a composition
+(`composer.py`):
 the *output test*, a headless statement `Relation_Equal(out, W_d)` whose
 protocol `OutputTest` reduces "the output oracle equals the output layer" to
 one evaluation claim on the layer at a random point; then, one layer per
@@ -34,7 +37,8 @@ Circuits are the protobuf messages of `vfhe.circuit` (imported lazily; the
 predicates come from `vfhe.circuit.export.sparse_wiring`). A wiring index
 packs `z || x || y` with y in the low bits, so a predicate's MLE variables
 are listed `[y..., x..., z...]` and no reordering is needed against the
-framework's LSB-first tables.
+framework's LSB-first tables. A predicate has variables of its own; a layer
+body reads it through a map renaming them to the body's `z`, `x` and `y`.
 """
 
 from __future__ import annotations
@@ -80,6 +84,28 @@ def _sparse(domain, variables: list, entries: dict) -> SparseMLE:
     )
 
 
+def wiring_predicates(circuit: gkr.Circuit, domain) -> tuple[SparseMLE, ...]:
+    """The indexer's predicates of `circuit` in `domain`: the tuple
+    `(lin_0, xmult_0, ..., lin_{d-1}, xmult_{d-1})`, public sparse tables,
+    those of layer `l` over variables `[y..., x..., z...]` of their own,
+    created here (`s_in` of `y` and of `x`, `s_out` of `z`)."""
+    from vfhe.circuit.export import layer_bit_sizes, sparse_wiring
+
+    sizes = layer_bit_sizes(circuit)
+    predicates: list[SparseMLE] = []
+    for layer in range(len(circuit.layers)):
+        s_in, s_out = sizes[layer], sizes[layer + 1]
+        variables = (
+            [MLE_Variable(f"py{layer}_{i}") for i in range(s_in)]
+            + [MLE_Variable(f"px{layer}_{i}") for i in range(s_in)]
+            + [MLE_Variable(f"pz{layer}_{i}") for i in range(s_out)]
+        )
+        lin_t, xmult_t = sparse_wiring(circuit, layer)
+        predicates.append(_sparse(domain, variables, lin_t))
+        predicates.append(_sparse(domain, variables, xmult_t))
+    return tuple(predicates)
+
+
 def _eval_layer(layer, prev: list, size: int) -> list:
     """The padded wire values of one gate layer over the values `prev` of the
     layer below: entry i the gate i, zeros past the last gate up to `size`.
@@ -105,25 +131,40 @@ def _eval_layer(layer, prev: list, size: int) -> list:
 
 @with_start
 class Relation_Circuit(Relation):
-    """The input oracle evaluates, under the circuit `index`, to the output
-    oracle: `oracles = (out, w_in)`, `out` a table over s_out variables
-    (public, committed, or plain, or the implicit head of a headed
-    statement) and `w_in` one over s_in variables. The ideal decider
+    """The input oracle evaluates, under the circuit in the index, to the
+    output oracle: `oracles = (out, w_in)`, `out` a table over s_out
+    variables (public, committed, or plain, or the implicit head of a headed
+    statement) and `w_in` one over s_in variables. The index is the circuit
+    description and its wiring predicates, `("circuit", "predicates")`, the
+    latter the tuple `wiring_predicates` builds, which `GKR`'s layer bodies
+    read; `indexed(circuit, domain)` is the indexer. The ideal decider
     evaluates the circuit gate by gate over the input table; `compute_head`
     returns its output table, so a circuit can define an implicit oracle of
     a larger reduction."""
 
     name = "circuit"
     fields = ("oracles",)
+    index_fields = ("circuit", "predicates")
+    sparse_index_fields = ("predicates",)
     head_index = 0
 
-    def __init__(self, index: gkr.Circuit) -> None:
-        super().__init__(index=index)
+    @classmethod
+    def indexed(cls, circuit: gkr.Circuit, domain):
+        """The relation indexed by `circuit`, its predicates built in
+        `domain` (a Ring, a Field, or None for plain Python values)."""
+        return cls(
+            index={"circuit": circuit, "predicates": wiring_predicates(circuit, domain)}
+        )
 
     @property
     def circuit(self) -> gkr.Circuit:
         """The circuit this relation is indexed by."""
-        return cast("gkr.Circuit", self.index)
+        return cast("gkr.Circuit", self.index["circuit"])
+
+    @property
+    def predicates(self) -> tuple[SparseMLE, ...]:
+        """The wiring predicates, `(lin_0, xmult_0, ..., lin_{d-1}, xmult_{d-1})`."""
+        return self.index["predicates"]
 
     def layer_tables(self, w_in) -> list:
         """Every layer's padded wire values from the input table: entry 0 is
@@ -159,21 +200,20 @@ class Relation_Circuit(Relation):
 
 @with_start
 class Relation_Layer(Relation_SumDef):
-    """Gate layer l of a circuit as a sum definition, `index = (circuit, l)`:
-    `oracles = (W_{l+1}, G_l)` with G_l the layer identity over the layer's
-    sparse predicates and the layer below under two renamings (`GKR` builds
-    it). `compute_head` evaluates the gates on the table of the layer below,
-    linear in the wires, where the generic route would materialize the
-    predicates."""
+    """Gate layer l of a circuit as a sum definition, indexed by
+    `("circuit", "layer", "lin", "xmult")`, the circuit, l and the layer's
+    two sparse predicates: `oracles = (W_{l+1}, G_l)` with G_l the layer
+    identity over those predicates and the layer below under two renamings
+    (`GKR` builds it). `compute_head` evaluates the gates on the table of
+    the layer below, linear in the wires, where the generic route would
+    materialize the predicates."""
 
     name = "layer"
-
-    def __init__(self, index: tuple) -> None:
-        super().__init__(index=index)
+    index_fields = ("circuit", "layer", "lin", "xmult")
 
     def compute_head(self, statement: Statement):
         head, body = statement.oracles
-        circuit, layer = cast("tuple", self.index)
+        circuit, layer = self.index["circuit"], self.index["layer"]
         below = resolve_table(body.constituents[2])  # W_l under the x renaming
         values = _eval_layer(
             circuit.layers[layer], list(below.table), 1 << head.num_vars
@@ -314,7 +354,7 @@ class GKR(Composed):
         out, w_in = root.oracles
         top = Implicit(out.variables)
         test = root.reduce_to(Relation_Equal, oracles=(out, top))
-        return [[test], *_layer_statements(root, w_in, top, iop.domain)]
+        return [[test], *_layer_statements(root, w_in, top)]
 
 
 class GKR_Start(GKR):
@@ -333,20 +373,20 @@ class GKR_Start(GKR):
         if root.head is None:
             raise TypeError("GKR_Start proves a started circuit statement")
         _, w_in = root.oracles
-        return _layer_statements(root, w_in, root.head, iop.domain)
+        return _layer_statements(root, w_in, root.head)
 
 
-def _layer_statements(
-    root: Statement, w_in, top: Implicit, domain
-) -> list[list[Statement]]:
+def _layer_statements(root: Statement, w_in, top: Implicit) -> list[list[Statement]]:
     """One layer of the reduction per gate layer, output layer first: the
     sum definition of W_{l+1} (the head; `top` for the last layer) by the
-    layer identity over the sparse predicates of layer l in `domain` and
-    W_l under the x and y renamings, summed variables x first, then y (the
-    round order the two-phase prover needs)."""
-    from vfhe.circuit.export import layer_bit_sizes, sparse_wiring
+    layer identity over the sparse predicates of layer l, read from the
+    root's index and renamed to the body's variables, and W_l under the x
+    and y renamings, summed variables x first, then y (the round order the
+    two-phase prover needs)."""
+    from vfhe.circuit.export import layer_bit_sizes
 
-    circuit = cast("gkr.Circuit", root.relation.index)
+    circuit = cast("gkr.Circuit", root.index["circuit"])
+    predicates = root.index["predicates"]
     sizes = layer_bit_sizes(circuit)
     depth = len(circuit.layers)
     if top.num_vars != sizes[-1] or w_in.num_vars != sizes[0]:
@@ -367,9 +407,7 @@ def _layer_statements(
         z = list(head.variables)
         x = [MLE_Variable(f"x{layer}_{i}") for i in range(s_in)]
         y = [MLE_Variable(f"y{layer}_{i}") for i in range(s_in)]
-        lin_t, xmult_t = sparse_wiring(circuit, layer)
-        lin = _sparse(domain, y + x + z, lin_t)
-        xmult = _sparse(domain, y + x + z, xmult_t)
+        lin, xmult = predicates[2 * layer], predicates[2 * layer + 1]
         wx = dict(zip(below.variables, x, strict=True))
         wy = dict(zip(below.variables, y, strict=True))
         body = VirtualOracle(
@@ -377,13 +415,15 @@ def _layer_statements(
             [lin, xmult, below, below],
             terms=[(1, (0, 2)), (1, (1, 2, 3))],
             maps=[
-                {v: v for v in lin.variables},
-                {v: v for v in xmult.variables},
+                dict(zip(lin.variables, y + x + z, strict=True)),
+                dict(zip(xmult.variables, y + x + z, strict=True)),
                 wx,
                 wy,
             ],
         )
-        relation = Relation_Layer(index=(circuit, layer))
+        relation = Relation_Layer(
+            index={"circuit": circuit, "layer": layer, "lin": lin, "xmult": xmult}
+        )
         statements.append([root.reduce_to(relation, oracles=(head, body), head=head)])
     return statements
 

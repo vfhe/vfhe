@@ -53,7 +53,9 @@ from .piop import (
     Relation_Eval,
     Statement,
     Verifier,
+    _map_oracles,
     oracle_closure,
+    statement_oracles,
 )
 from .virtual import VirtualOracle
 
@@ -148,7 +150,7 @@ class Composed(Protocol):
         protocol = iop.protocol_for(stmt)
         if protocol is None:  # terminal: the driver decides it ...
             if stmt.head is not None or any(
-                id(o) in heads for o in oracle_closure(_oracles(stmt))
+                id(o) in heads for o in oracle_closure(statement_oracles(stmt))
             ):  # ... unless it reads an implicit oracle, which it cannot
                 raise RuntimeError(f"no protocol registered for {stmt!r}")
             outputs.append(stmt)
@@ -168,17 +170,14 @@ class Composed(Protocol):
                 await self._discharge(party, half, claim, heads, pending, outputs)
 
 
-def _oracles(statement: Statement) -> tuple:
-    return tuple(statement.fields.get("oracles") or ())
-
-
 def _check_rules(layers: list[list[Statement]]) -> dict[int, Statement]:
     """Rules 1 and 2 of a layering; returns `{id(head): its statement}`.
 
-    Oracles are read through virtual definitions (`oracle_closure`), since an
-    implicit oracle may hide behind a virtual one. An implicit oracle that
-    heads no statement here belongs to an enclosing composition and counts as
-    non-implicit for the rules.
+    Oracles are read through virtual definitions (`oracle_closure`) and
+    through the relation's index (`statement_oracles`), since an implicit
+    oracle may hide behind a virtual one or sit in an index. An implicit
+    oracle that heads no statement here belongs to an enclosing composition
+    and counts as non-implicit for the rules.
     """
     heads: dict[int, Statement] = {}
     layer_of: dict[int, int] = {}
@@ -192,7 +191,7 @@ def _check_rules(layers: list[list[Statement]]) -> dict[int, Statement]:
             layer_of[id(stmt.head)] = depth
     for depth, layer in enumerate(layers):
         for stmt in layer:
-            for o in oracle_closure(_oracles(stmt)):
+            for o in oracle_closure(statement_oracles(stmt)):
                 if o is stmt.head or id(o) not in heads:
                     continue
                 if layer_of[id(o)] <= depth:
@@ -212,7 +211,10 @@ def _compute_heads(prover: Prover, layers: list[list[Statement]]) -> None:
             head = stmt.head
             if head is None or head in prover.witnesses:
                 continue
-            table = stmt.relation.compute_head(_statement_view(stmt, prover.witnesses))
+            # Through the view's relation: it reads its index as it reads the
+            # oracles, and the view may have rebuilt it over viewed entries.
+            view = _statement_view(stmt, prover.witnesses)
+            table = view.relation.compute_head(view)
             variables = list(getattr(table, "variables", ()))
             if len(variables) != len(head.variables) or any(
                 a is not b for a, b in zip(variables, head.variables, strict=True)
@@ -226,21 +228,32 @@ def _compute_heads(prover: Prover, layers: list[list[Statement]]) -> None:
 
 def _statement_view(statement: Statement, witnesses: dict) -> Statement:
     """`statement` as its relation's `compute_head` reads it: every oracle but
-    the head replaced by what the prover holds of it. A stored table
-    (`witnesses`) stands in for an implicit oracle; a virtual oracle becomes
-    the same definition over its constituents so resolved; any other oracle
-    (a dense or sparse table, public or committed) is its own table."""
-    oracles = tuple(
-        o if o is statement.head else _view_oracle(o, witnesses)
-        for o in _oracles(statement)
-    )
+    the head, the index oracles included, replaced by what the prover holds
+    of it. A stored table (`witnesses`) stands in for an implicit oracle; a
+    virtual oracle becomes the same definition over its constituents so
+    resolved; any other oracle (a dense or sparse table, public or
+    committed) is its own table. The head is left alone wherever it sits.
+    When an index entry changed, the relation is rebuilt over the viewed
+    index, `type(r)(index=viewed)`; a relation with an opaque index is left
+    as it is."""
+    head = statement.head
+
+    def view(oracle):
+        return oracle if oracle is head else _view_oracle(oracle, witnesses)
+
+    oracles = tuple(view(o) for o in statement.fields.get("oracles") or ())
+    relation = statement.relation
+    if relation.index_fields:
+        viewed = _map_oracles(relation.index, view)
+        if viewed is not relation.index:
+            relation = type(relation)(index=viewed)
     fields = dict(statement.fields)
     fields["oracles"] = oracles
     return Statement(
-        statement.relation,
+        relation,
         parents=statement.parents,
         path=statement.path,
-        head=statement.head,
+        head=head,
         **fields,
     )
 
