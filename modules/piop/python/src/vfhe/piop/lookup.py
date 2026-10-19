@@ -52,22 +52,17 @@ class Relation_Lookup(Relation):
 
     name = "lookup"
     fields = ("oracles",)
+    index_fields = ("beta",)
 
     def __init__(self, beta: int) -> None:
         if beta <= 0 or beta & (beta - 1):
             raise ValueError(f"beta must be a positive power of two, got {beta}")
-        super().__init__(index=beta)
+        super().__init__(index={"beta": beta})
 
     @property
     def beta(self) -> int:
-        """The table size; `t_beta` is `{0, ..., beta - 1}`.
-
-        `Relation.index` is deliberately untyped in the base class -- it holds
-        whatever a relation needs -- so a subclass narrows it where it reads
-        it, the way `Relation_Circuit.circuit` does (`circuit.py`). The
-        constructor is what guarantees the cast is honest.
-        """
-        return cast("int", self.index)
+        """The table size; `t_beta` is `{0, ..., beta - 1}`."""
+        return cast("int", self.index["beta"])
 
     def check(self, statement: Statement) -> bool:
         """The ideal decider: every hypercube evaluation is in range.

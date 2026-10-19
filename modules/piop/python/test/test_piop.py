@@ -3,7 +3,8 @@
 """Tests for the relation / statement layer of vfhe.piop: the ideal deciders
 of Relation_Sum / Relation_Zero / Relation_Eval over coefficient-basis and
 ring-backed evaluation-basis MLE oracles, statement reduction
-chaining, and future resolution.
+chaining, future resolution, and the index of a relation (its declared
+fields, its oracles, its digest).
 """
 
 import asyncio
@@ -12,14 +13,18 @@ import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import (
     IOP,
+    Implicit,
     Protocol,
+    Relation,
     Relation_Eval,
     Relation_Sum,
     Relation_SumProd,
     Relation_Zero,
     Statement,
     Value,
+    element_digest,
 )
+from vfhe.piop.piop import statement_oracles
 
 
 def _coeff_mle():
@@ -227,3 +232,112 @@ def test_statement_resolution():
         return stmt.check()
 
     assert asyncio.run(run())
+
+
+# --- the index of a relation --------------------------------------------------
+
+
+class _Indexed(Relation):
+    """A relation with two declared index fields and no decider."""
+
+    name = "indexed"
+    fields = ("oracles",)
+    index_fields = ("a", "b")
+
+
+def _vars(*names):
+    return [MLE_Variable(n) for n in names]
+
+
+def test_relation_index_fields_take_a_mapping_over_exactly_those_names():
+    r = _Indexed(index={"b": 2, "a": 1})
+    assert list(r.index) == ["a", "b"]  # stored in the declared order
+    assert r.index == {"a": 1, "b": 2}
+    with pytest.raises(TypeError):  # a missing name
+        _Indexed(index={"a": 1})
+    with pytest.raises(TypeError):  # an extra name
+        _Indexed(index={"a": 1, "b": 2, "c": 3})
+    with pytest.raises(TypeError):  # not a mapping at all
+        _Indexed(index=(1, 2))
+    with pytest.raises(TypeError):
+        _Indexed()
+    # No declared fields: the index stays the opaque object it is given.
+    assert Relation_Sum(index=(1, 2)).index == (1, 2)
+    assert Relation_Sum().index is None and Relation_Sum().index_oracles() == ()
+    with pytest.raises(TypeError):  # an opaque index has no declared digest
+        Relation_Sum(index=3).index_digest()
+
+
+def test_index_oracles_walk_tuples_lists_and_mappings():
+    x = _vars("x0")
+    t1 = MLE(variables=x, evaluations=[1, 2])
+    t2 = MLE(variables=x, evaluations=[3, 4])
+    h = Implicit(x)
+    r = _Indexed(index={"a": (t1, {"k": [t2, 5]}, "data"), "b": h})
+    assert r.index_oracles() == (t1, t2, h)  # declared order, data skipped
+    assert _Indexed(index={"a": 1, "b": "two"}).index_oracles() == ()
+    stmt = Statement(r, oracles=(t2,))
+    assert stmt.index is r.index
+    # The instance oracles first, then the index oracles.
+    assert statement_oracles(stmt) == (t2, t1, t2, h)
+
+
+def test_index_digest_follows_the_declared_order_and_is_computed_once(monkeypatch):
+    import vfhe.piop.piop as piop
+
+    r1 = _Indexed(index={"a": 1, "b": 2})
+    r2 = _Indexed(index={"b": 2, "a": 1})  # another insertion order
+    assert r1.index_digest() == r2.index_digest()
+    assert r1.index_digest() != _Indexed(index={"a": 2, "b": 1}).index_digest()
+    # A statement's digest goes through it, so it is insertion-order free too.
+    x = _vars("x0")
+    t = MLE(variables=x, evaluations=[1, 2])
+    assert element_digest(Statement(r1, oracles=(t,))) == element_digest(
+        Statement(r2, oracles=(t,))
+    )
+    # Computed once per instance: a second call hashes nothing.
+    calls = []
+    digest = piop.element_digest
+    monkeypatch.setattr(piop, "element_digest", lambda v: calls.append(v) or digest(v))
+    fresh = _Indexed(index={"a": 1, "b": 2})
+    first = fresh.index_digest()
+    assert len(calls) == 4  # two names, two values
+    assert fresh.index_digest() == first and len(calls) == 4
+
+
+def test_element_digest_of_a_class_is_by_its_qualified_name():
+    class _A(Relation):
+        name = "same"
+
+    class _B(Relation):
+        name = "same"
+
+    assert element_digest(_A) == element_digest(_A)
+    assert element_digest(_A) != element_digest(_B)  # not by `name`
+    assert element_digest(Relation_Sum) != element_digest(Relation_SumProd)
+
+
+def test_a_root_whose_index_holds_an_implicit_oracle_is_refused():
+    class _Reads(Relation):
+        name = "reads"
+        fields = ("oracles",)
+        index_fields = ("t",)
+
+        def check(self, statement):
+            return True
+
+    x = _vars("x0")
+    f = MLE(variables=x, evaluations=[1, 2])
+    stmt = Statement(_Reads(index={"t": Implicit(x)}), oracles=(f,))
+    with pytest.raises(TypeError, match="implicit"):
+        IOP().run(stmt)
+    with pytest.raises(TypeError, match="implicit"):
+        IOP(fiat_shamir=True).prove(stmt)
+    with pytest.raises(TypeError, match="implicit"):
+        IOP(fiat_shamir=True).verify(
+            stmt,
+            IOP(fiat_shamir=True).prove(
+                Statement(_Reads(index={"t": f}), oracles=(f,))
+            ),
+        )
+    assert IOP().run(Statement(_Reads(index={"t": f}), oracles=(f,)))

@@ -6,12 +6,14 @@ them. Sum definitions and the Composer are in test_composition.py."""
 
 import random
 
+import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
 from vfhe.piop import (
     IOP,
     Implicit,
     OracleKind,
     Protocol,
+    Relation,
     Relation_Eval,
     Relation_Sum,
     Relation_Zero,
@@ -62,6 +64,16 @@ def test_oracle_kinds():
     assert oracle_kind(SparseMLE(variables=v, evaluations={5: 3}, public=True)) is (
         OracleKind.public
     )
+    # A table tagged by a commitment scheme is committed; one carrying both
+    # marks is refused (public and committed are two discharges, not two
+    # properties).
+    tagged = MLE(variables=x, evaluations=[1, 2])
+    tagged.kind = OracleKind.committed  # pyright: ignore[reportAttributeAccessIssue]
+    assert oracle_kind(tagged) is OracleKind.committed
+    both = MLE(variables=x, evaluations=[1, 2], public=True)
+    both.kind = OracleKind.committed  # pyright: ignore[reportAttributeAccessIssue]
+    with pytest.raises(ValueError, match="public or committed"):
+        oracle_kind(both)
 
 
 def test_sparse_mle_digest_is_canonical():
@@ -191,6 +203,80 @@ def test_parking_rule_waits_for_all_claims_on_an_oracle():
     f = MLE(variables=x, evaluations=[1, 2, 3, 4])
     iop = _iop()
     iop.register(Relation_Zero, _Split())
+    iop.register(Relation_Eval, _Bundle())
+    assert iop.run(Statement(Relation_Zero(), oracles=[f]))
+    assert sizes == [2, 2]
+
+
+def test_parking_rule_sees_an_oracle_read_through_the_index():
+    # As above, but the second frontier statement mentions f only through
+    # its relation's index: a statement of `_Reads(index={"table": f})` with
+    # no instance oracle, whose protocol emits a claim on that table. The
+    # Eval on f must wait for it, or the bundle sees [1, 1] per party.
+    sizes = []
+
+    class _Reads(Relation):
+        name = "reads"
+        fields = ()
+        index_fields = ("table",)
+
+    class _Split(Protocol):
+        reduces_from = Relation_Zero
+        reduces_to = (Relation_Eval, _Reads)
+
+        async def prove(self, prover, statements):
+            return self._go(statements)
+
+        async def verify(self, verifier, statements):
+            return self._go(statements)
+
+        def _go(self, statements):
+            (s,) = statements
+            (f,) = s.oracles
+            (x0, x1) = f.variables
+            return [
+                self.reduce(statements, Relation_Eval, point={x0: 1, x1: 1}, value=4),
+                self.reduce(statements, _Reads(index={"table": f})),
+            ]
+
+    class _Open(Protocol):
+        reduces_from = _Reads
+        reduces_to = (Relation_Eval,)
+
+        async def prove(self, prover, statements):
+            return self._go(statements)
+
+        async def verify(self, verifier, statements):
+            return self._go(statements)
+
+        def _go(self, statements):
+            (s,) = statements
+            f = s.index["table"]
+            (x0, x1) = f.variables
+            return [
+                self.reduce(
+                    statements, oracles=[f], point={x0: 0, x1: 0}, value=f.table[0]
+                )
+            ]
+
+    class _Bundle(Protocol):
+        reduces_from = Relation_Eval
+        batching = True
+
+        async def prove(self, prover, statements):
+            sizes.append(len(statements))
+            return []
+
+        async def verify(self, verifier, statements):
+            sizes.append(len(statements))
+            assert all(s.check() for s in statements)
+            return []
+
+    x = _vars("x0", "x1")
+    f = MLE(variables=x, evaluations=[1, 2, 3, 4])
+    iop = _iop()
+    iop.register(Relation_Zero, _Split())
+    iop.register(_Reads, _Open())
     iop.register(Relation_Eval, _Bundle())
     assert iop.run(Statement(Relation_Zero(), oracles=[f]))
     assert sizes == [2, 2]

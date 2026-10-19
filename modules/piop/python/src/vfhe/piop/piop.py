@@ -10,6 +10,7 @@ full derivation and bibliography.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Mapping
 from enum import Enum
 from typing import Any, ClassVar, TypeVar, cast
 
@@ -118,15 +119,22 @@ def _chain(parts: list[bytes]) -> bytes:
 def element_digest(value) -> bytes:
     """A 32-byte digest of a transcript entry or statement field.
 
-    Duck-typed dispatch (this module imports no concrete value types): raw
-    bytes, ints, strings and None are primitives; dicts and sequences chain
-    their parts; everything else must bring its own digest — a `digest()`
-    method, a statement shape (`relation` + `fields`), a dense-MLE shape
-    (`table` + `variables`), a sparse-MLE shape (`evaluations` +
-    `variables`, entries in index order), `to_bytes()` (MerklePath), `get_hash()`
-    (arith.Polynomial, four 64-bit words) or a callable `hash` attribute
-    (arith.FieldElement). Each branch is domain-separated by a tag.
+    Duck-typed dispatch (this module imports no concrete value types): a
+    class (a relation named in an index) is digested by its module and
+    qualified name; raw bytes, ints, strings and None are primitives; dicts
+    and sequences chain their parts; everything else must bring its own
+    digest — a `digest()` method, a statement shape (`relation` + `fields`;
+    a declared index through `Relation.index_digest`), a table tagged with a
+    `commitment` (digested by that commitment, never by its entries), a
+    dense-MLE shape (`table` + `variables`), a sparse-MLE shape
+    (`evaluations` + `variables`, entries in index order), `to_bytes()`
+    (MerklePath), `get_hash()` (arith.Polynomial, four 64-bit words) or a
+    callable `hash` attribute (arith.FieldElement). Each branch is
+    domain-separated by a tag.
     """
+    if isinstance(value, type):
+        name = f"{value.__module__}.{value.__qualname__}"
+        return hash_bytes(b"class" + name.encode())
     if isinstance(value, bytes | bytearray | memoryview):
         return hash_bytes(b"bytes" + bytes(value))
     if isinstance(value, bool | int):
@@ -147,12 +155,19 @@ def element_digest(value) -> bytes:
     if callable(digest):
         return _as_digest_bytes(digest())
     if hasattr(value, "relation") and hasattr(value, "fields"):  # a Statement
-        parts = [b"statement", element_digest(value.relation.name)]
-        if value.relation.index is not None:
-            parts.append(element_digest(value.relation.index))
-        for name in value.relation.fields:
+        relation = value.relation
+        parts = [b"statement", element_digest(relation.name)]
+        if relation.index_fields:
+            parts.append(relation.index_digest())
+        elif relation.index is not None:
+            parts.append(element_digest(relation.index))
+        for name in relation.fields:
             parts += [element_digest(name), element_digest(value.fields.get(name))]
         return _chain(parts)
+    if hasattr(value, "table") and getattr(value, "commitment", None) is not None:
+        # A committed table: the scheme tagged it with its commitment, which
+        # binds the entries, so the digest never walks them.
+        return hash_bytes(b"committed" + _as_digest_bytes(value.commitment.digest()))
     if hasattr(value, "table") and hasattr(value, "variables"):  # a dense MLE
         parts = [b"mle", element_digest(value.basis.name)]
         parts += [element_digest(v) for v in value.variables]
@@ -215,11 +230,19 @@ class OracleKind(Enum):
 
 def oracle_kind(oracle, commitment=None) -> OracleKind:
     """The kind of `oracle` (duck-typed: defined oracles carry `kind`, tables
-    carry `public`); a claim carrying a commitment is `committed`."""
+    carry `public`, and a committed table the `kind` and `commitment` the
+    scheme set on it); a claim carrying a commitment is `committed`. A table
+    is `public` or `committed`, never both: the two are two discharges of a
+    claim on it, so a table carrying both marks is refused."""
     if commitment is not None:
         return OracleKind.committed
     kind = getattr(oracle, "kind", None)
     if isinstance(kind, OracleKind):
+        if kind is OracleKind.committed and getattr(oracle, "public", False):
+            raise ValueError(
+                "a table marked public was committed; a table is public or "
+                "committed, not both"
+            )
         return kind
     if getattr(oracle, "public", False):
         return OracleKind.public
@@ -278,6 +301,28 @@ class Implicit:
         return f"Implicit(vars={self.num_vars})"
 
 
+def _map_oracles(value, fn: Callable):
+    """`value` with `fn` applied to every oracle in it: the structural map
+    over an index, walking tuples, lists and mappings and duck-typing an
+    oracle on a `variables` attribute (a table, a defined oracle, an
+    `Implicit` handle); anything else is data and is left alone. A container
+    none of whose entries changed is returned as the same object, so a
+    caller can tell by identity whether anything was replaced."""
+    if isinstance(value, Mapping):
+        items = {k: _map_oracles(v, fn) for k, v in value.items()}
+        if all(items[k] is v for k, v in value.items()):
+            return value
+        return items
+    if isinstance(value, list | tuple):
+        items = [_map_oracles(v, fn) for v in value]
+        if all(a is b for a, b in zip(items, value, strict=True)):
+            return value
+        return type(value)(items)
+    if hasattr(value, "variables"):
+        return fn(value)
+    return value
+
+
 class Relation:
     """An indexed relation R: a set of (index, instance, witness) triples.
 
@@ -290,6 +335,14 @@ class Relation:
     `fields` declares the instance shape: the statement field names, in
     canonical order — the order a Fiat-Shamir serialization will hash, so it
     is declared here rather than left to construction order.
+
+    `index_fields` declares the index's shape the same way. When it is
+    non-empty, `index` is a mapping over exactly those names, stored in the
+    declared order; the oracles among its values (`index_oracles`) are
+    oracles of every statement of the relation wherever the framework reads
+    a statement's oracles (`statement_oracles`), and its digest
+    (`index_digest`) is the chain of the entries in the declared order. When
+    it is empty, `index` is one opaque object, digested as it is.
 
     `check(statement)` is the ideal (non-succinct) membership test for the
     relation's language: it enumerates the hypercube or queries the oracle
@@ -311,12 +364,61 @@ class Relation:
 
     name = "abstract"
     fields: tuple[str, ...] = ()
+    index_fields: tuple[str, ...] = ()
     head_index: int | None = None
     Start: ClassVar[type[Relation]]  # set by `with_start`
     base: ClassVar[type[Relation]]  # on a start relation: what it derives from
 
     def __init__(self, index=None):
-        self.index = index
+        if self.index_fields:
+            if not isinstance(index, Mapping):
+                raise TypeError(
+                    f"{type(self).__name__} takes its index as a mapping over "
+                    f"{self.index_fields}"
+                )
+            missing = set(self.index_fields) - set(index)
+            unknown = set(index) - set(self.index_fields)
+            if missing or unknown:
+                raise TypeError(
+                    f"{type(self).__name__} index: missing {sorted(missing)}, "
+                    f"unknown {sorted(unknown)}; declared fields: "
+                    f"{self.index_fields}"
+                )
+            index = {n: index[n] for n in self.index_fields}
+        # Untyped on purpose: an opaque object, or the mapping over
+        # `index_fields`; a subclass narrows it where it reads it.
+        self.index: Any = index
+        self._index_digest: bytes | None = None
+
+    def index_oracles(self) -> tuple:
+        """The oracles among the index values, in declared order, walking
+        tuples, lists and mappings (an entry may hold a family of tables, or
+        a nested index); `()` for an opaque index."""
+        if not self.index_fields:
+            return ()
+        found: list = []
+
+        def collect(oracle):
+            found.append(oracle)
+            return oracle
+
+        _map_oracles(self.index, collect)
+        return tuple(found)
+
+    def index_digest(self) -> bytes:
+        """The digest of a declared index: the chain of the entries in the
+        declared order, each under its name. Cached on the instance, since an
+        index is built once and never mutated; a table in the index is
+        committed before the index is first digested, so that the cached
+        digest records it by its commitment."""
+        if not self.index_fields:
+            raise TypeError(f"{type(self).__name__} declares no index fields")
+        if self._index_digest is None:
+            parts = [b"index"]
+            for name in self.index_fields:
+                parts += [element_digest(name), element_digest(self.index[name])]
+            self._index_digest = _chain(parts)
+        return self._index_digest
 
     def check(self, statement: Statement) -> bool:
         raise NotImplementedError
@@ -497,6 +599,11 @@ class Statement:
             default=len(point),
         )
 
+    @property
+    def index(self):
+        """The relation's index, the preprocessed part of this claim."""
+        return self.relation.index
+
     def reduce_to(
         self,
         relation: Relation | type[Relation],
@@ -551,6 +658,14 @@ class Statement:
             f"Statement({self.relation.name}, path={self.path!r}, "
             f"vars={self.num_vars}, fields={list(self.fields)}{head})"
         )
+
+
+def statement_oracles(statement: Statement) -> tuple:
+    """Every oracle a statement mentions: its instance oracles followed by
+    the index oracles of its relation. What the oracle closures (the parking
+    rule, the Composer's rules) and the prover view read."""
+    oracles = tuple(statement.fields.get("oracles") or ())
+    return oracles + statement.relation.index_oracles()
 
 
 def _checked_head(relation: Relation, fields: dict, head) -> Implicit | None:
@@ -631,6 +746,7 @@ def with_start(cls: type[_R]) -> type[_R]:
     class Start(Relation):
         name = base_cls.name + "_start"
         fields = (*base_cls.fields, "points", "values")
+        index_fields = base_cls.index_fields
         head_index = base_cls.head_index
         base = base_cls
 
@@ -1008,9 +1124,7 @@ class Party:
         for other in worklist:
             if other is stmt or self._bundle_key(other) == key:
                 continue
-            if any(
-                o is subject for o in oracle_closure(other.fields.get("oracles") or ())
-            ):
+            if any(o is subject for o in oracle_closure(statement_oracles(other))):
                 return True
         return False
 
@@ -1228,6 +1342,22 @@ class IOP:
         if self.fiat_shamir and not self.transcript.seed:
             self.transcript.bind(element_digest(statement))
 
+    @staticmethod
+    def _root(statement: Statement) -> Statement:
+        """`statement` checked as the root of a run: the index of a root is
+        fixed before any reduction, so its oracles (through their
+        definitions) are tables, never implicit, with one exception, the
+        head of a started root, which a relation with an index head keeps in
+        its index."""
+        for o in oracle_closure(statement.relation.index_oracles()):
+            if isinstance(o, Implicit) and o is not statement.head:
+                raise TypeError(
+                    f"the index of a root statement holds the implicit oracle "
+                    f"{o!r}, which is not its head; a root's index oracles are "
+                    "tables"
+                )
+        return statement
+
     def _prover_view(self, statement: Statement) -> Statement:
         """The prover's fork of the root, carrying its witness along."""
         fork = statement._fork()
@@ -1250,7 +1380,7 @@ class IOP:
                 "prove() produces a non-interactive proof; construct the IOP "
                 "with fiat_shamir=True (or use run() for an interactive check)"
             )
-        self._bind(statement)
+        self._bind(self._root(statement))
         self.solo = True
         try:
             self.loop.run_until_complete(
@@ -1275,7 +1405,7 @@ class IOP:
                 "verify() checks a non-interactive proof; construct the IOP "
                 "with fiat_shamir=True (or use run() for an interactive check)"
             )
-        self._bind(statement)
+        self._bind(self._root(statement))
         self.transcript.replay(proof)
         self.solo = True
         try:
@@ -1295,7 +1425,7 @@ class IOP:
         child-path counters), so both derive the same DAG paths — and the
         same transcript labels — independently.
         """
-        self._bind(statement)
+        self._bind(self._root(statement))
         prover_statement = self._prover_view(statement)
 
         async def _run():

@@ -278,6 +278,27 @@ def test_start_relation_rebuilds_its_base_from_the_index():
     started = stmt.relation.start(stmt, [claim])
     assert started.relation.index == 3 and started.check()
 
+    # With declared index fields: the start relation declares them too, so
+    # the started statement's index is the same mapping, not an opaque one.
+    class _ScaledIdx(_Scaled):
+        name = "scaled_idx"
+        index_fields = ("k",)
+
+        def check(self, statement):
+            u, w = statement.oracles
+            return list(u.table) == [self.index["k"] * x for x in w.table]
+
+        def compute_head(self, statement):
+            _, w = statement.oracles
+            return _table(w.variables, [self.index["k"] * x for x in w.table])
+
+    with_start(_ScaledIdx)
+    assert _ScaledIdx.Start.index_fields == ("k",)
+    stmt = Statement(_ScaledIdx(index={"k": 3}), oracles=(u, w), head=u)
+    started = stmt.relation.start(stmt, [claim])
+    assert started.relation.index == {"k": 3} and started.check()
+    assert started.relation.index_digest() == stmt.relation.index_digest()
+
 
 # --- the driver refuses stray claims on implicit oracles --------------------
 
@@ -666,6 +687,117 @@ def test_nested_composition_reads_an_outer_head():
     assert not _iop3(_IntDomain(1)).run(
         _chain_instance(total=15903, relation=_Chain3())
     )
+
+
+@with_start
+class _ScaledBy(Relation):
+    """u = w ∘ m on the hypercube, head u, the factor m an *index* oracle
+    (`index = {"factor": m}`) and not an instance one: `compute_head` reads
+    its table through the index, so the prover view has to rebuild the
+    relation over the viewed index when m is a head of a deeper layer."""
+
+    name = "scaled_by"
+    fields = ("oracles",)
+    index_fields = ("factor",)
+    head_index = 0
+
+    def check(self, statement):
+        u, w = statement.oracles
+        m = self.index["factor"]
+        return list(u.table) == [x * y for x, y in zip(w.table, m.table, strict=True)]
+
+    def compute_head(self, statement):
+        _, w = statement.oracles
+        m = self.index["factor"]
+        return _like(w, [x * y for x, y in zip(w.table, m.table, strict=True)])
+
+
+class _ScaledByStart(Protocol):
+    """`_HadamardStart` for `_ScaledBy`: the factor comes from the index, so
+    the sum claims mention m as a constituent of their virtual oracle."""
+
+    name = "scaled_by_start"
+    reduces_to = (Relation_Sum,)
+
+    async def prove(self, prover, statements):
+        return self._sums(statements)
+
+    async def verify(self, verifier, statements):
+        return self._sums(statements)
+
+    def _sums(self, statements):
+        (s,) = statements
+        _, w = s.oracles
+        m = s.index["factor"]
+        out = []
+        for point, value in zip(s.points, s.values, strict=True):
+            r = [point[v] for v in s.head.variables]
+            eq = _like(w, _eq_weights(r, _one_of([w])), public=True)
+            g = VirtualOracle.product([w, m, eq])
+            out.append(self.reduce([s], oracles=[g], value=value))
+        return out
+
+
+def _index_layering(root):
+    # c = d ∘ m through the index of _ScaledBy, m = d ∘ e a deeper head:
+    # the same claim as _Chain2's, read through an index.
+    b, d, e = root.oracles
+    c, m = Implicit(b.variables), Implicit(b.variables)
+    product = VirtualOracle.product([b, c])
+    return [
+        [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
+        [root.reduce_to(_ScaledBy(index={"factor": m}), oracles=(c, d), head=c)],
+        [root.reduce_to(_Hadamard, oracles=(m, d, e), head=m)],
+    ]
+
+
+def _index_iop(domain, layering=_index_layering):
+    iop = _iop(domain)
+    iop.register(_Chain2, compose(layering, name="chain2"))
+    iop.register(_ScaledBy.Start, _ScaledByStart())
+    return iop
+
+
+def test_prover_view_rebuilds_a_relation_whose_index_holds_a_head(monkeypatch):
+    views = []
+    compute_head = _ScaledBy.compute_head
+    monkeypatch.setattr(
+        _ScaledBy,
+        "compute_head",
+        lambda self, s: views.append(s.relation) or compute_head(self, s),
+    )
+    stmt = _chain_instance(total=2134, relation=_Chain2())
+    iop = _index_iop(_IntDomain())
+    assert iop.run(stmt)
+    # The view handed compute_head a rebuilt relation, its index holding m's
+    # table in m's place; the statement's own relation still holds m.
+    (viewed,) = views
+    assert isinstance(viewed, _ScaledBy)
+    assert list(viewed.index["factor"].table) == [10, 18, 28, 40]
+    tables = sorted(
+        list(t.table)
+        for o, t in iop.prover.witnesses.items()
+        if isinstance(o, Implicit)
+    )
+    assert tables == [[10, 18, 28, 40], [50, 108, 196, 320]]
+    # The tail of layer 1 ends in a VirtualEval leaving the claim on m, caught.
+    assert any(k.startswith("virtual/1/") for k in iop.transcript.order)
+    assert not _index_iop(_IntDomain(1)).run(
+        _chain_instance(total=2135, relation=_Chain2())
+    )
+
+    def shallow(root):  # rule 2 through the index: m read above its layer
+        b, d, e = root.oracles
+        c, m = Implicit(b.variables), Implicit(b.variables)
+        product = VirtualOracle.product([b, c])
+        return [
+            [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
+            [root.reduce_to(_Hadamard, oracles=(m, d, e), head=m)],
+            [root.reduce_to(_ScaledBy(index={"factor": m}), oracles=(c, d), head=c)],
+        ]
+
+    with pytest.raises(ValueError, match="rule 2"):
+        _index_iop(_IntDomain(), layering=shallow).run(stmt)
 
 
 def test_a_terminal_statement_reading_a_head_is_refused():

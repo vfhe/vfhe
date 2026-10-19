@@ -60,6 +60,7 @@ from vfhe.arith import MLE, Field, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
 from vfhe.crypto import DIGEST_LEN, Merkle, hash_bytes
 from vfhe.piop import (
+    OracleKind,
     Protocol,
     Prover,
     Rejection,
@@ -225,13 +226,30 @@ class Basefold:
         Both costs are paid here, once; store the opening under the
         commitment on whichever provers will run evaluation proofs
         (`prover.witnesses[commitment] = opening`).
+
+        The table is tagged with what was done to it: `kind` becomes
+        `OracleKind.committed` and `commitment` the commitment, so that a
+        claim carrying the table is `committed` to `vfhe.piop.oracle_kind`
+        and a statement's digest records the table by its commitment. A table
+        marked `public` is refused: public and committed are two discharges
+        of a claim on a table, never two properties of one. The tag lives on
+        this object -- a copy of the table carries none -- and mutating the
+        table after the commit breaks the binding, as the scheme's record,
+        keyed by identity, already assumes.
         """
         self._check_polynomial(f)
+        if f.public:
+            raise ValueError(
+                "a table marked public is not committed: the verifier evaluates "
+                "it itself"
+            )
         word = self.code.encode(_coefficients(f))
         tree = self.merkle_commit(word)
         commitment = BasefoldCommitment(f.variables, tree.root)
         self.commitments[f] = commitment
         self.openings[commitment] = BasefoldOpening(f, word, tree)
+        f.kind = OracleKind.committed  # pyright: ignore[reportAttributeAccessIssue]
+        f.commitment = commitment  # pyright: ignore[reportAttributeAccessIssue]
         return commitment, self.openings[commitment]
 
     def open(self, commitment: BasefoldCommitment, f) -> bool:
