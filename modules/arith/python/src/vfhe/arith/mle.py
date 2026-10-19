@@ -707,6 +707,33 @@ class SparseMLE:
         assert self.num_vars == 0, "constant() needs a fully-evaluated SparseMLE"
         return self.evaluations.get(0, self._one() * 0)
 
+    def restrict(self, fixed: dict) -> SparseMLE:
+        """The slice of this table at `fixed`, a map from some of its
+        variables to the constants 0 or 1: the sparse table over the
+        remaining variables, in their order, whose nonzeros are the entries
+        of this one whose bits at the fixed variables equal the constants.
+        One pass over the nonzeros. A slice, not a partial evaluation: a
+        constant outside {0, 1}, or a variable not of this table, raises."""
+        bits = []
+        for var, bit in fixed.items():
+            if var not in self.variables:
+                raise ValueError(f"{var!r} is not a variable of this table")
+            if not isinstance(bit, int) or bit not in (0, 1):
+                raise ValueError(
+                    "a restriction fixes variables to the constants 0 or 1; "
+                    f"got {bit!r}"
+                )
+            bits.append((self.variables.index(var), bit))
+        keep = [i for i, v in enumerate(self.variables) if v not in fixed]
+        evaluations = {}
+        for k, value in self.evaluations.items():
+            if all((k >> pos) & 1 == bit for pos, bit in bits):
+                index = 0
+                for j, pos in enumerate(keep):
+                    index |= ((k >> pos) & 1) << j
+                evaluations[index] = value
+        return self._like(evaluations, variables=[self.variables[i] for i in keep])
+
     def materialize(self, *_ignored) -> MLE:
         """The dense table with the same evaluations, in the same domain."""
         table = [0] * (1 << self.num_vars)

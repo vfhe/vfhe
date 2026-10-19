@@ -8,9 +8,7 @@ import random
 
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
-from vfhe.piop import (
-    VirtualOracle,
-)
+from vfhe.piop import Implicit, VirtualOracle
 from vfhe.piop.virtual import _LibraProver, _ProverVirtual
 
 
@@ -194,3 +192,84 @@ def test_libra_matches_dense_over_a_field():
         for a, b in zip(da, la, strict=True)
     )
     assert d_const == l_const
+
+
+def _master_shape(rng, s_z, s_x, ring=None, implicit=False):
+    """The layer body of `_layer_shape` twice: over its two predicates as
+    sparse tables, and over restrictions of one master P over `T || X`, the
+    predicates at the slots T = 0 and T = 1 (`implicit`: P an `Implicit`
+    with the master as its witness). Returns (direct, through, witnesses)."""
+    z, x, y = _vars("z", s_z), _vars("x", s_x), _vars("y", s_x)
+    A = _random_table(rng, _vars("a", s_x), ring)
+    B = _random_table(rng, _vars("b", s_x), ring)
+    lin = _random_sparse(rng, y + x + z, 6, ring, values=(1, 2))
+    xmult = _random_sparse(rng, y + x + z, 6, ring, values=(1,))
+    width = 2 * s_x + s_z
+    t = _vars("t", 1)
+    master = SparseMLE(
+        ring=ring,
+        variables=t + _vars("p", width),
+        evaluations={
+            **{(k << 1): v for k, v in lin.nonzeros()},
+            **{(k << 1) | 1: v for k, v in xmult.nonzeros()},
+        },
+    )
+    P = Implicit(master.variables) if implicit else master
+    r_lin = VirtualOracle.restriction(P, _vars("l", width), {t[0]: 0})
+    r_xmult = VirtualOracle.restriction(P, _vars("m", width), {t[0]: 1})
+    terms = [(1, (0, 2)), (1, (1, 2, 3))]
+    wa, wb = (
+        dict(zip(A.variables, x, strict=True)),
+        dict(zip(B.variables, y, strict=True)),
+    )
+    direct = VirtualOracle(
+        z + x + y,
+        [lin, xmult, A, B],
+        terms,
+        [{v: v for v in lin.variables}, {v: v for v in xmult.variables}, wa, wb],
+    )
+    through = VirtualOracle(
+        z + x + y,
+        [r_lin, r_xmult, A, B],
+        terms,
+        [
+            dict(zip(r_lin.variables, y + x + z, strict=True)),
+            dict(zip(r_xmult.variables, y + x + z, strict=True)),
+            wa,
+            wb,
+        ],
+    )
+    rz = [ring.random_exceptional() if ring else rng.randrange(2, 99) for _ in z]
+    bound = dict(zip(z, rz, strict=True))
+    witnesses = {P: master} if implicit else {}
+    return direct.evaluate(bound), through.evaluate(bound), witnesses
+
+
+@pytest.mark.parametrize("implicit", [False, True])
+def test_restrictions_of_a_master_send_the_messages_of_the_slices(implicit):
+    rng = random.Random(8)
+    direct, through, witnesses = _master_shape(rng, s_z=2, s_x=2, implicit=implicit)
+    chall = [rng.randrange(2, 1 << 16) for _ in direct.variables]
+    d_msgs, d_libra, d_const, _ = _run_both(direct, chall)
+    t_msgs, t_libra, t_const, t_lconst = _run_both(through, chall, witnesses)
+    assert d_msgs == t_msgs == t_libra == d_libra
+    assert d_const == t_const == t_lconst
+    # The restrictions were kept sparse by the two-phase prover.
+    libra = through.prover_view(witnesses, strategy="libra")
+    assert isinstance(libra, _LibraProver)
+    assert all(
+        term.predicate is not None and isinstance(term.predicate.sparse, SparseMLE)
+        for term in libra.terms
+    )
+
+
+def test_restrictions_of_a_master_over_a_ring():
+    rng = random.Random(9)
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    direct, through, _ = _master_shape(rng, s_z=1, s_x=2, ring=ring)
+    chall = [ring.random_exceptional() for _ in direct.variables]
+    d_msgs, _, d_const, _ = _run_both(direct, chall)
+    t_msgs, t_libra, t_const, t_lconst = _run_both(through, chall)
+    for a, b, c in zip(d_msgs, t_msgs, t_libra, strict=True):
+        assert all(u == v == w for u, v, w in zip(a, b, c, strict=True))
+    assert d_const == t_const == t_lconst

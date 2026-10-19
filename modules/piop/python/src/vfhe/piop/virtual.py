@@ -114,14 +114,40 @@ def _combine(terms: list, values: list):
 def resolve_table(oracle, witnesses: dict | None = None) -> Any:
     """The concrete table behind an oracle on the prover's side: the
     witness recorded for it (`Prover.witnesses[oracle]`), the oracle itself
-    when it is a table, else its materialization (a sparse table)."""
+    when it is a table, dense or sparse (a sparse table is returned as it
+    is, never materialized), or, for a *restriction*
+    (`VirtualOracle.restriction`), the restriction of its constituent's
+    resolved table renamed to the restriction's variables: the slice of a
+    sparse table (`SparseMLE.restrict`), the partial evaluation of a dense
+    one. Any other virtual oracle has no table of its own and raises."""
     if witnesses is not None and oracle in witnesses:
         return witnesses[oracle]
-    if hasattr(oracle, "table"):
+    if isinstance(oracle, SparseMLE) or hasattr(oracle, "table"):
         return oracle
-    materialize = getattr(oracle, "materialize", None)
-    if callable(materialize):
-        return materialize()
+    if isinstance(oracle, VirtualOracle):
+        if not oracle.is_restriction():
+            raise TypeError(
+                f"no table for {oracle!r}: a virtual oracle resolves to a table "
+                "only when it is a restriction of one constituent"
+            )
+        (constituent,) = oracle.constituents
+        (mapping,) = oracle.maps
+        table = resolve_table(constituent, witnesses)
+        fixed = {
+            cv: src for cv, src in mapping.items() if not _is_var(src, oracle.variables)
+        }
+        renames = {
+            cv: src for cv, src in mapping.items() if _is_var(src, oracle.variables)
+        }
+        if isinstance(table, SparseMLE):
+            sliced = table.restrict(fixed)
+            sliced.variables = [renames[v] for v in sliced.variables]
+            return sliced
+        if not fixed:
+            return table.rename(renames)
+        table = table.evaluate(fixed, in_place=False)
+        table.variables = [renames[v] for v in table.variables]
+        return table
     raise TypeError(f"no table for oracle {oracle!r}")
 
 
@@ -169,6 +195,43 @@ class VirtualOracle:
             for c in constituents:
                 variables += [v for v in c.variables if v not in variables]
         return cls(variables, constituents, [(coeff, range(len(constituents)))])
+
+    @classmethod
+    def restriction(cls, constituent, variables: list, fixed: dict) -> VirtualOracle:
+        """The restriction of `constituent` to the slice `fixed`, a map from
+        some of its variables to the constants 0 or 1, the remaining ones
+        renamed, in order, to `variables`: the virtual oracle with the one
+        constituent, one term of coefficient 1 and that map -- how one
+        member of a family of tables packed into one oracle over slot
+        variables and table variables is read, the slot being a variable
+        map and nothing more. `resolve_table` resolves it to a slice of the
+        constituent's table; `is_restriction` recognises the form."""
+        free = [v for v in constituent.variables if v not in fixed]
+        if len(free) != len(variables):
+            raise ValueError(
+                f"the constituent has {len(free)} free variables, "
+                f"{len(variables)} names were given"
+            )
+        for bit in fixed.values():
+            if not isinstance(bit, int) or bit not in (0, 1):
+                raise ValueError("a restriction fixes variables to 0 or 1")
+        renames = dict(zip(free, variables, strict=True))
+        mapping = {cv: fixed.get(cv, renames.get(cv)) for cv in constituent.variables}
+        return cls(variables, [constituent], [(1, (0,))], [mapping])
+
+    def is_restriction(self) -> bool:
+        """Whether this oracle has the form `restriction` builds: one
+        constituent, one term of coefficient 1, every map source a variable
+        of this oracle or the constant 0 or 1."""
+        if len(self.constituents) != 1 or len(self.terms) != 1:
+            return False
+        coeff, idxs = self.terms[0]
+        if idxs != (0,) or not (isinstance(coeff, int) and coeff == 1):
+            return False
+        return all(
+            _is_var(src, self.variables) or (isinstance(src, int) and src in (0, 1))
+            for src in self.maps[0].values()
+        )
 
     @classmethod
     def linear(cls, coeffs: list, oracles: list[VirtualOracle]) -> VirtualOracle:
@@ -309,17 +372,23 @@ class VirtualOracle:
         self, witnesses: dict | None = None, strategy: str | None = None
     ) -> Any:
         """The prover's concrete form: every constituent resolved to a table
-        (`resolve_table`; sparse predicates stay sparse for the two-phase
-        strategy), with the round-message strategy chosen by `strategy`
-        (default: the class attribute)."""
+        (`resolve_table`), a constituent being sparse when its *resolved*
+        table is -- a sparse predicate, a restriction of a sparse table, an
+        implicit oracle whose stored table is sparse -- and kept sparse for
+        the two-phase strategy, materialized for the dense one; the
+        round-message strategy is chosen by `strategy` (default: the class
+        attribute)."""
         strategy = self.strategy if strategy is None else strategy
         tables: dict[int, MLE] = {}
         sparse: dict[int, SparseMLE] = {}
         for j, c in enumerate(self.constituents):
-            if isinstance(c, SparseMLE) and strategy != "dense":
-                sparse[j] = c
-            else:
-                tables[j] = self._dense_constituent(j, resolve_table(c, witnesses))
+            table = resolve_table(c, witnesses)
+            if isinstance(table, SparseMLE):
+                if strategy != "dense":
+                    sparse[j] = table
+                    continue
+                table = table.materialize()
+            tables[j] = self._dense_constituent(j, table)
         if sparse:
             libra = _LibraProver.build(self, tables, sparse)
             if libra is not None:
@@ -328,8 +397,8 @@ class VirtualOracle:
                 raise ValueError(
                     "this oracle's shape is not one the two-phase prover handles"
                 )
-            for j, c in sparse.items():
-                tables[j] = self._dense_constituent(j, c.materialize())
+            for j, table in sparse.items():
+                tables[j] = self._dense_constituent(j, table.materialize())
         ordered = [tables[j] for j in range(len(self.constituents))]
         return _ProverVirtual(self.variables, ordered, self.terms)
 
