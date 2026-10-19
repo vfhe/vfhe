@@ -24,6 +24,7 @@ from vfhe.piop import (
     element_digest,
     oracle_kind,
 )
+from vfhe.piop.virtual import resolve_table
 
 
 class _IntDomain:
@@ -323,3 +324,78 @@ def test_fiat_shamir_over_defined_oracles():
     assert any(label.startswith("sumcheck") for label in proofs[0].labels)
     bad = Statement(Relation_Sum(), oracles=[G], value=total + 1)
     assert not _iop(domain=ring, fiat_shamir=True).verify(bad, proofs[0])
+
+
+# --- restrictions ------------------------------------------------------------
+
+
+def test_sparse_restrict_is_the_dense_slice():
+    rng = random.Random(11)
+    v = _vars("t", "x0", "x1", "x2")
+    entries = {k: rng.randrange(1, 9) for k in rng.sample(range(16), 7)}
+    s = SparseMLE(variables=v, evaluations=entries, public=True)
+    dense = s.materialize()
+    for fixed in ({v[0]: 1}, {v[0]: 0, v[2]: 1}, {v[3]: 0}, {}):
+        sliced = s.restrict(fixed)
+        assert sliced.public and sliced.variables == [u for u in v if u not in fixed]
+        expected = dense.evaluate(fixed, in_place=False)
+        assert list(sliced.materialize().table) == list(expected.table)
+    # The whole table fixed: one entry, or none.
+    k = next(iter(entries))
+    point = {u: (k >> i) & 1 for i, u in enumerate(v)}
+    assert s.restrict(point).evaluations == {0: entries[k]}
+    # A slice, not a partial evaluation; and only this table's variables.
+    with pytest.raises(ValueError, match="0 or 1"):
+        s.restrict({v[0]: 2})
+    with pytest.raises(ValueError, match="not a variable"):
+        s.restrict({_vars("w")[0]: 0})
+
+
+def test_restriction_form_and_resolution():
+    t, x = _vars("t"), _vars("x0", "x1")
+    r = _vars("r0", "r1")
+    P = SparseMLE(variables=t + x, evaluations={0: 5, 3: 7, 6: 11})  # (t, x0, x1)
+    r0 = VirtualOracle.restriction(P, r, {t[0]: 0})
+    r1 = VirtualOracle.restriction(P, r, {t[0]: 1})
+    assert (
+        r0.is_restriction()
+        and r0.variables == r
+        and r0.maps[0]
+        == {
+            t[0]: 0,
+            x[0]: r[0],
+            x[1]: r[1],
+        }
+    )
+    assert oracle_kind(r0) is OracleKind.virtual and not r0.public
+    # Resolved: the slice at t, renamed to the restriction's variables.
+    s0, s1 = resolve_table(r0), resolve_table(r1)
+    assert isinstance(s0, SparseMLE) and s0.variables == r
+    assert s0.evaluations == {0: 5, 3: 11} and s1.evaluations == {1: 7}
+    # Through a witness: an implicit master whose stored table is sparse.
+    h = Implicit(t + x)
+    assert resolve_table(
+        VirtualOracle.restriction(h, r, {t[0]: 1}), {h: P}
+    ).evaluations == {1: 7}
+    # A dense constituent: the partial evaluation, renamed.
+    D = MLE(variables=t + x, evaluations=list(range(8)))
+    d1 = resolve_table(VirtualOracle.restriction(D, r, {t[0]: 1}))
+    assert isinstance(d1, MLE) and d1.variables == r
+    assert list(d1.table) == [1, 3, 5, 7]
+    # No fixed coordinate: a renaming.
+    rn = resolve_table(VirtualOracle.restriction(D, t + r, {}))
+    assert rn.variables == t + r and list(rn.table) == list(range(8))
+    # Not restrictions: a product, a scaled term, a slice at a non-bit.
+    with pytest.raises(TypeError, match="restriction"):
+        resolve_table(VirtualOracle.product([P, D]))
+    scaled = VirtualOracle(r, [P], [(2, (0,))], [r0.maps[0]])
+    assert not scaled.is_restriction()
+    with pytest.raises(TypeError):
+        resolve_table(scaled)
+    assert not r0.evaluate({r[0]: 3}).is_restriction()
+    with pytest.raises(ValueError):
+        VirtualOracle.restriction(P, r, {t[0]: 2})
+    with pytest.raises(ValueError):  # too few names for the free variables
+        VirtualOracle.restriction(P, r[:1], {t[0]: 1})
+    # The sparse table is never materialized by resolve_table.
+    assert resolve_table(P) is P
