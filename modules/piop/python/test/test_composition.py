@@ -1066,3 +1066,266 @@ def test_a_head_waits_for_every_claim(monkeypatch):
     iop = _iop(_IntDomain(), layering=layering)
     assert iop.run(stmt)
     assert starts == [1, 2, 1, 2]  # per party: k with one claim, c with both
+
+
+# --- a head in the index -----------------------------------------------------
+
+
+@with_start
+class _HadamardIdx(Relation):
+    """a = b ∘ c on the hypercube with a an *index* entry and the head
+    (`index = {"a": a}`, `head_index = "a"`), b and c the instance oracles,
+    plus the residual sum(b) = total."""
+
+    name = "hadamard_idx"
+    fields = ("oracles", "total")
+    index_fields = ("a",)
+    head_index = "a"
+
+    def check(self, statement):
+        b, c = statement.oracles
+        a = self.index["a"]
+        return (
+            list(a.table) == [x * y for x, y in zip(b.table, c.table, strict=True)]
+            and sum(b.table) == statement.total
+        )
+
+    def compute_head(self, statement):
+        b, c = statement.oracles
+        return _like(b, [x * y for x, y in zip(b.table, c.table, strict=True)])
+
+
+class _HadamardIdxStart(Protocol):
+    """`_HadamardStart` for `_HadamardIdx`: one sumcheck per claim, over the
+    instance oracles; the head is read from the statement."""
+
+    name = "hadamard_idx_start"
+    reduces_to = (Relation_Sum,)
+
+    async def prove(self, prover, statements):
+        return self._sums(statements)
+
+    async def verify(self, verifier, statements):
+        return self._sums(statements)
+
+    def _sums(self, statements):
+        (s,) = statements
+        b, c = s.oracles
+        out = []
+        for point, value in zip(s.points, s.values, strict=True):
+            r = [point[v] for v in s.head.variables]
+            eq = _like(b, _eq_weights(r, _one_of([b])), public=True)
+            g = VirtualOracle.product([b, c, eq])
+            out.append(self.reduce([s], oracles=[g], value=value))
+        return out
+
+
+def _hadamard_idx(ring=None, total=10):
+    """A headed statement of `_HadamardIdx`: the head derived from the index."""
+    x = _vars("x0", "x1")
+    b = MLE(ring=ring, variables=x, evaluations=[1, 2, 3, 4])
+    c = MLE(ring=ring, variables=x, evaluations=[5, 6, 7, 8])
+    a = Implicit(x)
+    return Statement(_HadamardIdx(index={"a": a}), oracles=(b, c), total=total), a
+
+
+def _idx_claims(a, values=(0, 0)):
+    x = a.variables
+    points = [{x[0]: 3, x[1]: 5}, {x[0]: 7, x[1]: 11}]
+    return [
+        Statement(Relation_Eval(), oracles=(a,), point=p, value=v)
+        for p, v in zip(points, values, strict=True)
+    ]
+
+
+def test_index_head_is_derived_from_the_index_entry():
+    stmt, a = _hadamard_idx()
+    assert stmt.head is a and stmt.relation.index_head() is a
+    assert stmt.relation.head_index == "a"
+    # Passing the entry is allowed; the same statement either way.
+    b, c = stmt.oracles
+    assert Statement(_HadamardIdx(index={"a": a}), oracles=(b, c), head=a).head is a
+    # A table in the entry: an ordinary statement, no head to derive.
+    product = _like(b, [5, 12, 21, 32])
+    plain = Statement(_HadamardIdx(index={"a": product}), oracles=(b, c), total=10)
+    assert plain.head is None and plain.check()
+    assert not Statement(
+        _HadamardIdx(index={"a": product}), oracles=(b, c), total=11
+    ).check()
+    assert stmt._fork().head is a and stmt.reduce_to(Relation_Sum, value=0).head is None
+    # Refusals: a head that is not the entry, an instance oracle offered as
+    # the head, a str head naming no index field.
+    with pytest.raises(ValueError, match="index entry"):
+        Statement(
+            _HadamardIdx(index={"a": a}), oracles=(b, c), head=Implicit(a.variables)
+        )
+    other = Implicit(a.variables)
+    with pytest.raises(ValueError, match="index entry"):
+        Statement(_HadamardIdx(index={"a": a}), oracles=(other, c), head=other)
+    with pytest.raises(TypeError):
+        Statement(_HadamardIdx(index={"a": a}), oracles=(b, c), head=b)  # pyright: ignore[reportArgumentType]
+
+    class _Nameless(Relation):
+        name = "nameless"
+        fields = ("oracles",)
+        index_fields = ("a",)
+        head_index = "b"
+
+    with pytest.raises(TypeError, match="index fields"):
+        with_start(_Nameless)
+    with pytest.raises(TypeError, match="index fields"):
+        _Nameless(index={"a": a}).index_head()
+
+
+def test_index_head_start_relation_and_check():
+    Start = _HadamardIdx.Start
+    assert Start.head_index == "a" and Start.index_fields == ("a",)
+    assert Start.fields == ("oracles", "total", "points", "values")
+    stmt, a = _hadamard_idx()
+    product = _like(stmt.oracles[0], [5, 12, 21, 32])
+    claims = _idx_claims(a, [_at(product, c.point) for c in _idx_claims(a)])
+    started = stmt.relation.start(stmt, claims)
+    assert isinstance(started.relation, Start)
+    assert started.head is a and started.index == stmt.index  # the same index
+    assert started.index["a"] is a
+    assert started.oracles == stmt.oracles and started.total == 10
+    assert started.check()
+    assert started.relation.compute_head(started).table == product.table
+    # One wrong claim fails it; so does the residual (sum(b) = total).
+    wrong = stmt.relation.start(stmt, [claims[0], _idx_claims(a, (0, 1))[1]])
+    assert not wrong.check()
+    bad = Statement(_HadamardIdx(index={"a": a}), oracles=stmt.oracles, total=11)
+    assert not bad.relation.start(bad, claims).check()
+    with pytest.raises(ValueError):  # a claim on another oracle
+        stmt.relation.start(
+            stmt,
+            [Statement(Relation_Eval(), oracles=(stmt.oracles[0],), point={}, value=0)],
+        )
+
+
+def _idx_iop(domain, **kw):
+    iop = IOP(domain=domain, **kw)
+    iop.register(_HadamardIdx.Start, _HadamardIdxStart())
+    iop.register(Relation_Sum, Sumcheck())
+    iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+    return iop
+
+
+def test_index_head_started_statement_as_a_root():
+    # The started statement is a root whose index holds an Implicit: its own
+    # head, the one exemption to the root rule. Ideal model, then Fiat-Shamir.
+    stmt, a = _hadamard_idx()
+    product = _like(stmt.oracles[0], [5, 12, 21, 32])
+    claims = _idx_claims(a, [_at(product, c.point) for c in _idx_claims(a)])
+    started = stmt.relation.start(stmt, claims)
+    iop = _idx_iop(_IntDomain())
+    assert iop.run(started)
+    assert iop.transcript.order[0] == "sumcheck/0/0/g0"
+    wrong = stmt.relation.start(stmt, [claims[0], _idx_claims(a, (0, 1))[1]])
+    assert not _idx_iop(_IntDomain(1)).run(wrong)
+
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    stmt, a = _hadamard_idx(ring)
+    product = _like(stmt.oracles[0], [5, 12, 21, 32])
+    claims = _idx_claims(a, [_at(product, c.point) for c in _idx_claims(a)])
+    started = stmt.relation.start(stmt, claims)
+    proof = _idx_iop(ring, fiat_shamir=True).prove(started)
+    assert _idx_iop(ring, fiat_shamir=True).verify(started, proof)
+    assert proof.digest() == _idx_iop(ring, fiat_shamir=True).prove(started).digest()
+    wrong = stmt.relation.start(stmt, [claims[0], _idx_claims(a, (0, 1))[1]])
+    assert not _idx_iop(ring, fiat_shamir=True).verify(wrong, proof)
+    assert not _idx_iop(ring, fiat_shamir=True).run(wrong)
+
+
+class _WeightedSum(Relation):
+    """sum_i b(i) w(i) = total, the weight w an index oracle and the only
+    instance oracle b: `index = {"weight": w}`, `fields = ("oracles", "total")`."""
+
+    name = "weighted_sum"
+    fields = ("oracles", "total")
+    index_fields = ("weight",)
+
+    def check(self, statement):
+        (b,) = statement.oracles
+        w = self.index["weight"]
+        return sum(x * y for x, y in zip(b.table, w.table, strict=True)) == (
+            statement.total
+        )
+
+
+class _WeightedSumProtocol(Protocol):
+    """`_WeightedSum` -> the Sum claim over b * w, w read from the index."""
+
+    reduces_from = _WeightedSum
+    reduces_to = (Relation_Sum,)
+
+    async def prove(self, prover, statements):
+        return self._sum(statements)
+
+    async def verify(self, verifier, statements):
+        return self._sum(statements)
+
+    def _sum(self, statements):
+        (s,) = statements
+        (b,) = s.oracles
+        g = VirtualOracle.product([b, s.index["weight"]])
+        return [self.reduce([s], oracles=[g], value=s.total)]
+
+
+class _ChainIdx(_Chain):
+    """`_Chain` (sum b (d ∘ e) = total) whose layering goes through indexes:
+    L_0 reads the product c through the index of `_WeightedSum`, L_1 defines
+    c as the index head of `_HadamardIdx`; no instance oracle mentions c."""
+
+    name = "chain_idx"
+
+
+def _chain_idx_layering(root):
+    b, d, e = root.oracles
+    c = Implicit(b.variables)
+    return [
+        [
+            root.reduce_to(
+                _WeightedSum(index={"weight": c}), oracles=(b,), total=root.total
+            )
+        ],
+        [
+            root.reduce_to(
+                _HadamardIdx(index={"a": c}), oracles=(d, e), total=sum(d.table)
+            )
+        ],
+    ]
+
+
+def test_layering_through_index_heads():
+    stmt = _chain_instance(total=290, relation=_ChainIdx())
+    assert stmt.check()
+    iop = _idx_iop(_IntDomain())
+    iop.register(_ChainIdx, compose(_chain_idx_layering, name="chain_idx"))
+    iop.register(_WeightedSum, _WeightedSumProtocol())
+    assert iop.run(stmt)
+    (c,) = [o for o in iop.prover.witnesses if isinstance(o, Implicit)]
+    assert list(iop.prover.witnesses[c].table) == [10, 18, 28, 40]
+    order = iop.transcript.order
+    first = {
+        tag: next(i for i, k in enumerate(order) if k.startswith(tag))
+        for tag in ("virtual/0/", "sumcheck/1/")
+    }
+    assert first["virtual/0/"] < first["sumcheck/1/"]  # c's claim, then its layer
+    # The L_1 statement was headed through its index, with no `head=` passed.
+    layers = _chain_idx_layering(stmt._fork())
+    assert layers[1][0].head is layers[1][0].index["a"]
+    assert layers[0][0].head is None
+    bad = _idx_iop(_IntDomain(1))
+    bad.register(_ChainIdx, compose(_chain_idx_layering, name="chain_idx"))
+    bad.register(_WeightedSum, _WeightedSumProtocol())
+    assert not bad.run(_chain_instance(total=291, relation=_ChainIdx()))
+    # A root whose index holds an Implicit that is not its head is refused.
+    x = _vars("x0", "x1")
+    root = Statement(
+        _WeightedSum(index={"weight": Implicit(x)}),
+        oracles=(_table(x, [1] * 4),),
+        total=0,
+    )
+    with pytest.raises(TypeError, match="implicit"):
+        _idx_iop(_IntDomain()).run(root)

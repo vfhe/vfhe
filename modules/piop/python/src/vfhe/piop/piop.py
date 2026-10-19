@@ -350,11 +350,13 @@ class Relation:
     the fully-reduced leaf statements — not the succinct verifier.
 
     A relation may declare that one of its oracles is determined by the
-    others: `head_index` names that position in `oracles`, and
+    others: `head_index` names it, either by its position in `oracles` (an
+    `int`) or by the name of the index field holding it (a `str`), and
     `compute_head(statement)` computes its table from the other oracles of
     the statement (given concrete tables, the prover view). A statement of
     such a relation may then carry that oracle as its `head` (an `Implicit`
-    handle), and `with_start` derives the companion relation and the
+    handle) -- for an index head the statement derives it from the index
+    entry -- and `with_start` derives the companion relation and the
     `start` method the Composer uses. `check` ignores the head: it decides
     the relation on whatever the statement's oracles are.
 
@@ -365,7 +367,7 @@ class Relation:
     name = "abstract"
     fields: tuple[str, ...] = ()
     index_fields: tuple[str, ...] = ()
-    head_index: int | None = None
+    head_index: int | str | None = None
     Start: ClassVar[type[Relation]]  # set by `with_start`
     base: ClassVar[type[Relation]]  # on a start relation: what it derives from
 
@@ -404,6 +406,20 @@ class Relation:
 
         _map_oracles(self.index, collect)
         return tuple(found)
+
+    def index_head(self):
+        """The index entry a `str` `head_index` names (an `Implicit` for a
+        headed statement, a table otherwise); `None` for a relation whose
+        head is an instance oracle or which has none."""
+        name = self.head_index
+        if not isinstance(name, str):
+            return None
+        if name not in self.index_fields:
+            raise TypeError(
+                f"{type(self).__name__}.head_index names {name!r}, which is not "
+                f"one of its index fields {self.index_fields}"
+            )
+        return self.index[name]
 
     def index_digest(self) -> bytes:
         """The digest of a declared index: the chain of the entries in the
@@ -551,10 +567,13 @@ class Statement:
     this statement's position in the DAG (root `""`; j-th child of `p` is
     `f"{p}/{j}"`), identical on both sides, and namespaces the transcript.
     `head`, structural like `parents` and `path` (not a field, never
-    digested), marks the statement as *headed*: the oracle at the relation's
-    `head_index` is an `Implicit` handle whose table the relation computes
-    from the others, and a Composer consumes the evaluation claims on it at
-    this statement's layer. `None` (the default) is an ordinary statement.
+    digested), marks the statement as *headed*: the oracle the relation's
+    `head_index` names is an `Implicit` handle whose table the relation
+    computes from the others, and a Composer consumes the evaluation claims
+    on it at this statement's layer. `None` (the default) is an ordinary
+    statement -- except for a relation whose head is an index entry, where
+    the head is derived: that entry when it is an `Implicit`, `None` when it
+    is a table, and a `head` that is passed must be that entry.
     """
 
     def __init__(
@@ -669,8 +688,22 @@ def statement_oracles(statement: Statement) -> tuple:
 
 
 def _checked_head(relation: Relation, fields: dict, head) -> Implicit | None:
-    """`head` validated against the relation: None, or the `Implicit` handle at
-    the relation's `head_index` among the statement's oracles."""
+    """`head` validated against the relation: None, or the `Implicit` handle
+    the relation's `head_index` names, among the statement's oracles or in
+    its index. For an index head `None` means *derived*: the index entry when
+    it is an `Implicit`, else no head."""
+    if isinstance(relation.head_index, str):
+        entry = relation.index_head()
+        if head is None:
+            return entry if isinstance(entry, Implicit) else None
+        if not isinstance(head, Implicit):
+            raise TypeError("a head must be an Implicit oracle")
+        if head is not entry:
+            raise ValueError(
+                f"the head of a {type(relation).__name__} statement is its index "
+                f"entry {relation.head_index!r}, which this head is not"
+            )
+        return head
     if head is None:
         return None
     if relation.head_index is None:
@@ -705,12 +738,16 @@ def _reduce(
 
 def _with_head_table(statement: Statement, base: Relation, table) -> Statement:
     """`statement` as `base`'s ideal decider sees it once the head is known:
-    the base relation's fields, with `table` in the head's place among the
-    oracles and no head (every oracle is a table now)."""
+    the base relation's fields, with `table` in the head's place -- among the
+    oracles, or in the index entry, the relation then rebuilt over that
+    index -- and no head (every oracle is a table now)."""
+    fields = {n: statement.fields[n] for n in base.fields if n in statement.fields}
+    if isinstance(base.head_index, str):
+        base = type(base)(index={**base.index, base.head_index: table})
+        return Statement(base, **fields)
     assert base.head_index is not None
     oracles = list(statement.oracles)
     oracles[base.head_index] = table
-    fields = {n: statement.fields[n] for n in base.fields if n in statement.fields}
     fields["oracles"] = tuple(oracles)
     return Statement(base, **fields)
 
@@ -729,7 +766,10 @@ def with_start(cls: type[_R]) -> type[_R]:
     that is `R` with its head *bound* to the oracle it defines, plus
     evaluation claims on that oracle (k >= 1 of them) at points the statement
     carries as data. Its statements are `R`'s with two more fields, `points`
-    and `values`; the oracles and the head are the same. The decider is
+    and `values`; the oracles, the index and the head are the same (a head
+    named by an index field stays in the index, so a started statement of a
+    relation with no instance fields is nothing but the index and the
+    claims). The decider is
     generic: materialize the head with `compute_head`, decide `R` with that
     table in the head's place (the residual), then one `Relation_Eval` check
     per claim. The decorator also installs `R.start(statement, claims)`, which
@@ -741,6 +781,11 @@ def with_start(cls: type[_R]) -> type[_R]:
     """
     if cls.head_index is None:
         raise TypeError(f"{cls.__name__} declares no head_index; nothing to start")
+    if isinstance(cls.head_index, str) and cls.head_index not in cls.index_fields:
+        raise TypeError(
+            f"{cls.__name__}.head_index names {cls.head_index!r}, which is not "
+            f"one of its index fields {cls.index_fields}"
+        )
     base_cls = cls
 
     class Start(Relation):
