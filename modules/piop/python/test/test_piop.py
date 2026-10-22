@@ -13,18 +13,18 @@ import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import (
     IOP,
-    Implicit,
+    CommittedOracle,
+    ImplicitOracle,
     Protocol,
     Relation,
     Relation_Eval,
-    Relation_Sum,
-    Relation_SumProd,
-    Relation_Zero,
     Statement,
+    TableOracle,
     Value,
     element_digest,
 )
-from vfhe.piop.piop import statement_oracles
+from vfhe.piop.relation import statement_oracles
+from vfhe.piop.relations import Relation_Sum, Relation_SumProd, Relation_Zero
 
 
 def _coeff_mle():
@@ -35,22 +35,26 @@ def _coeff_mle():
 
 def test_relation_sum_coeff_basis():
     _, f = _coeff_mle()
-    assert Statement(Relation_Sum(), oracles=[f], value=18).check()
-    assert not Statement(Relation_Sum(), oracles=[f], value=17).check()
+    assert Statement(Relation_Sum(), oracles=[TableOracle(f)], value=18).check()
+    assert not Statement(Relation_Sum(), oracles=[TableOracle(f)], value=17).check()
 
 
 def test_relation_zero_coeff_basis():
     v, f = _coeff_mle()
     zero = MLE(variables=v, coefficients=[0, 0, 0, 0])
-    assert Statement(Relation_Zero(), oracles=[zero]).check()
-    assert not Statement(Relation_Zero(), oracles=[f]).check()
+    assert Statement(Relation_Zero(), oracles=[TableOracle(zero)]).check()
+    assert not Statement(Relation_Zero(), oracles=[TableOracle(f)]).check()
 
 
 def test_relation_eval_coeff_basis():
     v, f = _coeff_mle()
     point = {v[0]: 2, v[1]: 3}  # f(2, 3) = 1 + 4 + 9 + 24 = 38
-    assert Statement(Relation_Eval(), oracles=[f], point=point, value=38).check()
-    assert not Statement(Relation_Eval(), oracles=[f], point=point, value=39).check()
+    assert Statement(
+        Relation_Eval(), oracles=[TableOracle(f)], point=point, value=38
+    ).check()
+    assert not Statement(
+        Relation_Eval(), oracles=[TableOracle(f)], point=point, value=39
+    ).check()
 
 
 def test_relations_mle_dense():
@@ -59,24 +63,34 @@ def test_relations_mle_dense():
     f = MLE(ring=ring, variables=v, evaluations=[1, 2, 3, 4])
     zero = MLE(ring=ring, variables=v, evaluations=[0, 0, 0, 0])
 
-    assert Statement(Relation_Sum(), oracles=[f], value=10).check()
-    assert not Statement(Relation_Sum(), oracles=[f], value=11).check()
-    assert Statement(Relation_Zero(), oracles=[zero]).check()
-    assert not Statement(Relation_Zero(), oracles=[f]).check()
+    assert Statement(Relation_Sum(), oracles=[TableOracle(f)], value=10).check()
+    assert not Statement(Relation_Sum(), oracles=[TableOracle(f)], value=11).check()
+    assert Statement(Relation_Zero(), oracles=[TableOracle(zero)]).check()
+    assert not Statement(Relation_Zero(), oracles=[TableOracle(f)]).check()
     # f(2, 3) = 9 (see test_mle.py::test_mle_full_evaluation).
     point = {v[0]: 2, v[1]: 3}
-    assert Statement(Relation_Eval(), oracles=[f], point=point, value=9).check()
+    assert Statement(
+        Relation_Eval(), oracles=[TableOracle(f)], point=point, value=9
+    ).check()
 
 
 def test_relation_sumprod():
     v, f = _coeff_mle()
     g = MLE(variables=v, coefficients=[2, 0, 1, 0])  # 2 + x1
     # f*g over {0,1}^2: 1*2 + 3*2 + 4*3 + 10*3 = 50
-    assert Statement(Relation_SumProd(), oracles=[f, g], value=50).check()
-    assert not Statement(Relation_SumProd(), oracles=[f, g], value=49).check()
+    assert Statement(
+        Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=50
+    ).check()
+    assert not Statement(
+        Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=49
+    ).check()
     h = MLE(variables=v, coefficients=[0, 1, 0, 0])  # x0
     # f*g*h: 0 + 3*2*1 + 0 + 10*3*1 = 36
-    assert Statement(Relation_SumProd(), oracles=[f, g, h], value=36).check()
+    assert Statement(
+        Relation_SumProd(),
+        oracles=[TableOracle(f), TableOracle(g), TableOracle(h)],
+        value=36,
+    ).check()
 
 
 def test_relation_sumprod_mle_dense():
@@ -85,13 +99,17 @@ def test_relation_sumprod_mle_dense():
     f = MLE(ring=ring, variables=v, evaluations=[1, 2, 3, 4])
     g = MLE(ring=ring, variables=v, evaluations=[2, 2, 3, 3])
     # elementwise products summed: 1*2 + 2*2 + 3*3 + 4*3 = 27
-    assert Statement(Relation_SumProd(), oracles=[f, g], value=27).check()
-    assert not Statement(Relation_SumProd(), oracles=[f, g], value=28).check()
+    assert Statement(
+        Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=27
+    ).check()
+    assert not Statement(
+        Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=28
+    ).check()
 
 
 def test_reduce_to_chaining():
     v, f = _coeff_mle()
-    sum_stmt = Statement(Relation_Sum(), oracles=[f], value=18)
+    sum_stmt = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=18)
     eval_stmt = sum_stmt.reduce_to(Relation_Eval(), point={v[0]: 2, v[1]: 3}, value=38)
     assert eval_stmt.parents == (sum_stmt,)
     assert eval_stmt.oracles == sum_stmt.oracles  # inherited by default
@@ -131,19 +149,27 @@ def test_run_forks_root_so_child_paths_agree():
     iop = IOP()
     iop.register(Relation_Sum, _Emit())
     iop.register(Relation_Eval, _Recorder())
-    stmt = Statement(Relation_Sum(), oracles=[f], value=18)
+    stmt = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=18)
     assert iop.run(stmt)
     assert iop.prover.state["path"] == iop.verifier.state["path"] == "/0"
     assert stmt._children == 0  # the parties drove forks, not the root
 
 
+def test_statement_names_oracles_not_tables():
+    _, f = _coeff_mle()
+    with pytest.raises(TypeError, match="TableOracle"):
+        Statement(Relation_Sum(), oracles=[f], value=18)
+
+
 def test_statement_dynamic_fields():
     _, f = _coeff_mle()
-    stmt = Statement(Relation_Sum(), oracles=[f], value=18)
+    stmt = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=18)
     assert list(stmt.fields) == ["oracles", "value"]  # canonical order
     with pytest.raises(TypeError):
-        Statement(Relation_Sum(), oracles=[f], point={})  # not a Sum field
-    assert Statement(Relation_Sum(), oracles=[f]).value is None  # declared, unset
+        Statement(Relation_Sum(), oracles=[TableOracle(f)], point={})  # not a Sum field
+    assert (
+        Statement(Relation_Sum(), oracles=[TableOracle(f)]).value is None
+    )  # declared, unset
     with pytest.raises(AttributeError):
         _ = stmt.nonsense
 
@@ -184,16 +210,17 @@ def test_batching_driver_groups_frontier():
     iop = IOP()
     iop.register(Relation_Zero, _Split())
     iop.register(Relation_Sum, _CountBatch())
-    assert iop.run(Statement(Relation_Zero(), oracles=[zero]))
+    assert iop.run(Statement(Relation_Zero(), oracles=[TableOracle(zero)]))
     assert sizes == [2, 2]  # both parties got the two Sum claims in one bundle
 
 
-def test_relation_eval_commitment_only_has_no_decider():
-    # An eval claim may carry a commitment instead of (or beside) the
-    # oracle; without the oracle there is no witness-free decider — such
-    # claims must be discharged by a registered PCS protocol.
-    stmt = Statement(Relation_Eval(), commitment=object(), point={}, value=0)
-    with pytest.raises(NotImplementedError, match="commitment-only"):
+def test_relation_eval_on_a_committed_oracle_has_no_decider():
+    # An eval claim on a committed oracle has no table to query: no
+    # witness-free decider, so such claims must be discharged by a
+    # registered PCS protocol.
+    f = CommittedOracle([], commitment=object())
+    stmt = Statement(Relation_Eval(), oracles=(f,), point={}, value=0)
+    with pytest.raises(NotImplementedError, match="committed oracle"):
         stmt.check()
 
 
@@ -220,7 +247,10 @@ def test_statement_resolution():
         v, f = _coeff_mle()
         r0, r1, claimed = Value(), Value(), Value()
         stmt = Statement(
-            Relation_Eval(), oracles=[f], point={v[0]: r0, v[1]: r1}, value=claimed
+            Relation_Eval(),
+            oracles=[TableOracle(f)],
+            point={v[0]: r0, v[1]: r1},
+            value=claimed,
         )
         with pytest.raises(RuntimeError):
             stmt.check()  # challenges still pending
@@ -270,9 +300,9 @@ def test_relation_index_fields_take_a_mapping_over_exactly_those_names():
 
 def test_index_oracles_walk_tuples_lists_and_mappings():
     x = _vars("x0")
-    t1 = MLE(variables=x, evaluations=[1, 2])
-    t2 = MLE(variables=x, evaluations=[3, 4])
-    h = Implicit(x)
+    t1 = TableOracle(MLE(variables=x, evaluations=[1, 2]))
+    t2 = TableOracle(MLE(variables=x, evaluations=[3, 4]))
+    h = ImplicitOracle(x)
     r = _Indexed(index={"a": (t1, {"k": [t2, 5]}, "data"), "b": h})
     assert r.index_oracles() == (t1, t2, h)  # declared order, data skipped
     assert _Indexed(index={"a": 1, "b": "two"}).index_oracles() == ()
@@ -283,7 +313,7 @@ def test_index_oracles_walk_tuples_lists_and_mappings():
 
 
 def test_index_digest_follows_the_declared_order_and_is_computed_once(monkeypatch):
-    import vfhe.piop.piop as piop
+    import vfhe.piop.relation as relation
 
     r1 = _Indexed(index={"a": 1, "b": 2})
     r2 = _Indexed(index={"b": 2, "a": 1})  # another insertion order
@@ -291,14 +321,16 @@ def test_index_digest_follows_the_declared_order_and_is_computed_once(monkeypatc
     assert r1.index_digest() != _Indexed(index={"a": 2, "b": 1}).index_digest()
     # A statement's digest goes through it, so it is insertion-order free too.
     x = _vars("x0")
-    t = MLE(variables=x, evaluations=[1, 2])
+    t = TableOracle(MLE(variables=x, evaluations=[1, 2]))
     assert element_digest(Statement(r1, oracles=(t,))) == element_digest(
         Statement(r2, oracles=(t,))
     )
     # Computed once per instance: a second call hashes nothing.
     calls = []
-    digest = piop.element_digest
-    monkeypatch.setattr(piop, "element_digest", lambda v: calls.append(v) or digest(v))
+    digest = relation.element_digest
+    monkeypatch.setattr(
+        relation, "element_digest", lambda v: calls.append(v) or digest(v)
+    )
     fresh = _Indexed(index={"a": 1, "b": 2})
     first = fresh.index_digest()
     assert len(calls) == 4  # two names, two values
@@ -327,8 +359,8 @@ def test_a_root_whose_index_holds_an_implicit_oracle_is_refused():
             return True
 
     x = _vars("x0")
-    f = MLE(variables=x, evaluations=[1, 2])
-    stmt = Statement(_Reads(index={"t": Implicit(x)}), oracles=(f,))
+    f = TableOracle(MLE(variables=x, evaluations=[1, 2]))
+    stmt = Statement(_Reads(index={"t": ImplicitOracle(x)}), oracles=(f,))
     with pytest.raises(TypeError, match="implicit"):
         IOP().run(stmt)
     with pytest.raises(TypeError, match="implicit"):

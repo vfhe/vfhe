@@ -10,20 +10,19 @@ import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
 from vfhe.piop import (
     IOP,
-    Implicit,
+    CommittedOracle,
+    ImplicitOracle,
     OracleKind,
     Protocol,
     Relation,
     Relation_Eval,
-    Relation_Sum,
-    Relation_Zero,
     Statement,
-    Sumcheck,
-    VirtualEval,
+    TableOracle,
     VirtualOracle,
     element_digest,
-    oracle_kind,
 )
+from vfhe.piop.protocols import Sumcheck, VirtualEval
+from vfhe.piop.relations import Relation_Sum, Relation_Zero
 from vfhe.piop.virtual import resolve_table
 
 
@@ -51,30 +50,27 @@ def _iop(domain=None, **kw):
 
 def test_oracle_kinds():
     x = _vars("x0")
-    f = MLE(variables=x, evaluations=[1, 2])
-    g = VirtualOracle.product([f])
-    assert oracle_kind(f) is OracleKind.plain
-    assert (
-        oracle_kind(MLE(variables=x, evaluations=[1, 2], public=True))
-        is OracleKind.public
-    )
-    assert oracle_kind(f, commitment=object()) is OracleKind.committed
-    assert oracle_kind(g) is OracleKind.virtual
-    assert oracle_kind(Implicit(x)) is OracleKind.implicit
+    table = MLE(variables=x, evaluations=[1, 2])
+    f = TableOracle(table)
+    assert f.kind is OracleKind.plain and not f.public
+    assert f.polynomial is table and f.variables == x and f.num_vars == 1
+    assert f.query({x[0]: 3}) == 1 + 3 * (2 - 1)
+    public = TableOracle(MLE(variables=x, evaluations=[1, 2]), public=True)
+    assert public.kind is OracleKind.public and public.public
+    assert CommittedOracle(x, commitment=object()).kind is OracleKind.committed
+    assert VirtualOracle.product([f]).kind is OracleKind.virtual
+    assert ImplicitOracle(x).kind is OracleKind.implicit
     v = _vars("y0", "y1", "y2")
-    assert oracle_kind(SparseMLE(variables=v, evaluations={5: 3}, public=True)) is (
-        OracleKind.public
-    )
-    # A table tagged by a commitment scheme is committed; one carrying both
-    # marks is refused (public and committed are two discharges, not two
-    # properties).
-    tagged = MLE(variables=x, evaluations=[1, 2])
-    tagged.kind = OracleKind.committed  # pyright: ignore[reportAttributeAccessIssue]
-    assert oracle_kind(tagged) is OracleKind.committed
-    both = MLE(variables=x, evaluations=[1, 2], public=True)
-    both.kind = OracleKind.committed  # pyright: ignore[reportAttributeAccessIssue]
-    with pytest.raises(ValueError, match="public or committed"):
-        oracle_kind(both)
+    sparse = TableOracle(SparseMLE(variables=v, evaluations={5: 3}), public=True)
+    assert sparse.kind is OracleKind.public
+    # An oracle wraps an arith table, never another oracle or a bare value;
+    # a virtual oracle is defined over oracles, not tables.
+    with pytest.raises(TypeError):
+        TableOracle(f)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        TableOracle(3)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError, match="TableOracle"):
+        VirtualOracle.product([table])
 
 
 def test_sparse_mle_digest_is_canonical():
@@ -96,9 +92,9 @@ def test_virtual_products_form_sumcheck():
     # g and h, decided by the verifier in the ideal model.
     x = _vars("x0", "x1")
     x1 = x[1]
-    f = MLE(variables=x, evaluations=[1, 2, 3, 4])
-    g = MLE(variables=x, evaluations=[5, 6, 7, 8])
-    h = MLE(variables=[x1], evaluations=[9, 10])
+    f = TableOracle(MLE(variables=x, evaluations=[1, 2, 3, 4]))
+    g = TableOracle(MLE(variables=x, evaluations=[5, 6, 7, 8]))
+    h = TableOracle(MLE(variables=[x1], evaluations=[9, 10]))
     G = VirtualOracle(x, [f, g, h], terms=[(1, (0, 1)), (3, (2,))])
     assert G.degree == 2
     total = 1 * 5 + 2 * 6 + 3 * 7 + 4 * 8 + 3 * (9 + 9 + 10 + 10)
@@ -118,7 +114,7 @@ def test_virtual_same_oracle_under_two_maps():
     # on W at two points.
     w = _vars("w0", "w1")
     xs, ys = _vars("x0", "x1"), _vars("y0", "y1")
-    W = MLE(variables=w, evaluations=[1, 2, 3, 4])
+    W = TableOracle(MLE(variables=w, evaluations=[1, 2, 3, 4]))
     maps = [dict(zip(w, xs, strict=True)), dict(zip(w, ys, strict=True))]
     G = VirtualOracle(xs + ys, [W, W], terms=[(1, (0, 1))], maps=maps)
     stmt = Statement(Relation_Sum(), oracles=[G], value=100)
@@ -145,8 +141,8 @@ def test_virtual_same_oracle_under_two_maps():
 
 def test_virtual_claims_dedupe_and_skip_public():
     x = _vars("x0", "x1")
-    W = MLE(variables=x, evaluations=[1, 2, 3, 4])
-    E = MLE(variables=x, evaluations=[1, 0, 0, 1], public=True)
+    W = TableOracle(MLE(variables=x, evaluations=[1, 2, 3, 4]))
+    E = TableOracle(MLE(variables=x, evaluations=[1, 0, 0, 1]), public=True)
     # G = E * W + W: three constituents, one public, W twice at the same point.
     G = VirtualOracle(x, [E, W, W], terms=[(1, (0, 1)), (1, (2,))])
     claims = G.claims({x[0]: 5, x[1]: 7})
@@ -184,7 +180,7 @@ def test_parking_rule_waits_for_all_claims_on_an_oracle():
             (x0, x1) = f.variables
             return [
                 self.reduce(statements, Relation_Eval, point={x0: 1, x1: 1}, value=4),
-                self.reduce(statements, Relation_Sum, value=sum(f.table)),
+                self.reduce(statements, Relation_Sum, value=sum(f.polynomial.table)),
             ]
 
     class _Bundle(Protocol):
@@ -201,7 +197,7 @@ def test_parking_rule_waits_for_all_claims_on_an_oracle():
             return []
 
     x = _vars("x0", "x1")
-    f = MLE(variables=x, evaluations=[1, 2, 3, 4])
+    f = TableOracle(MLE(variables=x, evaluations=[1, 2, 3, 4]))
     iop = _iop()
     iop.register(Relation_Zero, _Split())
     iop.register(Relation_Eval, _Bundle())
@@ -256,7 +252,10 @@ def test_parking_rule_sees_an_oracle_read_through_the_index():
             (x0, x1) = f.variables
             return [
                 self.reduce(
-                    statements, oracles=[f], point={x0: 0, x1: 0}, value=f.table[0]
+                    statements,
+                    oracles=[f],
+                    point={x0: 0, x1: 0},
+                    value=f.polynomial.table[0],
                 )
             ]
 
@@ -274,7 +273,7 @@ def test_parking_rule_sees_an_oracle_read_through_the_index():
             return []
 
     x = _vars("x0", "x1")
-    f = MLE(variables=x, evaluations=[1, 2, 3, 4])
+    f = TableOracle(MLE(variables=x, evaluations=[1, 2, 3, 4]))
     iop = _iop()
     iop.register(Relation_Zero, _Split())
     iop.register(_Reads, _Open())
@@ -298,7 +297,7 @@ def test_public_eval_is_terminal_even_with_a_default_protocol():
             return []
 
     x = _vars("x0")
-    e = MLE(variables=x, evaluations=[3, 4], public=True)
+    e = TableOracle(MLE(variables=x, evaluations=[3, 4]), public=True)
     iop = _iop()
     iop.register(Relation_Eval, _Never())
     assert iop.run(Statement(Relation_Eval(), oracles=[e], point={x[0]: 2}, value=5))
@@ -308,8 +307,8 @@ def test_public_eval_is_terminal_even_with_a_default_protocol():
 def test_fiat_shamir_over_defined_oracles():
     ring = Ring(1024, prime_size=[49], split_degree=4)
     w = _vars("w0", "w1")
-    W = MLE(ring=ring, variables=w, evaluations=[2, 3, 5, 7])
-    E = MLE(ring=ring, variables=w, evaluations=[1, 0, 0, 1], public=True)
+    W = TableOracle(MLE(ring=ring, variables=w, evaluations=[2, 3, 5, 7]))
+    E = TableOracle(MLE(ring=ring, variables=w, evaluations=[1, 0, 0, 1]), public=True)
     G = VirtualOracle(w, [E, W, W], terms=[(1, (0, 1)), (1, (2,))])  # E W + W
     # The sumcheck's challenges come from the chain; VirtualEval ends it.
     total = (2 + 7) + (2 + 3 + 5 + 7)
@@ -333,11 +332,11 @@ def test_sparse_restrict_is_the_dense_slice():
     rng = random.Random(11)
     v = _vars("t", "x0", "x1", "x2")
     entries = {k: rng.randrange(1, 9) for k in rng.sample(range(16), 7)}
-    s = SparseMLE(variables=v, evaluations=entries, public=True)
+    s = SparseMLE(variables=v, evaluations=entries)
     dense = s.materialize()
     for fixed in ({v[0]: 1}, {v[0]: 0, v[2]: 1}, {v[3]: 0}, {}):
         sliced = s.restrict(fixed)
-        assert sliced.public and sliced.variables == [u for u in v if u not in fixed]
+        assert sliced.variables == [u for u in v if u not in fixed]
         expected = dense.evaluate(fixed, in_place=False)
         assert list(sliced.materialize().table) == list(expected.table)
     # The whole table fixed: one entry, or none.
@@ -354,7 +353,8 @@ def test_sparse_restrict_is_the_dense_slice():
 def test_restriction_form_and_resolution():
     t, x = _vars("t"), _vars("x0", "x1")
     r = _vars("r0", "r1")
-    P = SparseMLE(variables=t + x, evaluations={0: 5, 3: 7, 6: 11})  # (t, x0, x1)
+    sparse = SparseMLE(variables=t + x, evaluations={0: 5, 3: 7, 6: 11})  # (t, x0, x1)
+    P = TableOracle(sparse)
     r0 = VirtualOracle.restriction(P, r, {t[0]: 0})
     r1 = VirtualOracle.restriction(P, r, {t[0]: 1})
     assert (
@@ -367,18 +367,18 @@ def test_restriction_form_and_resolution():
             x[1]: r[1],
         }
     )
-    assert oracle_kind(r0) is OracleKind.virtual and not r0.public
+    assert r0.kind is OracleKind.virtual and not r0.public
     # Resolved: the slice at t, renamed to the restriction's variables.
     s0, s1 = resolve_table(r0), resolve_table(r1)
     assert isinstance(s0, SparseMLE) and s0.variables == r
     assert s0.evaluations == {0: 5, 3: 11} and s1.evaluations == {1: 7}
     # Through a witness: an implicit master whose stored table is sparse.
-    h = Implicit(t + x)
+    h = ImplicitOracle(t + x)
     assert resolve_table(
-        VirtualOracle.restriction(h, r, {t[0]: 1}), {h: P}
+        VirtualOracle.restriction(h, r, {t[0]: 1}), {h: sparse}
     ).evaluations == {1: 7}
     # A dense constituent: the partial evaluation, renamed.
-    D = MLE(variables=t + x, evaluations=list(range(8)))
+    D = TableOracle(MLE(variables=t + x, evaluations=list(range(8))))
     d1 = resolve_table(VirtualOracle.restriction(D, r, {t[0]: 1}))
     assert isinstance(d1, MLE) and d1.variables == r
     assert list(d1.table) == [1, 3, 5, 7]
@@ -398,4 +398,4 @@ def test_restriction_form_and_resolution():
     with pytest.raises(ValueError):  # too few names for the free variables
         VirtualOracle.restriction(P, r[:1], {t[0]: 1})
     # The sparse table is never materialized by resolve_table.
-    assert resolve_table(P) is P
+    assert resolve_table(P) is sparse

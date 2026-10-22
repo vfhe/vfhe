@@ -138,24 +138,23 @@ starts from a handful of relation kinds. In all of them `f` is (an MLE of) an
   the claim reduces to the `Relation_Sum` claim
   `Σ_b eq̃(r, b)·f(b) = 0`, where `eq̃` is the multilinear equality polynomial
   (the `χ_w` Lagrange basis of [Tha22, §3.5, Lemma 3.6]).
-- **`Relation_Eval`** — instance `(f and/or its commitment, z, v)`:
-  `f(z) = v`, the terminal claim of the sumcheck family. The polynomial may
-  appear as the in-process oracle (`oracles`), as its commitment
-  (`commitment`, optional), or both — they are one object at two levels of
-  instantiation, "the commitment to f is simply the oracle π_f"
-  [ZCF24, §4], so the compiled claim is *the same relation*: the standard
-  PCS evaluation relation R_Eval = {[(C, z, y); f] : f(z) = y and C opens
-  to f} [ZCF24, Def. 8; BFS20]. A commitment is instance data — created by
-  a scheme's commit algorithm (possibly long before any IOP run, reused
+- **`Relation_Eval`** (`evaluation.py`) — instance `(f, z, v)`: `f(z) = v`,
+  the terminal claim of the sumcheck family, for one oracle `f`, which is
+  the claim's `subject`: what the driver bundles, parks and routes it by. What the verifier has
+  of `f` is the oracle's kind (below): a table it may query, or a
+  commitment — "the commitment to f is simply the oracle π_f" [ZCF24, §4],
+  so the compiled claim is *the same relation*: the standard PCS
+  evaluation relation R_Eval = {[(C, z, y); f] : f(z) = y and C opens to f}
+  [ZCF24, Def. 8; BFS20]. A `CommittedOracle` is instance data — created
+  by a scheme's commit algorithm (possibly long before any IOP run, reused
   across runs), carried on statements, never on the per-execution
-  transcript — and its witness lives in `prover.witnesses[commitment]`.
-  Left terminal, the claim is decided by one oracle query (`MLE.evaluate`);
-  registering a PCS evaluation protocol (`vfhe.polycom.BasefoldEval`)
-  replaces that query with an opening argument — the "queries become
-  opening claims" side of the [CHMMVW20] compiler, done in place, with the
-  commitment taken from the field or resolved from the scheme's records of
-  the oracle. Commitment-only claims have no witness-free decider and must
-  not be left terminal.
+  transcript — and the prover's table lives in `prover.witnesses[oracle]`.
+  Left terminal, the claim is decided by one oracle query
+  (`Oracle.query`); registering a PCS evaluation protocol
+  (`vfhe.polycom.BasefoldEval`) replaces that query with an opening
+  argument — the "queries become opening claims" side of the [CHMMVW20]
+  compiler, done in place. A claim on a committed oracle has no
+  witness-free decider and must not be left terminal.
 
 - **`Relation_CircuitSparseIndex`** — index: a layered arithmetic circuit
   (`vfhe.circuit`: fan-in-2 ADD and MUL gates and XMULT inner-product gates
@@ -214,15 +213,16 @@ Further members of the toolbox (product-check, permutation-check, lookups
 ### Oracle kinds
 
 `Relation_Eval` is one relation with several discharges, decided by *what
-the verifier has* of the oracle (`OracleKind`, `oracle_kind`):
+the verifier has* of the oracle (`OracleKind`, the oracle's `kind`; the
+kinds are classes, `oracle.py`):
 
 | kind | the verifier has | an evaluation claim on it |
 |---|---|---|
-| `public` (`MLE(public=True)`) | the table itself: a wiring predicate, `eq̃`, a public output | terminal — the verifier evaluates it |
-| `committed` | a commitment | the PCS protocol (`vfhe.polycom.BasefoldEval`) |
+| `public` (`TableOracle(table, public=True)`) | the table itself: a wiring predicate, `eq̃`, a public output | terminal — the verifier evaluates it |
+| `committed` (`CommittedOracle`) | a commitment and the variables, no table | the PCS protocol (`vfhe.polycom.BasefoldEval`) |
 | `virtual` (`VirtualOracle`) | a local definition over other oracles | `VirtualEval`: rewritten into claims on the constituents, no challenge, error 0 |
-| `implicit` (`Implicit`) | nothing but the statement it heads | never discharged by a protocol: held by the Composer until its head's layer (§5) |
-| `plain` | the oracle of the ideal model, which it may query | terminal, or the protocol registered without a kind |
+| `implicit` (`ImplicitOracle`) | nothing but the statement it heads | never discharged by a protocol: held by the Composer until its head's layer (§5) |
+| `plain` (`TableOracle(table)`) | the oracle of the ideal model, which it may query | terminal, or the protocol registered without a kind |
 
 The two *defined* kinds are one idea: an oracle given by a relation on
 other oracles instead of by a table. A **virtual oracle**
@@ -234,7 +234,7 @@ some possibly fixed to constants: how one oracle appears as both `W(x)` and
 constituent, so a claim `p*(x) = v` reduces for free: the prover sends the
 constituent values, the verifier evaluates the public constituents
 itself, checks the combination against `v`, and one claim per distinct
-(constituent, point) pair remains. An **implicit oracle** (`Implicit`) is
+(constituent, point) pair remains. An **implicit oracle** (`ImplicitOracle`) is
 a handle with variables and no content of its own: it is the *head* of
 exactly one statement of a reduction (`Statement.head`, §5), and that
 statement is its definition — `L(z) = Σ_{b} G(z, b)` for a virtual oracle
@@ -293,15 +293,13 @@ length of the longest product), so both strategies agree node for node.
 
 Index oracles (§3) have the same kinds. A table in a root's index is
 `public`, when the verifier evaluates it, or `committed`: `Basefold.commit`
-tags the table it records with `kind = committed` and its `commitment`, so
-that a claim carrying the table is `committed` to `oracle_kind` whether it
-carries the commitment or the tagged table, the root digest records the
-table by its commitment and never by its entries (a verifier seeds
-Fiat–Shamir without reading a committed predicate table), and the scheme's
-record still maps the table to its opening. The two marks exclude each
-other — they are two discharges of a claim, not two properties of a table —
-so committing a `public` table is refused, and so is a table carrying both
-marks. The index a layering builds for a child statement may also hold an
+returns the `CommittedOracle` — the commitment and the variables, no table
+— that the index then names, so a claim on it is `committed` by its kind,
+the root digest records it by its commitment and never by entries (a
+verifier seeds Fiat–Shamir without reading a committed predicate table),
+and the prover holds the table under the oracle in its witnesses. Public
+and committed are two classes, not two marks on one table: they are two
+discharges of a claim. The index a layering builds for a child statement may also hold an
 `implicit` oracle (the head of a deeper statement, or the relation's own,
 §5) and a `virtual` one when it is a *restriction*:
 `VirtualOracle.restriction(P, variables, fixed)` reads one member of a
@@ -407,9 +405,10 @@ transcript.
   nothing (the caches fill lazily). The chain is seeded by
   `bind(seed)` with the *root statement's* digest — σ_0 = ρ(x), whose
   omission is the "weak Fiat–Shamir" bug of [DMWG23] — and entry values
-  are digested by the duck-typed `element_digest` walker (bytes, ints,
-  Polynomials via `get_hash`, MerklePaths, statements, dense MLEs, or any
-  object providing `digest()`).
+  are digested by `element_digest`: primitives, containers, classes and
+  protobuf messages by itself, every other value by its own `digest()`
+  (arith's tables, polynomials and field elements, `vfhe.crypto`'s Merkle
+  paths, this module's oracles, statements and proofs).
 - **Challenges.** `iop.verifier.challenge(label)` returns the challenge
   `label`: the first call samples it from the domain's exceptional set (§6)
   and writes it to the transcript; later calls return the recorded value.
@@ -556,7 +555,7 @@ reading its index as it reads the oracles; and a terminal statement reading
 a head through its index is refused. A relation may also name its *head* by
 an index field: `head_index` is an `int`, a position in `oracles`, or a
 `str`, the name of the index entry holding it, and a statement of such a
-relation derives its head from that entry — an `Implicit` makes it headed,
+relation derives its head from that entry — an `ImplicitOracle` makes it headed,
 a table an ordinary statement, and a `head=` passed must be the entry. The
 Composer is unchanged by it: the head map, the rules and the routing are
 keyed on the oracle object, wherever it sits. A root's index holds tables,
@@ -651,7 +650,7 @@ next), kept for clear errors, droppable in a byte-level format. That
 encoding is the prerequisite for the port, and it is what would make this a
 NARG *string* rather than a list of objects.
 
-The first instantiation is the sumcheck protocol (`sumcheck.py`): round *i*
+The first instantiation is the sumcheck protocol (`protocols/sumcheck.py`): round *i*
 sends the univariate `g_i` (as the pair `g_i(0), g_i(1)` — the oracle is a
 single multilinear polynomial, so `deg g_i = 1`), the verifier checks
 `g_i(0) + g_i(1)` against the running claim, samples `r_i` from the domain's
@@ -856,14 +855,14 @@ common base could only promise an `evaluate` it cannot implement:
   `vector_table(f)` is its field counterpart.
   `MLE.eq(domain, point)` builds the dense table of the equality
   polynomial `eq̃(point, ·)` (the zerocheck reduction and basefold's
-  virtual factor), marked `public`. `MLE(public=True)` marks a table both
-  parties hold (§4's oracle kinds): derived tables inherit the mark, a
-  combination of two tables is public only if both are. `rename(mapping)`
+  virtual factor). A table carries no protocol mark: whether the verifier
+  holds it is said by the oracle that names it (`TableOracle(table,
+  public=True)`, §4's oracle kinds). `rename(mapping)`
   is a relabelled copy — the same polynomial read under other variable
   names, which is how the prover holds `W(x)` and `W(y)` as two tables.
 - `SparseMLE` — a sparse map of hypercube evaluations
   (`evaluations[index] = value`, index packed LSB-first like a dense
-  position), in a domain and with the same `public` mark: the carrier of
+  position), in a domain: the carrier of
   wiring predicates. It supports add / sub / scale, evaluation at a *full*
   point (`Σ_k value_k · Π_i eq̃(k_i, point_i)`, `O(nnz · vars)`; a partial
   point raises, since the form has no per-variable fold — defined oracles
@@ -895,7 +894,24 @@ asyncio-free: variables are plain identifiers (`MLE_Variable`, or any
 hashable — *not* protocol futures), and evaluation points are always
 concrete values; anything unresolved is a Transcript / Statement concern.
 
-### `VirtualOracle`, `Relation_SumDef` / `SumDefStart` (`virtual.py`)
+### `Oracle`, `TableOracle`, `CommittedOracle`, `ImplicitOracle` (`oracle.py`)
+
+What a statement or an index names is an oracle, an object of this
+package, never an arith table: the table is arith's and carries no
+protocol mark, the oracle says what the verifier has of it (§4's kinds).
+`Oracle` is the contract — `variables`, `kind`, `query(point)` (the ideal
+decider's one query, at a full point; it raises for an oracle the verifier
+has no table of), `dependencies()`, `digest()` — and the four kinds are
+classes: `TableOracle(table, public=...)` wraps a dense or sparse table,
+`CommittedOracle(variables, commitment)` holds the commitment and the
+variables and nothing else, `ImplicitOracle(variables)` is a handle,
+`VirtualOracle` a definition. Oracles are compared by identity: claims are
+bundled, parked and stored on the object. The prover works on tables:
+`resolve_table(oracle, witnesses)` is the table behind an oracle on its
+side — a table oracle's own, `witnesses[oracle]` for a committed or an
+implicit one, a slice for a restriction.
+
+### `VirtualOracle`, `Relation_SumDef` / `SumDefStart` (`virtual.py`, `relations/sumdef.py`, `protocols/virtual.py`, `protocols/prover_view.py`)
 
 The virtual oracle of §4 is an object with the oracle surface the rest of
 the module duck-types on (`variables`, `num_vars`, `evaluate`, `constant`,
@@ -925,7 +941,7 @@ the two round-message strategies (`_ProverVirtual`, `_LibraProver`; §4).
 `VirtualOracle.strategy` (`"auto"` / `"dense"` / `"libra"`) pins one; the
 tests assert message-for-message agreement between them.
 
-### `Relation_CircuitSparseIndex` / `Relation_Circuit` / `GKR` (`circuit.py`)
+### `Relation_CircuitSparseIndex` / `Relation_Circuit` / `GKR` (`relations/circuit.py`, `protocols/gkr.py`)
 
 Circuit satisfiability over the protobuf circuits of `vfhe.circuit`
 (imported lazily), with the wiring tables of `vfhe.circuit.export` as index
@@ -945,7 +961,7 @@ predicates from the root's index and renames each into its layer body
 through the body's map (a predicate's own variables to the body's `z`, `x`
 and `y`), so the index may hold public tables or restrictions of a master
 (§4) and `GKR` runs the same. Layer `L_0` is the output test `Relation_Equal(out, W_d)`, `W_d` a
-fresh `Implicit` handle for the output layer; then comes one
+fresh `ImplicitOracle` handle for the output layer; then comes one
 `Relation_Layer` statement per gate layer, from the output layer down,
 headed at that layer's implicit oracle and reading the one below, the
 bottom one reading `w_in` itself. The layering first checks that `out`
@@ -978,7 +994,7 @@ it and its `Start`; a small circuit keeps its predicates public and runs
 `Relation_CircuitSparseIndex` as before, a large one commits them and runs
 `Relation_Circuit`, and nothing in `GKR` changes between the two.
 
-### `FamilyShape`, `Relation_SpEval`, `dense_relation` / `dense_layering` (`sparse.py`)
+### `FamilyShape`, `Relation_SpEval`, `dense_relation` / `dense_layering` (`relations/sparse.py`, `protocols/sparse.py`)
 
 The pattern for sparse index oracles committed through one dense one (§4),
 with no encoding fixed by the framework. `FamilyShape({field: width or
@@ -1030,14 +1046,14 @@ claims the inner protocol leaves on the restrictions are rewritten by
 layering and come back to this Composer, which holds them for `L_1`; no
 message, no challenge, soundness error 0.
 
-### `Statement.head`, `with_start`, `Composed` (`piop.py`, `composer.py`)
+### `Statement.head`, `with_start`, `Composed` (`relation.py`, `evaluation.py`, `composer.py`)
 
 `Statement.head` is structural, beside `parents` and `path`: not a field,
 never digested, set through `reduce_to(…, head=…)` and kept by the
 parties' forks of the root. A relation with a head declares `head_index`,
 the head's position in `oracles`, and `compute_head(statement)`, the
 head's table from the other oracles on the prover's view (concrete
-tables); a statement checks that its head is the `Implicit` handle at that
+tables); a statement checks that its head is the `ImplicitOracle` handle at that
 position. The class decorator `with_start` derives `R.Start`, whose fields
 are `R`'s plus `points` and
 `values` and whose oracles and head are `R`'s: "`R` with its head bound to
@@ -1050,7 +1066,7 @@ place, then one `Relation_Eval` check per claim — and `R.Start` rebuilds
 child of the headed one, the claims as further parents. A sequentially
 composable protocol for `R` is a protocol for `R.Start`.
 
-`Implicit` is the handle itself: variables and nothing else. Its
+`ImplicitOracle` is the handle itself: variables and nothing else. Its
 `digest()` is by its variables, so a statement carrying it can seed a
 Fiat–Shamir chain, and its `kind = implicit` exists only for the guard in
 `protocol_for`. `Composed` is the protocol `compose` builds (§5); a
@@ -1092,9 +1108,9 @@ statistical soundness over exceptional-set challenges (§6), while a Merkle
 claim is computational (collision resistance) with no challenge, no round
 and no reduction, so the framework's accounting has nothing to say about
 it. And the relation a commitment participates in already exists —
-`Relation_Eval` *is* [ZCF24]'s R_Eval, its optional `commitment` field
-carrying the compiled form of the oracle; swapping a codeword for a root
-changes the type of an instance field, not the relation. Path checking
+`Relation_Eval` *is* [ZCF24]'s R_Eval, the oracle it names being a
+`CommittedOracle` in the compiled form; swapping a table for a commitment
+changes the oracle's kind, not the relation. Path checking
 therefore lives inside the PCS's evaluation protocol
 (`vfhe.polycom.BasefoldEval`), which is where the queried positions are.
 
@@ -1136,7 +1152,8 @@ therefore lives inside the PCS's evaluation protocol
    takes the common point at the layer oracle first, as the classic line
    reduction does; the line-restriction 2-to-1 [Tha22, §4.5.2] should a
    single-point opening ever pay.
-4. **Lookup relation**: done (`lookup.py`, `range.py`; see
+4. **Lookup relation**: done (`relations/lookup.py`, `protocols/lookup.py`,
+   `relations/range.py`, `protocols/range.py`; see
    [range.md](range.md)). `Relation_Lookup` reduces, by offline memory
    checking over four grand products, to two `Relation_Sum` claims over
    degree-3 virtual oracles plus four `Relation_Eval` claims;

@@ -9,18 +9,10 @@ produce byte-identical transcripts.
 
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring, RNSRing
-from vfhe.piop import (
-    IOP,
-    FS_Verifier,
-    Proof,
-    Relation_Sum,
-    Relation_SumProd,
-    Statement,
-    Sumcheck,
-    SumcheckProd,
-    element_digest,
-)
+from vfhe.piop import IOP, FS_Verifier, Proof, Statement, TableOracle, element_digest
 from vfhe.piop.fs import expand_bytes, ring_exceptional_from_seed
+from vfhe.piop.protocols import Sumcheck, SumcheckProd
+from vfhe.piop.relations import Relation_Sum, Relation_SumProd
 
 
 def _ring() -> RNSRing:
@@ -31,7 +23,7 @@ def _dense_sum_statement(ring: RNSRing, evaluations: list) -> Statement:
     v = [MLE_Variable("x0"), MLE_Variable("x1")]
     f = MLE(ring=ring, variables=v, evaluations=evaluations)
     total = sum(evaluations)
-    return Statement(Relation_Sum(), oracles=[f], value=total)
+    return Statement(Relation_Sum(), oracles=[TableOracle(f)], value=total)
 
 
 def _fs_sum_iop(ring: RNSRing) -> IOP:
@@ -83,9 +75,9 @@ def test_element_digest_walker():
     # Statements digest over relation + canonical fields.
     v = [MLE_Variable("x0"), MLE_Variable("x1")]
     f = MLE(variables=v, evaluations=[1, 2, 3, 4])
-    s1 = Statement(Relation_Sum(), oracles=[f], value=10)
-    s2 = Statement(Relation_Sum(), oracles=[f], value=10)
-    s3 = Statement(Relation_Sum(), oracles=[f], value=11)
+    s1 = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=10)
+    s2 = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=10)
+    s3 = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=11)
     assert element_digest(s1) == element_digest(s2)
     assert element_digest(s1) != element_digest(s3)
     # Ring-backed tables digest through Polynomial.get_hash.
@@ -129,7 +121,7 @@ def test_fs_sumcheck_rejects_false_claim():
     iop = _fs_sum_iop(ring)
     v = [MLE_Variable("x0"), MLE_Variable("x1")]
     f = MLE(ring=ring, variables=v, evaluations=[1, 2, 3, 4])
-    assert not iop.run(Statement(Relation_Sum(), oracles=[f], value=11))
+    assert not iop.run(Statement(Relation_Sum(), oracles=[TableOracle(f)], value=11))
 
 
 def test_fs_challenges_bind_the_statement():
@@ -153,7 +145,11 @@ def test_fs_sumcheckprod():
         g = MLE(ring=ring, variables=v, evaluations=[2, 2, 3, 3])
         iop = IOP(domain=ring, fiat_shamir=True)
         iop.register(Relation_SumProd, SumcheckProd())
-        assert iop.run(Statement(Relation_SumProd(), oracles=[f, g], value=27))
+        assert iop.run(
+            Statement(
+                Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=27
+            )
+        )
         runs.append(_transcript_digests(iop))
     assert runs[0] == runs[1]
 
@@ -175,7 +171,7 @@ def test_fs_domain_hook_and_plain_tables():
     f = MLE(variables=v, evaluations=[1, 2, 3, 4])
     iop = IOP(domain=_SeededDomain(), fiat_shamir=True)
     iop.register(Relation_Sum, Sumcheck())
-    assert iop.run(Statement(Relation_Sum(), oracles=[f], value=10))
+    assert iop.run(Statement(Relation_Sum(), oracles=[TableOracle(f)], value=10))
 
 
 def test_proof_holds_only_prover_messages():
@@ -257,7 +253,9 @@ def test_prove_then_verify_sumcheckprod():
     def statement() -> Statement:
         f = MLE(ring=ring, variables=v, evaluations=[1, 2, 3, 4])
         g = MLE(ring=ring, variables=v, evaluations=[2, 2, 3, 3])
-        return Statement(Relation_SumProd(), oracles=[f, g], value=27)
+        return Statement(
+            Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=27
+        )
 
     def iop() -> IOP:
         one = IOP(domain=ring, fiat_shamir=True)

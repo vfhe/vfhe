@@ -2,11 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Range checks over packed polynomials: Figure 13 of [CCCFGS26].
 
-`Relation_Range` is the claim that every `Z_q` coefficient of every hypercube
-evaluation of an `R_q` oracle lies in `[0, B)` -- membership in the table
-`T_B` of [CCCFGS26] §4. `RangeDecomposition` discharges it by the optimized
-protocol of §I.5: the prover sends the base-`beta` digits of those
-coefficients as an oracle over a large prime field `F_p`, and what remains is
+`RangeDecomposition` discharges `Relation_Range` by the optimized protocol
+of §I.5: the prover sends the base-`beta` digits of the coefficients as an
+oracle over a large prime field `F_p`, and what remains is
 
 - that the digits *recompose* to the coefficients (checked here, `kappa` times
   at small integer points, over `Z` and then modulo `q`), and
@@ -27,23 +25,19 @@ in `modules/piop/range.md`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import MLE, MLE_Variable
 from vfhe.arith.mle import native_table
+from vfhe.piop.evaluation import Relation_Eval
+from vfhe.piop.oracle import TableOracle
+from vfhe.piop.protocol import Protocol, Rejection
+from vfhe.piop.relations import Relation_Lookup, Relation_Range
+from vfhe.piop.virtual import resolve_table
 
-from .lookup import Relation_Lookup
-from .piop import (
-    Protocol,
-    Prover,
-    Rejection,
-    Relation,
-    Relation_Eval,
-    Statement,
-    Verifier,
-    _constant,
-    _hypercube,
-)
+if TYPE_CHECKING:
+    from vfhe.piop.party import Prover, Verifier
+    from vfhe.piop.relation import Relation, Statement
 
 
 def eq_int(bits: list[int], point: list[int]) -> int:
@@ -125,63 +119,6 @@ class _Shape:
         return self.ell + self.nu + self.gamma
 
 
-class Relation_Range(Relation):
-    """Every `Z_q` coefficient of every hypercube evaluation of the oracle
-    lies in `[0, B)`: the table `T_B` of [CCCFGS26] §4.
-
-    The index is `(B, c)`: the bound, and the number of base-`beta` digits the
-    protocol splits each coefficient into (`beta = B ** (1/c)`). Both are
-    public, reusable, preprocessable data, which is what an index is for.
-    `c` is a pure efficiency knob -- it trades the digit alphabet against the
-    size of the digit oracle -- and does not change the language.
-    """
-
-    name = "range"
-    fields = ("oracles",)
-    index_fields = ("bound", "chunks")
-
-    def __init__(self, bound: int, chunks: int) -> None:
-        if bound <= 1 or bound & (bound - 1):
-            raise ValueError(f"bound B must be a power of two > 1, got {bound}")
-        if chunks <= 0 or chunks & (chunks - 1):
-            raise ValueError(f"chunks c must be a power of two, got {chunks}")
-        if (bound.bit_length() - 1) % chunks:
-            raise ValueError(
-                f"c must divide log2(B): log2({bound}) = {bound.bit_length() - 1} "
-                f"is not a multiple of {chunks}"
-            )
-        super().__init__(index={"bound": bound, "chunks": chunks})
-
-    @property
-    def bound(self) -> int:
-        """The coefficient bound `B`."""
-        return cast("int", self.index["bound"])
-
-    @property
-    def chunks(self) -> int:
-        """The number of base-`beta` digits per coefficient, `c`."""
-        return cast("int", self.index["chunks"])
-
-    @property
-    def beta(self) -> int:
-        """The digit alphabet `B ** (1/c)`."""
-        return 1 << ((self.bound.bit_length() - 1) // self.chunks)
-
-    def check(self, statement: Statement) -> bool:
-        (v,) = statement.oracles
-        entries = (
-            v.table
-            if native_table(v)
-            else [
-                _constant(v.evaluate(b, in_place=False))
-                for b in _hypercube(v.variables)
-            ]
-        )
-        # get_polynomial() is the unsigned representative in [0, q), so a
-        # negative coefficient shows up here as a large one and is rejected.
-        return all(max(e.get_polynomial()) < self.bound for e in entries)
-
-
 class RangeDecomposition(Protocol):
     """`Relation_Range -> Relation_Lookup x Relation_Eval^(2 kappa)`
     (Figure 13 of [CCCFGS26]).
@@ -219,7 +156,9 @@ class RangeDecomposition(Protocol):
     reduces_from: type[Relation] = Relation_Range
     reduces_to: tuple[type[Relation], ...] = (Relation_Lookup, Relation_Eval)
 
-    def __init__(self, field: Any, m: int, alphabet: int, kappa: int) -> None:
+    def __init__(
+        self, field: Any, m: int, alphabet: int, kappa: int, ring: Any
+    ) -> None:
         if alphabet <= 1 or alphabet & (alphabet - 1):
             raise ValueError(
                 f"the alphabet size sigma must be a power of two > 1, got {alphabet}"
@@ -232,6 +171,9 @@ class RangeDecomposition(Protocol):
         self.m = m
         self.alphabet = alphabet
         self.kappa = kappa
+        # The ring the claims are about: an oracle does not expose its
+        # domain (a committed one has no table on the verifier's side).
+        self.ring = ring
 
     # --- shape and parameter conditions -----------------------------------
 
@@ -245,9 +187,7 @@ class RangeDecomposition(Protocol):
         relation = statement.relation
         if not isinstance(relation, Relation_Range):
             raise TypeError("RangeDecomposition discharges Relation_Range")
-        ring = v.ring
-        if ring is None:
-            raise TypeError("a range claim is about an oracle over a Ring")
+        ring = self.ring
         ell = v.num_vars
         nu = ring.N.bit_length() - 1
         gamma = relation.chunks.bit_length() - 1
@@ -315,31 +255,30 @@ class RangeDecomposition(Protocol):
     ) -> list[Statement]:
         (statement,) = statements
         iop = prover.iop
-        if iop is None:
-            raise RuntimeError("this party is not bound to an IOP")
         (v,) = statement.oracles
+        v_table = resolve_table(v, prover.witnesses)
         shape = self._shape(statement)
         label = f"{self.name}{statement.path}"
 
-        mu = MLE(
-            field=self.field,
-            variables=shape.variables,
-            evaluations=[self.field(d) for d in self._digit_table(v, shape)],
+        mu = TableOracle(
+            MLE(
+                field=self.field,
+                variables=shape.variables,
+                evaluations=[self.field(d) for d in self._digit_table(v_table, shape)],
+            )
         )
-        iop.transcript.write(f"{label}/mu", tuple(mu.table))
+        iop.transcript.write(f"{label}/mu", tuple(mu.polynomial.table))
 
         points = [self._draw_point(iop, label, shape, eta) for eta in range(self.kappa)]
 
         psis, values = [], []
         for eta, r in enumerate(points):
-            psi = mu.evaluate(self._bind_prefix(shape, r), in_place=False)
+            psi = mu.polynomial.evaluate(self._bind_prefix(shape, r), in_place=False)
             iop.transcript.write(f"{label}/psi{eta}", tuple(psi.table))
             psis.append(psi)
-            w = _constant(
-                v.evaluate(
-                    {var: r[i] for i, var in enumerate(v.variables)}, in_place=False
-                )
-            )
+            w = v_table.evaluate(
+                {var: r[i] for i, var in enumerate(v.variables)}, in_place=False
+            ).constant()
             iop.transcript.write(f"{label}/w{eta}", w)
             values.append(w)
 
@@ -351,14 +290,14 @@ class RangeDecomposition(Protocol):
     ) -> list[Statement]:
         (statement,) = statements
         iop = verifier.iop
-        if iop is None:
-            raise RuntimeError("this party is not bound to an IOP")
         shape = self._shape(statement)
         label = f"{self.name}{statement.path}"
 
         table = await iop.transcript.read(f"{label}/mu")
         self._expect(len(table), 1 << shape.ell_star, f"{label}/mu")
-        mu = MLE(field=self.field, variables=shape.variables, evaluations=list(table))
+        mu = TableOracle(
+            MLE(field=self.field, variables=shape.variables, evaluations=list(table))
+        )
 
         points = [self._draw_point(iop, label, shape, eta) for eta in range(self.kappa)]
 
@@ -387,7 +326,8 @@ class RangeDecomposition(Protocol):
             raise Rejection(f"{label}: expected {want} entries, got {got}")
 
     def _digit_table(self, v: MLE, shape: _Shape) -> list[int]:
-        """The integer digit table of `mu`, LSB-first over `X | Z | Z'`:
+        """The integer digit table of `mu` from the prover's table `v`,
+        LSB-first over `X | Z | Z'`:
         `index = i + 2^ell * k + 2^(ell+nu) * j` holds the `j`-th base-`beta`
         digit of the `k`-th coefficient of `v(i)` (Lemma 4.1, proof in §C.1).
 
@@ -475,7 +415,7 @@ class RangeDecomposition(Protocol):
         self,
         statement: Statement,
         shape: _Shape,
-        mu: MLE,
+        mu: TableOracle,
         points: list[list[int]],
         psis: list[MLE],
         values: list,
@@ -493,11 +433,9 @@ class RangeDecomposition(Protocol):
         for r, psi in zip(points, psis, strict=True):
             point = self._bind_prefix(shape, r)
             point.update(zip(free, spot, strict=True))
-            value = _constant(
-                psi.evaluate(
-                    dict(zip(psi.variables, spot, strict=True)), in_place=False
-                )
-            )
+            value = psi.evaluate(
+                dict(zip(psi.variables, spot, strict=True)), in_place=False
+            ).constant()
             out.append(
                 self.reduce(
                     [statement], Relation_Eval, oracles=[mu], point=point, value=value

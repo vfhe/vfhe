@@ -16,18 +16,16 @@ import pytest
 from vfhe.arith import MLE, MLE_Variable, PseudoMersenneField
 from vfhe.piop import (
     IOP,
-    Lookup,
     OracleKind,
     Protocol,
     Relation_Eval,
-    Relation_Lookup,
-    Relation_Sum,
     Statement,
-    Sumcheck,
-    VirtualEval,
+    TableOracle,
     element_digest,
 )
-from vfhe.piop.lookup import FINGERPRINTS, counters, grand_product
+from vfhe.piop.protocols import Lookup, Sumcheck, VirtualEval
+from vfhe.piop.protocols.lookup import FINGERPRINTS, counters, grand_product
+from vfhe.piop.relations import Relation_Lookup, Relation_Sum
 
 # beta = 8 (b* = 3) and a 64-entry oracle (ell* = 6): the two sides of the
 # protocol then have different widths, which is what catches an index that
@@ -43,7 +41,9 @@ def field():
 
 def _oracle(field, values):
     variables = [MLE_Variable(f"m{i}") for i in range(NUM_VARS)]
-    return MLE(field=field, variables=variables, evaluations=[field(v) for v in values])
+    return TableOracle(
+        MLE(field=field, variables=variables, evaluations=[field(v) for v in values])
+    )
 
 
 def _bounded(seed=0, beta=BETA):
@@ -174,7 +174,8 @@ def test_rejects_a_negative_entry(field):
     must not slip through as a small number."""
     values = _bounded(seed=5)
     mu = _oracle(field, values)
-    mu.table = type(mu.table)(field, [*list(mu.table)[:-1], -field.one])
+    table = mu.polynomial
+    table.table = type(table.table)(field, [*list(table.table)[:-1], -field.one])
     statement = Statement(Relation_Lookup(BETA), oracles=[mu])
     assert not statement.check()
     assert not _iop(field).run(statement)
@@ -406,12 +407,14 @@ def test_soundness_error_is_the_theorem_bound(field):
 # --- under the range protocol, which is what produces these claims ----------
 
 
-def _range_iop(field):
-    from vfhe.piop import RangeDecomposition, Relation_Range
+def _range_iop(field, ring):
+    from vfhe.piop.protocols import RangeDecomposition
+    from vfhe.piop.relations import Relation_Range
 
     iop = _iop(field)
     iop.register(
-        Relation_Range, RangeDecomposition(field, m=2, alphabet=1 << 8, kappa=2)
+        Relation_Range,
+        RangeDecomposition(field, m=2, alphabet=1 << 8, kappa=2, ring=ring),
     )
     return iop
 
@@ -423,7 +426,7 @@ def test_range_proof_end_to_end(field, bounded):
     on the real oracles. Accepted exactly when the coefficients are in range.
     """
     from vfhe.arith import Polynomial, Ring
-    from vfhe.piop import Relation_Range
+    from vfhe.piop.relations import Relation_Range
 
     ring = Ring(8, prime_size=[30, 30], split_degree=1)
     bound, chunks, ell = 1 << 6, 2, 2
@@ -434,12 +437,14 @@ def test_range_proof_end_to_end(field, bounded):
         if i == 0 and not bounded:
             coefficients[2] = bound + 7
         table.append(Polynomial(ring).from_array(coefficients))
-    v = MLE(
-        ring=ring,
-        variables=[MLE_Variable(f"x{i}") for i in range(ell)],
-        evaluations=table,
+    v = TableOracle(
+        MLE(
+            ring=ring,
+            variables=[MLE_Variable(f"x{i}") for i in range(ell)],
+            evaluations=table,
+        )
     )
 
     statement = Statement(Relation_Range(bound, chunks), oracles=[v])
     assert statement.check() is bounded
-    assert _range_iop(field).run(statement) is bounded
+    assert _range_iop(field, ring).run(statement) is bounded

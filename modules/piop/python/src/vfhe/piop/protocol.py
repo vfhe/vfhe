@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+"""The protocol: a reduction between products of relations (piop.md
+section 5), as a pair of prove / verify coroutines."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from .relation import Relation, Statement, child_statement
+
+if TYPE_CHECKING:
+    from .party import Prover, Verifier
+
+
+class Rejection(Exception):
+    """Raised by a protocol's verify half when a round check fails."""
+
+
+class Protocol:
+    """A reduction between products of relations (piop.md §5).
+
+    The two halves are coroutines over the same bundle of statements:
+    `prove` sends the oracle messages, `verify` checks round consistency,
+    and both draw challenges via `iop.verifier.challenge` and return the
+    list of statements the bundle reduces to. Messages flow only through
+    the IOP transcript (`iop.transcript.write` / `await iop.transcript.read`);
+    statements are never sent — each party derives its own DAG from the
+    common input and transcript.
+
+    `batching = True` declares a bundle protocol, a many-to-fewer reduction
+    [KP23, Def. 4]: the driver hands it a bundle of statements in one
+    invocation instead of one at a time — every frontier statement of the
+    relation for most relations; for `Relation_Eval`, every claim on one
+    oracle, *after* every other frontier statement that could still emit a
+    claim on that oracle has been discharged (the parking rule, piop.md §5).
+
+    `supported_domains` lists the coefficient-domain types (e.g. Ring) for
+    which native (C) kernels exist — declarative metadata, not a dispatch
+    switch. The native/pure-Python decision is made at the data level,
+    inside the round-message helpers (they inspect the oracle
+    representation, e.g. `mle.native_table`), so protocol bodies are
+    written once and never branch on it; both paths produce identical
+    transcripts. An empty tuple means pure Python always.
+
+    A protocol reports its own soundness error as
+    `soundness_error(statement, domain)` (piop.md §6): the error of this
+    one step for a claim of `statement`'s size, with the challenges drawn
+    from `domain`'s exceptional set (`protocols.rounds.exceptional_set_size`),
+    `None` when that set has no known size. The errors of the steps a
+    reduction hands on to are those steps' own.
+    """
+
+    reduces_from: type[Relation] | None = None
+    reduces_to: tuple[type[Relation], ...] = ()
+    batching: bool = False
+    supported_domains: tuple[type, ...] = ()
+
+    def reduce(
+        self,
+        statements: list[Statement],
+        relation: Relation | type[Relation] | None = None,
+        **fields,
+    ) -> Statement:
+        """One output statement of this reduction (default: reduces_to[0])."""
+        return child_statement(
+            tuple(statements), relation or self.reduces_to[0], **fields
+        )
+
+    async def prove(
+        self, prover: Prover, statements: list[Statement]
+    ) -> list[Statement]:
+        raise NotImplementedError
+
+    async def verify(
+        self, verifier: Verifier, statements: list[Statement]
+    ) -> list[Statement]:
+        raise NotImplementedError

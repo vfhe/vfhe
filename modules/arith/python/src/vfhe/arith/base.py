@@ -430,6 +430,11 @@ class Polynomial(metaclass=_ImplementationDispatch):
         """
         raise NotImplementedError
 
+    def digest(self) -> bytes:
+        """The 32 bytes of `get_hash`, little-endian word by word: the digest
+        a transcript or a statement absorbs for this value."""
+        return b"".join(int(word).to_bytes(8, "little") for word in self.get_hash())
+
     def get_hash_pointer(self):
         """`get_hash` left in native memory, for a caller that passes it on."""
         raise NotImplementedError
@@ -973,6 +978,10 @@ class FieldElement(metaclass=_ImplementationDispatch):
         builds.
         """
         raise NotImplementedError
+
+    def digest(self) -> bytes:
+        """`hash`, under the name every value a transcript absorbs answers to."""
+        return self.hash()
 
     def __eq__(self, other: object) -> bool:
         raise NotImplementedError

@@ -18,15 +18,18 @@ from vfhe.arith import (
     PseudoMersenneField,
 )
 from vfhe.arith.mle import native_table, vector_table
-from vfhe.piop import (
-    IOP,
-    Relation_Sum,
-    Relation_SumProd,
-    Statement,
-    Sumcheck,
-    SumcheckProd,
+from vfhe.piop import IOP, Statement, TableOracle
+from vfhe.piop.protocols import Sumcheck, SumcheckProd
+from vfhe.piop.protocols.rounds import (
+    _prod_round_evals_python,
+    _round_evals_python,
+    interpolate_evals,
+    prod2_round_evals_vector,
+    prod_round_evals,
+    round_evals,
+    round_evals_vector,
 )
-from vfhe.piop.sumcheck import interpolate_evals
+from vfhe.piop.relations import Relation_Sum, Relation_SumProd
 
 # A 50-bit prime with 2-adicity 20 (x^2 - 5 is irreducible: 5 is a non-residue).
 _PRIME = 562949948178433
@@ -179,20 +182,14 @@ def test_vector_round_messages_match_python(field):
     # binds) is the reference the whole-vector shortcuts must reproduce.
     v, f, _ = _tables(field, 4, seed=3)
     _, g, _ = _tables(field, 4, seed=4, variables=v)
-    assert Sumcheck.round_evals(f) == Sumcheck._round_evals_python(f)
-    assert Sumcheck.round_evals(f) == Sumcheck.round_evals_vector(f)
-    assert SumcheckProd.prod_round_evals([f, g]) == (
-        SumcheckProd._prod_round_evals_python([f, g])
-    )
-    assert SumcheckProd.prod_round_evals([f, g]) == (
-        SumcheckProd.prod2_round_evals_vector(f, g)
-    )
+    assert round_evals(f) == _round_evals_python(f)
+    assert round_evals(f) == round_evals_vector(f)
+    assert prod_round_evals([f, g]) == (_prod_round_evals_python([f, g]))
+    assert prod_round_evals([f, g]) == (prod2_round_evals_vector(f, g))
     # A round variable that is not the first takes the Python path, over a
     # variable the vector layout cannot pair directly.
-    assert Sumcheck.round_evals(f, v[2]) == Sumcheck._round_evals_python(f, v[2])
-    assert SumcheckProd.prod_round_evals([f, g], v[3]) == (
-        SumcheckProd._prod_round_evals_python([f, g], v[3])
-    )
+    assert round_evals(f, v[2]) == _round_evals_python(f, v[2])
+    assert prod_round_evals([f, g], v[3]) == (_prod_round_evals_python([f, g], v[3]))
     assert f.num_vars == g.num_vars == 4  # the messages leave the tables alone
 
 
@@ -249,8 +246,9 @@ def test_sumprod_check_agrees_with_the_walk(field):
     wrong = total + _element(field, 1)
     relation = Relation_SumProd()
     for oracles in ([f_py, g_py, h_py], [f_vec, g_vec, h_vec], [f_vec, g_py, h_vec]):
-        assert relation.check(Statement(relation, oracles=oracles, value=total))
-        assert not relation.check(Statement(relation, oracles=oracles, value=wrong))
+        named = [TableOracle(o) for o in oracles]
+        assert relation.check(Statement(relation, oracles=named, value=total))
+        assert not relation.check(Statement(relation, oracles=named, value=wrong))
 
     # The product is built in a vector of its own: no oracle was written to.
     assert [int(e) for e in f_vec.table] == [int(e) for e in f_py.table]
@@ -258,10 +256,16 @@ def test_sumprod_check_agrees_with_the_walk(field):
 
     # One oracle, and the plain sum relation, take the same route.
     assert Relation_Sum().check(
-        Statement(Relation_Sum(), oracles=[f_vec], value=sum(f_py.table, zero))
+        Statement(
+            Relation_Sum(), oracles=[TableOracle(f_vec)], value=sum(f_py.table, zero)
+        )
     )
     assert Relation_SumProd().check(
-        Statement(Relation_SumProd(), oracles=[f_vec], value=sum(f_py.table, zero))
+        Statement(
+            Relation_SumProd(),
+            oracles=[TableOracle(f_vec)],
+            value=sum(f_py.table, zero),
+        )
     )
 
 
@@ -272,12 +276,20 @@ def test_sumprod_check_walks_when_the_tables_do_not_line_up(field):
     other = [MLE_Variable(f"y{i}") for i in range(3)]
     _, g_vec, g_py = _tables(field, 3, seed=15, variables=other)
     relation = Relation_SumProd()
-    statement = Statement(relation, oracles=[f_vec, g_vec], value=_element(field, 0))
+    statement = Statement(
+        relation,
+        oracles=[TableOracle(f_vec), TableOracle(g_vec)],
+        value=_element(field, 0),
+    )
     # Decided by the walk over f's variables; the point is that it runs at all
     # and agrees with the same oracles read as Python tables.
     _, f_py, _ = (v, *_tables(field, 3, seed=14)[1:])
     assert relation.check(statement) == relation.check(
-        Statement(relation, oracles=[f_py, g_py], value=_element(field, 0))
+        Statement(
+            relation,
+            oracles=[TableOracle(f_py), TableOracle(g_py)],
+            value=_element(field, 0),
+        )
     )
 
 
@@ -289,7 +301,7 @@ def test_sumcheck_over_a_field(field, fiat_shamir):
     def run(value) -> bool:
         iop = IOP(domain=field, fiat_shamir=fiat_shamir)
         iop.register(Relation_Sum, Sumcheck())
-        return iop.run(Statement(Relation_Sum(), oracles=[f], value=value))
+        return iop.run(Statement(Relation_Sum(), oracles=[TableOracle(f)], value=value))
 
     assert run(total)
     assert not run(total + field.one)
@@ -305,7 +317,13 @@ def test_sumcheck_prod_over_a_field(field, fiat_shamir):
     def run(value) -> bool:
         iop = IOP(domain=field, fiat_shamir=fiat_shamir)
         iop.register(Relation_SumProd, SumcheckProd())
-        return iop.run(Statement(Relation_SumProd(), oracles=[f, g], value=value))
+        return iop.run(
+            Statement(
+                Relation_SumProd(),
+                oracles=[TableOracle(f), TableOracle(g)],
+                value=value,
+            )
+        )
 
     assert run(total)
     assert not run(total + field.one)
@@ -319,7 +337,9 @@ def test_fiat_shamir_is_deterministic_over_a_field(field):
     for _ in range(2):
         iop = IOP(domain=field, fiat_shamir=True)
         iop.register(Relation_Sum, Sumcheck())
-        assert iop.run(Statement(Relation_Sum(), oracles=[f], value=f.table.sum()))
+        assert iop.run(
+            Statement(Relation_Sum(), oracles=[TableOracle(f)], value=f.table.sum())
+        )
         t = iop.transcript
         runs.append([(lbl, element_digest(t.entries[lbl].result())) for lbl in t.order])
     assert runs[0] == runs[1]

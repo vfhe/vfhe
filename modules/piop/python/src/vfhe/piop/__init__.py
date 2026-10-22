@@ -1,97 +1,43 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-# vfhe.piop public API re-exports.
-from .circuit import (
-    GKR,
-    GKR_Start,
-    OutputTest,
-    Relation_Circuit,
-    Relation_CircuitSparseIndex,
-    Relation_Equal,
-    Relation_Layer,
-)
+# vfhe.piop public API re-exports: the framework. The relation toolbox is
+# `vfhe.piop.relations`, the protocols `vfhe.piop.protocols`.
 from .composer import Composed, compose
+from .digest import element_digest
+from .evaluation import Relation_Eval, with_start
 from .fs import FS_Verifier
-from .lookup import Lookup, Relation_Lookup
-from .piop import (
-    IOP,
-    Implicit,
-    OracleKind,
-    Party,
-    Proof,
-    Protocol,
-    Prover,
-    Rejection,
-    Relation,
-    Relation_Eval,
-    Relation_Sum,
-    Relation_SumProd,
-    Relation_Zero,
-    Statement,
-    Transcript,
-    Value,
-    Variable,
-    Verifier,
-    element_digest,
-    oracle_kind,
-    statement_oracles,
-    with_start,
-)
-from .range import RangeDecomposition, Relation_Range
-from .sparse import FamilyShape, Relation_SpEval, dense_layering, dense_relation
-from .sumcheck import Sumcheck, SumcheckProd
-from .virtual import (
-    Relation_SumDef,
-    SumDefStart,
-    VirtualEval,
-    VirtualOracle,
-)
+from .iop import IOP
+from .oracle import CommittedOracle, ImplicitOracle, Oracle, OracleKind, TableOracle
+from .party import Party, Prover, Verifier
+from .protocol import Protocol, Rejection
+from .relation import Relation, Statement, statement_oracles
+from .transcript import Proof, Transcript, Value, Variable
+from .virtual import VirtualOracle
 
 __all__ = [
-    "GKR",
     "IOP",
+    "CommittedOracle",
     "Composed",
     "FS_Verifier",
-    "FamilyShape",
-    "GKR_Start",
-    "Implicit",
-    "Lookup",
+    "ImplicitOracle",
+    "Oracle",
     "OracleKind",
-    "OutputTest",
     "Party",
     "Proof",
     "Protocol",
     "Prover",
-    "RangeDecomposition",
     "Rejection",
     "Relation",
-    "Relation_Circuit",
-    "Relation_CircuitSparseIndex",
-    "Relation_Equal",
     "Relation_Eval",
-    "Relation_Layer",
-    "Relation_Lookup",
-    "Relation_Range",
-    "Relation_SpEval",
-    "Relation_Sum",
-    "Relation_SumDef",
-    "Relation_SumProd",
-    "Relation_Zero",
     "Statement",
-    "SumDefStart",
-    "Sumcheck",
-    "SumcheckProd",
+    "TableOracle",
     "Transcript",
     "Value",
     "Variable",
     "Verifier",
-    "VirtualEval",
     "VirtualOracle",
     "compose",
-    "dense_layering",
-    "dense_relation",
     "element_digest",
-    "oracle_kind",
     "statement_oracles",
     "with_start",
 ]

@@ -8,8 +8,8 @@ import random
 
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
-from vfhe.piop import Implicit, VirtualOracle
-from vfhe.piop.virtual import _LibraProver, _ProverVirtual
+from vfhe.piop import ImplicitOracle, TableOracle, VirtualOracle
+from vfhe.piop.protocols.prover_view import _LibraProver, _ProverVirtual, prover_view
 
 
 def _vars(prefix, n):
@@ -21,7 +21,9 @@ def _random_sparse(rng, variables, nnz, ring=None, values=(1,)):
     entries = {}
     for _ in range(nnz):
         entries[rng.randrange(size)] = rng.choice(values)
-    return SparseMLE(ring=ring, variables=variables, evaluations=entries, public=True)
+    return TableOracle(
+        SparseMLE(ring=ring, variables=variables, evaluations=entries), public=True
+    )
 
 
 def _random_table(rng, variables, ring=None):
@@ -29,14 +31,14 @@ def _random_table(rng, variables, ring=None):
         vals = [ring.random_element() for _ in range(1 << len(variables))]
     else:
         vals = [rng.randrange(1, 50) for _ in range(1 << len(variables))]
-    return MLE(ring=ring, variables=variables, evaluations=vals)
+    return TableOracle(MLE(ring=ring, variables=variables, evaluations=vals))
 
 
 def _run_both(G, challenges, witnesses=None):
     """Both strategies through every round with the same challenges;
     returns the two message lists and the two final constants."""
-    dense = G.prover_view(witnesses, strategy="dense")
-    libra = G.prover_view(witnesses, strategy="libra")
+    dense = prover_view(G, witnesses, strategy="dense")
+    libra = prover_view(G, witnesses, strategy="libra")
     assert isinstance(dense, _ProverVirtual) and isinstance(libra, _LibraProver)
     msgs = ([], [])
     views = [dense, libra]
@@ -100,8 +102,8 @@ def test_libra_in_place_rounds_and_repeated_constituents():
     rng = random.Random(3)
     G = _layer_shape(rng, s_z=1, s_x=2)
     chall = [rng.randrange(2, 1 << 16) for _ in G.variables]
-    dense = G.prover_view(strategy="dense")
-    libra = G.prover_view(strategy="libra")
+    dense = prover_view(G, strategy="dense")
+    libra = prover_view(G, strategy="libra")
     for i, (var, r) in enumerate(zip(list(G.variables), chall, strict=True)):
         assert dense.round_evals(var) == libra.round_evals(var)
         dense = dense.evaluate({var: r}, in_place=i > 0)
@@ -142,21 +144,23 @@ def test_libra_falls_back_on_unsupported_shapes():
         dict(zip(C.variables, w, strict=True)),
     ]
     three = VirtualOracle(x + y + w, [pred, A, B, C], [(1, (0, 1, 2, 3))], maps)
-    assert isinstance(three.prover_view(), _ProverVirtual)  # three blocks: dense
+    assert isinstance(prover_view(three), _ProverVirtual)  # three blocks: dense
     with pytest.raises(ValueError):
-        three.prover_view(strategy="libra")
+        prover_view(three, strategy="libra")
     # A stray variable in a map is a construction error, not a constant.
     with pytest.raises(ValueError):
         VirtualOracle(x + y, [pred, A, B], [(1, (0, 1, 2))], maps[:3])
     # With w fixed to a constant the two-block shape fits.
     two = VirtualOracle(x + y + w, [pred, A, B], [(1, (0, 1, 2))], maps[:3])
-    assert isinstance(two.evaluate({w[0]: 1}).prover_view(), _LibraProver)
+    assert isinstance(prover_view(two.evaluate({w[0]: 1})), _LibraProver)
     # No sparse constituent at all: dense, whatever the order.
-    dense_pred = pred.materialize().evaluate({w[0]: 0}, in_place=False)
+    dense_pred = TableOracle(
+        pred.polynomial.materialize().evaluate({w[0]: 0}, in_place=False)
+    )
     swapped = VirtualOracle(
         y + x, [dense_pred, A, B], [(1, (0, 1, 2))], [{v: v for v in x + y}, *maps[1:3]]
     )
-    assert isinstance(swapped.prover_view(), _ProverVirtual)
+    assert isinstance(prover_view(swapped), _ProverVirtual)
 
 
 def test_libra_matches_dense_over_a_field():
@@ -165,18 +169,23 @@ def test_libra_matches_dense_over_a_field():
     rng = random.Random(6)
     field = Field(562949948178433, 2, 5)
     x, y = _vars("x", 2), _vars("y", 2)
-    A = MLE(
-        field=field,
-        variables=_vars("a", 2),
-        evaluations=[rng.randrange(1, 99) for _ in range(4)],
+    A = TableOracle(
+        MLE(
+            field=field,
+            variables=_vars("a", 2),
+            evaluations=[rng.randrange(1, 99) for _ in range(4)],
+        )
     )
-    B = MLE(
-        field=field,
-        variables=_vars("b", 2),
-        evaluations=[rng.randrange(1, 99) for _ in range(4)],
+    B = TableOracle(
+        MLE(
+            field=field,
+            variables=_vars("b", 2),
+            evaluations=[rng.randrange(1, 99) for _ in range(4)],
+        )
     )
-    pred = SparseMLE(
-        field=field, variables=y + x, evaluations={3: 1, 9: 2, 14: 1}, public=True
+    pred = TableOracle(
+        SparseMLE(field=field, variables=y + x, evaluations={3: 1, 9: 2, 14: 1}),
+        public=True,
     )
     maps = [
         {v: v for v in pred.variables},
@@ -197,7 +206,7 @@ def test_libra_matches_dense_over_a_field():
 def _master_shape(rng, s_z, s_x, ring=None, implicit=False):
     """The layer body of `_layer_shape` twice: over its two predicates as
     sparse tables, and over restrictions of one master P over `T || X`, the
-    predicates at the slots T = 0 and T = 1 (`implicit`: P an `Implicit`
+    predicates at the slots T = 0 and T = 1 (`implicit`: P an `ImplicitOracle`
     with the master as its witness). Returns (direct, through, witnesses)."""
     z, x, y = _vars("z", s_z), _vars("x", s_x), _vars("y", s_x)
     A = _random_table(rng, _vars("a", s_x), ring)
@@ -210,11 +219,11 @@ def _master_shape(rng, s_z, s_x, ring=None, implicit=False):
         ring=ring,
         variables=t + _vars("p", width),
         evaluations={
-            **{(k << 1): v for k, v in lin.nonzeros()},
-            **{(k << 1) | 1: v for k, v in xmult.nonzeros()},
+            **{(k << 1): v for k, v in lin.polynomial.nonzeros()},
+            **{(k << 1) | 1: v for k, v in xmult.polynomial.nonzeros()},
         },
     )
-    P = Implicit(master.variables) if implicit else master
+    P = ImplicitOracle(master.variables) if implicit else TableOracle(master)
     r_lin = VirtualOracle.restriction(P, _vars("l", width), {t[0]: 0})
     r_xmult = VirtualOracle.restriction(P, _vars("m", width), {t[0]: 1})
     terms = [(1, (0, 2)), (1, (1, 2, 3))]
@@ -255,7 +264,7 @@ def test_restrictions_of_a_master_send_the_messages_of_the_slices(implicit):
     assert d_msgs == t_msgs == t_libra == d_libra
     assert d_const == t_const == t_lconst
     # The restrictions were kept sparse by the two-phase prover.
-    libra = through.prover_view(witnesses, strategy="libra")
+    libra = prover_view(through, witnesses, strategy="libra")
     assert isinstance(libra, _LibraProver)
     assert all(
         term.predicate is not None and isinstance(term.predicate.sparse, SparseMLE)

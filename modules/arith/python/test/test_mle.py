@@ -293,9 +293,9 @@ def test_mle_full_evaluation():
 
 def test_sparse_mle_evaluates_at_full_points():
     v = [MLE_Variable("x0"), MLE_Variable("x1"), MLE_Variable("x2")]
-    s = SparseMLE(variables=v, evaluations={5: 3, 2: 1}, public=True)
+    s = SparseMLE(variables=v, evaluations={5: 3, 2: 1})
     dense = s.materialize()
-    assert dense.table == [0, 0, 1, 0, 0, 3, 0, 0] and dense.public
+    assert dense.table == [0, 0, 1, 0, 0, 3, 0, 0]
     for point in ([0, 0, 0], [1, 0, 1], [7, 11, 13], [2, -3, 5]):
         pt = dict(zip(v, point, strict=True))
         assert (
@@ -308,10 +308,9 @@ def test_sparse_mle_evaluates_at_full_points():
 def test_sparse_mle_over_a_ring():
     ring = Ring(1024, prime_size=[49], split_degree=4)
     v = [MLE_Variable("x0"), MLE_Variable("x1")]
-    s = SparseMLE(ring=ring, variables=v, evaluations={1: 1, 3: 2}, public=True)
+    s = SparseMLE(ring=ring, variables=v, evaluations={1: 1, 3: 2})
     pt = {v[0]: ring.random_exceptional(), v[1]: ring.random_exceptional()}
     want = s.materialize().evaluate(pt, in_place=False).constant()
     assert s.evaluate(pt).constant() == want
     assert (s + s).evaluations == {1: 2, 3: 4} and (s + s).ring is ring
     assert s.scale(3).evaluations == {1: 3, 3: 6}
-    assert not (s + SparseMLE(ring=ring, variables=v, evaluations={0: 1})).public

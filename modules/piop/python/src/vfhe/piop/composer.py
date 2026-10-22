@@ -43,21 +43,17 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-from .piop import (
-    IOP,
-    Implicit,
-    Party,
-    Protocol,
-    Prover,
-    Relation_Eval,
-    Statement,
-    Verifier,
-    _map_oracles,
-    oracle_closure,
-    statement_oracles,
-)
+from .evaluation import start_claims
+from .oracle import ImplicitOracle, TableOracle, map_oracles, oracle_closure
+from .party import Party, Prover, Verifier
+from .protocol import Protocol
+from .relation import Statement, statement_oracles
 from .virtual import VirtualOracle
+
+if TYPE_CHECKING:
+    from .iop import IOP
 
 Layering = Callable[[Statement], list[list[Statement]]]
 """R's reduction in executable form: given a statement of R, its layers, L_0
@@ -104,7 +100,6 @@ class Composed(Protocol):
         (root,) = statements
         await root.resolved()
         iop = party.iop
-        assert iop is not None
         layers = self.layers(root, iop)  # the same layered DAG on both parties
         heads = _check_rules(layers)
         if half == "prove":
@@ -113,7 +108,7 @@ class Composed(Protocol):
 
         pending: dict[int, list[Statement]] = defaultdict(list)
         if root.head is not None:  # a started root: its own claims
-            pending[id(root.head)] = _start_claims(root)
+            pending[id(root.head)] = start_claims(root)
         outputs: list[Statement] = []
         for layer in layers:
             runs = []
@@ -146,7 +141,6 @@ class Composed(Protocol):
     ) -> None:
         """Run `stmt`'s protocol and route what it leaves."""
         iop = party.iop
-        assert iop is not None
         protocol = iop.protocol_for(stmt)
         if protocol is None:  # terminal: the driver decides it ...
             if stmt.head is not None or any(
@@ -156,8 +150,8 @@ class Composed(Protocol):
             outputs.append(stmt)
             return
         for claim in await getattr(protocol, half)(party, [stmt]):
-            subject = _eval_subject(claim)
-            if isinstance(subject, Implicit):
+            subject = claim.relation.subject(claim)
+            if isinstance(subject, ImplicitOracle):
                 if id(subject) in heads:
                     pending[id(subject)].append(claim)  # its head's layer
                 else:
@@ -231,8 +225,8 @@ def _statement_view(statement: Statement, witnesses: dict) -> Statement:
     the head, the index oracles included, replaced by what the prover holds
     of it. A stored table (`witnesses`) stands in for an implicit oracle; a
     virtual oracle becomes the same definition over its constituents so
-    resolved; any other oracle (a dense or sparse table, public or
-    committed) is its own table. The head is left alone wherever it sits.
+    resolved; any other oracle (a table oracle, public or plain) is left as
+    it is. The head is left alone wherever it sits.
     When an index entry changed, the relation is rebuilt over the viewed
     index, `type(r)(index=viewed)`; a relation with an opaque index is left
     as it is."""
@@ -244,7 +238,7 @@ def _statement_view(statement: Statement, witnesses: dict) -> Statement:
     oracles = tuple(view(o) for o in statement.fields.get("oracles") or ())
     relation = statement.relation
     if relation.index_fields:
-        viewed = _map_oracles(relation.index, view)
+        viewed = map_oracles(relation.index, view)
         if viewed is not relation.index:
             relation = type(relation)(index=viewed)
     fields = dict(statement.fields)
@@ -260,9 +254,12 @@ def _statement_view(statement: Statement, witnesses: dict) -> Statement:
 
 
 def _view_oracle(oracle, witnesses: dict):
+    """`oracle` as the prover holds it: a table oracle to the stored table
+    when there is one, a virtual oracle rebuilt over its constituents so
+    viewed, any other oracle itself."""
     if oracle in witnesses:
-        return witnesses[oracle]
-    if isinstance(oracle, Implicit):
+        return TableOracle(witnesses[oracle])
+    if isinstance(oracle, ImplicitOracle):
         raise RuntimeError(f"{oracle!r} has no table yet (rule 2?)")
     if isinstance(oracle, VirtualOracle):
         return VirtualOracle(
@@ -272,19 +269,3 @@ def _view_oracle(oracle, witnesses: dict):
             oracle.maps,
         )
     return oracle
-
-
-def _start_claims(root: Statement) -> list[Statement]:
-    """The evaluation claims a started root carries on its head."""
-    assert root.head is not None
-    return [
-        root.reduce_to(Relation_Eval, oracles=(root.head,), point=p, value=v)
-        for p, v in zip(root.points, root.values, strict=True)
-    ]
-
-
-def _eval_subject(claim: Statement):
-    """The oracle an evaluation claim is about; None for any other statement."""
-    if isinstance(claim.relation, Relation_Eval):
-        return Relation_Eval.subject(claim)
-    return None

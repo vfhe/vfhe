@@ -25,38 +25,40 @@ column bits; `VirtualEval` then leaves `m + 1` claims on `P_dense`.
 import random
 
 import pytest
-from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
+from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring, RNSRing, SparseMLE
 from vfhe.circuit import add_gate, gkr, mul_gate
 from vfhe.piop import (
-    GKR,
     IOP,
-    GKR_Start,
-    Implicit,
+    ImplicitOracle,
+    Oracle,
     OracleKind,
-    OutputTest,
     Protocol,
     Relation,
-    Relation_Circuit,
-    Relation_Equal,
     Relation_Eval,
-    Relation_Layer,
-    Relation_Sum,
     Statement,
-    Sumcheck,
-    SumDefStart,
-    VirtualEval,
+    TableOracle,
     VirtualOracle,
     compose,
     with_start,
 )
-from vfhe.piop.circuit import Relation_CircuitSparseIndex, _domain_kw
-from vfhe.piop.sparse import (
-    FamilyShape,
-    Relation_SpEval,
-    dense_layering,
-    dense_relation,
+from vfhe.piop.protocols import (
+    GKR,
+    GKR_Start,
+    OutputTest,
+    Sumcheck,
+    SumDefStart,
+    VirtualEval,
 )
-from vfhe.piop.virtual import _one_of, resolve_table
+from vfhe.piop.protocols.sparse import dense_layering
+from vfhe.piop.relations import (
+    Relation_Circuit,
+    Relation_Equal,
+    Relation_Layer,
+    Relation_Sum,
+)
+from vfhe.piop.relations.circuit import Relation_CircuitSparseIndex, _domain_kw
+from vfhe.piop.relations.sparse import FamilyShape, Relation_SpEval, dense_relation
+from vfhe.piop.virtual import resolve_table
 
 
 class _IntDomain:
@@ -89,25 +91,36 @@ def _row(ell: int, t: int, b: int, i: int, col: int) -> int:
     return b | (i << ell) | (col << (ell + t))
 
 
-def basic_encode(shape: FamilyShape, tables: dict, domain) -> MLE:
+def _one(domain):
+    """The multiplicative identity of `domain` (1 for plain Python values)."""
+    if isinstance(domain, RNSRing):
+        return Polynomial(domain).from_array([1])
+    return getattr(domain, "one", 1)
+
+
+def basic_encode(shape: FamilyShape, tables: dict, domain) -> TableOracle:
     """The encoder: the family's tables (the sparse index fields, as the
-    inner relation's index holds them; a slot past a field's tuple is
-    empty) into one dense table over fresh variables `B || T || C`."""
+    inner relation's index holds them, oracles to sparse tables; a slot past
+    a field's tuple is empty) into one dense table over fresh variables
+    `B || T || C`, as a plain oracle."""
     members = []
     for name, position, _ in shape.slots:
         entry = tables.get(name)
         if entry is not None and position is not None:
             entry = entry[position] if position < len(entry) else None
         members.append(entry)
-    nnz = max((len(m.evaluations) for m in members if m is not None), default=1)
+    nnz = max(
+        (len(m.polynomial.evaluations) for m in members if m is not None), default=1
+    )
     ell, t, c = max(1, _bits(nnz)), len(shape.selectors), shape.width.bit_length()
     entries = [0] * (1 << (ell + t + c))
     for i, member in enumerate(members):
         if member is None:
             continue
         width = shape.slots[i][2]
-        for b, k in enumerate(sorted(member.evaluations)):
-            entries[_row(ell, t, b, i, 0)] = member.evaluations[k]
+        evaluations = member.polynomial.evaluations
+        for b, k in enumerate(sorted(evaluations)):
+            entries[_row(ell, t, b, i, 0)] = evaluations[k]
             for j in range(width):
                 entries[_row(ell, t, b, i, j + 1)] = (k >> j) & 1
     variables = (
@@ -115,7 +128,9 @@ def basic_encode(shape: FamilyShape, tables: dict, domain) -> MLE:
         + [MLE_Variable(f"t{i}") for i in range(t)]
         + [MLE_Variable(f"c{i}") for i in range(c)]
     )
-    return MLE(variables=variables, evaluations=entries, **_domain_kw(domain))
+    return TableOracle(
+        MLE(variables=variables, evaluations=entries, **_domain_kw(domain))
+    )
 
 
 @with_start
@@ -125,7 +140,8 @@ class BasicSpEval(Relation_SpEval):
     name = "basic_speval"
 
     def compute_head(self, statement):
-        dense, shape = self.index["dense"], self.index["shape"]
+        shape = self.index["shape"]
+        dense = resolve_table(self.index["dense"])
         ell, _ = _layout(dense, shape)
         t = len(shape.selectors)
         evaluations: dict = {}
@@ -164,12 +180,14 @@ class BasicSpEvalProtocol(Protocol):
         return 0
 
     async def prove(self, prover, statements):
-        return self._sums(statements)
+        assert prover.iop is not None
+        return self._sums(statements, prover.iop.domain)
 
     async def verify(self, verifier, statements):
-        return self._sums(statements)
+        assert verifier.iop is not None
+        return self._sums(statements, verifier.iop.domain)
 
-    def _sums(self, statements):
+    def _sums(self, statements, domain):
         (s,) = statements
         dense, shape = s.index["dense"], s.index["shape"]
         ell, _ = _layout(dense, shape)
@@ -179,7 +197,7 @@ class BasicSpEvalProtocol(Protocol):
             dense.variables[ell : ell + t],
             dense.variables[ell + t :],
         )
-        one = _one_of([dense])
+        one = _one(domain)
 
         def constituent_map(i: int, col: int) -> dict:
             return {
@@ -256,8 +274,10 @@ def _instance(ring=None, inputs=(1, 2, 3, 4), output=None, public_output=True, *
     o = [MLE_Variable("o0")]
     a, b, c, d = inputs
     out = [a + b + c * d, 0] if output is None else output
-    w_in = MLE(ring=ring, variables=w, evaluations=list(inputs))
-    out_mle = MLE(ring=ring, variables=o, evaluations=out, public=public_output)
+    w_in = TableOracle(MLE(ring=ring, variables=w, evaluations=list(inputs)))
+    out_mle = TableOracle(
+        MLE(ring=ring, variables=o, evaluations=out), public=public_output
+    )
     return Statement(_dense_circuit(_circuit(), ring, **kw), oracles=(out_mle, w_in))
 
 
@@ -267,9 +287,9 @@ class _Recording(BasicSpEvalProtocol):
     def __init__(self):
         self.started = []
 
-    def _sums(self, statements):
+    def _sums(self, statements, domain):
         self.started.extend(statements)
-        return super()._sums(statements)
+        return super()._sums(statements, domain)
 
 
 def _slots_claimed(started, shape) -> list[int]:
@@ -290,7 +310,7 @@ def test_family_shape():
     assert len(shape.selectors) == 2 and len(shape.xs) == 5
     P = shape.implicit()
     assert P.variables == shape.selectors + shape.xs
-    assert not hasattr(shape, "variables")  # data, not an oracle
+    assert not isinstance(shape, Oracle)  # data, not an oracle
     assert shape.index_of(2, 5) == 2 | (5 << 2)
     # Member 1: T = bin(1), the two padded coordinates fixed to 0, the three
     # others renamed to variables of its own.
@@ -326,14 +346,18 @@ def test_basic_realization_decodes_what_it_encodes():
     master = relation.compute_head(Statement(relation))
     assert isinstance(master, SparseMLE) and master.variables == P.variables
     for i, predicate in enumerate(sp.index["predicates"]):
-        sliced = resolve_table(shape.restriction(master, i))
-        assert sliced.evaluations == predicate.evaluations
+        sliced = resolve_table(shape.restriction(TableOracle(master), i))
+        assert sliced.evaluations == predicate.polynomial.evaluations
     # The generic decider, over a table in the sparse entry.
-    ideal = BasicSpEval(index={"sparse": master, "dense": dense, "shape": shape})
+    ideal = BasicSpEval(
+        index={"sparse": TableOracle(master), "dense": dense, "shape": shape}
+    )
     assert Statement(ideal).check() and Statement(ideal).head is None
     wrong = master.copy()
     wrong.evaluations[0] = 7
-    bad = BasicSpEval(index={"sparse": wrong, "dense": dense, "shape": shape})
+    bad = BasicSpEval(
+        index={"sparse": TableOracle(wrong), "dense": dense, "shape": shape}
+    )
     assert not Statement(bad).check()
     assert Relation_SpEval.fields == () and Relation_SpEval.head_index == "sparse"
     with pytest.raises(NotImplementedError):
@@ -346,7 +370,7 @@ def test_basic_realization_decodes_what_it_encodes():
     master5 = BasicSpEval(
         index={"sparse": five.implicit(), "dense": dense5, "shape": five}
     ).compute_head(Statement(relation))
-    assert resolve_table(five.restriction(master5, 4)).evaluations == {}
+    assert resolve_table(five.restriction(TableOracle(master5), 4)).evaluations == {}
 
 
 def test_dense_circuit_relation():
@@ -364,7 +388,7 @@ def test_dense_circuit_relation():
     out, w_in = stmt.oracles
     relation = stmt.relation
     assert relation.index_oracles() == (relation.index["dense"],)
-    head = Implicit(out.variables)
+    head = ImplicitOracle(out.variables)
     headed = Statement(relation, oracles=(head, w_in), head=head)
     assert list(relation.compute_head(headed).table) == [15, 0]
     with pytest.raises(TypeError, match="sparse_index_fields"):
@@ -414,7 +438,9 @@ def test_dense_circuit_ideal_model():
     assert not _iop(_IntDomain()).run(_instance(output=[16, 0]))
     assert not _iop(_IntDomain(1)).run(_instance(public_output=False, output=[16, 0]))
     assert _iop(_IntDomain(2)).run(_instance(public_output=False))
-    wide = MLE(variables=_vars("o0", "o1"), evaluations=[15, 0, 0, 0], public=True)
+    wide = TableOracle(
+        MLE(variables=_vars("o0", "o1"), evaluations=[15, 0, 0, 0]), public=True
+    )
     with pytest.raises(ValueError, match="output"):
         _iop(_IntDomain()).run(Statement(stmt.relation, oracles=(wide, w_in)))
 
@@ -478,7 +504,7 @@ class _ThreeCircuits(Relation):
 
     def check(self, statement):
         y, x = statement.oracles
-        return list(y.table) == _chain_output(list(x.table))
+        return list(y.polynomial.table) == _chain_output(list(x.polynomial.table))
 
 
 def _three_layering(domain):
@@ -488,8 +514,12 @@ def _three_layering(domain):
 
     def layering(root):
         y, x = root.oracles
-        m1 = Implicit(_vars(*[f"m1_{i}" for i in range(layer_bit_sizes(_C1)[-1])]))
-        m2 = Implicit(_vars(*[f"m2_{i}" for i in range(layer_bit_sizes(_C2)[-1])]))
+        m1 = ImplicitOracle(
+            _vars(*[f"m1_{i}" for i in range(layer_bit_sizes(_C1)[-1])])
+        )
+        m2 = ImplicitOracle(
+            _vars(*[f"m2_{i}" for i in range(layer_bit_sizes(_C2)[-1])])
+        )
         return [
             [root.reduce_to(c0, oracles=(y, m1))],
             [root.reduce_to(c1, oracles=(m1, m2), head=m1)],
@@ -500,10 +530,14 @@ def _three_layering(domain):
 
 
 def _three_instance(ring=None, tweak=0, public=True):
-    x = MLE(ring=ring, variables=_vars("x0", "x1"), evaluations=[1, 2, 3, 4])
+    x = TableOracle(
+        MLE(ring=ring, variables=_vars("x0", "x1"), evaluations=[1, 2, 3, 4])
+    )
     out = _chain_output([1, 2, 3, 4])
     out[0] += tweak
-    y = MLE(ring=ring, variables=_vars("y0"), evaluations=out, public=public)
+    y = TableOracle(
+        MLE(ring=ring, variables=_vars("y0"), evaluations=out), public=public
+    )
     return Statement(_ThreeCircuits(), oracles=(y, x)), compose(
         _three_layering(ring), "three"
     )
@@ -523,7 +557,7 @@ def test_three_circuits_through_the_dense_relation(public):
     heads = sorted(
         list(t.table)
         for o, t in iop.prover.witnesses.items()
-        if isinstance(o, Implicit) and isinstance(t, MLE)
+        if isinstance(o, ImplicitOracle) and isinstance(t, MLE)
     )
     assert [3, 12] in heads and [36, 15] in heads and [51, 1296] in heads
     masters = [t for t in iop.prover.witnesses.values() if isinstance(t, SparseMLE)]
@@ -604,9 +638,12 @@ def test_seven_predicates_make_seven_claims_on_one_master():
     rng = random.Random(3)
     m = 3
     preds = tuple(
-        SparseMLE(
-            variables=_vars(*[f"q{i}_{k}" for k in range(m)]),
-            evaluations={k: rng.randrange(1, 9) for k in rng.sample(range(8), 3)},
+        TableOracle(
+            SparseMLE(
+                variables=_vars(*[f"q{i}_{k}" for k in range(m)]),
+                evaluations={k: rng.randrange(1, 9) for k in rng.sample(range(8), 3)},
+            ),
+            public=True,
         )
         for i in range(7)
     )
@@ -644,7 +681,8 @@ def test_seven_predicates_make_seven_claims_on_one_master():
     assert sizes == [7 * (m + 1)] * 2
     (master,) = [t for t in iop.prover.witnesses.values() if isinstance(t, SparseMLE)]
     for i, p in enumerate(preds):
-        assert resolve_table(shape.restriction(master, i)).evaluations == p.evaluations
+        sliced = resolve_table(shape.restriction(TableOracle(master), i))
+        assert sliced.evaluations == p.polynomial.evaluations
 
 
 # --- (d) refusals ----------------------------------------------------------------
@@ -689,7 +727,7 @@ def test_refusals():
         _iop(_IntDomain()).run(
             Statement(
                 Relation_Circuit(
-                    index={**index, "dense": Implicit(index["dense"].variables)}
+                    index={**index, "dense": ImplicitOracle(index["dense"].variables)}
                 ),
                 oracles=(out, w_in),
             )

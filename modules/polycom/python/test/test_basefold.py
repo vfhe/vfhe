@@ -13,14 +13,9 @@ verifier-only run, since an in-process prover is honest by construction."""
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring
 from vfhe.crypto import DIGEST_LEN, Merkle
-from vfhe.piop import (
-    IOP,
-    Proof,
-    Relation_Eval,
-    Relation_Sum,
-    Statement,
-    Sumcheck,
-)
+from vfhe.piop import IOP, CommittedOracle, Proof, Relation_Eval, Statement, TableOracle
+from vfhe.piop.protocols import Sumcheck
+from vfhe.piop.relations import Relation_Sum
 from vfhe.polycom import (
     Basefold,
     BasefoldCommitment,
@@ -51,11 +46,11 @@ def _claim(f: MLE, ring: Ring):
     return point, value
 
 
-def _iop(ring: Ring, scheme: Basefold, commitment, opening, rep: int = 4) -> IOP:
+def _iop(ring: Ring, scheme: Basefold, oracle, opening, rep: int = 4) -> IOP:
     iop = IOP(domain=ring)
     iop.register(Relation_Eval, BasefoldEval(scheme, rep=rep))
     if opening is not None:
-        iop.prover.witnesses[commitment] = opening
+        iop.prover.witnesses[oracle.commitment] = opening
     return iop
 
 
@@ -66,14 +61,14 @@ def test_basefold_fiat_shamir_deterministic():
     from vfhe.piop import element_digest
 
     ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, ring)
     runs = []
     for _ in range(2):
         iop = IOP(domain=ring, fiat_shamir=True)
         iop.register(Relation_Eval, BasefoldEval(scheme, rep=4))
-        iop.prover.witnesses[com] = opening
-        stmt = Statement(Relation_Eval(), commitment=com, point=point, value=value)
+        iop.prover.witnesses[oracle.commitment] = opening
+        stmt = Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
         assert iop.run(stmt)
         t = iop.transcript
         runs.append(
@@ -87,7 +82,7 @@ def test_basefold_prove_then_verify_proof():
     # and a second IOP — no prover, no witnesses, no codeword, just the
     # commitment-carrying statement — checks it.
     ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, ring)
 
     def fresh() -> IOP:
@@ -96,8 +91,8 @@ def test_basefold_prove_then_verify_proof():
         return iop
 
     prover_iop = fresh()
-    prover_iop.prover.witnesses[com] = opening
-    stmt = Statement(Relation_Eval(), commitment=com, point=point, value=value)
+    prover_iop.prover.witnesses[oracle.commitment] = opening
+    stmt = Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
     proof = prover_iop.prove(stmt)
     assert len(proof) == len(prover_iop.transcript.order) - len(
         prover_iop.transcript.derived
@@ -108,17 +103,17 @@ def test_basefold_prove_then_verify_proof():
     assert checker.verify(stmt, proof)
 
     # A false claim over the same proof, and a false proof over the claim.
-    wrong = Statement(Relation_Eval(), commitment=com, point=point, value=value + 1)
+    wrong = Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value + 1)
     assert not fresh().verify(wrong, proof)
     assert not fresh().verify(stmt, Proof(proof.messages[:-1]))
 
 
 def test_basefold_commit_then_eval_accepts():
     ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, ring)
-    iop = _iop(ring, scheme, com, opening)
-    stmt = Statement(Relation_Eval(), commitment=com, point=point, value=value)
+    iop = _iop(ring, scheme, oracle, opening)
+    stmt = Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
     assert iop.run(stmt)
     # Canonical write order: the rounds publish roots (pi_k), the base table
     # goes in the clear, and only then does the query phase run — the
@@ -147,11 +142,15 @@ def test_commitment_is_a_succinct_root():
     # whatever the codeword length.
     _, small, f_small = _setup(num_vars=4, k0=4, c=4, d=2)  # n_d = 64
     _, big, f_big = _setup(num_vars=4, k0=4, c=16, d=2)  # n_d = 256
-    com_small, _ = small.commit(f_small)
-    com_big, _ = big.commit(f_big)
-    assert len(com_small.root) == len(com_big.root) == DIGEST_LEN
+    oracle_small, _ = small.commit(f_small)
+    oracle_big, _ = big.commit(f_big)
+    assert (
+        len(oracle_small.commitment.root)
+        == len(oracle_big.commitment.root)
+        == (DIGEST_LEN)
+    )
     # And the tree commits to pairs, so it has half a codeword's leaves.
-    assert len(small.openings[com_small].tree) == small.code.n_d // 2
+    assert len(small.openings[oracle_small.commitment].tree) == small.code.n_d // 2
 
 
 def test_basefold_commit_once_evaluate_many():
@@ -159,85 +158,91 @@ def test_basefold_commit_once_evaluate_many():
     # evaluation claims at different points and different moments (separate
     # single-use IOPs), all against the same commitment and opening.
     ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     for _ in range(3):
         point, value = _claim(f, ring)
-        iop = _iop(ring, scheme, com, opening)
-        stmt = Statement(Relation_Eval(), commitment=com, point=point, value=value)
+        iop = _iop(ring, scheme, oracle, opening)
+        stmt = Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
         assert iop.run(stmt)
-        assert stmt.commitment is com  # no re-commitment anywhere
-        assert scheme.openings[com] is opening  # nor re-encoding
+        assert stmt.oracles[0] is oracle  # no re-commitment anywhere
+        assert scheme.openings[oracle.commitment] is opening  # nor re-encoding
 
 
 def test_basefold_rejects_false_claim():
     ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, _ = _claim(f, ring)
-    iop = _iop(ring, scheme, com, opening)
+    iop = _iop(ring, scheme, oracle, opening)
     wrong = ring.random_element()
     assert not iop.run(
-        Statement(Relation_Eval(), commitment=com, point=point, value=wrong)
+        Statement(Relation_Eval(), oracles=(oracle,), point=point, value=wrong)
     )
 
 
 def test_basefold_opening_witness_is_required_and_typed():
     ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
-    com, _ = scheme.commit(f)
+    oracle, _ = scheme.commit(f)
     point, value = _claim(f, ring)
-    stmt = {"commitment": com, "point": point, "value": value}
+    stmt = {"oracles": (oracle,), "point": point, "value": value}
 
     # commit() records the opening on the scheme and BasefoldEval falls back
     # to it, so "missing" means neither the prover nor the scheme holds it
     # (e.g. a prover that did not run commit).
-    del scheme.openings[com]
-    iop = _iop(ring, scheme, com, opening=None)  # witness never installed
+    del scheme.openings[oracle.commitment]
+    iop = _iop(ring, scheme, oracle, opening=None)  # witness never installed
     with pytest.raises(LookupError, match=r"prover\.witnesses"):
         iop.run(Statement(Relation_Eval(), **stmt))
 
     # The polynomial alone is not an opening: the codeword and its tree are
     # part of it too.
-    iop = _iop(ring, scheme, com, opening=f)
+    iop = _iop(ring, scheme, oracle, opening=f)
     with pytest.raises(TypeError, match="BasefoldOpening"):
         iop.run(Statement(Relation_Eval(), **stmt))
 
 
 def test_basefold_open_algorithm():
     ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
-    com, _ = scheme.commit(f)
-    assert scheme.open(com, f)
+    oracle, _ = scheme.commit(f)
+    assert scheme.open(oracle.commitment, f)
     other = MLE(
         ring=ring,
         variables=f.variables,
         evaluations=[ring.random_element() for _ in range(16)],
     )
-    assert not scheme.open(com, other)
+    assert not scheme.open(oracle.commitment, other)
 
 
 def test_basefold_all_variables_folded():
     # kappa = 0: the base code has a single-element message.
     ring, scheme, f = _setup(num_vars=2, k0=1, c=16, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, ring)
-    iop = _iop(ring, scheme, com, opening)
-    assert iop.run(Statement(Relation_Eval(), commitment=com, point=point, value=value))
+    iop = _iop(ring, scheme, oracle, opening)
+    assert iop.run(
+        Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
+    )
 
 
 def test_basefold_multi_prime_ring():
     ring, scheme, f = _setup(num_vars=3, k0=2, c=8, d=2, prime_size=[49, 49])
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, ring)
-    iop = _iop(ring, scheme, com, opening)
-    assert iop.run(Statement(Relation_Eval(), commitment=com, point=point, value=value))
+    iop = _iop(ring, scheme, oracle, opening)
+    assert iop.run(
+        Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
+    )
 
 
 def test_basefold_deeper_code():
     # d = 3: three folds, three roots (commitment + pi1 + pi2), and a query
     # walk three levels deep.
     ring, scheme, f = _setup(num_vars=4, k0=2, c=8, d=3)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, ring)
-    iop = _iop(ring, scheme, com, opening)
-    assert iop.run(Statement(Relation_Eval(), commitment=com, point=point, value=value))
+    iop = _iop(ring, scheme, oracle, opening)
+    assert iop.run(
+        Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
+    )
     assert "basefold/pi2" in iop.transcript.order
 
 
@@ -256,10 +261,10 @@ def _replay_with_tamper(honest: IOP, ring, scheme, stmt_fields, tamper):
 
 def _honest_run(num_vars=4, k0=4, c=4, d=2):
     ring, scheme, f = _setup(num_vars=num_vars, k0=k0, c=c, d=d)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, ring)
-    honest = _iop(ring, scheme, com, opening)
-    fields = {"commitment": com, "point": point, "value": value}
+    honest = _iop(ring, scheme, oracle, opening)
+    fields = {"oracles": (oracle,), "point": point, "value": value}
     assert honest.run(Statement(Relation_Eval(), **fields))
     return ring, scheme, honest, fields
 
@@ -295,8 +300,11 @@ def test_basefold_rejects_tampered_commitment():
     # The commitment is instance data: a statement carrying a root the
     # answers do not open under fails the very first path check.
     ring, scheme, honest, fields = _honest_run()
-    fields["commitment"] = BasefoldCommitment(
-        fields["commitment"].variables, bytes(DIGEST_LEN)
+    (named,) = fields["oracles"]
+    fields["oracles"] = (
+        CommittedOracle(
+            named.variables, BasefoldCommitment(named.variables, bytes(DIGEST_LEN))
+        ),
     )
     assert not _replay_with_tamper(honest, ring, scheme, fields, lambda _, v: v)
 
@@ -322,7 +330,7 @@ def test_basefold_rejects_answer_from_the_wrong_position():
     # the path is checked against the index the verifier chose itself, which
     # is why MerklePath deliberately does not carry one.
     ring, scheme, honest, fields = _honest_run()
-    opening = scheme.openings[fields["commitment"]]
+    opening = scheme.openings[fields["oracles"][0].commitment]
     proto = BasefoldEval(scheme, rep=4)
     queries = proto.query_positions(
         honest.transcript.entries["basefold/queries"].result()
@@ -344,38 +352,46 @@ def test_pair_leaves_authenticate_both_fold_operands():
     # over the pair, so the tree has n/2 leaves and Merkle.verify accepts
     # the pair as a unit.
     _, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     tree = opening.tree
-    assert len(tree) == len(opening.word) // 2 and tree.root == com.root
+    assert len(tree) == len(opening.word) // 2 and tree.root == oracle.commitment.root
     for i in (0, 3, len(tree) - 1):
         pair = scheme.code.pair_at(opening.word, i)
-        assert Merkle.verify(com.root, i, tree.open(i), pair, hash=pair_digest)
+        assert Merkle.verify(
+            oracle.commitment.root, i, tree.open(i), pair, hash=pair_digest
+        )
         # The pair is ordered: swapping the two entries is a different leaf.
         assert not Merkle.verify(
-            com.root, i, tree.open(i), (pair[1], pair[0]), hash=pair_digest
+            oracle.commitment.root,
+            i,
+            tree.open(i),
+            (pair[1], pair[0]),
+            hash=pair_digest,
         )
 
 
 def test_sumcheck_then_basefold_pipeline():
     # The compiled chain: Relation_Sum --Sumcheck--> Relation_Eval
-    # --BasefoldEval. The eval claim carries only the oracle (sumcheck
-    # inherits it); BasefoldEval resolves the commitment from the scheme's
-    # records — committed before the run, before any challenge fixes the
-    # evaluation point — and installs its opening as the witness itself.
+    # --BasefoldEval. The eval claim names the committed oracle (sumcheck
+    # inherits it) — committed before the run, before any challenge fixes
+    # the evaluation point; BasefoldEval takes the opening from the scheme's
+    # records and installs it as the witness itself. The sumcheck prover
+    # folds the table stored under the oracle.
     ring, scheme, f = _setup(num_vars=3, k0=2, c=8, d=2)
-    scheme.commit(f)
+    oracle, _ = scheme.commit(f)
     total = None
     for p in f.table:
         total = p.copy() if total is None else total + p
 
     def pipeline_iop() -> IOP:
         iop = IOP(domain=ring)
+        iop.prover.witnesses[oracle] = f
         iop.register(Relation_Sum, Sumcheck())
         iop.register(Relation_Eval, BasefoldEval(scheme, rep=4))
         return iop
 
     iop = pipeline_iop()
-    assert iop.run(Statement(Relation_Sum(), oracles=[f], value=total))
+    assert iop.run(Statement(Relation_Sum(), oracles=[oracle], value=total))
     # DAG: sumcheck's eval claim is child /0, discharged in place — no
     # bridge level in the paths.
     assert "basefold/0/g0" in iop.transcript.order
@@ -385,12 +401,12 @@ def test_sumcheck_then_basefold_pipeline():
 
     iop = pipeline_iop()
     wrong = total + Polynomial(ring).from_array([1])
-    assert not iop.run(Statement(Relation_Sum(), oracles=[f], value=wrong))
+    assert not iop.run(Statement(Relation_Sum(), oracles=[oracle], value=wrong))
 
 
 def test_basefold_requires_a_committed_oracle():
-    # An oracle-carrying eval claim whose oracle was never committed cannot
-    # be resolved to a commitment.
+    # An eval claim on a plain table oracle carries no commitment to prove
+    # against.
     ring, scheme, f = _setup(num_vars=3, k0=2, c=8, d=2)
     total = None
     for p in f.table:
@@ -398,8 +414,8 @@ def test_basefold_requires_a_committed_oracle():
     iop = IOP(domain=ring)
     iop.register(Relation_Sum, Sumcheck())
     iop.register(Relation_Eval, BasefoldEval(scheme, rep=4))
-    with pytest.raises(LookupError, match="never committed"):
-        iop.run(Statement(Relation_Sum(), oracles=[f], value=total))
+    with pytest.raises(TypeError, match="committed oracle"):
+        iop.run(Statement(Relation_Sum(), oracles=[TableOracle(f)], value=total))
 
 
 def test_replay_harness_accepts_an_untampered_transcript():
@@ -415,7 +431,7 @@ def test_basefold_rejects_a_consistently_committed_wrong_fold():
     # answers from — but it folded with the wrong challenge. Only the
     # fold-consistency check (not the path check) can catch this.
     ring, scheme, honest, fields = _honest_run()
-    opening = scheme.openings[fields["commitment"]]
+    opening = scheme.openings[fields["oracles"][0].commitment]
     d = scheme.code.d
     r0 = honest.transcript.entries["basefold/r0"].result()
     wrong_r = r0 + Polynomial(ring).from_array([1])

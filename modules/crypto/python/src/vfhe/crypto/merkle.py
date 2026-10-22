@@ -137,6 +137,10 @@ class MerklePath:
         """The siblings concatenated, the layout the C verifier reads."""
         return self._packed
 
+    def digest(self) -> bytes:
+        """The digest a transcript absorbs for the path: of its bytes."""
+        return hash_bytes(b"merkle-path" + self._packed)
+
     def __repr__(self) -> str:
         return f"MerklePath({[s.hex() for s in self.siblings]})"
 

@@ -12,14 +12,9 @@ element and vector types the protocol carries as well as in the code."""
 import pytest
 from vfhe.arith import MLE, Field, FieldVector, MLE_Variable, PseudoMersenneField
 from vfhe.crypto import DIGEST_LEN
-from vfhe.piop import (
-    IOP,
-    Proof,
-    Relation_Eval,
-    Relation_Sum,
-    Statement,
-    Sumcheck,
-)
+from vfhe.piop import IOP, Proof, Relation_Eval, Statement
+from vfhe.piop.protocols import Sumcheck
+from vfhe.piop.relations import Relation_Sum
 from vfhe.polycom import Basefold, BasefoldEval, FieldFoldableRS
 from vfhe.polycom.basefold import Word  # noqa: TC002
 
@@ -52,22 +47,24 @@ def _claim(f: MLE, field):
     return point, value
 
 
-def _iop(field, scheme, commitment, opening, rep: int = 4, fiat_shamir=False) -> IOP:
+def _iop(field, scheme, oracle, opening, rep: int = 4, fiat_shamir=False) -> IOP:
     iop = IOP(domain=field, fiat_shamir=fiat_shamir)
     iop.register(Relation_Eval, BasefoldEval(scheme, rep=rep))
     if opening is not None:
-        iop.prover.witnesses[commitment] = opening
+        iop.prover.witnesses[oracle.commitment] = opening
     return iop
 
 
 def test_commit_then_eval_accepts(field):
     scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     assert isinstance(opening.word, FieldVector) and len(opening.word) == 64
-    assert len(com.root) == DIGEST_LEN and len(opening.tree) == 32
+    assert len(oracle.commitment.root) == DIGEST_LEN and len(opening.tree) == 32
     point, value = _claim(f, field)
-    iop = _iop(field, scheme, com, opening)
-    assert iop.run(Statement(Relation_Eval(), commitment=com, point=point, value=value))
+    iop = _iop(field, scheme, oracle, opening)
+    assert iop.run(
+        Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
+    )
     assert iop.transcript.order == [
         "basefold/g0",
         "basefold/r0",
@@ -88,17 +85,19 @@ def test_commit_then_eval_accepts(field):
 
 def test_rejects_false_claim_and_wrong_point(field):
     scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, field)
-    iop = _iop(field, scheme, com, opening)
+    iop = _iop(field, scheme, oracle, opening)
     assert not iop.run(
-        Statement(Relation_Eval(), commitment=com, point=point, value=value + field.one)
+        Statement(
+            Relation_Eval(), oracles=(oracle,), point=point, value=value + field.one
+        )
     )
     other_point, _ = _claim(f, field)
     other_point[f.variables[0]] = field.random_element(b"elsewhere")
-    iop = _iop(field, scheme, com, opening)
+    iop = _iop(field, scheme, oracle, opening)
     assert not iop.run(
-        Statement(Relation_Eval(), commitment=com, point=other_point, value=value)
+        Statement(Relation_Eval(), oracles=(oracle,), point=other_point, value=value)
     )
 
 
@@ -106,48 +105,48 @@ def test_fiat_shamir_deterministic_and_prove_verify(field):
     from vfhe.piop import element_digest
 
     scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, field)
-    stmt_fields = {"commitment": com, "point": point, "value": value}
+    stmt_fields = {"oracles": (oracle,), "point": point, "value": value}
     runs = []
     for _ in range(2):
-        iop = _iop(field, scheme, com, opening, fiat_shamir=True)
+        iop = _iop(field, scheme, oracle, opening, fiat_shamir=True)
         assert iop.run(Statement(Relation_Eval(), **stmt_fields))
         t = iop.transcript
         runs.append([(lbl, element_digest(t.entries[lbl].result())) for lbl in t.order])
     assert runs[0] == runs[1]
 
-    prover_iop = _iop(field, scheme, com, opening, fiat_shamir=True)
+    prover_iop = _iop(field, scheme, oracle, opening, fiat_shamir=True)
     proof = prover_iop.prove(Statement(Relation_Eval(), **stmt_fields))
-    checker = _iop(field, scheme, com, None, fiat_shamir=True)
+    checker = _iop(field, scheme, oracle, None, fiat_shamir=True)
     assert not checker.prover.witnesses
     assert checker.verify(Statement(Relation_Eval(), **stmt_fields), proof)
     wrong = Statement(
-        Relation_Eval(), commitment=com, point=point, value=value + field.one
+        Relation_Eval(), oracles=(oracle,), point=point, value=value + field.one
     )
-    assert not _iop(field, scheme, com, None, fiat_shamir=True).verify(wrong, proof)
-    assert not _iop(field, scheme, com, None, fiat_shamir=True).verify(
+    assert not _iop(field, scheme, oracle, None, fiat_shamir=True).verify(wrong, proof)
+    assert not _iop(field, scheme, oracle, None, fiat_shamir=True).verify(
         Statement(Relation_Eval(), **stmt_fields), Proof(proof.messages[:-1])
     )
 
 
 def test_commit_once_evaluate_many_and_open(field):
     scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     for i in range(3):
         point = {
             var: field.random_element(bytes([i, j]))
             for j, var in enumerate(f.variables)
         }
         value = f.evaluate(point, in_place=False).constant()
-        iop = _iop(field, scheme, com, opening)
+        iop = _iop(field, scheme, oracle, opening)
         assert iop.run(
-            Statement(Relation_Eval(), commitment=com, point=point, value=value)
+            Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
         )
-        assert scheme.openings[com] is opening
-    assert scheme.open(com, f)
+        assert scheme.openings[oracle.commitment] is opening
+    assert scheme.open(oracle.commitment, f)
     other = MLE(field=field, variables=f.variables, evaluations=f.table + field.one)
-    assert not scheme.open(com, other)
+    assert not scheme.open(oracle.commitment, other)
 
 
 def test_commit_requires_a_field_or_ring_table(field):
@@ -162,35 +161,36 @@ def test_commit_requires_a_field_or_ring_table(field):
 def test_all_variables_folded_and_deeper_code(field):
     # kappa = 0: the base table is a single element; and d = 3 folds.
     scheme, f = _setup(field, num_vars=3, k0=1, c=16, d=3)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, field)
-    assert _iop(field, scheme, com, opening).run(
-        Statement(Relation_Eval(), commitment=com, point=point, value=value)
+    assert _iop(field, scheme, oracle, opening).run(
+        Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
     )
     scheme, f = _setup(field, num_vars=5, k0=4, c=4, d=3)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, field)
-    assert _iop(field, scheme, com, opening).run(
-        Statement(Relation_Eval(), commitment=com, point=point, value=value)
+    assert _iop(field, scheme, oracle, opening).run(
+        Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
     )
 
 
 def test_sumcheck_then_basefold_pipeline(field):
     scheme, f = _setup(field, num_vars=3, k0=2, c=8, d=2)
-    scheme.commit(f)
+    oracle, _ = scheme.commit(f)
     total = f.table.sum()
 
     def pipeline_iop() -> IOP:
         iop = IOP(domain=field)
+        iop.prover.witnesses[oracle] = f
         iop.register(Relation_Sum, Sumcheck())
         iop.register(Relation_Eval, BasefoldEval(scheme, rep=4))
         return iop
 
     iop = pipeline_iop()
-    assert iop.run(Statement(Relation_Sum(), oracles=[f], value=total))
+    assert iop.run(Statement(Relation_Sum(), oracles=[oracle], value=total))
     assert "basefold/0/g0" in iop.transcript.order
     assert not pipeline_iop().run(
-        Statement(Relation_Sum(), oracles=[f], value=total + field.one)
+        Statement(Relation_Sum(), oracles=[oracle], value=total + field.one)
     )
 
 
@@ -207,10 +207,10 @@ def _replay_with_tamper(honest: IOP, field, scheme, stmt_fields, tamper):
 
 def _honest_run(field):
     scheme, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
-    com, opening = scheme.commit(f)
+    oracle, opening = scheme.commit(f)
     point, value = _claim(f, field)
-    honest = _iop(field, scheme, com, opening)
-    fields = {"commitment": com, "point": point, "value": value}
+    honest = _iop(field, scheme, oracle, opening)
+    fields = {"oracles": (oracle,), "point": point, "value": value}
     assert honest.run(Statement(Relation_Eval(), **fields))
     return scheme, honest, fields
 
@@ -254,7 +254,7 @@ def test_rejects_a_consistently_committed_wrong_fold(field):
     # Every path verifies (the liar really built a tree over its codeword),
     # so only the fold-consistency check catches the wrong challenge.
     scheme, honest, fields = _honest_run(field)
-    opening = scheme.openings[fields["commitment"]]
+    opening = scheme.openings[fields["oracles"][0].commitment]
     d = scheme.code.d
     wrong_r = honest.transcript.entries["basefold/r0"].result() + field.one
     # A codeword in whichever form this code produces (see basefold.Word).

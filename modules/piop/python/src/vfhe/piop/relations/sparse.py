@@ -21,10 +21,8 @@ widths, which sparse index fields they fill; it builds the master's handle
 and its restrictions. `dense_relation(inner)` derives from a relation with
 sparse index fields (`Relation_XSparseIndex`, declaring
 `sparse_index_fields`) the relation `Relation_X` whose index holds P_dense,
-the shape and the realization in their place, and `dense_layering` is its
-protocol as a two-layer composition (`composer.py`): the inner relation over
-restrictions of a fresh master, then the realization's statement headed at
-that master.
+the shape and the realization in their place; its protocol is
+`protocols.sparse.dense_layering`.
 """
 
 from __future__ import annotations
@@ -32,9 +30,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vfhe.arith import MLE_Variable
-
-from .piop import Implicit, Relation, Statement, _chain, _map_oracles, element_digest
-from .virtual import VirtualOracle, resolve_table
+from vfhe.crypto import chain_digest
+from vfhe.piop.digest import element_digest
+from vfhe.piop.oracle import ImplicitOracle, Oracle, TableOracle, map_oracles
+from vfhe.piop.relation import Relation, Statement
+from vfhe.piop.virtual import VirtualOracle, resolve_table
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -54,9 +54,9 @@ class FamilyShape:
     (bit `j` of `i` at `T_j`), the coordinates of X past its width fixed to
     0, the rest renamed to variables of its own.
 
-    The shape sits in the index of the dense relation, as data: it exposes
-    no `variables` attribute, so `Relation.index_oracles` does not take it
-    for an oracle, and `digest()` is by the widths.
+    The shape sits in the index of the dense relation, as data (not an
+    `Oracle`, so `Relation.index_oracles` does not take it for one), and
+    `digest()` is by the widths.
     """
 
     def __init__(self, widths: Mapping[str, int | tuple[int, ...]]) -> None:
@@ -83,7 +83,7 @@ class FamilyShape:
         widths: dict[str, int | tuple[int, ...]] = {}
         for name in fields:
             entry = index[name]
-            if hasattr(entry, "variables"):
+            if isinstance(entry, Oracle):
                 widths[name] = entry.num_vars
             else:
                 widths[name] = tuple(t.num_vars for t in entry)
@@ -94,9 +94,9 @@ class FamilyShape:
         """The number of slots, a."""
         return len(self.slots)
 
-    def implicit(self) -> Implicit:
+    def implicit(self) -> ImplicitOracle:
         """A fresh handle for the master, over `selectors + xs`."""
-        return Implicit(self.selectors + self.xs)
+        return ImplicitOracle(self.selectors + self.xs)
 
     def slot_bits(self, i: int) -> dict:
         """`T = bin(i)`: the slot variables fixed to the bits of `i`."""
@@ -131,7 +131,7 @@ class FamilyShape:
         return {n: tuple(v) if isinstance(v, list) else v for n, v in out.items()}
 
     def digest(self) -> bytes:
-        return _chain([b"family-shape", element_digest(self.widths)])
+        return chain_digest([b"family-shape", element_digest(self.widths)])
 
     def __repr__(self) -> str:
         return f"FamilyShape({self.widths!r})"
@@ -175,7 +175,7 @@ class Relation_SpEval(Relation):
         )
 
     def check(self, statement: Statement) -> bool:
-        P = self.index["sparse"]
+        P = resolve_table(self.index["sparse"])
         decoded = self.compute_head(statement)
         if list(decoded.variables) != list(P.variables):
             return False
@@ -228,8 +228,11 @@ def dense_relation(inner_cls: type[Relation]) -> type[Relation]:
             return relation.compute_head(Statement(relation))
 
         def check(self, statement: Statement) -> bool:
-            placed = _map_oracles(
-                self.index["shape"].place(self.decode()), resolve_table
+            # The decoded slices in the sparse fields' place, as the public
+            # tables the sparse-index relation is written against.
+            placed = map_oracles(
+                self.index["shape"].place(TableOracle(self.decode())),
+                lambda o: TableOracle(resolve_table(o), public=True),
             )
             inner = inner_cls(index={**{n: self.index[n] for n in rest}, **placed})
             return Statement(inner, **self._inner_fields(statement)).check()
@@ -249,30 +252,3 @@ def dense_relation(inner_cls: type[Relation]) -> type[Relation]:
         "index oracle, its shape and its realization (`dense_relation`)."
     )
     return Dense
-
-
-def dense_layering(root: Statement) -> list[list[Statement]]:
-    """The protocol of a dense-index relation as a layered reduction: `L_0`
-    the inner relation over the root's instance fields, its sparse index
-    fields holding restrictions of a fresh master P, headed at the root's
-    head when the root is started (the Composer then starts it with the
-    root's claims); `L_1` the realization over `(P, P_dense, shape)`, headed
-    at P through its index. Rule 1: P heads `L_1`; rule 2: `L_0` reaches P
-    through its index, `L_1` mentions only P_dense beside its head. No
-    message, no challenge, soundness error 0. Register
-    `compose(dense_layering)` against the dense relation and its `Start`.
-    """
-    inner_cls = root.relation.inner
-    shape = root.index["shape"]
-    P = shape.implicit()
-    sparse = inner_cls.sparse_index_fields
-    rest = {n: root.index[n] for n in inner_cls.index_fields if n not in sparse}
-    inner = inner_cls(index={**rest, **shape.place(P)})
-    realization = root.index["speval"](
-        index={"sparse": P, "dense": root.index["dense"], "shape": shape}
-    )
-    fields = {n: root.fields[n] for n in inner_cls.fields if n in root.fields}
-    return [
-        [root.reduce_to(inner, head=root.head, **fields)],
-        [root.reduce_to(realization)],
-    ]

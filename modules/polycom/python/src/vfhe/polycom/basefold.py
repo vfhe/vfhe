@@ -60,19 +60,23 @@ from vfhe.arith import MLE, Field, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
 from vfhe.crypto import DIGEST_LEN, Merkle, hash_bytes
 from vfhe.piop import (
-    OracleKind,
+    CommittedOracle,
     Protocol,
     Prover,
     Rejection,
     Relation,
     Relation_Eval,
-    Relation_SumProd,
     Statement,
-    SumcheckProd,
+    TableOracle,
     Verifier,
     element_digest,
 )
-from vfhe.piop.sumcheck import _exceptional_set_size, interpolate_evals
+from vfhe.piop.protocols.rounds import (
+    exceptional_set_size,
+    interpolate_evals,
+    prod_round_evals,
+)
+from vfhe.piop.relations import Relation_SumProd
 
 # `pair_digest` is re-exported here: the aliased form is what marks it
 # as a public name of this module rather than an unused import.
@@ -179,18 +183,16 @@ class Basefold:
     (its `code` is the Setup output); `commit` / `open` below, and Eval is
     the `BasefoldEval` protocol, registered for `Relation_Eval`.
 
-    `commitments` is the scheme's public oracle -> commitment association:
-    which polynomial a commitment binds is instance data both parties know,
-    and it is how `BasefoldEval` finds the commitment behind an evaluation
-    claim that carries only the oracle (the compiled-pipeline shape). `openings` is the matching *prover-side*
-    map (commitment -> `BasefoldOpening`); a verifier's copy of a scheme
-    simply never holds one, and the in-process sharing of this object is the
-    same convention that lets a verifier hold MLE oracles it may only query.
+    `commit` returns the committed oracle (`piop.CommittedOracle`: the
+    commitment and the variables, what a statement names) and the opening.
+    `openings` is the *prover-side* map (commitment -> `BasefoldOpening`)
+    `BasefoldEval` falls back to; a verifier's copy of a scheme simply never
+    holds one, and the in-process sharing of this object is the same
+    convention that lets a verifier hold table oracles it may only query.
     """
 
     def __init__(self, code: FoldableRS | FieldFoldableRS):
         self.code = code
-        self.commitments: dict[MLE, BasefoldCommitment] = {}
         self.openings: dict[BasefoldCommitment, BasefoldOpening] = {}
 
     def _check_polynomial(self, f) -> None:
@@ -219,38 +221,32 @@ class Basefold:
         """
         return Merkle.from_digests(self.code.leaf_digests(word))
 
-    def commit(self, f: MLE) -> tuple[BasefoldCommitment, BasefoldOpening]:
-        """Commit to f: encode, build the Merkle tree, return the root as the
-        commitment and the codeword plus tree as the prover's opening data.
+    def commit(
+        self, f: MLE, prover: Prover | None = None
+    ) -> tuple[CommittedOracle, BasefoldOpening]:
+        """Commit to f: encode, build the Merkle tree, return the committed
+        oracle -- the root as the commitment, with the variables -- and the
+        codeword plus tree as the prover's opening data.
 
-        Both costs are paid here, once; store the opening under the
-        commitment on whichever provers will run evaluation proofs
-        (`prover.witnesses[commitment] = opening`).
-
-        The table is tagged with what was done to it: `kind` becomes
-        `OracleKind.committed` and `commitment` the commitment, so that a
-        claim carrying the table is `committed` to `vfhe.piop.oracle_kind`
-        and a statement's digest records the table by its commitment. A table
-        marked `public` is refused: public and committed are two discharges
-        of a claim on a table, never two properties of one. The tag lives on
-        this object -- a copy of the table carries none -- and mutating the
-        table after the commit breaks the binding, as the scheme's record,
-        keyed by identity, already assumes.
+        Both costs are paid here, once. The opening is recorded on the scheme
+        and, with `prover` given, installed on it: `witnesses[commitment] =
+        opening` is what the evaluation protocol proves against, and
+        `witnesses[oracle] = f` is the table a sumcheck prover folds when
+        the oracle is one of its factors (`piop.resolve_table`). Without a
+        prover, store them yourself on whichever provers will run. Mutating
+        the table after the commit breaks the binding.
         """
         self._check_polynomial(f)
-        if f.public:
-            raise ValueError(
-                "a table marked public is not committed: the verifier evaluates "
-                "it itself"
-            )
         word = self.code.encode(_coefficients(f))
         tree = self.merkle_commit(word)
         commitment = BasefoldCommitment(f.variables, tree.root)
-        self.commitments[f] = commitment
-        self.openings[commitment] = BasefoldOpening(f, word, tree)
-        f.kind = OracleKind.committed  # pyright: ignore[reportAttributeAccessIssue]
-        f.commitment = commitment  # pyright: ignore[reportAttributeAccessIssue]
-        return commitment, self.openings[commitment]
+        opening = BasefoldOpening(f, word, tree)
+        self.openings[commitment] = opening
+        oracle = CommittedOracle(f.variables, commitment)
+        if prover is not None:
+            prover.witnesses[oracle] = f
+            prover.witnesses[commitment] = opening
+        return oracle, opening
 
     def open(self, commitment: BasefoldCommitment, f) -> bool:
         """The Open algorithm [ZCF24, Def. 8]: does `commitment` open to f?
@@ -272,14 +268,12 @@ class BasefoldEval(Protocol):
     against the scheme's code, replacing the terminal oracle query.
 
     Register with `iop.register(Relation_Eval, BasefoldEval(scheme))` —
-    every evaluation claim reaching the driver is then proved against a
-    commitment: the statement's own `commitment` field when set (the
-    standalone commit-then-eval shape), else the one the scheme recorded
-    for the statement's oracle at commit time (the compiled-pipeline shape,
-    where sumcheck emits oracle-carrying claims; an oracle the scheme never
-    committed is a `LookupError`). This is [CHMMVW20]'s "queries become
-    opening claims" done in place — no separate relation, since the
-    commitment is just the oracle's other form [ZCF24, §4].
+    every evaluation claim reaching the driver is then proved against the
+    commitment its oracle carries (a `CommittedOracle`, as `commit`
+    returns it; a claim on any other oracle is a `TypeError`). This is
+    [CHMMVW20]'s "queries become opening claims" done in place — no
+    separate relation, since the commitment is just the oracle's other
+    form [ZCF24, §4].
 
     The prover's witness is the `BasefoldOpening`, from
     `prover.witnesses[commitment]` (falling back to the scheme's own
@@ -322,28 +316,23 @@ class BasefoldEval(Protocol):
         is a property of BLAKE3 and the security parameter, not of these
         protocol parameters, so it is deliberately not folded in here.
         """
-        size = _exceptional_set_size(domain)
+        size = exceptional_set_size(domain)
         if size is None:
             return None
         d = self.code.d
         return 2 * d / (gamma**3 * size) + (1 - delta + gamma * d) ** self.rep
 
     def _check_statement(self, statement: Statement) -> BasefoldCommitment:
-        """The commitment this claim is proved against: the statement's own
-        field when set, else the scheme's record for the statement's oracle."""
-        commitment = statement.commitment
-        if commitment is None and statement.oracles:
-            (f,) = statement.oracles
-            commitment = self.scheme.commitments.get(f)
-            if commitment is None:
-                raise LookupError(
-                    "evaluation claim on an oracle the scheme never "
-                    "committed; call scheme.commit(f) before running the IOP"
-                )
-        if not isinstance(commitment, BasefoldCommitment):
+        """The commitment this claim is proved against: the one its oracle
+        carries."""
+        (oracle,) = statement.oracles
+        commitment = getattr(oracle, "commitment", None)
+        if not isinstance(oracle, CommittedOracle) or not isinstance(
+            commitment, BasefoldCommitment
+        ):
             raise TypeError(
-                "the evaluation claim carries no BasefoldCommitment (neither "
-                "a commitment field nor a committed oracle)"
+                "the evaluation claim is not on a basefold-committed oracle; "
+                "name the oracle scheme.commit(f) returned"
             )
         if (1 << commitment.num_vars) != self.code.k_d:
             raise ValueError(
@@ -433,7 +422,7 @@ class BasefoldEval(Protocol):
         cur_eq = MLE.eq(_domain_of(f), zs, variables=f.variables)
         for s in range(d):
             var = cur_f.variables[0]
-            evals = SumcheckProd.prod_round_evals([cur_f, cur_eq])
+            evals = prod_round_evals([cur_f, cur_eq])
             iop.transcript.write(f"{label}/g{s}", evals)
             r = iop.verifier.challenge(f"{label}/r{s}")
             cur_f = cur_f.evaluate({var: r}, in_place=cur_f is not f)
@@ -514,7 +503,7 @@ class BasefoldEval(Protocol):
         eq_tail = MLE.eq(domain, zs[d:], variables=h0.variables)
         base = Statement(
             Relation_SumProd(),
-            oracles=[h0, eq_tail.scale(eq_factor)],
+            oracles=[TableOracle(h0), TableOracle(eq_tail.scale(eq_factor))],
             value=claim,
         )
         if not base.check():

@@ -13,14 +13,14 @@ from vfhe.arith import MLE, MLE_Variable, Polynomial, PseudoMersenneField, Ring
 from vfhe.piop import (
     IOP,
     Protocol,
-    RangeDecomposition,
     Relation_Eval,
-    Relation_Lookup,
-    Relation_Range,
     Statement,
+    TableOracle,
     element_digest,
 )
-from vfhe.piop.range import balanced, base_digits, eq_int, uEval
+from vfhe.piop.protocols import RangeDecomposition
+from vfhe.piop.protocols.range import balanced, base_digits, eq_int, uEval
+from vfhe.piop.relations import Relation_Lookup, Relation_Range
 
 # ell = 2, nu = 3, gamma = 1 -> ell* = 6, so mu' is a 64-entry table: small
 # enough for the pure-Python degree-3 rounds the lookup argument will add.
@@ -61,19 +61,20 @@ def _witness(ring, seed=0, bound=BOUND, tweak=None):
     return MLE(ring=ring, variables=variables, evaluations=table)
 
 
-def _protocol(field, **kw):
+def _protocol(field, ring, **kw):
     params = {"m": M, "alphabet": ALPHABET, "kappa": KAPPA} | kw
-    return RangeDecomposition(field, **params)
+    return RangeDecomposition(field, ring=ring, **params)
 
 
-def _iop(field, protocol=None, **kw):
+def _iop(ring, field, protocol=None, **kw):
     iop = IOP(domain=field, **kw)
-    iop.register(Relation_Range, protocol or _protocol(field))
+    iop.register(Relation_Range, protocol or _protocol(field, ring))
     return iop
 
 
 def _statement(v):
-    return Statement(Relation_Range(BOUND, CHUNKS), oracles=[v])
+    """The range claim on the table `v`, named by a fresh oracle."""
+    return Statement(Relation_Range(BOUND, CHUNKS), oracles=[TableOracle(v)])
 
 
 def _most_acceptances(runs, error, false_failure=1e-6):
@@ -109,20 +110,20 @@ def test_relation_lookup_check(field):
     inside = MLE(
         field=field, variables=variables, evaluations=[field(i % 8) for i in range(8)]
     )
-    assert Statement(Relation_Lookup(8), oracles=[inside]).check()
+    assert Statement(Relation_Lookup(8), oracles=[TableOracle(inside)]).check()
     outside = MLE(
         field=field,
         variables=variables,
         evaluations=[field(i % 8) if i else field(8) for i in range(8)],
     )
-    assert not Statement(Relation_Lookup(8), oracles=[outside]).check()
+    assert not Statement(Relation_Lookup(8), oracles=[TableOracle(outside)]).check()
     # A "negative" digit is a large canonical representative, not a small one.
     negative = MLE(
         field=field,
         variables=variables,
         evaluations=[field(i % 8) if i else -field(1) for i in range(8)],
     )
-    assert not Statement(Relation_Lookup(8), oracles=[negative]).check()
+    assert not Statement(Relation_Lookup(8), oracles=[TableOracle(negative)]).check()
 
 
 # --- the recomposition identity, on its own --------------------------------
@@ -164,7 +165,7 @@ def test_recomposition_identity(ring, field):
        only form available once v(x) is read out of R_q.
     """
     v = _witness(ring, seed=3)
-    protocol = _protocol(field)
+    protocol = _protocol(field, ring)
     statement = _statement(v)
     shape = protocol._shape(statement)
     digits = protocol._digit_table(v, shape)
@@ -210,7 +211,7 @@ def test_digits_round_trip():
 
 def test_decomposition_accepts_an_honest_witness(ring, field):
     v = _witness(ring, seed=1)
-    iop = _iop(field)
+    iop = _iop(ring, field)
     assert iop.run(_statement(v))
     assert iop.transcript.order[:4] == [
         "range/mu",
@@ -242,22 +243,22 @@ def test_decomposition_across_the_parameter_knobs(ring, field, bound, chunks, m,
     2% here, so a single cheating run may pass: the cheating run is repeated
     and its acceptances are held to what that error allows."""
     good = _witness(ring, seed=20 + m + chunks, bound=bound)
-    statement = Statement(Relation_Range(bound, chunks), oracles=[good])
-    protocol = RangeDecomposition(field, m=m, alphabet=ALPHABET, kappa=kappa)
+    statement = Statement(Relation_Range(bound, chunks), oracles=[TableOracle(good)])
+    protocol = RangeDecomposition(field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa)
 
     iop = IOP(domain=field)
     iop.register(Relation_Range, protocol)
     assert iop.run(statement)
 
     bad = _witness(ring, bound=bound, tweak=lambda c: c.__setitem__(1, bound + 1))
-    cheating = Statement(Relation_Range(bound, chunks), oracles=[bad])
+    cheating = Statement(Relation_Range(bound, chunks), oracles=[TableOracle(bad)])
     runs = 64
     accepted = 0
     for _ in range(runs):
         iop = IOP(domain=field)
         iop.register(
             Relation_Range,
-            RangeDecomposition(field, m=m, alphabet=ALPHABET, kappa=kappa),
+            RangeDecomposition(field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa),
         )
         accepted += bool(iop.run(cheating))
     assert accepted <= _most_acceptances(runs, protocol.soundness_error(cheating))
@@ -278,13 +279,13 @@ def test_decomposition_emits_the_expected_bundle(ring, field):
             seen.extend(statements)
             return []
 
-    iop = _iop(field)
+    iop = _iop(ring, field)
     iop.register(Relation_Eval, _Record())
     assert iop.run(_statement(v))
 
     assert len(seen) == 2 * KAPPA
-    on_mu = [s for s in seen if s.oracles[0].field is field]
-    on_v = [s for s in seen if s.oracles[0].ring is not None]
+    on_mu = [s for s in seen if s.oracles[0].polynomial.field is field]
+    on_v = [s for s in seen if s.oracles[0].polynomial.ring is not None]
     assert len(on_mu) == KAPPA and len(on_v) == KAPPA
     # Every one of them is a true claim about the honest witness.
     assert all(s.check() for s in seen)
@@ -307,7 +308,7 @@ def test_lookup_claim_is_terminal_and_true(ring, field):
             seen.extend(statements)
             return []
 
-    iop = _iop(field)
+    iop = _iop(ring, field)
     iop.register(Relation_Lookup, _Record())
     assert iop.run(_statement(v))
     (claim,) = seen
@@ -331,8 +332,10 @@ class _Tampered(RangeDecomposition):
         return table
 
 
-def _cheat(field, corrupt):
-    return _Tampered(field, m=M, alphabet=ALPHABET, kappa=KAPPA, corrupt=corrupt)
+def _cheat(ring, field, corrupt):
+    return _Tampered(
+        field, m=M, alphabet=ALPHABET, kappa=KAPPA, ring=ring, corrupt=corrupt
+    )
 
 
 class _Swallow(Protocol):
@@ -354,12 +357,12 @@ def test_out_of_range_coefficient_is_rejected(ring, field):
     recompose, and the mod-q check of step 2 fails."""
     v = _witness(ring, tweak=lambda c: c.__setitem__(3, BOUND + 5))
     assert not _statement(v).check()  # the claim really is false
-    assert not _iop(field).run(_statement(v))
+    assert not _iop(ring, field).run(_statement(v))
 
     # The digits themselves stay inside t_beta here -- truncation keeps them
     # small -- so the lookup branch has nothing to say, and step 2 is the
     # only thing standing between this witness and an accepting run.
-    iop = _iop(field)
+    iop = _iop(ring, field)
     iop.register(Relation_Lookup, _Swallow(Relation_Lookup))
     assert not iop.run(_statement(v))
 
@@ -372,7 +375,7 @@ def test_perturbed_digit_is_rejected(ring, field):
     def corrupt(table, shape):
         table[0] = (table[0] + 1) % shape.beta
 
-    assert not _iop(field, _cheat(field, corrupt)).run(_statement(v))
+    assert not _iop(ring, field, _cheat(ring, field, corrupt)).run(_statement(v))
 
 
 def test_borrowed_digit_passes_recomposition_but_fails_the_lookup(ring, field):
@@ -392,22 +395,22 @@ def test_borrowed_digit_passes_recomposition_but_fails_the_lookup(ring, field):
                 return
         raise AssertionError("no high digit to borrow from")
 
-    protocol = _cheat(field, corrupt)
-    assert not _iop(field, protocol).run(_statement(v))
+    protocol = _cheat(ring, field, corrupt)
+    assert not _iop(ring, field, protocol).run(_statement(v))
     assert "at" in moved
 
     # Pin the claim: it is the lookup branch that rejects, not step 2. With
     # the lookup claim swallowed, the same tampered run is accepted.
-    iop = _iop(field, _cheat(field, corrupt))
+    iop = _iop(ring, field, _cheat(ring, field, corrupt))
     iop.register(Relation_Lookup, _Swallow(Relation_Lookup))
     assert iop.run(_statement(v))
 
 
-def _replay_with_tamper(honest, field, statement, tamper):
+def _replay_with_tamper(honest, ring, field, statement, tamper):
     """A verifier-only run over an honest transcript with one message
     rewritten. The recorded challenges are replayed as they were, so this is
     the honest interaction with exactly one dishonest prover message."""
-    iop = _iop(field)
+    iop = _iop(ring, field)
     for label in honest.transcript.order:
         value = honest.transcript.entries[label].result()
         iop.transcript.write(label, tamper(label, value))
@@ -417,9 +420,11 @@ def _replay_with_tamper(honest, field, statement, tamper):
 def test_replay_harness_accepts_an_untampered_transcript(ring, field):
     v = _witness(ring, seed=12)
     statement = _statement(v)
-    honest = _iop(field)
+    honest = _iop(ring, field)
     assert honest.run(statement)
-    assert _replay_with_tamper(honest, field, statement, lambda _label, value: value)
+    assert _replay_with_tamper(
+        honest, ring, field, statement, lambda _label, value: value
+    )
 
 
 def test_every_prover_message_is_load_bearing(ring, field):
@@ -432,7 +437,7 @@ def test_every_prover_message_is_load_bearing(ring, field):
     """
     v = _witness(ring, seed=13)
     statement = _statement(v)
-    honest = _iop(field)
+    honest = _iop(ring, field)
     assert honest.run(statement)
 
     messages = [
@@ -454,7 +459,7 @@ def test_every_prover_message_is_load_bearing(ring, field):
                 return (value[0] + field.one, *value[1:])
             return value + Polynomial(value.ring).from_array([1])
 
-        assert not _replay_with_tamper(honest, field, statement, tamper), target
+        assert not _replay_with_tamper(honest, ring, field, statement, tamper), target
 
 
 # --- Fiat-Shamir ------------------------------------------------------------
@@ -463,8 +468,8 @@ def test_every_prover_message_is_load_bearing(ring, field):
 def test_fiat_shamir_round_trip(ring, field):
     v = _witness(ring, seed=8)
     statement = _statement(v)
-    proof = _iop(field, fiat_shamir=True).prove(statement)
-    assert _iop(field, fiat_shamir=True).verify(statement, proof)
+    proof = _iop(ring, field, fiat_shamir=True).prove(statement)
+    assert _iop(ring, field, fiat_shamir=True).verify(statement, proof)
     # Prover messages only: the challenges are re-derived, never carried.
     assert not any(label.startswith("range/r") for label in proof.labels)
     assert not any(label.startswith("range/s") for label in proof.labels)
@@ -475,7 +480,7 @@ def test_fiat_shamir_is_deterministic(ring, field):
     statement = _statement(v)
     digests = []
     for _ in range(2):
-        iop = _iop(field, fiat_shamir=True)
+        iop = _iop(ring, field, fiat_shamir=True)
         assert iop.run(statement)
         digests.append(
             [
@@ -489,12 +494,14 @@ def test_fiat_shamir_is_deterministic(ring, field):
 def test_fiat_shamir_rejects_a_tampered_proof(ring, field):
     v = _witness(ring, seed=10)
     statement = _statement(v)
-    proof = _iop(field, fiat_shamir=True).prove(statement)
+    proof = _iop(ring, field, fiat_shamir=True).prove(statement)
     messages = list(proof.messages)
     label, table = messages[0]
     assert label == "range/mu"
     messages[0] = (label, (table[0] + field.one, *table[1:]))
-    assert not _iop(field, fiat_shamir=True).verify(statement, type(proof)(messages))
+    assert not _iop(ring, field, fiat_shamir=True).verify(
+        statement, type(proof)(messages)
+    )
 
 
 # --- parameter conditions ---------------------------------------------------
@@ -505,28 +512,32 @@ def test_parameters_are_validated(ring, field):
     statement = _statement(v)
 
     with pytest.raises(ValueError, match="power of two"):
-        RangeDecomposition(field, m=M, alphabet=100, kappa=KAPPA)
+        RangeDecomposition(field, ring=ring, m=M, alphabet=100, kappa=KAPPA)
     with pytest.raises(ValueError, match="kappa"):
-        RangeDecomposition(field, m=M, alphabet=ALPHABET, kappa=0)
+        RangeDecomposition(field, ring=ring, m=M, alphabet=ALPHABET, kappa=0)
 
     # These three are conditions on the claim as well as on the constructor,
     # so they surface on first use rather than at construction.
     with pytest.raises(ValueError, match="must not exceed the number of variables"):
-        RangeDecomposition(field, m=ELL + 1, alphabet=ALPHABET, kappa=KAPPA)._shape(
-            statement
-        )
+        RangeDecomposition(
+            field, ring=ring, m=ELL + 1, alphabet=ALPHABET, kappa=KAPPA
+        )._shape(statement)
     # sigma so large that 2*beta*(2*sigma)^m overruns a 260-bit prime.
     with pytest.raises(ValueError, match="equation 38"):
-        RangeDecomposition(field, m=M, alphabet=1 << 128, kappa=KAPPA)._shape(statement)
+        RangeDecomposition(
+            field, ring=ring, m=M, alphabet=1 << 128, kappa=KAPPA
+        )._shape(statement)
     # sigma above the smallest RNS prime leaves the exceptional set of Z_q.
     too_wide = 1 << (min(ring.primes).bit_length() + 1)
     with pytest.raises(ValueError, match="smallest RNS prime"):
-        RangeDecomposition(field, m=0, alphabet=too_wide, kappa=KAPPA)._shape(statement)
+        RangeDecomposition(
+            field, ring=ring, m=0, alphabet=too_wide, kappa=KAPPA
+        )._shape(statement)
 
 
 def test_soundness_error_is_the_theorem_bound(ring, field):
     v = _witness(ring)
-    protocol = _protocol(field)
+    protocol = _protocol(field, ring)
     reported = protocol.soundness_error(_statement(v))
     nu = ring.N.bit_length() - 1
     assert reported == max(

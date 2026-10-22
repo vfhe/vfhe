@@ -12,6 +12,7 @@ import operator
 from enum import Enum
 from typing import Any
 
+from vfhe.crypto import chain_digest, hash_bytes, int_digest, str_digest
 from vfhe.util.bindings import ffi, lib
 
 from .base import Field, FieldVector, Polynomial
@@ -33,8 +34,23 @@ class MLE_Variable:
     def __init__(self, name: str):
         self.name = name
 
+    def digest(self) -> bytes:
+        """By the name: what a transcript absorbs for the variable."""
+        return hash_bytes(b"name" + self.name.encode())
+
     def __repr__(self) -> str:
         return f"MLE_Variable({self.name!r})"
+
+
+def _digest(value) -> bytes:
+    """The digest of a table entry or variable: a polynomial, a field element
+    or a variable by its own `digest()`, an integer or a string as a
+    primitive."""
+    if isinstance(value, bool | int):
+        return int_digest(value)
+    if isinstance(value, str):
+        return str_digest(value)
+    return value.digest()
 
 
 def _default_variables(num_vars: int) -> list[MLE_Variable]:
@@ -184,13 +200,6 @@ class MLE:
     first (LSB) variable, the two table halves for the last (MSB) one, and
     stride-computed pairs for anything in between.
 
-    `public` marks a table both parties hold — a wiring predicate, an eq~
-    table, a public output — so that an evaluation claim on it is decided
-    by the verifier's own evaluation and never becomes an opening claim;
-    every derived table (`copy`, out-of-place `evaluate`, `scale`, `+`/`-`
-    of two public tables) inherits the mark. Anything else is a witness
-    oracle: what happens to a claim on it is left to the consumer.
-
     `table` holds the entries (also keeping them alive across C calls) and
     `table_ptr` is the array of their handles the kernels take (None without
     a ring) — the two are always views of the same entries, replaced
@@ -206,7 +215,6 @@ class MLE:
         coefficients: FieldVector | list | None = None,
         num_vars: int | None = None,
         field: Field | None = None,
-        public: bool = False,
     ):
         if variables is not None:
             self.variables = list(variables)
@@ -220,7 +228,6 @@ class MLE:
             raise TypeError("pass ring or field, not both")
         self.ring = ring
         self.field = field
-        self.public = public
         self.basis = MLE_Basis.coeff if coefficients is not None else MLE_Basis.eval
 
         size = 1 << self.num_vars
@@ -313,7 +320,7 @@ class MLE:
         """A table with `src`'s variables and ring, holding `entries` (in
         `src`'s basis unless another is given)."""
         basis = src.basis if basis is None else basis
-        domain = {"ring": src.ring, "field": src.field, "public": src.public}
+        domain = {"ring": src.ring, "field": src.field}
         if basis is MLE_Basis.coeff:
             return cls(variables=src.variables, coefficients=entries, **domain)
         return cls(variables=src.variables, evaluations=entries, **domain)
@@ -330,9 +337,7 @@ class MLE:
             variables = _default_variables(len(point))
         if isinstance(domain, Field):
             table = _eq_table(domain, point)
-            return cls(
-                field=domain, variables=variables, evaluations=table, public=True
-            )
+            return cls(field=domain, variables=variables, evaluations=table)
         ring = domain
         one = Polynomial(ring).from_array([1])
         table = [one]
@@ -343,7 +348,7 @@ class MLE:
             # Appending variable i doubles the table: bit i = 0 keeps the
             # (1 - z_i) branch, bit i = 1 (the new MSB half) the z_i branch.
             table = [t * nz for t in table] + [t * z for t in table]
-        return cls(ring=ring, variables=variables, evaluations=table, public=True)
+        return cls(ring=ring, variables=variables, evaluations=table)
 
     def to_NTT(self) -> None:
         """Put every entry in NTT (RNS) form, the representation the C
@@ -427,7 +432,6 @@ class MLE:
             res = MLE._like(
                 self, [op(a, b) for a, b in zip(self.table, other.table, strict=True)]
             )
-        res.public = self.public and other.public
         return res
 
     def __add__(self, other):
@@ -591,6 +595,14 @@ class MLE:
     def copy(self) -> MLE:
         return MLE._like(self, self._entries_copy())
 
+    def digest(self) -> bytes:
+        """A 32-byte digest of the table: its basis, its variables and its
+        entries, in order (what a transcript or a statement absorbs)."""
+        parts = [b"mle", str_digest(self.basis.name)]
+        parts += [_digest(v) for v in self.variables]
+        parts += [_digest(entry) for entry in self.table]
+        return chain_digest(parts)
+
     def rename(self, mapping: dict) -> MLE:
         """A copy of this table with its variables relabelled through
         `mapping` (old variable -> new variable; variables absent from the
@@ -608,7 +620,7 @@ class SparseMLE:
     """A sparse map of hypercube evaluations: `evaluations[index] = value`
     for the nonzero entries, `index` packing the variables LSB-first like a
     dense table's position. The carrier of wiring predicates and other
-    mostly-zero public tables.
+    mostly-zero tables.
 
     Independent of `MLE` on purpose — it supports the linear operations
     (add / sub / scale) and evaluation at a *full* point (`evaluate`, the
@@ -629,7 +641,6 @@ class SparseMLE:
         num_vars: int | None = None,
         ring: RNSRing | None = None,
         field: Field | None = None,
-        public: bool = False,
     ):
         if variables is not None:
             self.variables = list(variables)
@@ -641,7 +652,6 @@ class SparseMLE:
             raise TypeError("pass ring or field, not both")
         self.ring = ring
         self.field = field
-        self.public = public
         self.evaluations = dict(evaluations) if evaluations is not None else {}
         size = 1 << self.num_vars
         if any(not 0 <= k < size for k in self.evaluations):
@@ -658,7 +668,6 @@ class SparseMLE:
             evaluations=evaluations,
             ring=self.ring,
             field=self.field,
-            public=self.public,
         )
 
     def _one(self):
@@ -734,6 +743,14 @@ class SparseMLE:
                 evaluations[index] = value
         return self._like(evaluations, variables=[self.variables[i] for i in keep])
 
+    def digest(self) -> bytes:
+        """A 32-byte digest of the table: its variables and its nonzero
+        entries in index order (not insertion order)."""
+        parts = [b"sparse"] + [_digest(v) for v in self.variables]
+        for k in sorted(self.evaluations):
+            parts += [int_digest(k), _digest(self.evaluations[k])]
+        return chain_digest(parts)
+
     def materialize(self, *_ignored) -> MLE:
         """The dense table with the same evaluations, in the same domain."""
         table = [0] * (1 << self.num_vars)
@@ -744,7 +761,6 @@ class SparseMLE:
             field=self.field,
             variables=self.variables,
             evaluations=table,
-            public=self.public,
         )
 
     def _combine(self, other, op) -> SparseMLE:
@@ -758,9 +774,7 @@ class SparseMLE:
             res = op(self.evaluations.get(k, 0), other.evaluations.get(k, 0))
             if res != 0:
                 new_evals[k] = res
-        res_mle = self._like(new_evals)
-        res_mle.public = self.public and other.public
-        return res_mle
+        return self._like(new_evals)
 
     def __add__(self, other):
         return self._combine(other, operator.add)

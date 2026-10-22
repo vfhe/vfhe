@@ -9,14 +9,17 @@ query.
 """
 
 from vfhe.arith import MLE, MLE_Variable, Ring
-from vfhe.piop import (
-    IOP,
-    Relation_Sum,
-    Relation_SumProd,
-    Statement,
-    Sumcheck,
-    SumcheckProd,
+from vfhe.piop import IOP, Statement, TableOracle
+from vfhe.piop.protocols import Sumcheck, SumcheckProd
+from vfhe.piop.protocols.rounds import (
+    _prod_round_evals_python,
+    _round_evals_python,
+    prod2_round_evals_native,
+    prod_round_evals,
+    round_evals,
+    round_evals_native,
 )
+from vfhe.piop.relations import Relation_Sum, Relation_SumProd
 
 
 class _IntDomain:
@@ -44,7 +47,7 @@ def _coeff_mle():
 def test_sumcheck_accepts_coeff_basis():
     _, f = _coeff_mle()
     iop = _setup(_IntDomain())
-    stmt = Statement(Relation_Sum(), oracles=[f], value=18)
+    stmt = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=18)
     assert iop.run(stmt)
     # Two rounds, in canonical write order: round polynomial, then challenge.
     assert iop.transcript.order == [
@@ -58,7 +61,7 @@ def test_sumcheck_accepts_coeff_basis():
 def test_sumcheck_rejects_false_claim():
     _, f = _coeff_mle()
     iop = _setup(_IntDomain())
-    stmt = Statement(Relation_Sum(), oracles=[f], value=17)
+    stmt = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=17)
     assert not iop.run(stmt)
 
 
@@ -71,7 +74,9 @@ class _LyingSumcheck(Sumcheck):
         # Hypercube values (0, 3, 4, 10): really sums to 17, so every round
         # check passes and only the terminal oracle query can catch the lie.
         fake = MLE(variables=list(f.variables), coefficients=[0, 3, 4, 3])
-        fake_statement = Statement(statement.relation, oracles=[fake], value=17)
+        fake_statement = Statement(
+            statement.relation, oracles=[TableOracle(fake)], value=17
+        )
         return await super().prove(prover, [fake_statement])
 
 
@@ -80,7 +85,7 @@ def test_sumcheck_terminal_query_catches_consistent_liar():
     # All round checks pass (the fake polynomial really sums to 17); the
     # terminal Relation_Eval query against the real oracle must reject.
     iop = _setup(_IntDomain(), protocol=_LyingSumcheck())
-    stmt = Statement(Relation_Sum(), oracles=[f], value=17)
+    stmt = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=17)
     assert not iop.run(stmt)
 
 
@@ -90,7 +95,7 @@ def test_sumcheck_mle_dense():
 
     iop = _setup(ring)
     f = MLE(ring=ring, variables=v, evaluations=[1, 2, 3, 4])  # sum 10
-    assert iop.run(Statement(Relation_Sum(), oracles=[f], value=10))
+    assert iop.run(Statement(Relation_Sum(), oracles=[TableOracle(f)], value=10))
     # This run took the native (C kernel) path; check the round-0 message:
     # LSB pairs (T0,T1),(T2,T3), so g(0) = 1+3 = 4 and g(1) = 2+4 = 6.
     g0, g1 = iop.transcript.entries["sumcheck/g0"].result()
@@ -100,7 +105,7 @@ def test_sumcheck_mle_dense():
 
     # An IOP is single-use: fresh transcript for the rejection run.
     iop = _setup(ring)
-    assert not iop.run(Statement(Relation_Sum(), oracles=[f], value=11))
+    assert not iop.run(Statement(Relation_Sum(), oracles=[TableOracle(f)], value=11))
 
 
 def test_verifier_challenge_samples_and_publishes():
@@ -126,7 +131,7 @@ def test_verifier_challenge_bits_samples_and_publishes():
 def test_sumcheck_soundness_error():
     ring = Ring(1024, prime_size=[49], split_degree=4)
     _, f = _coeff_mle()
-    stmt = Statement(Relation_Sum(), oracles=[f], value=18)
+    stmt = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=18)
     sc = Sumcheck()
     assert sc.soundness_error(stmt, ring) == 2 / min(ring.primes) ** ring.split_degree
     assert sc.soundness_error(stmt, _IntDomain()) is None
@@ -148,7 +153,11 @@ def _prod_oracles():
 def test_sumcheckprod_accepts_coeff_basis():
     _, f, g = _prod_oracles()
     iop = _prod_setup(_IntDomain())
-    assert iop.run(Statement(Relation_SumProd(), oracles=[f, g], value=50))
+    assert iop.run(
+        Statement(
+            Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=50
+        )
+    )
     # Degree-2 rounds then the per-factor values, in canonical write order.
     assert iop.transcript.order == [
         "sumcheckprod/g0",
@@ -166,15 +175,31 @@ def test_sumcheckprod_three_factors():
     v, f, g = _prod_oracles()
     h = MLE(variables=v, coefficients=[0, 1, 0, 0])  # x0
     iop = _prod_setup(_IntDomain())
-    assert iop.run(Statement(Relation_SumProd(), oracles=[f, g, h], value=36))
+    assert iop.run(
+        Statement(
+            Relation_SumProd(),
+            oracles=[TableOracle(f), TableOracle(g), TableOracle(h)],
+            value=36,
+        )
+    )
     iop = _prod_setup(_IntDomain())
-    assert not iop.run(Statement(Relation_SumProd(), oracles=[f, g, h], value=35))
+    assert not iop.run(
+        Statement(
+            Relation_SumProd(),
+            oracles=[TableOracle(f), TableOracle(g), TableOracle(h)],
+            value=35,
+        )
+    )
 
 
 def test_sumcheckprod_rejects_false_claim():
     _, f, g = _prod_oracles()
     iop = _prod_setup(_IntDomain())
-    assert not iop.run(Statement(Relation_SumProd(), oracles=[f, g], value=49))
+    assert not iop.run(
+        Statement(
+            Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=49
+        )
+    )
 
 
 def test_sumcheckprod_mle_dense():
@@ -183,14 +208,22 @@ def test_sumcheckprod_mle_dense():
     f = MLE(ring=ring, variables=v, evaluations=[1, 2, 3, 4])
     g = MLE(ring=ring, variables=v, evaluations=[2, 2, 3, 3])
     iop = _prod_setup(ring)
-    assert iop.run(Statement(Relation_SumProd(), oracles=[f, g], value=27))
+    assert iop.run(
+        Statement(
+            Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=27
+        )
+    )
     # Native (C kernel) round-0 message, evaluations at t = 0, 1, 2:
     # g(0) = 1·2 + 3·3 = 11, g(1) = 2·2 + 4·3 = 16,
     # g(2) = (2·2-1)(2·2-2) + (2·4-3)(2·3-3) = 3·2 + 5·3 = 21.
     e0, e1, e2 = iop.transcript.entries["sumcheckprod/g0"].result()
     assert e0 == 11 and e1 == 16 and e2 == 21
     iop = _prod_setup(ring)
-    assert not iop.run(Statement(Relation_SumProd(), oracles=[f, g], value=28))
+    assert not iop.run(
+        Statement(
+            Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=28
+        )
+    )
 
 
 class _LyingSumcheckProd(SumcheckProd):
@@ -201,7 +234,7 @@ class _LyingSumcheckProd(SumcheckProd):
         f, g = statement.oracles
         fake_f = MLE(variables=list(f.variables), coefficients=[0, 2, 3, 4])
         # sum of fake_f*g over {0,1}^2 is 40 — consistent with the false claim.
-        fake = Statement(statement.relation, oracles=[fake_f, g], value=40)
+        fake = Statement(statement.relation, oracles=[TableOracle(fake_f), g], value=40)
         return await super().prove(prover, [fake])
 
 
@@ -209,7 +242,9 @@ def test_sumcheckprod_terminal_evals_catch_consistent_liar():
     _, f, g = _prod_oracles()
     iop = _prod_setup(_IntDomain())
     iop.register(Relation_SumProd, _LyingSumcheckProd())
-    stmt = Statement(Relation_SumProd(), oracles=[f, g], value=40)
+    stmt = Statement(
+        Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=40
+    )
     assert not iop.run(stmt)  # rounds pass; the per-factor eval queries fail
 
 
@@ -225,7 +260,9 @@ def test_sumcheckprod_rejects_wrong_final_values():
     # the claim becomes g_0(2)=5, but the tampered product is 5*2=10.
     iop.transcript.write("sumcheckprod/g0", (1, 3, 5))
     iop.transcript.write("sumcheckprod/vals", (5, 2))
-    stmt = Statement(Relation_SumProd(), oracles=[f, g], value=4)
+    stmt = Statement(
+        Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=4
+    )
     assert not iop.loop.run_until_complete(iop.verifier.verify(stmt))
 
 
@@ -238,24 +275,21 @@ def test_round_evals_any_variable_position():
     f = MLE(ring=ring, variables=v, evaluations=[1, 2, 3, 4, 5, 6, 7, 8])
     g = MLE(ring=ring, variables=v, evaluations=[2, 1, 3, 2, 4, 3, 5, 4])
     for var in v:
-        native = Sumcheck.round_evals_native(f, var)
-        python = Sumcheck._round_evals_python(f, var)
+        native = round_evals_native(f, var)
+        python = _round_evals_python(f, var)
         assert all(a == b for a, b in zip(native, python, strict=True))
-        native3 = SumcheckProd.prod2_round_evals_native(f, g, var)
-        python3 = SumcheckProd._prod_round_evals_python([f, g], var)
+        native3 = prod2_round_evals_native(f, g, var)
+        python3 = _prod_round_evals_python([f, g], var)
         assert all(a == b for a, b in zip(native3, python3, strict=True))
     # The dispatching entry points default to the first variable.
     assert all(
-        a == b
-        for a, b in zip(
-            Sumcheck.round_evals(f), Sumcheck.round_evals(f, v[0]), strict=True
-        )
+        a == b for a, b in zip(round_evals(f), round_evals(f, v[0]), strict=True)
     )
     assert all(
         a == b
         for a, b in zip(
-            SumcheckProd.prod_round_evals([f, g]),
-            SumcheckProd.prod_round_evals([f, g], v[0]),
+            prod_round_evals([f, g]),
+            prod_round_evals([f, g], v[0]),
             strict=True,
         )
     )
@@ -271,15 +305,17 @@ def test_mixed_representation_factors_agree_with_native():
     dense2 = MLE(ring=ring, variables=v, evaluations=[2, 2, 3, 3])
     # Same polynomial as dense2, in the monomial basis (non-native).
     coeff2 = dense2.to_coefficients()
-    native = SumcheckProd.prod_round_evals([dense, dense2])
-    mixed = SumcheckProd.prod_round_evals([dense, coeff2])
+    native = prod_round_evals([dense, dense2])
+    mixed = prod_round_evals([dense, coeff2])
     assert all(a == b for a, b in zip(native, mixed, strict=True))
 
 
 def test_sumcheckprod_soundness_error():
     ring = Ring(1024, prime_size=[49], split_degree=4)
     _, f, g = _prod_oracles()
-    stmt = Statement(Relation_SumProd(), oracles=[f, g], value=50)
+    stmt = Statement(
+        Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=50
+    )
     scp = SumcheckProd()
     # degree k=2, n=2 variables.
     assert scp.soundness_error(stmt, ring) == 4 / min(ring.primes) ** ring.split_degree

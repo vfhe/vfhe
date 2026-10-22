@@ -14,6 +14,21 @@ versions may contain breaking changes.
 
 ### Added
 
+- `vfhe.piop.relations.Relation_Lookup` / `vfhe.piop.protocols.Lookup` and
+  `Relation_Range` / `RangeDecomposition`: the lookup argument (offline
+  memory checking over four grand products, two degree-3 zerochecks over
+  virtual oracles) and the range check over packed `R_q` polynomials that
+  reduces to it through the base-`beta` digits of the coefficients, as in
+  [CCCFGS26]'s appendix; `modules/piop/range.md` is the design note.
+- `vfhe.crypto.digest`: `chain_digest`, the chained digest of
+  already-digested parts, and `bytes_digest`, `int_digest`, `str_digest`,
+  the canonical digests of primitives every `digest()` method is built
+  from.
+- `Basefold.commit(f, prover=prover)` installs on `prover` the table of the
+  committed oracle and the opening of its commitment.
+- `Statement` refuses a bare table among its `oracles` (a `TypeError`
+  naming `TableOracle`), and `VirtualOracle` a bare table as a constituent.
+
 - Add indexed relations to `vfhe.piop`: a relation declares `index_fields`,
   its index is then a mapping over exactly those names, and the oracles
   among its values (`Relation.index_oracles`, `statement_oracles`) are
@@ -348,6 +363,62 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: `vfhe.piop` is restructured. The framework is one file per
+  concern (`oracle`, `virtual`, `relation`, `protocol`, `transcript`,
+  `party`, `fs`, `iop`, `composer`, `digest`) and is what `vfhe.piop`
+  exports; the relation toolbox is `vfhe.piop.relations` (`Relation_Sum`,
+  `Relation_SumProd`, `Relation_Zero`, `Relation_Equal`, `Relation_SumDef`,
+  `Relation_CircuitSparseIndex`, `Relation_Circuit`, `Relation_Layer`,
+  `Relation_SpEval`, `Relation_Lookup`, `Relation_Range`, `FamilyShape`,
+  `dense_relation`, `wiring_predicates`; `Relation_Eval` stays in the
+  framework, in `vfhe.piop.evaluation` with `with_start`, since the head
+  machinery is written against it) and the protocols are
+  `vfhe.piop.protocols` (`Sumcheck`, `SumcheckProd`, `VirtualEval`,
+  `SumDefStart`, `OutputTest`, `GKR`, `GKR_Start`, `Lookup`,
+  `RangeDecomposition`, `dense_layering`); neither is re-exported by
+  `vfhe.piop`, and the modules `vfhe.piop.piop`, `.sumcheck`, `.circuit`,
+  `.sparse`, `.lookup` and `.range` are gone. The sumcheck round-message
+  kernels are functions in `vfhe.piop.protocols.rounds` (`round_evals`,
+  `prod_round_evals`, their native, whole-vector and pure-Python paths,
+  `interpolate_evals`, `exceptional_set_size`), no longer static methods of
+  the protocols; the prover's form of a virtual oracle is
+  `vfhe.piop.protocols.prover_view.prover_view(oracle, witnesses,
+  strategy)`, no longer `VirtualOracle.prover_view`, and the `strategy`
+  switch is an attribute of the sumcheck protocols. `Implicit` is
+  `ImplicitOracle`; `Party` takes its IOP (`Party(iop)`). The driver, the
+  registry and the Composer route a claim by `Relation.subject(statement)`,
+  the oracle a statement is a claim about (`None` by default,
+  `Relation_Eval`'s one oracle), so any relation that declares a subject is
+  bundled, parked and discharged per oracle kind as evaluation claims are;
+  `Relation_Eval.subject` is an instance method. The helpers
+  protocols share have public names (`hypercube`, `hypercube_sum`,
+  `aligned_tables`, `value_of`, `map_oracles`, `table_like`,
+  `child_statement`, `expanded_tables`, `hypercube_index`).
+- **BREAKING**: A statement names oracles, never tables. `vfhe.piop.oracle`
+  has the oracle classes: `TableOracle(table, public=...)` wraps an arith
+  `MLE` or `SparseMLE` (kind `public` for a table the verifier holds,
+  `plain` otherwise); `CommittedOracle(variables, commitment)` is the
+  verifier's view of a committed polynomial -- the commitment and the
+  variables, no table; the prover's table lives in
+  `Prover.witnesses[oracle]`, where `resolve_table` finds it; `ImplicitOracle`
+  is the handle. Every oracle has `kind`, `query(point)` (the ideal
+  decider's one query) and `digest()`; `oracle_kind` is gone. `MLE` and
+  `SparseMLE` no longer take or carry `public`, and `MLE.eq` returns an
+  unmarked table. `Basefold.commit(f)` returns `(CommittedOracle,
+  BasefoldOpening)`, no longer tags the table, and `Basefold.commitments`
+  is gone; `Relation_Eval` has no `commitment` field -- a compiled claim
+  names the committed oracle -- and `BasefoldEval` refuses a claim on any
+  other oracle. `RangeDecomposition` takes the ring of its claims as a
+  constructor parameter. `Relation_SumProd.check` decides an instance whose
+  oracles disagree on their variables as not in the relation.
+- **BREAKING**: `digest()` is a method of every value a transcript or a
+  statement absorbs: `Statement`, the oracles and `Proof` in `vfhe.piop`;
+  `MLE`, `SparseMLE`, `MLE_Variable`, `Polynomial` and `FieldElement` in
+  `vfhe.arith`; `MerklePath` in `vfhe.crypto`. `element_digest` digests
+  primitives, containers, classes and protobuf messages itself and calls
+  `digest()` on everything else; the chain is `vfhe.crypto.chain_digest`,
+  seeded differently, so every Fiat-Shamir proof differs from those of
+  `821f951`.
 - **BREAKING**: `Relation_Circuit` with public wiring predicates is now
   `Relation_CircuitSparseIndex`, built by `indexed(circuit, domain)`: its
   index is the mapping `("circuit", "predicates")`, the predicates built
@@ -358,12 +429,9 @@ versions may contain breaking changes.
   registered against it and its `Start`. The `.index` of `Relation_Layer`
   (`("circuit", "layer", "lin", "xmult")`), `Relation_Lookup` (`("beta",)`)
   and `Relation_Range` (`("bound", "chunks")`) is a mapping over those
-  names. A committed table carries `kind = OracleKind.committed` and its
-  `commitment`, set by `Basefold.commit`, which refuses a table marked
-  `public`, and `oracle_kind` refuses a table carrying both marks; the root
-  digest records a committed table by its commitment, so every Fiat-Shamir
-  proof whose root has a declared index or a committed oracle differs from
-  those of `9a8e0f8`. `resolve_table` returns a sparse table as it is and
+  names. The root digest records a committed oracle by its commitment, so
+  every Fiat-Shamir proof whose root has a declared index or a committed
+  oracle differs from those of `9a8e0f8`. `resolve_table` returns a sparse table as it is and
   resolves restrictions; `prover_view` classifies a constituent as sparse by
   its resolved table.
 - **BREAKING**: `Relation_Circuit`'s instance is `oracles = (out, w_in)`,

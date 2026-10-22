@@ -1,92 +1,31 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cozzo <daniele.cozzo@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""The lookup relation: every evaluation of an oracle lies in a small table.
-
-`Relation_Lookup` is the toolbox member of `piop.md` §8 item 4 and the target
-of the range proof's decomposition step (`range.py`): once the digits of a
-bounded ring element are on the table, all that is left to prove is that each
-digit is a member of `t_beta = {0, ..., beta - 1}`.
-
-Left terminal, the claim is decided by the ideal decider below, which reads
-every hypercube evaluation. `Lookup` is the succinct discharge: Figure 11 of
-[CCCFGS26], Spartan-style offline memory checking [Set20] reduced to four
-grand products [SL20], each of which becomes a zerocheck over a virtual
-oracle. See `modules/piop/range.md`.
+"""The lookup argument: Figure 11 of [CCCFGS26], Spartan-style offline
+memory checking [Set20] reduced to four grand products [SL20], each of
+which becomes a zerocheck over a virtual oracle. See
+`modules/piop/range.md`.
 """
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from vfhe.arith import MLE, MLE_Variable
-from vfhe.arith.mle import native_table, vector_table
+from vfhe.piop.evaluation import Relation_Eval
+from vfhe.piop.oracle import TableOracle
+from vfhe.piop.protocol import Protocol, Rejection
+from vfhe.piop.relations import Relation_Lookup, Relation_Sum
+from vfhe.piop.virtual import VirtualOracle, resolve_table
 
-from .piop import (
-    Protocol,
-    Prover,
-    Rejection,
-    Relation,
-    Relation_Eval,
-    Relation_Sum,
-    Statement,
-    Verifier,
-    _constant,
-    _hypercube,
-)
-from .virtual import VirtualOracle
+if TYPE_CHECKING:
+    from vfhe.piop.party import Prover, Verifier
+    from vfhe.piop.relation import Relation, Statement
 
-#: The four multiset fingerprints of the lookup PIOP: the write set and read set on the oracle's side, then the
-#: write set and final counts on the table's side.
+
+#: The four multiset fingerprints of the lookup PIOP: the write set and read
+#: set on the oracle's side, then the write set and final counts on the
+#: table's side.
 FINGERPRINTS = ("WSmu", "RS", "WSt", "S")
-
-
-class Relation_Lookup(Relation):
-    """`f(b) in t_beta` for every `b` in `{0,1}^n`, with
-    `t_beta = {0, ..., beta - 1}` the relation's index.
-
-    The table is an index rather than an instance field because it is the
-    large, reusable, preprocessable part of the claim: one `beta` serves every
-    lookup of a given digit width, and it is public data both parties hold
-    (`piop.md` §3).
-    """
-
-    name = "lookup"
-    fields = ("oracles",)
-    index_fields = ("beta",)
-
-    def __init__(self, beta: int) -> None:
-        if beta <= 0 or beta & (beta - 1):
-            raise ValueError(f"beta must be a positive power of two, got {beta}")
-        super().__init__(index={"beta": beta})
-
-    @property
-    def beta(self) -> int:
-        """The table size; `t_beta` is `{0, ..., beta - 1}`."""
-        return cast("int", self.index["beta"])
-
-    def check(self, statement: Statement) -> bool:
-        """The ideal decider: every hypercube evaluation is in range.
-
-        A dense table in the evaluation basis already *is* the list of those
-        evaluations, so it is read directly; anything else (a coefficient
-        basis, a defined oracle) is enumerated the slow way.
-        """
-        (f,) = statement.oracles
-        if native_table(f) or vector_table(f):
-            return all(self._in_range(e) for e in f.table)
-        return all(
-            self._in_range(_constant(f.evaluate(b, in_place=False)))
-            for b in _hypercube(f.variables)
-        )
-
-    def _in_range(self, value) -> bool:
-        """Whether one coefficient-domain value is a member of `t_beta`.
-
-        `int()` on a field element is its canonical representative in
-        `[0, p)`, so a digit that overflowed the table is a large integer
-        here, not a small negative one.
-        """
-        return 0 <= int(value) < self.beta
 
 
 def counters(values: list[int], beta: int) -> tuple[list[int], list[int]]:
@@ -183,17 +122,19 @@ class Lookup(Protocol):
     def _names(self, prefix: str, count: int) -> list:
         return [MLE_Variable(f"{prefix}{i}") for i in range(count)]
 
-    def _table(self, b: int) -> MLE:
+    def _table(self, b: int) -> TableOracle:
         """`t_beta` as a public oracle: the verifier holds it, so an
         evaluation claim on it never leaves the verifier's own hands."""
-        return MLE(
-            field=self.field,
-            variables=self._names("t", b),
-            evaluations=[self.field(j) for j in range(1 << b)],
+        return TableOracle(
+            MLE(
+                field=self.field,
+                variables=self._names("t", b),
+                evaluations=[self.field(j) for j in range(1 << b)],
+            ),
             public=True,
         )
 
-    def _layered(self, W: list, f1: MLE, parts: list) -> VirtualOracle:
+    def _layered(self, W: list, f1: TableOracle, parts: list) -> VirtualOracle:
         """`f_a = (1 - W_n) * sum(parts) + W_n * f^(1)_a`, as a virtual
         oracle over `W`.
 
@@ -201,12 +142,16 @@ class Lookup(Protocol):
         pairs, with `oracle=None` for a constant. A constant needs the
         indicator anyway -- a term must index at least one constituent, and
         the constant is only there on the `W_n = 0` half -- so riding it on
-        `1 - W_n` is both the fix and the correct algebra.
+        `1 - W_n` is the correct algebra.
         """
         last = W[-1]
         low = MLE.eq(self.field, [self.field.zero], variables=[last])  # 1 - W_n
         high = MLE.eq(self.field, [self.field.one], variables=[last])  # W_n
-        constituents = [low, high, f1]
+        constituents = [
+            TableOracle(low, public=True),
+            TableOracle(high, public=True),
+            f1,
+        ]
         maps: list[dict] = [
             {last: last},
             {last: last},
@@ -232,7 +177,7 @@ class Lookup(Protocol):
         that the `(1 - W_n)` factor has already multiplied by zero.
         """
         n = len(X)
-        eq = MLE.eq(self.field, point, variables=X)
+        eq = TableOracle(MLE.eq(self.field, point, variables=X), public=True)
         constituents: list = [eq]
         maps: list[dict] = [{v: v for v in X}]
         terms: list[tuple[Any, tuple[int, ...]]] = []
@@ -254,7 +199,9 @@ class Lookup(Protocol):
             terms.append((-coefficient, (0, child, child + 1)))
         return VirtualOracle(X, constituents, terms, maps)
 
-    def _scaffold(self, statement: Statement, read_ts: MLE, final_cts: MLE) -> dict:
+    def _scaffold(
+        self, statement: Statement, read_ts: TableOracle, final_cts: TableOracle
+    ) -> dict:
         """Everything downstream of the round-1 messages that does not depend
         on a challenge: the public table, and the variable lists the two
         sides are built over. Both parties derive it the same way."""
@@ -272,22 +219,24 @@ class Lookup(Protocol):
             "W": {"mu": self._names("w", n + 1), "t": self._names("u", b + 1)},
         }
 
-    def _leaves(self, parts: dict, zeta: Any, tau: Any) -> dict:
-        """The four fingerprint leaf tables, equations (41)-(43)."""
-        mu, table = parts["mu"], parts["table"]
-        read_ts, final_cts = parts["read_ts"], parts["final_cts"]
+    def _leaves(self, mu_table: MLE, parts: dict, zeta: Any, tau: Any) -> dict:
+        """The four fingerprint leaf tables, equations (41)-(43), from the
+        prover's table of `mu` and the tables of the scaffold's oracles."""
+        mu, table = mu_table.table, parts["table"].polynomial.table
+        read_ts = parts["read_ts"].polynomial.table
+        final_cts = parts["final_cts"].polynomial.table
         return {
             "WSmu": [
-                mu.table[i] + zeta * (read_ts.table[i] + self.field.one) - tau
+                mu[i] + zeta * (read_ts[i] + self.field.one) - tau
                 for i in range(1 << parts["sizes"]["WSmu"])
             ],
             "RS": [
-                mu.table[i] + zeta * read_ts.table[i] - tau
+                mu[i] + zeta * read_ts[i] - tau
                 for i in range(1 << parts["sizes"]["RS"])
             ],
-            "WSt": [table.table[j] - tau for j in range(1 << parts["sizes"]["WSt"])],
+            "WSt": [table[j] - tau for j in range(1 << parts["sizes"]["WSt"])],
             "S": [
-                table.table[j] + zeta * final_cts.table[j] - tau
+                table[j] + zeta * final_cts[j] - tau
                 for j in range(1 << parts["sizes"]["S"])
             ],
         }
@@ -362,44 +311,49 @@ class Lookup(Protocol):
     ) -> list[Statement]:
         (statement,) = statements
         iop = prover.iop
-        if iop is None:
-            raise RuntimeError("this party is not bound to an IOP")
         (mu,) = statement.oracles
         beta = cast("Relation_Lookup", statement.relation).beta
         label = f"{self.name}{statement.path}"
         field = self.field
 
-        read_counts, final_counts = counters([int(e) for e in mu.table], beta)
-        read_ts = MLE(
-            field=field,
-            variables=self._names("r", mu.num_vars),
-            evaluations=[field(c) for c in read_counts],
+        mu_table = resolve_table(mu, prover.witnesses)
+        read_counts, final_counts = counters([int(e) for e in mu_table.table], beta)
+        read_ts = TableOracle(
+            MLE(
+                field=field,
+                variables=self._names("r", mu.num_vars),
+                evaluations=[field(c) for c in read_counts],
+            )
         )
-        final_cts = MLE(
-            field=field,
-            variables=self._names("c", beta.bit_length() - 1),
-            evaluations=[field(c) for c in final_counts],
+        final_cts = TableOracle(
+            MLE(
+                field=field,
+                variables=self._names("c", beta.bit_length() - 1),
+                evaluations=[field(c) for c in final_counts],
+            )
         )
-        iop.transcript.write(f"{label}/read_ts", tuple(read_ts.table))
-        iop.transcript.write(f"{label}/final_cts", tuple(final_cts.table))
+        iop.transcript.write(f"{label}/read_ts", tuple(read_ts.polynomial.table))
+        iop.transcript.write(f"{label}/final_cts", tuple(final_cts.polynomial.table))
         zeta = iop.verifier.challenge(f"{label}/zeta")
         tau = iop.verifier.challenge(f"{label}/tau")
 
         parts = self._scaffold(statement, read_ts, final_cts)
         trees = {
             a: grand_product(leaves, field.zero)
-            for a, leaves in self._leaves(parts, zeta, tau).items()
+            for a, leaves in self._leaves(mu_table, parts, zeta, tau).items()
         }
         side = {"WSmu": "mu", "RS": "mu", "WSt": "t", "S": "t"}
         f1 = {}
         for a in FINGERPRINTS:
             half = 1 << parts["sizes"][a]
-            f1[a] = MLE(
-                field=field,
-                variables=self._names(f"f{a}", parts["sizes"][a]),
-                evaluations=trees[a][half:],
+            f1[a] = TableOracle(
+                MLE(
+                    field=field,
+                    variables=self._names(f"f{a}", parts["sizes"][a]),
+                    evaluations=trees[a][half:],
+                )
             )
-            iop.transcript.write(f"{label}/f1_{a}", tuple(f1[a].table))
+            iop.transcript.write(f"{label}/f1_{a}", tuple(f1[a].polynomial.table))
         products = tuple(trees[a][-2] for a in FINGERPRINTS)
         iop.transcript.write(f"{label}/products", products)
 
@@ -418,8 +372,6 @@ class Lookup(Protocol):
     ) -> list[Statement]:
         (statement,) = statements
         iop = verifier.iop
-        if iop is None:
-            raise RuntimeError("this party is not bound to an IOP")
         (mu,) = statement.oracles
         beta = cast("Relation_Lookup", statement.relation).beta
         label = f"{self.name}{statement.path}"
@@ -477,11 +429,14 @@ class Lookup(Protocol):
         }
         return chi, points
 
-    async def _read_table(self, iop: Any, label: str, variables: list) -> MLE:
-        """One oracle message read back as a table over `variables`."""
+    async def _read_table(self, iop: Any, label: str, variables: list) -> TableOracle:
+        """One oracle message read back as an oracle to a table over
+        `variables`."""
         entries = await iop.transcript.read(label)
         if len(entries) != 1 << len(variables):
             raise Rejection(
                 f"{label}: expected {1 << len(variables)} entries, got {len(entries)}"
             )
-        return MLE(field=self.field, variables=variables, evaluations=list(entries))
+        return TableOracle(
+            MLE(field=self.field, variables=variables, evaluations=list(entries))
+        )

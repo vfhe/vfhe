@@ -1,23 +1,20 @@
 <!-- SPDX-FileCopyrightText: 2026 Daniele Cozzo <daniele.cozzo@imdea.org> -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# vfhe.piop.range — the range proof, design and implementation plan
+# vfhe.piop.range — the range proof
 
-> **Under development.** This is the design note *and* the implementation
-> plan for `lookup.py` / `range.py`: the two protocols of Appendix I of
-> [CCCFGS26] expressed in this module's vocabulary. Sections marked as
-> deliverables or verification describe work in progress.
+> The design note for the range proof: the two protocols of Appendix I of
+> [CCCFGS26] expressed in this module's vocabulary, as implemented in
+> `relations/lookup.py`, `protocols/lookup.py`, `relations/range.py` and
+> `protocols/range.py`.
 
 - [Context](#context)
-- [Deliverables](#deliverables)
 - [Background: the tools](#background-the-tools-being-used)
 - [Conventions](#conventions-domains-and-index-order)
 - [The lookup protocol (Figure 11)](#the-lookup-protocol--figure-11)
 - [The decomposition protocol (Figure 13)](#the-decomposition-protocol--figure-13)
 - [Soundness](#soundness-bookkeeping-both-protocols)
-- [Files](#files)
-- [Verification](#verification)
-- [Risks](#risks-in-the-order-they-will-bite)
-- [Appendix: what was checked](#appendix-what-was-checked-and-how)
+- [Sending an oracle](#sending-an-oracle-both-protocols)
+- [The tests](#the-tests)
 
 ## Context
 
@@ -33,66 +30,36 @@ two layers:
   which reduces to two sumchecks and evaluation claims. **Figure 12** defines
   the function `g` that builds the virtual oracle those sumchecks run on.
 
-A standalone reference implementation exists outside the library (the
-authors' `vcckks` scratch tree): its `decomposition_prove` /
-`decomposition_verify` follow the *older* decomposition protocol, and its
-`lookup_prove` / `lookup_verify` follow Figure 11 procedurally, with
-hand-rolled sumcheck loops. It is the semantics to agree with, not the
-structure to copy.
+Both are expressed in the language of `vfhe.piop` — relations, statements,
+registered protocols, async prove/verify coroutines — so the range proof is a
+reduction in the framework's statement DAG rather than a standalone script.
 
-The goal is to re-express both inside `vfhe` in the language of `vfhe.piop` —
-relations, statements, registered protocols, async prove/verify coroutines —
-so the range proof becomes a reduction in the framework's statement DAG rather
-than a standalone script, plus tests that accept honest decompositions and
-reject dishonest ones.
+`Relation_Range` and `RangeDecomposition` (Figure 13) are
+`relations/range.py` and `protocols/range.py`, `Relation_Lookup` and
+`Lookup` (Figure 11) `relations/lookup.py` and `protocols/lookup.py`,
+covered by `test_range.py` and `test_lookup.py`. A range claim reduces all
+the way down — through the lookup, its two degree-3 zerochecks and their
+virtual-oracle openings — to evaluation claims on `ṽ` over `R_q` and on
+`µ̃'`, `read_ts`, `final_cts` and the `f^{(1)}_α` over `F_p`, which are left
+terminal; see [Sending an oracle](#sending-an-oracle-both-protocols) for the
+compiled variant.
 
-**Where this lands.** The working tree is on `feature/range-proof` at
-`9762a2c`, which is exactly `main`'s tip — clean, tracking
-`origin/feature/range-proof`, nothing to rebase. That tree already has the
-three pieces this protocol needs, and they are what make the construction
-below short:
-
-| piece | why it matters here |
-| --- | --- |
-| `arith.PseudoMersenneField` | the big prime field `F_p`: uniform and seeded sampling, inversion, hashing — enough to serve directly as `IOP(domain=…)` |
-| `arith.MLE(field=…)` | field-backed tables, plus a domain-generic `MLE.eq(domain, point)` that comes back marked `public` |
-| `piop/virtual.py` | `VirtualOracle`: `p*(x) = Σ c·Π p_j(h_j(x))`, constituents read through variable maps that may pin variables to constants — which is *literally* Figure 12's function `g` |
-
-`piop.md`'s own roadmap, item 4, is "**Lookup relation**, reducing to a mix of
-Eval and Sum claims". This work is that item.
-
-**Status.** Both protocols are implemented: `Relation_Range` and
-`RangeDecomposition` (Figure 13) in `range.py`, `Relation_Lookup` and `Lookup`
-(Figure 11) in `lookup.py`, covered by `test_range.py` and `test_lookup.py`.
-A range claim now reduces all the way down — through the lookup, its two
-degree-3 zerochecks and their virtual-oracle openings — to evaluation claims
-on `ṽ` over `R_q` and on `µ̃'`, `read_ts`, `final_cts` and the `f^{(1)}_α`
-over `F_p`, which are left terminal. Compiling those with a PCS is the next
-step; see [Sending an oracle](#sending-an-oracle-both-protocols).
-
-## Deliverables
-
-- two new modules, `vfhe/piop/lookup.py` and `vfhe/piop/range.py`;
-- two new relations, `Relation_Lookup` and `Relation_Range`, and the two
-  protocols that discharge them, `Lookup` and `RangeDecomposition`;
-- a design note `modules/piop/range.md` (the background below, expanded);
-- two test files, `test_lookup.py` and `test_range.py`.
-
-Everything else is reuse. The whole construction is this much wiring:
+Everything else is the framework's. The whole construction is this much
+wiring:
 
 ```python
 iop = IOP(domain=field)                       # field = F_p; or fiat_shamir=True
-iop.register(Relation_Range,  RangeDecomposition(field, m, alphabet, kappa))
+iop.register(Relation_Range,  RangeDecomposition(field, m, alphabet, kappa, ring))
 #                                     m = split point, alphabet = |Sigma| = sigma,
-#                                     kappa = repetitions           (all Fig. 13)
+#                                     kappa = repetitions (all Fig. 13); ring = R_q
 iop.register(Relation_Lookup, Lookup(field))
-iop.register(Relation_Sum,    Sumcheck())                       # existing
-iop.register(Relation_Eval,   VirtualEval(), kind=OracleKind.virtual)  # existing
+iop.register(Relation_Sum,    Sumcheck())
+iop.register(Relation_Eval,   VirtualEval(), kind=OracleKind.virtual)
 # Relation_Eval for plain oracles stays unregistered -> terminal oracle query
-assert iop.run(Statement(Relation_Range(B, c), oracles=[v_tilde]))
+assert iop.run(Statement(Relation_Range(B, c), oracles=[TableOracle(v_tilde)]))
 ```
 
-In the notation of `piop.md` §5's reduction table, the two new lines are
+In the notation of `piop.md` §5's reduction table, the two lines are
 
 ```text
 Relation_Range  ─(RangeDecomposition, κ)─▶ Relation_Lookup × Relation_Eval^{2κ}
@@ -115,8 +82,6 @@ Relation_Range(B, c) on ṽ
 ```
 
 ## Background: the tools being used
-
-*(This section, expanded, becomes `modules/piop/range.md`.)*
 
 ### Asynchronous programming, and why a PIOP library wants it
 
@@ -180,13 +145,17 @@ verify half cannot look at a witness to decide how many children to make.
 - The two relations that carry this whole construction:
   - **`Relation_Sum`** — `Σ_{x ∈ {0,1}^n} f(x) = value`, discharged by
     `Sumcheck` in `n` rounds, reducing to
-  - **`Relation_Eval`** — `f(point) = value`, the terminal claim. The
-    instance may carry `f` as an in-process oracle, as a `commitment`, or both.
-- **Oracle kinds** (`OracleKind`) — `Relation_Eval` is *one* relation with
-  several discharges, keyed on what the verifier *has* of the oracle:
+  - **`Relation_Eval`** — `f(point) = value`, the terminal claim, on one
+    oracle `f`.
+- **Oracle kinds** (`OracleKind`) — a statement names *oracles*, never
+  tables: `TableOracle(table, public=...)` wraps an arith table,
+  `CommittedOracle` is a commitment and the variables, `ImplicitOracle` a
+  handle, `VirtualOracle` a definition. `Relation_Eval` is *one* relation
+  with several discharges, keyed on what the verifier *has* of the oracle:
   `public` (terminal, the verifier evaluates the table itself), `committed`
-  (a PCS protocol), `virtual` (`VirtualEval`), `implicit` (`ImplicitEval`),
-  `plain` (terminal oracle query). `register` takes a `kind=` argument.
+  (a PCS protocol), `virtual` (`VirtualEval`), `implicit` (held by the
+  Composer of the reduction), `plain` (terminal oracle query). `register`
+  takes a `kind=` argument.
 - **`VirtualOracle(variables, constituents, terms, maps)`** —
   `p*(x) = Σ_terms coeff · Π_j p_j(h_j(x))`. `terms` is `[(coeff, (j, …)), …]`
   over constituent indices; `maps[j]` sends each variable of constituent `j`
@@ -196,14 +165,14 @@ verify half cannot look at a witness to decide how many children to make.
   `Relation_Sum`: the round message carries `degree_in(var) + 1` evaluation
   nodes. `VirtualEval` then rewrites the final `Relation_Eval` on the virtual
   oracle: for each distinct (constituent, point) pair it emits one
-  `Relation_Eval`. Constituents marked `public` are dropped, because the
-  verifier evaluates them itself. The rewrite draws no challenges and is a
+  `Relation_Eval`. Public constituents are dropped, because the verifier
+  evaluates them itself. The rewrite draws no challenges and is a
   deterministic identity, not a probabilistic reduction, so it costs no
   soundness.
 
-That last pair of bullets is why this maps onto `main` so cleanly: **Figure
-12's `g` is a `VirtualOracle`**, and Figure 11's two sumchecks are two
-`Relation_Sum` statements over one.
+That last pair of bullets is why this maps onto the framework so cleanly:
+**Figure 12's `g` is a `VirtualOracle`**, and Figure 11's two sumchecks are
+two `Relation_Sum` statements over one.
 
 ### Notation
 
@@ -236,8 +205,7 @@ Paper notation, all of it used below:
 
 ## Conventions: domains and index order
 
-These are the things that are easiest to get wrong; fix them before writing
-any code.
+These are the things that are easiest to get wrong.
 
 ### The challenge domain
 
@@ -248,7 +216,6 @@ any code.
 `iop.domain` is consulted in exactly one place — when the verifier samples a
 challenge — and the only claim ever made about `ṽ` is a terminal evaluation at
 a point with plain-integer coordinates, which a ring-backed table can bind.
-(This combination is untested on `main`; see [Risk 3](#risks-in-the-order-they-will-bite).)
 
 The small-integer challenges `r_η ∈ Σ^{ℓ+ν}` are **not** domain challenges.
 They come from `verifier.challenge_bits(label, bits)` — raw published coins
@@ -278,9 +245,8 @@ toy parameters `ℓ = ν = γ = 1`:
 and `P = f[2^{n+1}−2]`. The pinning is not cosmetic: applying the recurrence at
 `k = 2^n−1` would be self-referential (`f[2^{n+1}−1] = P·f[2^{n+1}−1]`), and
 the zerocheck below is only identically zero on the *whole* hypercube because
-both sides vanish there. The old `scripts/grand_product.py` does exactly this
-(`f[n-1] = 0`, and the fill loop stops one short); the paper's Lemma I.4
-carries the same convention implicitly. Reading the array LSB-first, with
+both sides vanish there; the paper's Lemma I.4 carries the same convention
+implicitly. Reading the array LSB-first, with
 `f_α`'s variables `W = [W_0 … W_n]` and `index = W_0 + 2W_1 + … + 2^n W_n`, at
 `n = 2`:
 
@@ -311,8 +277,6 @@ With arguments listed in variable order `W_0 … W_n`, `f_α(X, 1)` is index
   `2^n − 2` of the top half. (The paper writes this query point as `(1,0)`,
   meaning `(1,…,1,0)` in its own argument order.)
 
-*Checked numerically for `n = 2, 3, 4` before writing this plan.*
-
 > **Comparing with the paper side by side.** Figure 11 writes the layer
 > selector as the *first* argument (`f(1,i) = f(i,0)·f(i,1)`, with
 > `f^{(1)}_α(i) = f^{(i_1)}_α(i', 0)·f^{(i_1)}_α(i', 1)`); above it is the
@@ -324,15 +288,16 @@ With arguments listed in variable order `W_0 … W_n`, `f_α(X, 1)` is index
 
 ## The lookup protocol — Figure 11
 
-Taken first, because Figure 13 reduces to it.
-New file **`modules/piop/python/src/vfhe/piop/lookup.py`**.
+Taken first, because Figure 13 reduces to it. The relation is
+`relations/lookup.py`, the protocol `protocols/lookup.py`.
 
 ```python
 class Relation_Lookup(Relation):
     """Every hypercube evaluation of the oracle lies in t_beta = {0..beta-1}."""
     name = "lookup"
     fields = ("oracles",)
-    def __init__(self, beta: int) -> None: super().__init__(index=beta)
+    index_fields = ("beta",)
+    def __init__(self, beta: int) -> None: super().__init__(index={"beta": beta})
 ```
 
 `check()` walks the hypercube and tests `0 <= int(value) < beta`.
@@ -347,8 +312,7 @@ sharing the challenges `σ_L, τ, χ`.
 steps 1–2; steps 3–6 are all of its step 3.
 
 1. Build `read_ts` (`ℓ*` vars) and `final_cts` (`b*` vars) by the counter
-   algorithm of Lemma I.3 — the reference tree's `create_counters_optimized`,
-   over `F_p`. One pass:
+   algorithm of Lemma I.3, over `F_p`. One pass:
    `read_ts[i]` is how many times the value `µ̃'[i]` has been seen *before*
    position `i`, and `final_cts[v]` is the total count of `v`. For
    `β = 4`, `µ̃' = [2, 0, 2, 2]`: `read_ts = [0, 0, 1, 2]` and
@@ -376,8 +340,8 @@ steps 1–2; steps 3–6 are all of its step 3.
    term. For `α = WSµ`:
 
    ```python
-   notlast = MLE.eq(field, [0], variables=[w])   # public, table [1, 0] = 1 - w
-   last    = MLE.eq(field, [1], variables=[w])   # public, table [0, 1] = w
+   notlast = TableOracle(MLE.eq(field, [0], variables=[w]), public=True)  # [1, 0] = 1 - w
+   last    = TableOracle(MLE.eq(field, [1], variables=[w]), public=True)  # [0, 1] = w
    onto_W  = lambda t: {v: W[i] for i, v in enumerate(t.variables)}
    f_WSmu = VirtualOracle(
        variables=W,
@@ -393,7 +357,7 @@ steps 1–2; steps 3–6 are all of its step 3.
 
    The third term is why the selectors are needed at all: a `VirtualOracle`
    term must index at least one constituent, so a bare constant has nowhere to
-   live — multiplying it by `notlast` is both the fix and the correct algebra.
+   live — multiplying it by `notlast` is the correct algebra.
    `RS` differs only in that constant (`−τ` instead of `σ_L − τ`); `WSt` uses
    the public `t̃β` with `−τ`; `S` uses `t̃β`, `σ_L·final_cts`, `−τ`.
 4. Build the two child views of the shift, over the sumcheck variables
@@ -444,26 +408,27 @@ steps 1–2; steps 3–6 are all of its step 3.
    6" while Figure 11 numbers it 3 — the figure is the right reading.)
 
 The prover records `prover.witnesses[f_α] = <the (n+1)-variable table>` — the
-same handoff `GKR` uses for its layer tables (`circuit.py`), and the only way
+same handoff the Composer uses for the heads of a reduction, and the only way
 `resolve_table` can find concrete data for a virtual constituent. It is
-mandatory, not an optimization; see [Risk 1](#risks-in-the-order-they-will-bite).
+mandatory, not an optimization: a virtual oracle has no table of its own, so
+a missing witness is a hard `TypeError` from the sumcheck prover.
 
-> **Not the `ImplicitOracle` grand product.** `test_virtual.py` already has a
-> grand product, `L_i(z) = Σ_p eq̃(z,p)·L_{i+1}(p,0)·L_{i+1}(p,1)` — the
-> Thaler/GKR form, which must be *implicit* because multilinear extension does
-> not commute with products. Figure 11 uses Quarks' form instead: the internal
-> nodes `f^{(1)}_α` are sent as an oracle, and the tree identity becomes a
-> zerocheck on `f_α(X,1) − f_α(0,X)·f_α(1,X)` — a claim about a polynomial the
-> verifier can already name. So there is no `ImplicitOracle` here, no
-> `ImplicitEval`, and no bundling: just a `VirtualOracle` and a
+> **Not the implicit-oracle grand product.** The sum definitions of
+> `test_composition.py` have a grand product,
+> `L_i(z) = Σ_p eq̃(z,p)·L_{i+1}(p,0)·L_{i+1}(p,1)` — the Thaler/GKR form,
+> which must be *implicit* because multilinear extension does not commute
+> with products. Figure 11 uses Quarks' form instead: the internal nodes
+> `f^{(1)}_α` are sent as an oracle, and the tree identity becomes a
+> zerocheck on `f_α(X,1) − f_α(0,X)·f_α(1,X)` — a claim about a polynomial
+> the verifier can already name. So there is no implicit oracle here, no
+> sum definition, and no Composer: just a `VirtualOracle` and a
 > `Relation_Sum`.
 
 ### What the framework does after step 5
 
-The paper's verifier recombines the sumcheck's final evaluations by hand
-(`f10/f11/f20/f21` in the old `lookup_verify`). Here that recombination is the
-framework's standard chain, and it is worth spelling out, because it is this
-plan's central bet:
+The paper's verifier recombines the sumcheck's final evaluations by hand.
+Here that recombination is the framework's standard chain, worth spelling
+out:
 
 1. `Sumcheck` runs `n` rounds on the `Relation_Sum` statement. Because the
    oracle is a `VirtualOracle`, each round message carries `degree_in(var)+1 = 4`
@@ -481,12 +446,10 @@ plan's central bet:
 4. The four claims on `f_α` are `Relation_Eval` on a `VirtualOracle` again, so
    `VirtualEval` fires a second time. `notlast`, `last` and `t̃β` are public and
    are evaluated by the verifier; what remains are claims on the real oracles
-   `µ̃'`, `read_ts`, `final_cts` and `f^{(1)}_α` at the shifted points — exactly
-   the `evals[2..9]` of the old implementation, with the linear recombination
-   it spells out as `f10/f11/f20/f21` performed for us.
+   `µ̃'`, `read_ts`, `final_cts` and `f^{(1)}_α` at the shifted points.
 5. Those claims are `plain`, hence terminal: one oracle query each.
 
-One deliberate deviation from the paper, to be noted in `range.md`:
+One deliberate deviation from the paper:
 
 - The counter construction of Lemma I.3 is only defined for in-range values, so
   `Lookup.prove` must reject an out-of-range entry with a clear error rather
@@ -496,7 +459,7 @@ One deliberate deviation from the paper, to be noted in `range.md`:
 
 ## The decomposition protocol — Figure 13
 
-New file **`modules/piop/python/src/vfhe/piop/range.py`**.
+The relation is `relations/range.py`, the protocol `protocols/range.py`.
 
 ```python
 class Relation_Range(Relation):
@@ -504,16 +467,18 @@ class Relation_Range(Relation):
     lies in [0, B): the table T_B of the paper."""
     name = "range"
     fields = ("oracles",)
+    index_fields = ("bound", "chunks")
     def __init__(self, bound: int, chunks: int) -> None:   # B, c
-        super().__init__(index=(bound, chunks))
+        super().__init__(index={"bound": bound, "chunks": chunks})
 ```
 
 `check()` walks the hypercube and tests `max(poly.get_polynomial()) < B`.
 
 `RangeDecomposition(Protocol)`: `reduces_from = Relation_Range`,
 `reduces_to = (Relation_Lookup, Relation_Eval)`. The constructor takes
-`(field, m, alphabet, kappa)`; `B` and `c` come from the relation's index,
-`N`/`ν` from `ṽ.ring`, `ℓ` from `ṽ.num_vars`.
+`(field, m, alphabet, kappa, ring)`; `B` and `c` come from the relation's
+index, `N`/`ν` from the ring (an oracle does not expose its domain: a
+committed one has no table on the verifier's side), `ℓ` from `ṽ.num_vars`.
 
 1. The prover builds the integer digit table `µ̃` by reading each
    `Polynomial.get_polynomial()` and slicing out `c` base-`β` digits, lifts it
@@ -544,7 +509,7 @@ class Relation_Range(Relation):
    `p_l`, by CRT.
 
    *Index warning:* Figure 13 writes the digit index as `k` in this formula,
-   having used `j` for it in eq. (4). This plan uses `j` for the digit and `k`
+   having used `j` for it in eq. (4). This note uses `j` for the digit and `k`
    for the coefficient **everywhere**; transposing the two blocks is the
    easiest way to get this wrong.
 6. Emit `κ` `Relation_Eval` on `µ̃'` at `(r'_η, s')` with value `ψ̃'_η(s')`
@@ -562,8 +527,9 @@ the paper's own bounds:
 - `Lookup` (Thm. I.5): `δ'_range = (2^{ℓ*} + 2^{b*}) / p`.
 
 The correctness side conditions — `p > 2β(2σ)^m` (eq. 38) and `p > 2^{ℓ*}` —
-are asserted in the protocol constructors, so a bad parameter set fails loudly
-at construction rather than producing a proof that is quietly unsound.
+mix constructor parameters with claim dimensions, so they are checked at the
+protocol's first use of a claim (`_shape`), and a bad parameter set fails
+loudly there rather than producing a proof that is quietly unsound.
 
 ## Sending an oracle (both protocols)
 
@@ -572,43 +538,20 @@ In the ideal model a prover message *is* an oracle, so `µ̃'`, `read_ts`,
 back by the verifier.
 
 They are written as plain **tuples of field elements**, not as `MLE` objects.
-`element_digest` would handle either (it has a dense-MLE branch), so the reason
-is variable identity: `MLE_Variable`s compare by identity, and each party
-should build its own table, with its own variable objects, from a message that
-is plain data. It also keeps the message a value rather than a live object,
-which is what the planned canonical byte encoding (`piop.md` §8, item 6) will
-need.
+A table digests itself, so either would do for Fiat–Shamir; the reason is
+variable identity: `MLE_Variable`s compare by identity, and each party should
+build its own table, with its own variable objects, from a message that is
+plain data. Each party then names its table through a plain `TableOracle`.
+It also keeps the message a value rather than a live object, which is what
+the planned canonical byte encoding (`piop.md` §8, item 6) will need.
 
 The compiled variant is a contained change, not a rewrite: the prover commits
-with `vfhe.polycom` and puts the commitment on the statements instead of the
-table; `Relation_Eval` is registered with `kind=OracleKind.committed`; the PCS
-protocol discharges those claims. The relations, the protocols and the DAG are
-unchanged. `range.md` will record this.
+with `vfhe.polycom` and the statements name the `CommittedOracle` that
+`commit` returns instead of a table oracle; the PCS protocol, registered for
+`Relation_Eval`, discharges those claims. The relations, the protocols and
+the DAG are unchanged.
 
-## Files
-
-| file | what |
-| --- | --- |
-| `modules/piop/python/src/vfhe/piop/lookup.py` | **new** — `Relation_Lookup`, `Lookup`, counter builder, grand-product builder |
-| `modules/piop/python/src/vfhe/piop/range.py` | **new** — `Relation_Range`, `RangeDecomposition`, digit decomposition, `uEval` |
-| `modules/piop/python/src/vfhe/piop/__init__.py` | add the four names to the imports and `__all__` |
-| `modules/piop/range.md` | **new** — the background above, expanded: the async/PIOP tour, the two figures, the index conventions, the soundness parameters, the compiled-PCS variant |
-| `modules/piop/piop.md` | one-line update: roadmap item 4 done, pointer to `range.md` |
-| `modules/piop/python/test/test_lookup.py` | **new** |
-| `modules/piop/python/test/test_range.py` | **new** |
-
-Reused, not rewritten: `VirtualOracle` / `VirtualEval` / `OracleKind`
-(`piop/virtual.py`), `Sumcheck` (`piop/sumcheck.py`), `MLE` / `MLE.eq` /
-`MLE.rename` (`arith/mle.py`), `PseudoMersenneField` (`arith/impl/pmf/`),
-`Ring` / `Polynomial.get_polynomial` (`arith/impl/rns/polynomial.py`), and the
-`Prover.witnesses` handoff pattern from `piop/circuit.py::GKR.prove`.
-
-## Verification
-
-**Done when:** (i) an honest `ṽ` with every coefficient in `[0,B)` is accepted
-end to end at the test parameters below; (ii) each cheating strategy listed is
-rejected, and rejected *for the reason named*; (iii) the Fiat–Shamir round trip
-across two separate `IOP`s accepts and is byte-reproducible.
+## The tests
 
 Test parameters, small enough for the pure-Python degree-3 rounds:
 `N = 8` (`ν = 3`), `ℓ = 2`, `B = 2^6`, `c = 2` (so `γ = 1`, `β = 8`, `b* = 3`),
@@ -616,33 +559,16 @@ giving `ℓ* = 6` and 64-entry tables; `m = 2`, `σ = 2^8`, `κ = 2`;
 `p = PseudoMersenneField.generate(260, two_adicity=8)` — the existing fixture in
 `test_field_domain.py`, reused verbatim — so `p ≈ 2^260`, against the correctness
 bound `2β(2σ)^m = 2^22` and the lookup requirement `2^{ℓ*} = 2^6`. (`κ = 2` is
-a test-size choice, not a security one; `range.md` records the real bound
+a test-size choice, not a security one; the real bound is
 `((ℓ+ν)/σ)^κ ≈ 2^{−λ}`, eq. 44.) `σ = 2^8 ≤ p_min` holds for any realistic
-prime size.
-
-**Pre-flight, not an assumption:** nothing on `main` builds a ring this small —
-every `Ring` in `modules/piop` and `modules/polycom` is `N = 512` or `N = 1024`,
-and `modules/arith`'s own tests bottom out at `N = 2^9`. Bare `Ring(8)` raises
-(`prime_size` defaults to the *int* `49`, which is not one of the four accepted
-modulus specifications). The call to try first is
-
-```python
-ring = Ring(8, prime_size=[30, 30], split_degree=1)   # rou_order = 2N/split_degree = 16
-```
-
-and step zero of the implementation is to check that it constructs and that
-`MLE(ring=ring, …).evaluate({var: 3})` returns the right thing. If a small `N`
-does not survive the native NTT, fall back to `N = 16` (`ν = 4`, `ℓ* = 7`), and
-beyond that to `N = 512` with `ℓ = 1`, `c = 2` (`ℓ* = 11`), which is slower but
-certainly supported.
+prime size. The ring is `Ring(8, prime_size=[30, 30], split_degree=1)`.
 
 `test_lookup.py`
 
 - `Relation_Lookup().check()` accepts an in-range table and rejects one
   out-of-range entry.
-- An honest run accepts. A cheating prover that fabricates counters for an
-  out-of-range entry is rejected — by the step-6 product check or by the
-  sumcheck, and the test asserts which.
+- An honest run accepts. An out-of-range entry is rejected — by the step-6
+  product check or by the sumcheck, and the test asserts which.
 - The transcript labels are the expected sequence, and both `Relation_Sum`
   children report `degree == 3` (round messages of 4 nodes).
 - Fiat–Shamir: `IOP(fiat_shamir=True).prove` then a *separate* `IOP(…).verify`
@@ -669,96 +595,9 @@ certainly supported.
 - The `κ` claims on `ṽ` and the `κ` on `µ̃'` reach the terminal frontier, and
   each `check()`s true on an honest run.
 
-(The core arithmetic was already checked numerically before writing this plan;
-see the [appendix](#appendix-what-was-checked-and-how). These tests are what
-pins it inside the framework.)
-
-Commands:
-
-```bash
-python3 -m pytest modules/piop modules/polycom -q
-```
-
-```bash
-ruff check modules/piop/python
-```
-
-No C is added, so no rebuild is required.
-
-## Risks, in the order they will bite
-
-1. **Nested `VirtualOracle` as a constituent.** `f_α` is virtual and appears as
-   a constituent of the Figure-12 oracle. Virtual-inside-virtual has no test on
-   `main`, but both call paths were traced and they hold: `resolve_table`
-   returns `witnesses[f_α]` (a `VirtualOracle` has no `__eq__`, so it is a
-   valid identity-keyed dict key); `_dense_constituent` binds the map's fixed
-   coordinate *out of place*, so the one shared witness table survives being
-   read under two child maps; and `claims()` dedups by constituent identity, so
-   the two shifted views stay two claims.
-   **The one hard requirement is that `prover.witnesses[f_α]` be set.** This is
-   the same handoff `GKR` uses for its layer tables, but *not* with the same
-   safety net: `ImplicitOracle` defines `materialize()`, so a missing witness
-   there merely falls back to a slow path, whereas `VirtualOracle` has neither
-   `.table` nor `materialize`, so a missing witness is a hard
-   `TypeError: no table for oracle` — raised from `VirtualOracle.prover_view`
-   during `Sumcheck.prove`, and again from `VirtualEval.prove`.
-   *Fallback if the nesting misbehaves anyway:* flatten `f_α` into the terms.
-   Under the child maps the `W_n` indicator becomes `X_{n−1}` rather than a
-   constant, so each child view is 4 summands and each product is 16 terms;
-   with the parent slot already collapsed to `f^{(1)}_α`, that is
-   2 fingerprints × (1 + 16) = 34 terms per sumcheck instead of 4. Mechanical,
-   slower, no framework dependency.
-2. **`VirtualOracle` over a `Field` domain, end to end.** `test_libra.py`
-   exercises `prover_view` over a field and `test_virtual.py` exercises the
-   full IOP over integers and `Ring`, but no test crosses the two. Write a
-   small degree-2 virtual sumcheck over `PseudoMersenneField` first, before the
-   real protocol.
-3. **Mixed domains in one run.** `ṽ` over `R_q`, everything else over `F_p`,
-   `iop.domain = F_p`. Verify early that a ring-backed `MLE` binds plain
-   integer points and that a terminal `Relation_Eval` on it decides correctly.
-4. **`element_digest` coverage.** Field-element tuples take the
-   `list|tuple` → `hash()` path and `Polynomial` values take `get_hash()`. Any
-   new message type outside those branches should be given a `digest()` method
-   rather than widening the walker.
-5. **Cost.** Degree-3 products-form round messages run in pure Python
-   (`piop.md` §8, item 3a). Keep `ℓ*` at 6–8 in tests.
-
-## Appendix: what was checked, and how
-
-Every API claim above was read off the working tree, and the three pieces of
-arithmetic that are easy to get wrong were checked numerically in standalone
-Python before the plan was written:
-
-- the grand-product identity `f_α(X,1) = f_α(0,X)·f_α(1,X)` under the LSB-first
-  reading, for `n = 2,3,4` — including at `X = (1,…,1)`, where it holds only
-  because the last entry is pinned to zero; and `P = f[2^{n+1}−2]` landing at
-  entry `2^n−2` of the top half;
-- that the paper's reading (selector first, MSB-first) and this plan's
-  (selector last, LSB-first) are two readings of the *same* flat array, both
-  satisfied by it;
-- the Figure-13 step-2 identity end to end — digits → `ψ`-fold →
-  `Σ ι(ψ)·eq̃·β^j`. Against `ṽ`'s *integer* coefficients this holds **exactly
-  over `Z`**; against `uEval` of the ring element the verifier actually
-  queries it is an identity mod `q` and nothing stronger, because reading
-  `ṽ(x_η)` out of `R_q` has already reduced it. `test_recomposition_identity`
-  pins both, and the `iota` lift's precondition (`|·| < 2^m β σ^m`) besides;
-- the Figure-11 product check `WSt·WSµ = RS·S` on honest counters.
-
-The plan's three risks were then settled by pre-flight, before any protocol
-code was written:
-
-- a nested `VirtualOracle` resolves correctly when `prover.witnesses[f_α]` is
-  set, and raises exactly the predicted `TypeError: no table for oracle`
-  when it is not;
-- a `VirtualOracle` runs end to end over a `PseudoMersenneField` domain,
-  including the degree-3 `eq̃ · f · f` shape Figure 12 needs;
-- `Ring(8, prime_size=[30, 30], split_degree=1)` constructs, multiplies
-  correctly, and binds plain integer points — so the `N = 16` / `N = 512`
-  fallbacks above are not needed.
-
-One correction the tests forced on this document is recorded above: the
-recomposition identity is exact over `Z` only against `ṽ`'s integer
-coefficients, not against the value read out of `R_q`.
+The recomposition identity is exact over `Z` only against `ṽ`'s integer
+coefficients, not against the value read out of `R_q`, which has already
+been reduced: `test_recomposition_identity` pins both forms.
 
 ## Bibliography
 

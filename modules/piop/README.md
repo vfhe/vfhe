@@ -9,92 +9,136 @@
 The interactive-oracle-proof scaffolding. The architecture and its
 derivation from the PIOP literature are documented in [piop.md](piop.md).
 
-The polynomials the protocols here run on — `MLE`, `SparseMLE`,
-`MLE_Basis`, `MLE_Variable` — are `vfhe.arith`'s (`arith/mle.py`), not this
-module's.
+The polynomials the protocols run on — `MLE`, `SparseMLE`, `MLE_Basis`,
+`MLE_Variable` — are `vfhe.arith`'s (`arith/mle.py`), not this module's. A
+statement never names a table directly: it names an *oracle*, an object of
+this package that says what the verifier has of the polynomial (`oracle.py`,
+below), and the prover works on the tables behind the oracles.
 
-- `piop.py`: the IOP primitives: `IOP` (event loop, coefficient domain,
-  transcript, parties, and the relation → protocol registry), `Transcript`
-  (the ordered, labeled record of exchanged messages: `write(label, value)`
-  / `await read(label)`; also its own Fiat-Shamir accumulator — `state()`
-  is the chained prefix hash h_i = H(h_{i-1} | H(label_i) | digest(value_i)),
-  seeded via `bind()` with the root statement's digest, with per-entry
-  digests and chain values cached so interactive runs pay nothing and a new
-  entry costs one hash; `element_digest` is the duck-typed walker digesting
-  entry values and statements), `Value` / `Variable` (asyncio futures),
-  `Party` / `Prover` / `Verifier` (worklist drivers; the IOP constructor
-  instantiates both parties, taking optional subclasses;
-  `iop.verifier.challenge(label)` is the single place challenges originate
-  and either party may call it, with `challenge_bits(label, bits)` the
-  second sampler — raw published coins that protocols expand into derived
-  randomness, e.g. spot-check positions for a committed vector, which the
-  prover must reproduce to answer with paths; a Fiat-Shamir verifier
-  overrides both), `Protocol` (a reduction between products
-  of relations, as paired prove/verify coroutines over statement bundles;
-  `batching = True` protocols receive all frontier statements of their
-  relation at once), and the relation / statement pair.
+The package has three parts: the framework, exported by `vfhe.piop`; the
+relation toolbox, `vfhe.piop.relations`; and the protocols,
+`vfhe.piop.protocols`.
+
+## The framework (`vfhe.piop`)
+
+- `oracle.py`: `OracleKind` and the oracle classes — `Oracle`, the contract
+  (`variables`, `kind`, `query(point)`, `digest()`); `TableOracle`, an
+  oracle to an arith table the framework holds, `public` when the verifier
+  holds it too (a wiring predicate, `eq̃`, a public output) and `plain`
+  otherwise (the ideal model); `CommittedOracle`, a commitment and the
+  variables, no table (the prover's table is in `Prover.witnesses[oracle]`);
+  `ImplicitOracle`, a handle with variables and no content, the head of a
+  statement of a reduction. `oracle_closure` and `map_oracles` walk the
+  oracles a value mentions.
+- `virtual.py`: `VirtualOracle`, a local definition over other oracles
+  (`p*(x) = Σ_terms c·Π_j p_j(h_j(x))`, the constituents read through
+  variable maps); `resolve_table`, the table behind an oracle on the
+  prover's side; `expanded_tables`, the definition as a products form over
+  equal-length dense tables.
+- `relation.py`: `Relation` (an indexed relation: `fields` in canonical
+  order, `index_fields`, the ideal decider `check`, heads through
+  `head_index` / `compute_head`, and `subject` — the oracle a statement is
+  a claim about, which the driver bundles, parks and routes by), `Statement`
+  (the claim `instance ∈ L(relation)`, verifier-shaped; `reduce_to` for the
+  DAG, `digest()` for Fiat-Shamir) and the hypercube helpers the deciders
+  share.
+- `evaluation.py`: `Relation_Eval`, the terminal claim `f(z) = v` on one
+  oracle, the one relation the framework itself is written against, and the
+  head machinery built on it: `with_start` derives the start relation
+  `R.Start` of a headed relation, whose decider checks evaluation claims on
+  the computed head, and `start_claims` rebuilds the claims of a started
+  root.
+- `protocol.py`: `Protocol`, a reduction between products of relations as
+  paired `prove` / `verify` coroutines over statement bundles (`batching =
+  True` protocols receive every frontier statement of their relation at
+  once), and `Rejection`.
+- `transcript.py`: `Transcript` (the ordered, labeled record of exchanged
+  messages: `write(label, value)` / `await read(label)`; its Fiat-Shamir
+  chain `state()`, seeded via `bind()` with the root statement's digest),
+  `Proof` (the prover messages of a Fiat-Shamir run, in order) and the
+  futures `Value` / `Variable`.
+- `party.py`: `Party` / `Prover` / `Verifier`: the worklist driver both
+  parties run (with the parking rule for evaluation claims), the prover's
+  `witnesses`, and the verifier's two samplers — `challenge(label)`, an
+  exceptional-set element, and `challenge_bits(label, bits)`, raw published
+  coins; either party may call them, a Fiat-Shamir verifier overrides both.
 - `fs.py`: `FS_Verifier`, the Fiat-Shamir transform as a `Verifier` subtype
-  overriding exactly the two draw hooks behind the samplers: each value is
-  H(transcript.state() | tag | label), so it binds the root statement and
-  every prior message. Enabled with `IOP(fiat_shamir=True)` (default
-  `False`: interactive is the base model, FS the compiled artifact); an FS
-  run is fully deterministic — same statement, same registry, byte-identical
-  transcript. Ring challenges come from `ring_exceptional_from_seed`
-  (deterministic constant-chunk exceptional elements) unless the domain
-  provides its own `exceptional_from_seed`.
-  With FS on, the two halves come apart: `iop.prove(statement)` runs the
-  prover alone and returns a `Proof` (the prover messages only — challenges
-  are recomputed, never carried), and a *separate* `iop.verify(statement,
-  proof)` checks it with no prover, witnesses, or oracles present, reading
-  the proof in a single forward pass and rejecting messages that arrive out
-  of turn, run out, or are left over.
-- `range.py` / `lookup.py`: range checks over packed `R_q` polynomials, and
-  the lookup argument they rest on.
-  `Relation_Range` (every coefficient below a bound `B`) reduces, via
-  `RangeDecomposition`, to a `Relation_Lookup` on the base-`beta` digits
-  plus evaluation claims on the digits and on the original oracle. The
-  digits live over a large prime field while the oracle stays over `R_q`;
-  the bridge is the unpacked-evaluation lemma, so the digit polynomial is
-  never committed on the ring side. See [range.md](range.md).
+  overriding exactly the two draw hooks: each value is
+  `H(transcript.state() | tag | label)`, so it binds the root statement and
+  every prior message. Ring challenges come from
+  `ring_exceptional_from_seed` unless the domain provides its own
+  `exceptional_from_seed`.
+- `iop.py`: `IOP`, one protocol execution: the event loop, the coefficient
+  domain, the transcript, the two parties and the relation → protocol
+  registry (`register(relation, protocol, kind=None)`; `Relation_Eval` is
+  registered per oracle kind). `run(statement)` executes both parties;
+  with `fiat_shamir=True`, `prove(statement) -> Proof` runs the prover
+  alone and a separate `verify(statement, proof)` checks the proof with no
+  prover, witnesses or oracles present.
+- `composer.py`: `compose(layering)` / `Composed`, the protocol of a
+  relation given as a layered reduction: headed statements introduce
+  implicit oracles, the prover computes every head's table, and each
+  layer's statements are started with the claims accumulated on their
+  heads.
+- `digest.py`: `element_digest`, the one entry point for digesting a
+  transcript entry or statement field: primitives, containers, classes and
+  protobuf messages itself, everything else through its own `digest()`
+  (arith's tables, polynomials and field elements; `vfhe.crypto`'s Merkle
+  paths; the oracles, statements and proofs here).
+
+## The relation toolbox (`vfhe.piop.relations`)
+
+- `hypercube.py`: `Relation_Sum`, `Relation_SumProd`, `Relation_Zero`.
+- `sumdef.py`: `Relation_SumDef`, an oracle defined as the hypercube sum of
+  a virtual oracle, the head of a statement in a layered reduction.
+- `circuit.py`: `Relation_CircuitSparseIndex` (circuit satisfiability over
+  the protobuf circuits of `vfhe.circuit`, the wiring predicates as public
+  sparse index oracles, `wiring_predicates` the indexer), `Relation_Circuit`
+  (the same with the predicates committed through one dense index oracle),
+  `Relation_Layer` (a gate layer as a sum definition) and `Relation_Equal`.
+- `sparse.py`: `FamilyShape`, `Relation_SpEval` and `dense_relation`: a
+  family of sparse index tables packed into one master oracle, committed
+  through a dense one.
+- `lookup.py` / `range.py`: `Relation_Lookup` (every evaluation lies in
+  `{0, …, β−1}`) and `Relation_Range` (every `Z_q` coefficient of every
+  evaluation of an `R_q` oracle lies in `[0, B)`); see [range.md](range.md).
+
+Every relation's `check` is the ideal (non-succinct) decider: what tests
+run and what the verifier may do on the fully-reduced leaf statements. It
+needs the tables, so a claim on a committed oracle has no decider.
+
+## The protocols (`vfhe.piop.protocols`)
+
+- `rounds.py`: the sumcheck round-message kernels as functions over tables
+  (`round_evals`, `prod_round_evals`, their native, whole-vector and
+  pure-Python paths, chosen per call), `interpolate_evals` (the verifier's
+  claim update) and `exceptional_set_size`. The building blocks of the
+  protocols below and of protocols that interleave sumcheck rounds with
+  other messages (basefold in `vfhe.polycom`).
+- `prover_view.py`: `prover_view(oracle, witnesses, strategy)`, the
+  prover's working form of an oracle: the table behind a table, committed
+  or implicit oracle; for a virtual oracle, the dense products form or the
+  two-phase (Libra) form, which keeps sparse predicates sparse — both send
+  identical messages.
 - `sumcheck.py`: `Sumcheck` (reduces `Relation_Sum` to `Relation_Eval` in
   `num_vars` rounds) and the Libra-style `SumcheckProd` (reduces
   `Relation_SumProd` to one `Relation_Eval` per factor). Round messages are
-  the evaluations of the round polynomial at `0..deg` (Libra's format);
-  both protocols work over any `MLE` oracle, in either basis and over
-  either coefficient type.
-  `iop.register(Relation_Sum, Sumcheck())` then `iop.run(statement)`.
-  Both protocols share their round machinery (a template base class) and
-  each body is written once: the native/pure-Python decision is made
-  per call inside the round-message helpers — `Sumcheck.round_evals` /
-  `SumcheckProd.prod_round_evals` delegate to the C kernels in
-  `c/src/sumcheck.c` for native tables (for `SumcheckProd`: exactly two
-  factors) and run pure Python otherwise, identical messages either way;
-  the kernels come in pairs/halves/generic variants chosen by the round
-  variable's location, like MLE binding. These helpers (plus
-  `interpolate_evals`, the verifier's claim update) are also the building
-  blocks for protocols that interleave sumcheck rounds with other messages
-  (basefold in `vfhe.polycom`). Folding is MLE evaluation
-  (`mle_dense_poly_evaluate`), not a sumcheck kernel; `supported_domains`
-  (currently `(Ring,)`) is declarative metadata, not a dispatch switch.
-
-A `Relation` is an indexed relation — a set of (index, instance, witness)
-triples — declaring its instance shape (`fields`, in the canonical order a
-Fiat-Shamir serialization will hash) and an ideal decider `check()`; the
-toolbox currently has `Relation_Sum`, `Relation_SumProd`, `Relation_Zero`,
-and `Relation_Eval` — whose instance may carry the polynomial as an
-in-process oracle, as a commitment (optional field; instance data on the
-statement, witness in `prover.witnesses[commitment]`), or both: left
-terminal it is decided by one oracle query, and a registered PCS protocol
-(basefold in `vfhe.polycom`) replaces that query with an opening argument. A `Statement` is the claim "instance ∈ L(relation)": a thin public
-record whose fields come from its relation — the witness stays with
-`Prover.witnesses`. Protocol steps reduce statement bundles to statement
-bundles, linked through `parents` (the statements of a run form a DAG whose
-`path`s namespace the transcript); field values may hold unresolved futures
-and `resolved()` awaits them. Challenges are sampled from the exceptional
-set of the coefficient domain (`Ring` / `Field`), never from a set carried
-by the statement.
+  the evaluations of the round polynomial at `0..deg`; the `strategy`
+  attribute picks the prover's form of a virtual oracle.
+- `virtual.py`: `VirtualEval` (a claim on a virtual oracle becomes one
+  claim per non-public constituent, no challenge) and `SumDefStart` (the
+  composable protocol of a sum definition: the claims on the head combined
+  by a random linear combination into one sum claim).
+- `gkr.py`: `OutputTest`, `GKR` and `GKR_Start`: circuit satisfiability as
+  a composition, the output test then one sum definition per gate layer.
+- `sparse.py`: `dense_layering`, the two-layer composition of a dense-index
+  relation.
+- `lookup.py` / `range.py`: `Lookup` (offline memory checking over four
+  grand products, two degree-3 zerochecks) and `RangeDecomposition` (the
+  base-`β` digits of the coefficients as an oracle over a prime field, a
+  recomposition check, and a lookup claim on the digits).
 
 `c/src/sumcheck.c` holds the sumcheck round-message kernels
-(`python/cdef/sumcheck.h`), the module's only C. The dense-MLE kernels
-they mirror are `vfhe.arith`'s (`arith/c/src/mle.c`), and the vector
-commitment the PCS layer uses is `vfhe.crypto`'s `Merkle`.
+(`python/cdef/sumcheck.h`), the module's only C. The dense-MLE kernels they
+mirror are `vfhe.arith`'s (`arith/c/src/mle.c`), and the vector commitment
+the PCS layer uses is `vfhe.crypto`'s `Merkle`.

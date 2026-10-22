@@ -9,24 +9,23 @@ import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import (
     IOP,
-    Implicit,
+    ImplicitOracle,
+    Oracle,
     OracleKind,
     Protocol,
     Relation,
     Relation_Eval,
-    Relation_Sum,
-    Relation_SumDef,
-    Relation_Zero,
     Statement,
-    Sumcheck,
-    SumDefStart,
-    VirtualEval,
+    TableOracle,
     VirtualOracle,
     compose,
     element_digest,
     with_start,
 )
-from vfhe.piop.virtual import _eq_weights, _one_of
+from vfhe.piop.protocols import Sumcheck, SumDefStart, VirtualEval
+from vfhe.piop.protocols.prover_view import _eq_weights, _one_of
+from vfhe.piop.relations import Relation_Sum, Relation_SumDef, Relation_Zero
+from vfhe.piop.virtual import resolve_table
 
 
 class _IntDomain:
@@ -48,15 +47,29 @@ def _table(variables, values):
     return MLE(variables=list(variables), evaluations=list(values))
 
 
-def _like(t, values, public=False):
-    """A table over `t`'s variables and domain."""
+def _t(oracle):
+    """The table behind an oracle: a relation's decider and `compute_head`
+    read tables, through the oracles the statement names (in a prover view
+    every oracle but the head is a table oracle)."""
+    return resolve_table(oracle)
+
+
+def _like(t, values):
+    """A table over the variables and domain of the table (or oracle) `t`."""
+    t = resolve_table(t) if isinstance(t, Oracle) else t
     return MLE(
-        ring=t.ring,
-        field=t.field,
-        variables=list(t.variables),
-        evaluations=values,
-        public=public,
+        ring=t.ring, field=t.field, variables=list(t.variables), evaluations=values
     )
+
+
+def _public(t, values):
+    """A public oracle to a table over `t`'s variables and domain."""
+    return TableOracle(_like(t, values), public=True)
+
+
+def _one(oracle):
+    """The multiplicative identity of the domain of an oracle's table."""
+    return _one_of([resolve_table(oracle)])
 
 
 def _at(f, point):
@@ -72,11 +85,12 @@ class _Hadamard(Relation):
     head_index = 0
 
     def check(self, statement):
-        a, b, c = statement.oracles
+        a, b, c = (_t(o) for o in statement.oracles)
         return list(a.table) == [x * y for x, y in zip(b.table, c.table, strict=True)]
 
     def compute_head(self, statement):
         _, b, c = statement.oracles
+        b, c = _t(b), _t(c)
         return _like(b, [x * y for x, y in zip(b.table, c.table, strict=True)])
 
 
@@ -90,7 +104,7 @@ class _Doubled(Relation):
     head_index = 0
 
     def check(self, statement):
-        u, w = statement.oracles
+        u, w = (_t(o) for o in statement.oracles)
         return (
             list(u.table) == [2 * x for x in w.table]
             and sum(w.table) == statement.total
@@ -98,6 +112,7 @@ class _Doubled(Relation):
 
     def compute_head(self, statement):
         _, w = statement.oracles
+        w = _t(w)
         return _table(w.variables, [2 * x for x in w.table])
 
 
@@ -112,18 +127,18 @@ class _Headless(Relation):
 def _hadamard():
     """A headed Hadamard statement: `a` implicit, `b` and `c` tables."""
     x = _vars("x0", "x1")
-    b = _table(x, [1, 2, 3, 4])
-    c = _table(x, [5, 6, 7, 8])
-    a = Implicit(x)
+    b = TableOracle(_table(x, [1, 2, 3, 4]))
+    c = TableOracle(_table(x, [5, 6, 7, 8]))
+    a = ImplicitOracle(x)
     return Statement(_Hadamard(), oracles=(a, b, c), head=a), a, b, c
 
 
 def _hadamard_tables():
     """The same statement headless, every oracle a table."""
     x = _vars("x0", "x1")
-    a = _table(x, [5, 12, 21, 32])
-    b = _table(x, [1, 2, 3, 4])
-    c = _table(x, [5, 6, 7, 8])
+    a = TableOracle(_table(x, [5, 12, 21, 32]))
+    b = TableOracle(_table(x, [1, 2, 3, 4]))
+    c = TableOracle(_table(x, [5, 6, 7, 8]))
     return Statement(_Hadamard(), oracles=(a, b, c)), a, b, c
 
 
@@ -135,16 +150,16 @@ def test_head_is_the_oracle_at_head_index():
     assert stmt.head is a and stmt.relation.head_index == 0
     assert _hadamard_tables()[0].head is None
     x = _vars("x0", "x1")
-    m = Implicit(x)
+    m = ImplicitOracle(x)
     with pytest.raises(TypeError):  # the relation declares no head
         Statement(_Headless(), oracles=(m,), head=m)
-    with pytest.raises(TypeError):  # a head is an Implicit handle
-        t = _table(x, [1, 2, 3, 4])
+    with pytest.raises(TypeError):  # a head is an ImplicitOracle handle
+        t = TableOracle(_table(x, [1, 2, 3, 4]))
         Statement(_Hadamard(), oracles=(t, t, t), head=t)  # pyright: ignore[reportArgumentType]
     with pytest.raises(ValueError):  # the head sits at head_index
-        Statement(_Hadamard(), oracles=(_table(x, [0] * 4), m, m), head=m)
+        Statement(_Hadamard(), oracles=(TableOracle(_table(x, [0] * 4)), m, m), head=m)
     with pytest.raises(ValueError):  # the very object, not a look-alike
-        Statement(_Hadamard(), oracles=(Implicit(x), m, m), head=m)
+        Statement(_Hadamard(), oracles=(ImplicitOracle(x), m, m), head=m)
 
 
 def test_head_travels_with_fork_and_reduce_and_is_not_digested():
@@ -157,22 +172,27 @@ def test_head_travels_with_fork_and_reduce_and_is_not_digested():
     headless = Statement(_Hadamard(), oracles=(a, b, c))
     assert element_digest(stmt) == element_digest(headless)
     # The handle itself digests by its variables, so it can sit in a root.
-    assert element_digest(a) == element_digest(Implicit(a.variables))
-    assert element_digest(a) != element_digest(Implicit(a.variables[:1]))
+    assert element_digest(a) == element_digest(ImplicitOracle(a.variables))
+    assert element_digest(a) != element_digest(ImplicitOracle(a.variables[:1]))
 
 
 def test_implicit_is_a_handle():
     x = _vars("x0", "x1")
-    m = Implicit(x)
+    m = ImplicitOracle(x)
     assert m.num_vars == 2 and not m.public
-    assert not hasattr(m, "table")  # no content: nothing to evaluate or sum
+    assert not hasattr(m, "polynomial")  # no content: nothing to evaluate or sum
+    with pytest.raises(NotImplementedError):
+        m.query(dict.fromkeys(x, 0))
 
 
 def test_hadamard_relation_check():
     stmt, _, _, _ = _hadamard_tables()
     assert stmt.check()
     bad, _, _, _ = _hadamard_tables()
-    bad.fields["oracles"] = (_table(_vars("x0", "x1"), [0] * 4), *bad.oracles[1:])
+    bad.fields["oracles"] = (
+        TableOracle(_table(_vars("x0", "x1"), [0] * 4)),
+        *bad.oracles[1:],
+    )
     assert not bad.check()
 
 
@@ -241,8 +261,8 @@ def test_start_check_hadamard():
 
 def test_start_check_residual():
     x = _vars("x0", "x1")
-    w = _table(x, [1, 2, 3, 4])
-    u = Implicit(x)
+    w = TableOracle(_table(x, [1, 2, 3, 4]))
+    u = ImplicitOracle(x)
     doubled = _table(x, [2, 4, 6, 8])
     point = {x[0]: 3, x[1]: 5}
     claim = Statement(
@@ -262,17 +282,18 @@ def test_start_relation_rebuilds_its_base_from_the_index():
         head_index = 0
 
         def check(self, statement):
-            u, w = statement.oracles
+            u, w = (_t(o) for o in statement.oracles)
             return list(u.table) == [self.index * x for x in w.table]
 
         def compute_head(self, statement):
             _, w = statement.oracles
+            w = _t(w)
             return _table(w.variables, [self.index * x for x in w.table])
 
     with_start(_Scaled)
     x = _vars("x0")
-    w = _table(x, [1, 2])
-    u = Implicit(x)
+    w = TableOracle(_table(x, [1, 2]))
+    u = ImplicitOracle(x)
     stmt = Statement(_Scaled(index=3), oracles=(u, w), head=u)
     claim = Statement(Relation_Eval(), oracles=(u,), point={x[0]: 4}, value=3 * 5)
     started = stmt.relation.start(stmt, [claim])
@@ -285,11 +306,12 @@ def test_start_relation_rebuilds_its_base_from_the_index():
         index_fields = ("k",)
 
         def check(self, statement):
-            u, w = statement.oracles
+            u, w = (_t(o) for o in statement.oracles)
             return list(u.table) == [self.index["k"] * x for x in w.table]
 
         def compute_head(self, statement):
             _, w = statement.oracles
+            w = _t(w)
             return _table(w.variables, [self.index["k"] * x for x in w.table])
 
     with_start(_ScaledIdx)
@@ -314,11 +336,16 @@ def test_protocol_for_refuses_a_claim_on_an_implicit_oracle():
     iop = IOP()
     iop.register(Relation_Eval, _Default())
     x = _vars("x0")
-    claim = Statement(Relation_Eval(), oracles=(Implicit(x),), point={x[0]: 1}, value=0)
+    claim = Statement(
+        Relation_Eval(), oracles=(ImplicitOracle(x),), point={x[0]: 1}, value=0
+    )
     with pytest.raises(RuntimeError, match="implicit oracle"):
         iop.protocol_for(claim)
     table = Statement(
-        Relation_Eval(), oracles=(_table(x, [1, 2]),), point={x[0]: 1}, value=2
+        Relation_Eval(),
+        oracles=(TableOracle(_table(x, [1, 2])),),
+        point={x[0]: 1},
+        value=2,
     )
     assert iop.protocol_for(table) is not None
 
@@ -344,11 +371,11 @@ class _HadamardStart(Protocol):
     def _sums(self, statements):
         (s,) = statements
         _, b, c = s.oracles
-        ref = c if isinstance(b, Implicit) else b  # a table, for the domain
+        ref = c if isinstance(b, ImplicitOracle) else b  # a table, for the domain
         out = []
         for point, value in zip(s.points, s.values, strict=True):
             r = [point[v] for v in s.head.variables]
-            eq = _like(ref, _eq_weights(r, _one_of([ref])), public=True)
+            eq = _public(ref, _eq_weights(r, _one(ref)))
             g = VirtualOracle.product([b, c, eq])
             out.append(self.reduce([s], oracles=[g], value=value))
         return out
@@ -362,14 +389,14 @@ class _Chain(Relation):
     fields = ("oracles", "total")
 
     def check(self, statement):
-        b, d, e = statement.oracles
+        b, d, e = (_t(o) for o in statement.oracles)
         prods = [x * y * z for x, y, z in zip(b.table, d.table, e.table, strict=True)]
         return sum(prods) == statement.total
 
 
 def _chain_layering(root):
     b, d, e = root.oracles
-    c = Implicit(b.variables)
+    c = ImplicitOracle(b.variables)
     product = VirtualOracle.product([b, c])
     return [
         [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
@@ -379,9 +406,9 @@ def _chain_layering(root):
 
 def _chain_instance(ring=None, total=290, relation=None):
     x = _vars("x0", "x1")
-    b = MLE(ring=ring, variables=x, evaluations=[1, 2, 3, 4])
-    d = MLE(ring=ring, variables=x, evaluations=[5, 6, 7, 8])
-    e = MLE(ring=ring, variables=x, evaluations=[2, 3, 4, 5])
+    b = TableOracle(MLE(ring=ring, variables=x, evaluations=[1, 2, 3, 4]))
+    d = TableOracle(MLE(ring=ring, variables=x, evaluations=[5, 6, 7, 8]))
+    e = TableOracle(MLE(ring=ring, variables=x, evaluations=[2, 3, 4, 5]))
     # d ∘ e = [10, 18, 28, 40]; sum b * (d ∘ e) = 10 + 36 + 84 + 160 = 290
     return Statement(relation or _Chain(), oracles=(b, d, e), total=total)
 
@@ -408,7 +435,7 @@ def test_composed_chain_ideal_model(monkeypatch):
     iop = _iop(_IntDomain())
     assert iop.run(stmt)  # the three terminal claims decided by the driver
     assert len(calls) == 1  # the prover, once
-    (c,) = [o for o in iop.prover.witnesses if isinstance(o, Implicit)]
+    (c,) = [o for o in iop.prover.witnesses if isinstance(o, ImplicitOracle)]
     assert list(iop.prover.witnesses[c].table) == [10, 18, 28, 40]
     order = iop.transcript.order
     # L0's sumcheck, its virtual-eval values, then the tail's sumcheck
@@ -423,14 +450,14 @@ class _ChainB(_Chain):
     name = "chain_b"
 
     def check(self, statement):
-        b, _, e = statement.oracles
+        b, _, e = (_t(o) for o in statement.oracles)
         prods = [x * x * z for x, z in zip(b.table, e.table, strict=True)]
         return sum(prods) == statement.total
 
 
 def _chain_b_layering(root):
     b, _, e = root.oracles
-    c = Implicit(b.variables)
+    c = ImplicitOracle(b.variables)
     product = VirtualOracle.product([b, c])
     return [
         [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
@@ -480,7 +507,7 @@ def test_composed_chain_fiat_shamir():
 def test_layering_rules_are_checked():
     def twice(root):  # rule 1: c heads two statements
         _, d, e = root.oracles
-        c = Implicit(d.variables)
+        c = ImplicitOracle(d.variables)
         return [
             [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)],
             [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)],
@@ -488,7 +515,7 @@ def test_layering_rules_are_checked():
 
     def shallow(root):  # rule 2: the sum reads c (through the virtual
         b, d, e = root.oracles  # oracle) but sits below c's layer
-        c = Implicit(b.variables)
+        c = ImplicitOracle(b.variables)
         product = VirtualOracle.product([b, c])
         return [
             [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)],
@@ -497,7 +524,7 @@ def test_layering_rules_are_checked():
 
     def unclaimed(root):  # a head nobody queries
         _, d, e = root.oracles
-        c = Implicit(d.variables)
+        c = ImplicitOracle(d.variables)
         return [[root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)]]
 
     cases = ((twice, "rule 1"), (shallow, "rule 2"), (unclaimed, "no claim"))
@@ -516,19 +543,20 @@ class _DoubleHadamard(Relation):
     head_index = 0
 
     def check(self, statement):
-        c, d, e = statement.oracles
+        c, d, e = (_t(o) for o in statement.oracles)
         want = [x * x * y for x, y in zip(d.table, e.table, strict=True)]
         return list(c.table) == want
 
     def compute_head(self, statement):
         _, d, e = statement.oracles
+        d, e = _t(d), _t(e)
         return _like(d, [x * x * y for x, y in zip(d.table, e.table, strict=True)])
 
 
 def _double_start_layering(started):
     # started: a statement of _DoubleHadamard.Start, head c, with claims on c
     c, d, e = started.oracles
-    m = Implicit(d.variables)
+    m = ImplicitOracle(d.variables)
     return [
         [started.reduce_to(_Hadamard, oracles=(c, d, m), head=c)],
         [started.reduce_to(_Hadamard, oracles=(m, d, e), head=m)],
@@ -541,7 +569,7 @@ class _Chain2(_Chain):
     name = "chain2"
 
     def check(self, statement):
-        b, d, e = statement.oracles
+        b, d, e = (_t(o) for o in statement.oracles)
         prods = [
             x * y * y * z for x, y, z in zip(b.table, d.table, e.table, strict=True)
         ]
@@ -550,7 +578,7 @@ class _Chain2(_Chain):
 
 def _chain2_layering(root):
     b, d, e = root.oracles
-    c = Implicit(b.variables)
+    c = ImplicitOracle(b.variables)
     product = VirtualOracle.product([b, c])
     return [
         [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
@@ -585,7 +613,7 @@ def test_nested_composition(monkeypatch):
     tables = sorted(
         list(t.table)
         for o, t in iop.prover.witnesses.items()
-        if isinstance(o, Implicit)
+        if isinstance(o, ImplicitOracle)
     )
     assert tables == [[10, 18, 28, 40], [50, 108, 196, 320]]
     assert not _iop2(_IntDomain(1)).run(_chain_instance(total=2135, relation=_Chain2()))
@@ -598,6 +626,7 @@ def test_a_false_head_is_rejected(monkeypatch):
     # integer domain is deterministic, so the pinned seed makes it exact.
     def wrong(_self, statement):
         _, b, c = statement.oracles
+        b, c = _t(b), _t(c)
         table = [x * y for x, y in zip(b.table, c.table, strict=True)]
         table[0] += 1
         return _like(b, table)
@@ -616,18 +645,19 @@ class _Triple(Relation):
     head_index = 0
 
     def check(self, statement):
-        c, d, m = statement.oracles
+        c, d, m = (_t(o) for o in statement.oracles)
         want = [x * x * y for x, y in zip(d.table, m.table, strict=True)]
         return list(c.table) == want
 
     def compute_head(self, statement):
         _, d, m = statement.oracles
+        d, m = _t(d), _t(m)
         return _like(d, [x * x * y for x, y in zip(d.table, m.table, strict=True)])
 
 
 def _triple_start_layering(started):
     c, d, m = started.oracles  # m: a head of the enclosing reduction
-    k = Implicit(d.variables)
+    k = ImplicitOracle(d.variables)
     return [
         [started.reduce_to(_Hadamard, oracles=(c, d, k), head=c)],
         [started.reduce_to(_Hadamard, oracles=(k, d, m), head=k)],
@@ -640,7 +670,7 @@ class _Chain3(_Chain):
     name = "chain3"
 
     def check(self, statement):
-        b, d, e = statement.oracles
+        b, d, e = (_t(o) for o in statement.oracles)
         prods = [
             x * y * y * y * z for x, y, z in zip(b.table, d.table, e.table, strict=True)
         ]
@@ -649,7 +679,7 @@ class _Chain3(_Chain):
 
 def _chain3_layering(root):
     b, d, e = root.oracles
-    c, m2 = Implicit(b.variables), Implicit(b.variables)
+    c, m2 = ImplicitOracle(b.variables), ImplicitOracle(b.variables)
     product = VirtualOracle.product([b, c])
     return [
         [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
@@ -677,7 +707,7 @@ def test_nested_composition_reads_an_outer_head():
     tables = sorted(
         list(t.table)
         for o, t in iop.prover.witnesses.items()
-        if isinstance(o, Implicit)
+        if isinstance(o, ImplicitOracle)
     )
     assert tables == [[10, 18, 28, 40], [50, 108, 196, 320], [250, 648, 1372, 2560]]
     ring = Ring(1024, prime_size=[49], split_degree=4)
@@ -702,13 +732,13 @@ class _ScaledBy(Relation):
     head_index = 0
 
     def check(self, statement):
-        u, w = statement.oracles
-        m = self.index["factor"]
+        u, w = (_t(o) for o in statement.oracles)
+        m = _t(self.index["factor"])
         return list(u.table) == [x * y for x, y in zip(w.table, m.table, strict=True)]
 
     def compute_head(self, statement):
         _, w = statement.oracles
-        m = self.index["factor"]
+        w, m = _t(w), _t(self.index["factor"])
         return _like(w, [x * y for x, y in zip(w.table, m.table, strict=True)])
 
 
@@ -732,7 +762,7 @@ class _ScaledByStart(Protocol):
         out = []
         for point, value in zip(s.points, s.values, strict=True):
             r = [point[v] for v in s.head.variables]
-            eq = _like(w, _eq_weights(r, _one_of([w])), public=True)
+            eq = _public(w, _eq_weights(r, _one(w)))
             g = VirtualOracle.product([w, m, eq])
             out.append(self.reduce([s], oracles=[g], value=value))
         return out
@@ -742,7 +772,7 @@ def _index_layering(root):
     # c = d ∘ m through the index of _ScaledBy, m = d ∘ e a deeper head:
     # the same claim as _Chain2's, read through an index.
     b, d, e = root.oracles
-    c, m = Implicit(b.variables), Implicit(b.variables)
+    c, m = ImplicitOracle(b.variables), ImplicitOracle(b.variables)
     product = VirtualOracle.product([b, c])
     return [
         [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
@@ -773,11 +803,11 @@ def test_prover_view_rebuilds_a_relation_whose_index_holds_a_head(monkeypatch):
     # table in m's place; the statement's own relation still holds m.
     (viewed,) = views
     assert isinstance(viewed, _ScaledBy)
-    assert list(viewed.index["factor"].table) == [10, 18, 28, 40]
+    assert list(viewed.index["factor"].polynomial.table) == [10, 18, 28, 40]
     tables = sorted(
         list(t.table)
         for o, t in iop.prover.witnesses.items()
-        if isinstance(o, Implicit)
+        if isinstance(o, ImplicitOracle)
     )
     assert tables == [[10, 18, 28, 40], [50, 108, 196, 320]]
     # The tail of layer 1 ends in a VirtualEval leaving the claim on m, caught.
@@ -788,7 +818,7 @@ def test_prover_view_rebuilds_a_relation_whose_index_holds_a_head(monkeypatch):
 
     def shallow(root):  # rule 2 through the index: m read above its layer
         b, d, e = root.oracles
-        c, m = Implicit(b.variables), Implicit(b.variables)
+        c, m = ImplicitOracle(b.variables), ImplicitOracle(b.variables)
         product = VirtualOracle.product([b, c])
         return [
             [root.reduce_to(Relation_Sum, oracles=[product], value=root.total)],
@@ -805,7 +835,7 @@ def test_a_terminal_statement_reading_a_head_is_refused():
     # it reads an implicit oracle, which the verifier could never decide.
     def bad(root):  # Zero has no protocol here, and reads c
         b, d, e = root.oracles
-        c = Implicit(d.variables)
+        c = ImplicitOracle(d.variables)
         zero = root.reduce_to(Relation_Zero, oracles=[VirtualOracle.product([b, c])])
         return [[zero], [root.reduce_to(_Hadamard, oracles=(c, d, e), head=c)]]
 
@@ -820,7 +850,9 @@ def _eq_table(variables, ring=None):
     """eq(z, p) over variables [p..., z...] (same width each), public."""
     n = len(variables) // 2
     table = [int((b & ((1 << n) - 1)) == (b >> n)) for b in range(1 << len(variables))]
-    return MLE(ring=ring, variables=variables, evaluations=table, public=True)
+    return TableOracle(
+        MLE(ring=ring, variables=variables, evaluations=table), public=True
+    )
 
 
 def _product_body(below, i):
@@ -829,7 +861,8 @@ def _product_body(below, i):
     n = below.num_vars - 1
     z = _vars(*[f"z{i}_{k}" for k in range(n)])
     p = _vars(*[f"p{i}_{k}" for k in range(n)])
-    eq = _eq_table(p + z, ring=getattr(below, "ring", None))
+    ring = below.polynomial.ring if isinstance(below, TableOracle) else None
+    eq = _eq_table(p + z, ring=ring)
     lo = dict(zip(below.variables[:-1], p, strict=True)) | {below.variables[-1]: 0}
     hi = dict(zip(below.variables[:-1], p, strict=True)) | {below.variables[-1]: 1}
     body = VirtualOracle(
@@ -838,7 +871,7 @@ def _product_body(below, i):
         [(1, (0, 1, 2))],
         [{v: v for v in eq.variables}, lo, hi],
     )
-    return Implicit(z), body
+    return ImplicitOracle(z), body
 
 
 def _sum_tree(W, levels):
@@ -891,15 +924,17 @@ def _sumdef_iop(domain, **kw):
 
 @pytest.mark.parametrize("ring", [None, Ring(1024, prime_size=[49], split_degree=4)])
 def test_sumdef_relation_and_head(ring):
-    W = MLE(ring=ring, variables=_vars("w0", "w1"), evaluations=[2, 3, 5, 7])
+    W = TableOracle(
+        MLE(ring=ring, variables=_vars("w0", "w1"), evaluations=[2, 3, 5, 7])
+    )
     ((L1, G1),) = _sum_tree(W, 1)  # L1(z) = W(z, 0) * W(z, 1) = [10, 21]
     stmt = Statement(Relation_SumDef(), oracles=(L1, G1), head=L1)
     assert Relation_SumDef.summed(stmt) == G1.variables[1:]
     table = stmt.relation.compute_head(stmt)  # constituents are tables already
     assert table.variables == L1.variables and table.ring is ring
     assert list(table.table) == [10, 21]
-    assert Statement(Relation_SumDef(), oracles=(table, G1)).check()
-    wrong = _like(table, [10, 22])
+    assert Statement(Relation_SumDef(), oracles=(TableOracle(table), G1)).check()
+    wrong = TableOracle(_like(table, [10, 22]))
     assert not Statement(Relation_SumDef(), oracles=(wrong, G1)).check()
     plain = Statement(Relation_SumDef(), oracles=(L1, W), head=L1)
     with pytest.raises(TypeError):  # G is a virtual oracle
@@ -911,7 +946,7 @@ def test_sumdef_one_level_started_statement():
     # (sumcheck, then the virtual-oracle rewriting). Rejections are exact: an
     # honest prover on a false claim fails the first round's check whatever
     # the challenges.
-    W = _table(_vars("w0", "w1"), [2, 3, 5, 7])
+    W = TableOracle(_table(_vars("w0", "w1"), [2, 3, 5, 7]))
     ((L1, G1),) = _sum_tree(W, 1)
     (z,) = L1.variables
     r = 11
@@ -992,7 +1027,7 @@ def _tree_layering(root):
 def test_sumdef_two_levels_bundle_claims():
     # The two claims on L1 left by L0's sumcheck meet in one started
     # statement, combined by a random linear combination.
-    W = _table(_vars("w0", "w1", "w2"), [2, 3, 5, 7, 11, 13, 17, 19])
+    W = TableOracle(_table(_vars("w0", "w1", "w2"), [2, 3, 5, 7, 11, 13, 17, 19]))
     # L1(z) = W(z, 0) W(z, 1) = [22, 39, 85, 133]; L0(z) = L1(z, 0) L1(z, 1)
     # = [1870, 5187]; L0~(6) = (1 - 6) 1870 + 6 * 5187.
     r = 6
@@ -1021,7 +1056,7 @@ def test_sumdef_two_levels_bundle_claims():
         (
             list(t.table)
             for o, t in iop.prover.witnesses.items()
-            if isinstance(o, Implicit)
+            if isinstance(o, ImplicitOracle)
         ),
         key=len,
     )
@@ -1049,7 +1084,7 @@ def test_a_head_waits_for_every_claim(monkeypatch):
 
     def layering(root):  # sum b (d o e) + sum b k, with k = (d o e) o e
         b, d, e = root.oracles
-        c, k = Implicit(b.variables), Implicit(b.variables)
+        c, k = ImplicitOracle(b.variables), ImplicitOracle(b.variables)
         bc = VirtualOracle.product([b, c])
         bk = VirtualOracle.product([b, k])
         return [
@@ -1083,15 +1118,15 @@ class _HadamardIdx(Relation):
     head_index = "a"
 
     def check(self, statement):
-        b, c = statement.oracles
-        a = self.index["a"]
+        b, c = (_t(o) for o in statement.oracles)
+        a = _t(self.index["a"])
         return (
             list(a.table) == [x * y for x, y in zip(b.table, c.table, strict=True)]
             and sum(b.table) == statement.total
         )
 
     def compute_head(self, statement):
-        b, c = statement.oracles
+        b, c = (_t(o) for o in statement.oracles)
         return _like(b, [x * y for x, y in zip(b.table, c.table, strict=True)])
 
 
@@ -1114,7 +1149,7 @@ class _HadamardIdxStart(Protocol):
         out = []
         for point, value in zip(s.points, s.values, strict=True):
             r = [point[v] for v in s.head.variables]
-            eq = _like(b, _eq_weights(r, _one_of([b])), public=True)
+            eq = _public(b, _eq_weights(r, _one(b)))
             g = VirtualOracle.product([b, c, eq])
             out.append(self.reduce([s], oracles=[g], value=value))
         return out
@@ -1123,9 +1158,9 @@ class _HadamardIdxStart(Protocol):
 def _hadamard_idx(ring=None, total=10):
     """A headed statement of `_HadamardIdx`: the head derived from the index."""
     x = _vars("x0", "x1")
-    b = MLE(ring=ring, variables=x, evaluations=[1, 2, 3, 4])
-    c = MLE(ring=ring, variables=x, evaluations=[5, 6, 7, 8])
-    a = Implicit(x)
+    b = TableOracle(MLE(ring=ring, variables=x, evaluations=[1, 2, 3, 4]))
+    c = TableOracle(MLE(ring=ring, variables=x, evaluations=[5, 6, 7, 8]))
+    a = ImplicitOracle(x)
     return Statement(_HadamardIdx(index={"a": a}), oracles=(b, c), total=total), a
 
 
@@ -1146,7 +1181,7 @@ def test_index_head_is_derived_from_the_index_entry():
     b, c = stmt.oracles
     assert Statement(_HadamardIdx(index={"a": a}), oracles=(b, c), head=a).head is a
     # A table in the entry: an ordinary statement, no head to derive.
-    product = _like(b, [5, 12, 21, 32])
+    product = TableOracle(_like(b, [5, 12, 21, 32]))
     plain = Statement(_HadamardIdx(index={"a": product}), oracles=(b, c), total=10)
     assert plain.head is None and plain.check()
     assert not Statement(
@@ -1157,9 +1192,11 @@ def test_index_head_is_derived_from_the_index_entry():
     # the head, a str head naming no index field.
     with pytest.raises(ValueError, match="index entry"):
         Statement(
-            _HadamardIdx(index={"a": a}), oracles=(b, c), head=Implicit(a.variables)
+            _HadamardIdx(index={"a": a}),
+            oracles=(b, c),
+            head=ImplicitOracle(a.variables),
         )
-    other = Implicit(a.variables)
+    other = ImplicitOracle(a.variables)
     with pytest.raises(ValueError, match="index entry"):
         Statement(_HadamardIdx(index={"a": a}), oracles=(other, c), head=other)
     with pytest.raises(TypeError):
@@ -1212,7 +1249,7 @@ def _idx_iop(domain, **kw):
 
 
 def test_index_head_started_statement_as_a_root():
-    # The started statement is a root whose index holds an Implicit: its own
+    # The started statement is a root whose index holds an ImplicitOracle: its own
     # head, the one exemption to the root rule. Ideal model, then Fiat-Shamir.
     stmt, a = _hadamard_idx()
     product = _like(stmt.oracles[0], [5, 12, 21, 32])
@@ -1246,8 +1283,8 @@ class _WeightedSum(Relation):
     index_fields = ("weight",)
 
     def check(self, statement):
-        (b,) = statement.oracles
-        w = self.index["weight"]
+        (b,) = (_t(o) for o in statement.oracles)
+        w = _t(self.index["weight"])
         return sum(x * y for x, y in zip(b.table, w.table, strict=True)) == (
             statement.total
         )
@@ -1282,7 +1319,7 @@ class _ChainIdx(_Chain):
 
 def _chain_idx_layering(root):
     b, d, e = root.oracles
-    c = Implicit(b.variables)
+    c = ImplicitOracle(b.variables)
     return [
         [
             root.reduce_to(
@@ -1291,7 +1328,7 @@ def _chain_idx_layering(root):
         ],
         [
             root.reduce_to(
-                _HadamardIdx(index={"a": c}), oracles=(d, e), total=sum(d.table)
+                _HadamardIdx(index={"a": c}), oracles=(d, e), total=sum(_t(d).table)
             )
         ],
     ]
@@ -1304,7 +1341,7 @@ def test_layering_through_index_heads():
     iop.register(_ChainIdx, compose(_chain_idx_layering, name="chain_idx"))
     iop.register(_WeightedSum, _WeightedSumProtocol())
     assert iop.run(stmt)
-    (c,) = [o for o in iop.prover.witnesses if isinstance(o, Implicit)]
+    (c,) = [o for o in iop.prover.witnesses if isinstance(o, ImplicitOracle)]
     assert list(iop.prover.witnesses[c].table) == [10, 18, 28, 40]
     order = iop.transcript.order
     first = {
@@ -1320,11 +1357,11 @@ def test_layering_through_index_heads():
     bad.register(_ChainIdx, compose(_chain_idx_layering, name="chain_idx"))
     bad.register(_WeightedSum, _WeightedSumProtocol())
     assert not bad.run(_chain_instance(total=291, relation=_ChainIdx()))
-    # A root whose index holds an Implicit that is not its head is refused.
+    # A root whose index holds an ImplicitOracle that is not its head is refused.
     x = _vars("x0", "x1")
     root = Statement(
-        _WeightedSum(index={"weight": Implicit(x)}),
-        oracles=(_table(x, [1] * 4),),
+        _WeightedSum(index={"weight": ImplicitOracle(x)}),
+        oracles=(TableOracle(_table(x, [1] * 4)),),
         total=0,
     )
     with pytest.raises(TypeError, match="implicit"):
