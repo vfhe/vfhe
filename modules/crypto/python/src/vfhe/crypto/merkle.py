@@ -138,7 +138,7 @@ class MerklePath:
         return self._packed
 
     def digest(self) -> bytes:
-        """The digest a transcript absorbs for the path: of its bytes."""
+        """A 32-byte digest of the path, over its sibling digests in order."""
         return hash_bytes(b"merkle-path" + self._packed)
 
     def __repr__(self) -> str:

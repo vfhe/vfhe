@@ -1525,21 +1525,28 @@ void polynomial_RNSc_to_multiprecision(RNSc_Polynomial out, RNSc_Polynomial in, 
     polynomial_RNSc_decompose_small(out, in, log_base, level);
 }
 
-void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p)
+void polynomial_RNS_hash_update(void *state, RNS_Polynomial p)
 {
-    blake3_hasher hasher;
-    blake3_hasher_init(&hasher);
     for (size_t i = 0; i < p->base->l; i++)
     {
         if (!(p->rns_mask & (1ULL << i)))
             continue;
         // one update per row, over the row as it is stored
         if (rns_row_is_narrow(p->base, i))
-            blake3_hasher_update(&hasher, p->rows32[i], p->base->N * sizeof(uint32_t));
+            hash_stream_update(state, (const uint8_t *)p->rows32[i], p->base->N * sizeof(uint32_t));
         else
-            blake3_hasher_update(&hasher, p->rows64[i], p->base->N * sizeof(uint64_t));
+            hash_stream_update(state, (const uint8_t *)p->rows64[i], p->base->N * sizeof(uint64_t));
     }
-    blake3_hasher_finalize(&hasher, (uint8_t *)out, BLAKE3_OUT_LEN);
+}
+
+void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p)
+{
+    // a hash_stream state is a blake3_hasher (hash_stream_size), so it can
+    // live on the stack here
+    blake3_hasher hasher;
+    hash_stream_init(&hasher);
+    polynomial_RNS_hash_update(&hasher, p);
+    hash_stream_digest(&hasher, (uint8_t *)out);
 }
 
 uint64_t *polynomial_RNS_get_hash_p(RNS_Polynomial p)

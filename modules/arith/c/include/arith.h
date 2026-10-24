@@ -997,6 +997,13 @@ extern "C"
        `out` is four 64-bit words. */
     void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p);
 
+    /* Feeds the bytes polynomial_RNS_get_hash hashes -- the active rows, as
+       stored -- into `state`, a hasher started with crypto.h's
+       hash_stream_init, and leaves it open, so that several elements can go
+       into one digest. As for polynomial_RNS_get_hash, the caller pins the
+       domain. */
+    void polynomial_RNS_hash_update(void *state, RNS_Polynomial p);
+
     /* A uniform polynomial from a public seed, in the mul domain: the row of
        prime q is values [0, N) of prng_expand_below, under the key
        prng_expand_key derives from `seed` and the label (stream, q). Keyed by

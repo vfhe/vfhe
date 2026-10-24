@@ -2,7 +2,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file test_hash.c
- * @brief hash_batch against the one-at-a-time digest it has to reproduce.
+ * @brief hash_batch and hash_chain against the one-at-a-time digests they
+ *        have to reproduce.
  */
 #include <blake3.h>
 #include <crypto.h>
@@ -83,11 +84,37 @@ void test_an_empty_batch_writes_nothing(void)
         TEST_ASSERT_EQUAL_UINT8(0xAB, out[i]);
 }
 
+/* hash_chain against its definition, one link at a time: state = H(state |
+ * part). Lengths up to 32 take the single-block path, the others a hasher. */
+void test_chain_matches_link_by_link(void)
+{
+    const uint64_t lengths[] = {0, 1, 31, 32, 33, 64, 100};
+    for (uint64_t l = 0; l < 7; l++)
+    {
+        uint64_t len = lengths[l], count = 17;
+        uint8_t in[17 * 100], state[32], expected[32], link[32 + 100];
+        for (uint64_t i = 0; i < count * len; i++)
+            in[i] = (uint8_t)(i * 131u + len);
+        for (uint64_t i = 0; i < 32; i++)
+            state[i] = expected[i] = (uint8_t)(i + 7);
+
+        hash_chain(state, in, count, len);
+        for (uint64_t i = 0; i < count; i++)
+        {
+            memcpy(link, expected, 32);
+            memcpy(&link[32], &in[i * len], len);
+            digest_alone(expected, link, 32 + len);
+        }
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, state, 32);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_batch_matches_one_at_a_time);
     RUN_TEST(test_lengths_outside_the_batch_still_hash);
     RUN_TEST(test_an_empty_batch_writes_nothing);
+    RUN_TEST(test_chain_matches_link_by_link);
     return UNITY_END();
 }
