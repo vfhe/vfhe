@@ -71,7 +71,8 @@ relation toolbox, `vfhe.piop.relations`; and the protocols,
 - `iop.py`: `IOP`, one protocol execution: the event loop, the coefficient
   domain, the transcript, the two parties and the relation → protocol
   registry (`register(relation, protocol, kind=None)`; `Relation_Eval` is
-  registered per oracle kind). `run(statement)` executes both parties;
+  registered per oracle kind and, for committed oracles, per commitment
+  scheme, `Protocol.scheme`). `run(statement)` executes both parties;
   with `fiat_shamir=True`, `prove(statement) -> Proof` runs the prover
   alone and a separate `verify(statement, proof)` checks the proof with no
   prover, witnesses or oracles present.

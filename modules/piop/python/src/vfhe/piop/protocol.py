@@ -5,7 +5,7 @@ section 5), as a pair of prove / verify coroutines."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .relation import Relation, Statement, child_statement
 
@@ -49,12 +49,19 @@ class Protocol:
     from `domain`'s exceptional set (`protocols.rounds.exceptional_set_size`),
     `None` when that set has no known size. The errors of the steps a
     reduction hands on to are those steps' own.
+
+    `scheme` is the commitment scheme, with its public parameters, whose
+    commitments an evaluation protocol proves against; `None` for any other
+    protocol. The registry keys a protocol by it: a claim on a
+    `CommittedOracle` goes to the protocol of the scheme the oracle was
+    committed under (`IOP.protocol_for`).
     """
 
     reduces_from: type[Relation] | None = None
     reduces_to: tuple[type[Relation], ...] = ()
     batching: bool = False
     supported_domains: tuple[type, ...] = ()
+    scheme: Any = None
 
     def reduce(
         self,

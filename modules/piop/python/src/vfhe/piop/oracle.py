@@ -11,10 +11,10 @@ an evaluation claim on it is discharged. The kinds are classes:
   that a claim on it is terminal; `plain` otherwise, the oracle of the ideal
   model, which the verifier may query while no commitment scheme is
   registered;
-- `CommittedOracle`, a commitment and the variables, nothing else: the
-  verifier's view of a committed polynomial ("the commitment to f is simply
-  the oracle pi_f" [ZCF24, section 4]); the prover's table is in
-  `Prover.witnesses[oracle]`;
+- `CommittedOracle`, a commitment, the scheme it was committed under and
+  the variables, nothing else: the verifier's view of a committed polynomial
+  ("the commitment to f is simply the oracle pi_f" [ZCF24, section 4]);
+  the prover's table is in `Prover.witnesses[oracle]`;
 - `ImplicitOracle`, a handle with variables and no content of its own, the
   head of a statement of a reduction (`composer.py`);
 - `VirtualOracle` (`virtual.py`), a local definition over other oracles.
@@ -43,7 +43,8 @@ class OracleKind(Enum):
 
     - `public`: the table itself (a wiring predicate, eq~, a public output);
       the claim is terminal and the verifier evaluates it.
-    - `committed`: a commitment; a polynomial commitment scheme's protocol.
+    - `committed`: a commitment; the evaluation protocol of the scheme it
+      was committed under.
     - `virtual`: a local definition over other oracles (`virtual.py`); the
       claim is rewritten into claims on the constituents, free of charge.
     - `implicit`: the head of a statement of a reduction (`ImplicitOracle`),
@@ -126,21 +127,23 @@ class TableOracle(Oracle):
 
 class CommittedOracle(Oracle):
     """An oracle the verifier has as a commitment: `commitment`, produced by
-    a polynomial commitment scheme's commit algorithm (possibly long before
-    any IOP run, reused across runs; it rides on statements, never on the
-    transcript), and the committed `variables`, whose order is the canonical
-    order of evaluation points. No table: an evaluation claim on it is
-    discharged by the scheme's evaluation protocol, registered for
-    `Relation_Eval` (e.g. `vfhe.polycom.BasefoldEval`), and `query` raises.
-    The prover's table is stored under the oracle in `Prover.witnesses`,
-    where `resolve_table` finds it; the scheme's own prover data (an
-    opening) is the scheme's business."""
+    the commit algorithm of `scheme` -- a polynomial commitment scheme,
+    with its public parameters -- possibly long before any IOP run and
+    reused across runs (it rides on statements, never on the transcript),
+    and the committed `variables`, whose order is the canonical order of
+    evaluation points. No table: an evaluation claim on it is discharged by
+    the evaluation protocol registered for `Relation_Eval` with that
+    `scheme` (`IOP.protocol_for`), and `query` raises. The prover's table
+    is stored under the oracle in `Prover.witnesses`, where `resolve_table`
+    finds it; the scheme's own prover data (an opening) is the scheme's
+    business."""
 
     kind = OracleKind.committed
 
-    def __init__(self, variables: list, commitment) -> None:
+    def __init__(self, variables: list, commitment, scheme) -> None:
         self.variables = list(variables)
         self.commitment = commitment
+        self.scheme = scheme
 
     def query(self, point: dict) -> Any:
         raise NotImplementedError(

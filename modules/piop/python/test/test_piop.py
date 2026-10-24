@@ -218,7 +218,7 @@ def test_relation_eval_on_a_committed_oracle_has_no_decider():
     # An eval claim on a committed oracle has no table to query: no
     # witness-free decider, so such claims must be discharged by a
     # registered PCS protocol.
-    f = CommittedOracle([], commitment=object())
+    f = CommittedOracle([], commitment=object(), scheme=object())
     stmt = Statement(Relation_Eval(), oracles=(f,), point={}, value=0)
     with pytest.raises(NotImplementedError, match="committed oracle"):
         stmt.check()

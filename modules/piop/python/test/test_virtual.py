@@ -57,7 +57,10 @@ def test_oracle_kinds():
     assert f.query({x[0]: 3}) == 1 + 3 * (2 - 1)
     public = TableOracle(MLE(variables=x, evaluations=[1, 2]), public=True)
     assert public.kind is OracleKind.public and public.public
-    assert CommittedOracle(x, commitment=object()).kind is OracleKind.committed
+    assert (
+        CommittedOracle(x, commitment=object(), scheme=object()).kind
+        is OracleKind.committed
+    )
     assert VirtualOracle.product([f]).kind is OracleKind.virtual
     assert ImplicitOracle(x).kind is OracleKind.implicit
     v = _vars("y0", "y1", "y2")
