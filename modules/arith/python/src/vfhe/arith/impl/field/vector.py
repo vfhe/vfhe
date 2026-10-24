@@ -409,17 +409,36 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_split_blocks(even._struct, odd._struct, self._struct, block)
         return even, odd
 
-    def fold_twisted(self, twist2_inv, r, out=None) -> ExtensionFieldVector:
-        """The pairwise fold of the front, as one kernel call; the table is
-        over this field or its prime subfield."""
+    def fold_twisted(self, untwist, r, out=None) -> ExtensionFieldVector:
+        """`FieldVector.fold_twisted`, which documents the operation,
+        computed by the native kernel `field_vec_fold_twisted` in one call.
+        `untwist` may be a vector over this field or over its prime
+        subfield."""
         half = len(self) // 2
-        self._table(twist2_inv, "twist2_inv", half)
+        self._table(untwist, "untwist", half)
         result = self._destination(out, half)
         lib.field_vec_fold_twisted(
             result._struct,
             self._struct,
-            twist2_inv._struct,
+            untwist._struct,
             self._coerce_element(r).value,
+        )
+        return result
+
+    def fold_twisted_blocks(self, untwist, r, out=None) -> ExtensionFieldVector:
+        """`FieldVector.fold_twisted_blocks`, which documents the operation,
+        computed by the native kernel `field_vec_fold_twisted_blocks` in one
+        call. `untwist` may be a vector over this field or over its prime
+        subfield; `r` is a vector over this field."""
+        m, count = len(untwist), len(r)
+        if self._n != 2 * m * count:
+            raise ValueError(f"{self._n} elements are not {count} blocks of 2 * {m}")
+        self._table(untwist, "untwist", m)
+        if not isinstance(r, ExtensionFieldVector) or r.field is not self.field:
+            raise ValueError("r must be a vector over this field")
+        result = self._destination(out, m * count)
+        lib.field_vec_fold_twisted_blocks(
+            result._struct, self._struct, untwist._struct, r._struct
         )
         return result
 
@@ -450,9 +469,11 @@ class ExtensionFieldVector(FieldVector):
 
     @staticmethod
     def lift_twisted(a, b, twist, out=None) -> ExtensionFieldVector:
-        """The front's `lift_twisted` as one kernel call: the product formed
-        once per pair, the table read cyclically in place, the pair
-        interleaved in cache. The table is over this field or its prime
+        """`FieldVector.lift_twisted`, which documents the operation,
+        computed by the native kernel `field_vec_lift_twisted` in one call.
+        The kernel forms each product once per pair, reads a short table
+        cyclically without copying it, and writes each pair while it is still
+        in cache. `twist` may be a vector over this field or over its prime
         subfield."""
         if not isinstance(a, ExtensionFieldVector) or not isinstance(
             b, ExtensionFieldVector
@@ -515,7 +536,8 @@ class ExtensionFieldVector(FieldVector):
         return result
 
     def query(self, indices) -> ExtensionFieldVector:
-        """The elements at `indices`, gathered; the front states the contract."""
+        """The elements at `indices`, gathered, as `FieldVector.query`
+        documents."""
         view = index_buffer(indices)
         if view is None:
             positions = [self._checked_index(i) for i in indices]
@@ -557,24 +579,27 @@ class ExtensionFieldVector(FieldVector):
         return result
 
     def chunk_length(self, live: int = 4) -> int:
-        """The front states the contract."""
+        """`FieldVector.chunk_length`, with an element taking d words, one
+        per coefficient plane."""
         return self._chunk_length(self.field.d * 8, live)
 
     def chain_bytes(self, live: int = 4) -> int:
-        """The front states the contract; here an element is its planes."""
+        """`FieldVector.chain_bytes`, with an element taking d words, one per
+        coefficient plane."""
         return len(self) * self.field.d * 8 * max(live, 1)
 
     @property
     def padding_unit(self) -> int:
-        """The eltwise kernels' vector width; the front says what it governs."""
+        """The eltwise kernels' vector width: the unit `FieldVector.padding_unit`
+        describes."""
         return lib.field_vec_padded_length(1)
 
     def view(self, start: int = 0, length: int | None = None) -> ExtensionFieldVector:
         """`length` elements from `start`, over this vector's own planes.
 
         The padding unit is the eltwise kernels' vector width, which is what
-        `field_vec_padded_length` rounds to; the front states what `start`
-        and `length` must satisfy against it. The view holds a reference to
+        `field_vec_padded_length` rounds to; `FieldVector.view` states what
+        `start` and `length` must satisfy against it. The view holds a reference to
         this vector, so the planes outlive it.
         """
         start, length = self._checked_view(
@@ -614,7 +639,7 @@ class ExtensionFieldVector(FieldVector):
         return result
 
     def sample_random_at(self, seed: bytes, indices) -> None:
-        """The front states the contract."""
+        """`FieldVector.sample_random_at`, which documents the operation."""
         view = index_buffer(indices)
         if view is None:
             positions = _sample_positions(indices, self._n)
@@ -647,8 +672,8 @@ class ExtensionFieldVector(FieldVector):
         """The kernel's own output buffer, viewed rather than copied.
 
         It already writes one digest per window, contiguously, which is the
-        packed layout the front promises -- so there is nothing to do but
-        hand it over. The view holds the buffer alive and is read-only, which
+        packed layout `FieldVector.hash_elements` and `hash_fibers` document,
+        so there is nothing to do but hand it over. The view holds the buffer alive and is read-only, which
         is what makes it safe to pass somewhere that will not copy it either.
         """
         if count == 0:
@@ -658,7 +683,8 @@ class ExtensionFieldVector(FieldVector):
         return memoryview(ffi.buffer(out)).toreadonly()
 
     def hash_elements(self, group: int = 1, stride: int = 1) -> memoryview:
-        """Every window's digest, packed; the front states the contract."""
+        """Every window's digest, packed, as `FieldVector.hash_elements`
+        documents."""
         if group < 1 or stride < 1:
             raise ValueError(
                 f"group and stride must be positive, got {group}, {stride}"
@@ -667,7 +693,8 @@ class ExtensionFieldVector(FieldVector):
         return self._digests(count, lib.field_vec_hash_elements, group, stride)
 
     def hash_fibers(self, group: int = 1, stride: int = 1) -> memoryview:
-        """Every fiber's digest, packed; the front states the contract."""
+        """Every fiber's digest, packed, as `FieldVector.hash_fibers`
+        documents."""
         if group < 1 or stride < 1:
             raise ValueError(
                 f"group and stride must be positive, got {group}, {stride}"

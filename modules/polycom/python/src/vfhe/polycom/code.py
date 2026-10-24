@@ -63,6 +63,8 @@ from vfhe.util.bindings import lib
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .field_code import FieldFoldableRS
+
 #: The seed a code's public tables are derived from when the caller names
 #: none. Public and fixed: two parties building a code from the same
 #: arguments hold the same code.
@@ -323,6 +325,21 @@ class FoldableRS:
 
     `seed` is the public parameter every table of the general code is
     derived from; the ``"rs"`` instantiation ignores it.
+
+    `twist_field` says where the general code's twists live: ``"prime"``
+    (the default), the per-prime integers above; or ``"field"``, the residue
+    fields `R_q/P` of the ring's primes (`RNSRing.residue_field`, `F_(p^d)`
+    with d the split degree). With ``"field"`` the code is defined by one
+    code per prime -- `FieldFoldableRS` over that residue field with
+    full-field twists, its own seeded tables and base, built from `seed` and
+    the prime -- and a codeword of `R_q` is the element-wise CRT lift of their
+    codewords: its CRT components at a prime (`RNSRing.crt_components`) are
+    that prime's code's codewords of the message's components. Encoding and
+    folding run in the residue fields, so a twist multiply costs an
+    `F_(p^d)` product, d `F_p` products per coefficient where an integer twist
+    costs one; the distance bound runs on `log2 p^d` bits instead of
+    `log2 p`. The ``"rs"`` instantiation's twists are roots of unity in `F_p`
+    whatever is asked.
     """
 
     def __init__(
@@ -334,14 +351,20 @@ class FoldableRS:
         *,
         instantiation: str = "general",
         seed: bytes = DEFAULT_SEED,
+        twist_field: str = "prime",
     ):
         for name, value in (("k0", k0), ("c", c)):
             if value < 1 or value & (value - 1):
                 raise ValueError(f"{name} must be a power of two, got {value}")
         if d < 1:
             raise ValueError(f"d must be at least 1, got {d}")
+        if twist_field not in ("field", "prime"):
+            raise ValueError(
+                f"twist_field must be 'field' or 'prime', got {twist_field!r}"
+            )
         self.instantiation = check_instantiation(instantiation)
         self.seed = bytes(seed)
+        self.twist_field = twist_field
         self.ring = ring
         self.k0 = k0
         self.c = c
@@ -366,8 +389,13 @@ class FoldableRS:
         # unlike the shared RNS base's prime count, which grows whenever another
         # ring of the same (N, split_degree) introduces a prime.
         self._plans: list = []
+        #: With full-field twists, the code over each prime's residue field
+        #: that defines this one (in `ring.primes` order); empty otherwise.
+        self.residue_codes: list[FieldFoldableRS] = []
         if self.instantiation == "rs":
             self._init_rs()
+        elif twist_field == "field":
+            self._init_residue_codes()
         else:
             self._init_general()
         self._vandermonde_inverse: list[list[list[int]]] | None = None
@@ -424,6 +452,29 @@ class FoldableRS:
             twist = self._sample_twists(level, self.n0 << level)
             self.twists.append(twist)
             self._fold_scale.append(self._inverse_table(twist, 2))
+
+    def _init_residue_codes(self) -> None:
+        """The general code with full-field twists: one `FieldFoldableRS` per
+        prime, over its residue field, each from a seed derived from `seed`
+        and the prime's value. This code holds no tables of its own."""
+        from .field_code import FieldFoldableRS
+
+        self.base_points = []
+        self.residue_codes = [
+            FieldFoldableRS(
+                self.ring.residue_field(index),
+                self.k0,
+                self.c,
+                self.d,
+                seed=derive_seed(self.seed, b"residue" + p.to_bytes(8, "little")),
+                twist_field="field",
+            )
+            for index, p in enumerate(self.ring.primes)
+        ]
+
+    def _components(self, elements: list, index: int, element_major: bool = False):
+        """`elements`' CRT components at prime `index`, as one vector."""
+        return self.ring.crt_components(elements, index, element_major)
 
     def _inverse_table(self, table: Table, factor: int) -> Table:
         """`1 / (factor * table[j][k])` for every position and prime: one
@@ -496,13 +547,11 @@ class FoldableRS:
         """
         if self.instantiation == "rs":
             return 1 - 1 / self.c + 1 / self.n_d
+        field_bits = math.log2(min(self.ring.primes))
+        if self.residue_codes:
+            field_bits *= self.ring.split_degree
         return foldable_relative_distance(
-            self.k0,
-            self.c,
-            self.d,
-            math.log2(min(self.ring.primes)),
-            security_bits,
-            bound,
+            self.k0, self.c, self.d, field_bits, security_bits, bound
         )
 
     def __del__(self) -> None:
@@ -557,6 +606,19 @@ class FoldableRS:
         level = self.level_of(message)
         if self.instantiation == "rs":
             return self._kernel_encode(message, self.n0 << level, self._plans[level])
+        if self.residue_codes:
+            # Each prime's code encodes the k components of the message
+            # together. `encode_batch` takes them interleaved, which is the
+            # element-major layout of the components, and returns their
+            # codewords end to end, which is the layout `from_crt_components`
+            # reads.
+            slots = self.ring.N // self.ring.split_degree
+            return self.ring.from_crt_components(
+                [
+                    code.encode_batch(self._components(message, i, True), slots)
+                    for i, code in enumerate(self.residue_codes)
+                ]
+            )
         return self._encode_general(message, level)
 
     def _encode_general(self, message: list, level: int) -> list:
@@ -596,7 +658,27 @@ class FoldableRS:
             raise ValueError(f"codeword length {size} is not n0 * 2^l, l <= d")
         if self.instantiation == "rs":
             return self._kernel_decode(word, self.k0 << level, self._plans[level])
+        if self.residue_codes:
+            return self._decode_by_components(word)
         return self._decode_general(word, level)
+
+    def _decode_by_components(self, word: list) -> tuple[bool, list]:
+        """`decode` with full-field twists: every component decoded by its
+        prime's code, and the messages lifted back."""
+        from vfhe.arith import FieldVector
+
+        slots = self.ring.N // self.ring.split_degree
+        n = len(word)
+        ok, parts = True, []
+        for i, code in enumerate(self.residue_codes):
+            components = self._components(word, i)
+            messages = []
+            for s in range(slots):
+                good, message = code.decode(components.query(range(s * n, (s + 1) * n)))
+                ok = ok and good
+                messages.append(message)
+            parts.append(FieldVector.concat(messages))
+        return ok, self.ring.from_crt_components(parts)
 
     def _decode_general(self, word: list, level: int) -> tuple[bool, list]:
         """`_encode_general` inverted: per pair, `b = (lo - hi) / (2 T)`
@@ -663,6 +745,8 @@ class FoldableRS:
         This is the form a Merkle verifier uses — it holds one authenticated
         pair per queried position, never a whole codeword.
         """
+        if self.residue_codes:
+            return self.fold_pairs([lo], [hi], r, level, [i])[0]
         coeff = (lo - hi) * self._fold_scale[level - 1][i]
         return hi + coeff * self.twists[level - 1][i] + r * coeff
 
@@ -671,11 +755,43 @@ class FoldableRS:
         has a vectorised one. Over a ring the entries are polynomials with
         their own arithmetic, so this is the loop a caller would write -- the
         uniform name is what lets a verifier fold a level without knowing
-        which code family answers."""
+        which code family answers.
+
+        With full-field twists the pairs are folded component by component:
+        at each prime, component s of every pair by that prime's code with
+        component s of r, and the results lifted back."""
+        if self.residue_codes:
+            return self._fold_pairs_by_components(los, his, r, level, indices)
         return [
             self.fold_pair(lo, hi, r, level, i)
             for lo, hi, i in zip(los, his, indices, strict=True)
         ]
+
+    def _fold_pairs_by_components(self, los, his, r, level: int, indices) -> list:
+        """`fold_pairs` with full-field twists: the pairs, end to end, are
+        fibers of two symbols, folded once (`_fold_fibers_by_components`)."""
+        values = [x for pair in zip(los, his, strict=True) for x in pair]
+        return self._fold_fibers_by_components(values, [r], level, indices)
+
+    def _fold_fibers_by_components(
+        self, values: list, challenges: list, level: int, indices
+    ) -> list:
+        """`fold_fibers` with full-field twists: at each prime, the CRT
+        components of the fibers -- component s of every fiber symbol, one
+        block per s -- folded by that prime's code, block s with component s
+        of each challenge (`FieldFoldableRS.fold_fibers_batch`), and the
+        results lifted back."""
+        return self.ring.from_crt_components(
+            [
+                code.fold_fibers_batch(
+                    self._components(values, i),
+                    [self._components([r], i) for r in challenges],
+                    level,
+                    indices,
+                )
+                for i, code in enumerate(self.residue_codes)
+            ]
+        )
 
     def fold_fibers(self, values, challenges, level: int, indices) -> list:
         """Fold fibers of a level-`level` codeword `s = len(challenges)` times,
@@ -695,6 +811,8 @@ class FoldableRS:
             raise ValueError(
                 f"{len(values)} symbols are not {len(indices)} fibers of {1 << steps}"
             )
+        if self.residue_codes:
+            return self._fold_fibers_by_components(values, challenges, level, indices)
         for k, r in enumerate(challenges):
             half = 1 << (steps - k - 1)
             positions = [j * half + i for j in indices for i in range(half)]
@@ -775,5 +893,17 @@ class FoldableRS:
 
     def fold(self, word: list, r: RNSPolynomial, level: int) -> list:
         """The full fold of a level-`level` codeword with challenge r (the
-        level-(level-1) codeword of the r-folded message)."""
+        level-(level-1) codeword of the r-folded message). With full-field
+        twists, at each prime every component is folded by that prime's code
+        with the same component of r (`FieldFoldableRS.fold_batch`), and the
+        results lifted back."""
+        if self.residue_codes:
+            return self.ring.from_crt_components(
+                [
+                    code.fold_batch(
+                        self._components(word, i), self._components([r], i), level
+                    )
+                    for i, code in enumerate(self.residue_codes)
+                ]
+            )
         return [self.fold_at(word, r, level, i) for i in range(len(word) // 2)]

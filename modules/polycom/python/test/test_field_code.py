@@ -351,19 +351,74 @@ def test_the_two_base_encoders_agree(field):
             assert code.encode(message) == horner
 
 
-def test_a_field_whose_root_is_off_the_prime_subfield_transforms():
-    """2^61 - 1 has 2-adicity 1, but F_(p^2) has roots of unity of every
-    two-power order up to 2^61: the base transform runs in the extension
-    domain, so `roots` (the F_p roots) is empty while the encoder is still a
-    transform, and it agrees with the Vandermonde product."""
+@pytest.mark.parametrize("twist_field", ["field", "prime"])
+def test_encode_batch_is_the_messages_encoded_one_by_one(
+    field, instantiation, twist_field
+):
+    """`count` interleaved messages encode to their codewords end to end, at
+    every level, for every count -- the general code's batch is one message
+    of more levels stopped early, the RS code's a transform per message."""
+    code = _code(field, instantiation=instantiation, twist_field=twist_field)
+    for level in range(code.d + 1):
+        for count in (1, 2, 8):
+            length = code.k0 << level
+            messages = [
+                _random(field, length, bytes([level, count, c])) for c in range(count)
+            ]
+            interleaved = FieldVector(
+                field, [messages[c][i] for i in range(length) for c in range(count)]
+            )
+            expected = FieldVector.concat([code.encode(m) for m in messages])
+            assert code.encode_batch(interleaved, count) == expected
+    with pytest.raises(ValueError, match="power of two"):
+        code.encode_batch(_random(field, 3 * code.k0, b"x"), 3)
+
+
+def test_encode_batch_on_a_vandermonde_base():
     field = Field(*_MERSENNE[:1], 2, _MERSENNE[1])
     code = _code(field)
+    assert code._batched is None
+    messages = [_random(field, code.k_d, bytes([c])) for c in range(4)]
+    interleaved = FieldVector(
+        field, [messages[c][i] for i in range(code.k_d) for c in range(4)]
+    )
+    assert code.encode_batch(interleaved, 4) == FieldVector.concat(
+        [code.encode(m) for m in messages]
+    )
+
+
+def test_fold_batch_is_each_codeword_folded_with_its_challenge(field, instantiation):
+    code = _code(field, instantiation=instantiation)
+    words = [code.encode(_random(field, code.k_d, bytes([c]))) for c in range(3)]
+    challenges = [field.random_element(bytes([9, c])) for c in range(3)]
+    folded = code.fold_batch(FieldVector.concat(words), challenges, code.d)
+    assert folded == FieldVector.concat(
+        [code.fold(w, r, code.d) for w, r in zip(words, challenges, strict=True)]
+    )
+    with pytest.raises(ValueError, match="codewords"):
+        code.fold_batch(FieldVector.concat(words), challenges[:2], code.d)
+
+
+def test_a_field_whose_root_is_off_the_prime_subfield_transforms():
+    """2^61 - 1 has 2-adicity 1, but F_(p^2) has roots of unity of every
+    two-power order up to 2^61: with ``root_field="field"`` the base
+    transform runs in the extension domain, so `roots` (the F_p roots) is
+    empty while the encoder is still a transform, and it agrees with the
+    Vandermonde product. By default the root must be in F_p, so the same
+    field gets the Vandermonde base."""
+    field = Field(*_MERSENNE[:1], 2, _MERSENNE[1])
+    code = _code(field, root_field="field")
     assert code.roots == [] and code._batched is not None
     assert code._batched.plan.domain == "extension"
     message = _random(field, code.k_d, b"m")
     assert code._batched.encode_all(message, code.d) == code._base_encode_all(
         message, code.d
     )
+    default = _code(field)
+    assert default.root_field == "prime" and default._batched is None
+    assert default.roots == [] and len(default.base_points) == default.n0
+    with pytest.raises(ValueError, match="root_field"):
+        _code(field, root_field="extension")
 
 
 def test_zcf24_recurrence_matches_the_paper():

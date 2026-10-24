@@ -1671,46 +1671,77 @@ class FieldVector(metaclass=_ImplementationDispatch):
 
     def fold_twisted(
         self,
-        twist2_inv: FieldVector,
+        untwist: FieldVector,
         r,
         out: FieldVector | None = None,
     ) -> FieldVector:
-        """This vector read as adjacent pairs and folded with the element
-        `r`, one output element per pair::
+        """The fold that undoes `lift_twisted`, recombining the two halves
+        with the element `r`.
 
-            out[i] = (self[2i] + self[2i + 1]) / 2
-                     + (self[2i] - self[2i + 1]) * twist2_inv[i] * r
+        This vector is read as adjacent pairs ``(u_i, v_i) = (self[2i],
+        self[2i + 1])``, and the result has one element per pair::
 
-        The inverse move to `lift_twisted`: with ``twist2_inv = 1 / (2 t)``,
-        a pair `lift_twisted` made from ``a[i]`` and ``b[i]`` with table `t`
-        folds to ``a[i] + r * b[i]``. The result is half this vector's length,
-        and so is the table. It is computed as ``self[2i + 1] + (self[2i] -
-        self[2i + 1]) * c[i]`` with ``c[i] = twist2_inv[i] * r + 1/2``, two
-        products per pair, a window at a time so the vector is read once.
-        The field's characteristic must be odd.
+            out[i] = (u_i + v_i) / 2 + (u_i - v_i) * untwist[i] * r
+
+        If the pairs were made by ``lift_twisted(a, b, t)``, then
+        ``u_i + v_i = 2 a[i]`` and ``u_i - v_i = 2 b[i] t[i]``; so with
+        ``untwist = 1 / (2 t)`` the result is ``a + r * b``. The result and
+        the table are half this vector's length. The field's characteristic
+        must be odd, so that 2 is invertible.
 
         Over an extension field the table may also be a vector over the
         **prime subfield** -- the degree-1 field with the same prime -- and
         its product with `r` is then one prime-field multiply per coefficient
         plane. `mul`, `fma` and `lift_twisted` take such a table the same way.
 
-        :param twist2_inv: the per-position table, ``1 / (2 t)`` for the
-            inverse of a lift with table `t`.
-        :param r: the folding challenge, one element.
+        :param untwist: the per-position table; ``1 / (2 t)`` undoes a lift
+            with table `t`.
+        :param r: the element the halves are recombined with.
         :param out: where to write, of half this length; a new vector when
             omitted.
         :returns: `out`, or the vector allocated for the result.
         """
         half = len(self) // 2
-        if len(twist2_inv) != half:
-            raise ValueError(f"twist2_inv holds {len(twist2_inv)} elements, not {half}")
+        if len(untwist) != half:
+            raise ValueError(f"untwist holds {len(untwist)} elements, not {half}")
         result = self._destination(out, half)
         one = self.field.one
-        c = twist2_inv.scale(r)
+        c = untwist.scale(r)
         c.add((one + one).inverse(), out=c)
         lo, hi = self.split_even_odd()
         lo.sub(hi, out=lo)
         return hi.fma(lo, c, out=result)
+
+    def fold_twisted_blocks(
+        self,
+        untwist: FieldVector,
+        r: FieldVector,
+        out: FieldVector | None = None,
+    ) -> FieldVector:
+        """`fold_twisted` applied to ``count = len(r)`` vectors at once, all
+        with the same table and each with its own element.
+
+        This vector holds the `count` vectors end to end, ``2m`` elements
+        each, and the result holds their folds end to end, ``m`` elements
+        each: block ``b`` of the result is
+        ``self[2bm : 2(b + 1)m].fold_twisted(untwist, r[b])``. The table may
+        be over the prime subfield, as for `fold_twisted`.
+
+        :param untwist: the table every block is folded with, ``m`` long.
+        :param r: the element each block is recombined with, one per block.
+        :param out: where to write, of half this length; a new vector when
+            omitted.
+        :returns: `out`, or the vector allocated for the result.
+        """
+        m, count = len(untwist), len(r)
+        if len(self) != 2 * m * count:
+            raise ValueError(f"{len(self)} elements are not {count} blocks of 2 * {m}")
+        result = self._destination(out, m * count)
+        parts = [
+            self.query(range(2 * m * b, 2 * m * (b + 1))).fold_twisted(untwist, rb)
+            for b, rb in enumerate(r)
+        ]
+        return type(self).concat(parts, out=result)
 
     def fold(self, r, block: int = 1) -> FieldVector:
         """``even + r * (odd - even)`` over adjacent pairs, half the length.

@@ -497,7 +497,7 @@ def test_a_twisted_pair_fold_is_expressible_in_vector_operations(field):
     """A twisted pair fold, written over whole vectors.
 
     ``folded[i] = hi + coeff * twist + r * coeff`` with
-    ``coeff = (lo - hi) * twist2_inv``, per position. Written once over
+    ``coeff = (lo - hi) * untwist``, per position. Written once over
     vectors and once as the loop it replaces.
     """
     p, n = field.prime, 16
@@ -682,6 +682,21 @@ class TestBlocksViewsAndIndexedSampling:
         b = FieldVector(field, random_values(field, n, 70))
         lifted = FieldVector.lift_twisted(a, b, table)
         assert lifted.fold_twisted(table.scale(2).inverse(), r) == a + b * r
+
+    def test_fold_twisted_blocks_takes_the_generic_body(self, field):
+        """Each block folded with its own element of `r`, by the generic body."""
+        m, count = 5, 3
+        word = FieldVector(field, random_values(field, 2 * m * count, 71))
+        table = FieldVector(field, random_values(field, m, 72))
+        r = FieldVector(field, random_values(field, count, 73))
+        folded = word.fold_twisted_blocks(table, r)
+        expected = FieldVector.concat(
+            [
+                word.query(range(2 * m * b, 2 * m * (b + 1))).fold_twisted(table, r[b])
+                for b in range(count)
+            ]
+        )
+        assert folded == expected
 
     def test_a_view_of_a_view_starts_where_the_view_does(self, field):
         values = random_values(field, 64, 62)
