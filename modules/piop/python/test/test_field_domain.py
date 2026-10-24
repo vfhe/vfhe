@@ -20,7 +20,7 @@ from vfhe.arith import (
 from vfhe.arith.mle import native_table, vector_table
 from vfhe.piop import IOP, Statement, TableOracle
 from vfhe.piop.protocols import Sumcheck, SumcheckProd
-from vfhe.piop.protocols.rounds import (
+from vfhe.piop.protocols.sumcheck.rounds import (
     _prod_round_evals_python,
     _round_evals_python,
     interpolate_evals,

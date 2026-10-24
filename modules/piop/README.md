@@ -51,7 +51,9 @@ relation toolbox, `vfhe.piop.relations`; and the protocols,
 - `protocol.py`: `Protocol`, a reduction between products of relations as
   paired `prove` / `verify` coroutines over statement bundles (`batching =
   True` protocols receive every frontier statement of their relation at
-  once), and `Rejection`.
+  once), `Rejection`, and `exceptional_set_size(domain)`, the size of the
+  domain's exceptional set, from which challenges are drawn and against
+  which `soundness_error` is stated.
 - `transcript.py`: `Transcript` (the ordered, labeled record of exchanged
   messages: `write(label, value)` / `await read(label)`; its Fiat-Shamir
   chain `state()`, seeded via `bind()` with the root statement's digest),
@@ -110,22 +112,23 @@ needs the tables, so a claim on a committed oracle has no decider.
 
 ## The protocols (`vfhe.piop.protocols`)
 
-- `rounds.py`: the sumcheck round-message kernels as functions over tables
-  (`round_evals`, `prod_round_evals`, their native, whole-vector and
-  pure-Python paths, chosen per call), `interpolate_evals` (the verifier's
-  claim update) and `exceptional_set_size`. The building blocks of the
-  protocols below and of protocols that interleave sumcheck rounds with
-  other messages (basefold in `vfhe.polycom`).
-- `prover_view.py`: `prover_view(oracle, witnesses, strategy)`, the
-  prover's working form of an oracle: the table behind a table, committed
-  or implicit oracle; for a virtual oracle, the dense products form or the
-  two-phase (Libra) form, which keeps sparse predicates sparse — both send
-  identical messages.
-- `sumcheck.py`: `Sumcheck` (reduces `Relation_Sum` to `Relation_Eval` in
-  `num_vars` rounds) and the Libra-style `SumcheckProd` (reduces
-  `Relation_SumProd` to one `Relation_Eval` per factor). Round messages are
-  the evaluations of the round polynomial at `0..deg`; the `strategy`
-  attribute picks the prover's form of a virtual oracle.
+- `sumcheck/`: the sumcheck protocols and their machinery.
+  - `sumcheck.py`: `Sumcheck` (reduces `Relation_Sum` to `Relation_Eval`
+    in `num_vars` rounds) and the Libra-style `SumcheckProd` (reduces
+    `Relation_SumProd` to one `Relation_Eval` per factor). Round messages
+    are the evaluations of the round polynomial at `0..deg`; the
+    `strategy` attribute picks the prover's form of a virtual oracle.
+  - `rounds.py`: the round-message kernels as functions over tables
+    (`round_evals`, `prod_round_evals`, their native, whole-vector and
+    pure-Python paths, chosen per call) and `interpolate_evals` (the
+    verifier's claim update). The building blocks of the sumcheck
+    protocols and of protocols that interleave sumcheck rounds with other
+    messages (basefold in `vfhe.polycom`).
+  - `prover_view.py`: `prover_view(oracle, witnesses, strategy)`, the
+    prover's working form of an oracle: the table behind a table, committed
+    or implicit oracle; for a virtual oracle, the dense products form or
+    the two-phase (Libra) form, which keeps sparse predicates sparse — both
+    send identical messages.
 - `virtual.py`: `VirtualEval` (a claim on a virtual oracle becomes one
   claim per non-public constituent, no challenge) and `SumDefStart` (the
   composable protocol of a sum definition: the claims on the head combined

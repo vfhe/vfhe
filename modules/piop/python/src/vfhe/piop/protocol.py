@@ -7,10 +7,24 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from vfhe.arith import ArithParent
+
 from .relation import Relation, Statement, child_statement
 
 if TYPE_CHECKING:
     from .party import Prover, Verifier
+
+
+def exceptional_set_size(domain) -> int | None:
+    """|A| for the domain's exceptional set; None if the domain has no size.
+
+    Each arithmetic domain computes its own: the size depends on the
+    representation, and a domain that is not an `ArithParent` (an int, a
+    Fraction) has no exceptional set to report.
+    """
+    if isinstance(domain, ArithParent):
+        return domain.exceptional_set_size
+    return None
 
 
 class Rejection(Exception):
@@ -46,7 +60,7 @@ class Protocol:
     A protocol reports its own soundness error as
     `soundness_error(statement, domain)` (piop.md §6): the error of this
     one step for a claim of `statement`'s size, with the challenges drawn
-    from `domain`'s exceptional set (`protocols.rounds.exceptional_set_size`),
+    from `domain`'s exceptional set (`exceptional_set_size`),
     `None` when that set has no known size. The errors of the steps a
     reduction hands on to are those steps' own.
 

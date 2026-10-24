@@ -9,7 +9,11 @@ import random
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
 from vfhe.piop import ImplicitOracle, TableOracle, VirtualOracle
-from vfhe.piop.protocols.prover_view import _LibraProver, _ProverVirtual, prover_view
+from vfhe.piop.protocols.sumcheck.prover_view import (
+    _LibraProver,
+    _ProverVirtual,
+    prover_view,
+)
 
 
 def _vars(prefix, n):

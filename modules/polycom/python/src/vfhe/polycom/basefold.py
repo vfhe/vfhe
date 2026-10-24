@@ -70,12 +70,9 @@ from vfhe.piop import (
     TableOracle,
     Verifier,
     element_digest,
-)
-from vfhe.piop.protocols.rounds import (
     exceptional_set_size,
-    interpolate_evals,
-    prod_round_evals,
 )
+from vfhe.piop.protocols.sumcheck.rounds import interpolate_evals, prod_round_evals
 from vfhe.piop.relations import Relation_SumProd
 
 # `pair_digest` is re-exported here: the aliased form is what marks it

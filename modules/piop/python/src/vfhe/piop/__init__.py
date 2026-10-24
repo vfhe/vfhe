@@ -9,7 +9,7 @@ from .fs import FS_Verifier
 from .iop import IOP
 from .oracle import CommittedOracle, ImplicitOracle, Oracle, OracleKind, TableOracle
 from .party import Party, Prover, Verifier
-from .protocol import Protocol, Rejection
+from .protocol import Protocol, Rejection, exceptional_set_size
 from .relation import Relation, Statement, statement_oracles
 from .transcript import Proof, Transcript, Value, Variable
 from .virtual import VirtualOracle
@@ -38,6 +38,7 @@ __all__ = [
     "VirtualOracle",
     "compose",
     "element_digest",
+    "exceptional_set_size",
     "statement_oracles",
     "with_start",
 ]

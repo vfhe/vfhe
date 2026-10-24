@@ -17,13 +17,12 @@ from typing import TYPE_CHECKING
 
 from vfhe.arith import Field, Ring
 from vfhe.piop.evaluation import Relation_Eval
-from vfhe.piop.protocol import Protocol, Rejection
+from vfhe.piop.protocol import Protocol, Rejection, exceptional_set_size
 from vfhe.piop.relation import Relation, Statement, value_of
 from vfhe.piop.relations import Relation_Sum, Relation_SumProd
 
 from .prover_view import prover_view
 from .rounds import (
-    exceptional_set_size,
     interpolate_evals,
     prod_round_evals,
     round_evals,

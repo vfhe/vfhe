@@ -11,7 +11,7 @@ query.
 from vfhe.arith import MLE, MLE_Variable, Ring
 from vfhe.piop import IOP, Statement, TableOracle
 from vfhe.piop.protocols import Sumcheck, SumcheckProd
-from vfhe.piop.protocols.rounds import (
+from vfhe.piop.protocols.sumcheck.rounds import (
     _prod_round_evals_python,
     _round_evals_python,
     prod2_round_evals_native,

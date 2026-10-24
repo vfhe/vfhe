@@ -657,7 +657,7 @@ next), kept for clear errors, droppable in a byte-level format. That
 encoding is the prerequisite for the port, and it is what would make this a
 NARG *string* rather than a list of objects.
 
-The first instantiation is the sumcheck protocol (`protocols/sumcheck.py`): round *i*
+The first instantiation is the sumcheck protocol (`protocols/sumcheck/`): round *i*
 sends the univariate `g_i` (as the pair `g_i(0), g_i(1)` — the oracle is a
 single multilinear polynomial, so `deg g_i = 1`), the verifier checks
 `g_i(0) + g_i(1)` against the running claim, samples `r_i` from the domain's
@@ -759,8 +759,8 @@ place — `Verifier.challenge`, which calls `domain.random_exceptional()`
 (the name both `Ring` and `Field` have) — and per-protocol soundness accounting is a
 protocol method —
 `Sumcheck.soundness_error` reports `d·n/|A|`, with `|A| =
-min(p_i)^split_degree` for a `Ring` and `p^d` for a `Field` (duck-typed until
-the domain classes expose `|A|` themselves).
+min(p_i)^split_degree` for a `Ring` and `p^d` for a `Field`, read from the
+domain by `exceptional_set_size(domain)` (`protocol.py`).
 
 ## 7. Class-by-class notes
 
@@ -919,7 +919,7 @@ bundled, parked and stored on the object. The prover works on tables:
 side — a table oracle's own, `witnesses[oracle]` for a committed or an
 implicit one, a slice for a restriction.
 
-### `VirtualOracle`, `Relation_SumDef` / `SumDefStart` (`virtual.py`, `relations/sumdef.py`, `protocols/virtual.py`, `protocols/prover_view.py`)
+### `VirtualOracle`, `Relation_SumDef` / `SumDefStart` (`virtual.py`, `relations/sumdef.py`, `protocols/virtual.py`, `protocols/sumcheck/prover_view.py`)
 
 The virtual oracle of §4 is an object with the oracle surface the rest of
 the module duck-types on (`variables`, `num_vars`, `evaluate`, `constant`,
