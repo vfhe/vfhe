@@ -665,6 +665,24 @@ class TestBlocksViewsAndIndexedSampling:
             assert int(lifted[2 * i]) == (int(a[i]) + int(b[i]) * t) % p
             assert int(lifted[2 * i + 1]) == (int(a[i]) - int(b[i]) * t) % p
 
+    def test_fold_twisted_takes_the_generic_body(self, field):
+        """No kernel here either: the fold is the formula, and with the table
+        `1 / (2 t)` it inverts a lift by `t`."""
+        n = 64
+        word = FieldVector(field, random_values(field, 2 * n, 66))
+        table = FieldVector(field, random_values(field, n, 67))
+        r = field(random_values(field, 1, 68)[0])
+        folded = word.fold_twisted(table, r)
+        p = field.prime
+        half = (p + 1) // 2
+        for i in range(n):
+            lo, hi, s = int(word[2 * i]), int(word[2 * i + 1]), int(table[i])
+            assert int(folded[i]) == ((lo + hi) * half + (lo - hi) * s * int(r)) % p
+        a = FieldVector(field, random_values(field, n, 69))
+        b = FieldVector(field, random_values(field, n, 70))
+        lifted = FieldVector.lift_twisted(a, b, table)
+        assert lifted.fold_twisted(table.scale(2).inverse(), r) == a + b * r
+
     def test_a_view_of_a_view_starts_where_the_view_does(self, field):
         values = random_values(field, 64, 62)
         vector = FieldVector(field, values)

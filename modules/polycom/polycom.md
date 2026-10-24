@@ -106,13 +106,24 @@ b[j]   = (pi[2j] - pi[2j+1]) / (2·T_l[j])
 pi'[j] = pi[2j+1] + b[j]·T_l[j] + b[j]·r
 ```
 
+Since `b[j]·T_l[j] = (pi[2j] - pi[2j+1]) / 2`, the same fold is
+
+```text
+pi'[j] = pi[2j+1] + (pi[2j] - pi[2j+1]) · (r / (2·T_l[j]) + 1/2)
+```
+
+which reads only the `1/(2T)` table and costs two products per pair; the
+field code folds this way (`FieldVector.fold_twisted`, one call per level,
+and per query level in `fold_pairs` / `fold_fibers`). Over a ring the
+products by `T` and by `1/2` are both per-prime scalar multiplies, so the
+ring code keeps the first form.
+
 Both codes hold `T` (`twists`; `twists_odd` is `-T`, derived on request)
 and the fold's `1/(2T)`, the latter inverted in **one batch per level by
 Montgomery's trick** (`FieldVector.inverse`, a C kernel on the extension
 family; `code.batch_inverse` per prime over a ring) rather than an
-exponentiation per entry; `fold_pair` is the two lines above and `fold` the
-whole-codeword form (`FieldVector.fold_twisted` over a field, a loop over a
-ring).
+exponentiation per entry; `fold_pair` is the scalar form and `fold` the
+whole-codeword form (a loop over a ring).
 
 The family is instantiated in one of two ways, chosen by the constructor's
 `instantiation=`:

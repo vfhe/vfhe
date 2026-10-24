@@ -409,18 +409,16 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_split_blocks(even._struct, odd._struct, self._struct, block)
         return even, odd
 
-    def fold_twisted(self, twist2_inv, twist, r, out=None) -> ExtensionFieldVector:
-        """The pairwise fold of the front, as one kernel call; the tables are
+    def fold_twisted(self, twist2_inv, r, out=None) -> ExtensionFieldVector:
+        """The pairwise fold of the front, as one kernel call; the table is
         over this field or its prime subfield."""
         half = len(self) // 2
         self._table(twist2_inv, "twist2_inv", half)
-        self._table(twist, "twist", half)
         result = self._destination(out, half)
         lib.field_vec_fold_twisted(
             result._struct,
             self._struct,
             twist2_inv._struct,
-            twist._struct,
             self._coerce_element(r).value,
         )
         return result

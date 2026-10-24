@@ -377,12 +377,12 @@ class FieldFoldableRS:
         self.n0 = c * k0
         self.k_d = k0 << d
         self.n_d = self.n0 << d
-        # The two tables of every fold level, as vectors over the codeword
-        # positions they act on: `_twist_vectors[l]` is `T` of the fold from
-        # level l+1 to level l (the encoder multiplies by `T` and `-T`, and
-        # the fold's `-T'` is `T` again), `_fold_scale_vectors[l]` the
-        # `1 / (2 T)` the fold reads. Both over `twists_domain`, which the
-        # vector kernels take as a table either way. Theta(n) entries in all,
+        # The two tables of every level, as vectors over the codeword
+        # positions they act on: `_twist_vectors[l]` is `T` between level l
+        # and level l+1 (the encoder multiplies by `T` and `-T`),
+        # `_fold_scale_vectors[l]` the `1 / (2 T)`, the one table the fold
+        # reads. Both over `twists_domain`, which the vector kernels take as a
+        # table either way. Theta(n) entries in all,
         # so nothing here is built an entry at a time.
         self._twist_vectors: list[FieldVector] = []
         self._fold_scale_vectors: list[FieldVector] = []
@@ -398,6 +398,8 @@ class FieldFoldableRS:
         else:
             self._init_general()
         self._twist_elements: list[list[list[FieldElement]] | None] = [None, None]
+        #: 1/2 in the field, the constant term of the fold's per-pair factor.
+        self._half = (field.one + field.one).inverse()
         self._vandermonde_inverse: list[list[FieldElement]] | None = None
 
     def _init_rs(self) -> None:
@@ -708,8 +710,8 @@ class FieldFoldableRS:
         This is the form a Merkle verifier uses — it holds one authenticated
         pair per queried position, never a whole codeword.
         """
-        coeff = (lo - hi) * self._scalar(self._fold_scale_vectors[level - 1][i])
-        return hi + coeff * self._scalar(self._twist_vectors[level - 1][i]) + coeff * r
+        scale = self._scalar(self._fold_scale_vectors[level - 1][i])
+        return hi + (lo - hi) * (scale * r + self._half)
 
     def fold_pairs(self, los, his, r, level: int, indices) -> list:
         """`fold_pair` at many positions at once.
@@ -720,21 +722,14 @@ class FieldFoldableRS:
 
         A verifier holds one pair per queried position and folds it at every
         level, so the scalar form costs a handful of element operations per
-        (query, level), each its own crossing into C. Here a level's positions
-        are one set of whole-vector operations instead, and the tables are
-        read with one gather rather than an index at a time.
+        (query, level), each its own crossing into C. Here a level's pairs are
+        one vector folded by one `FieldVector.fold_twisted` call, and the
+        table is read with one gather rather than an index at a time.
         """
-        positions = list(indices)
-        coeff = FieldVector(self.field, list(los))
-        highs = FieldVector(self.field, list(his))
-        coeff.sub(highs, out=coeff)
-        coeff.mul(self._fold_scale_vectors[level - 1].query(positions), out=coeff)
-        # The gathered tables are over `twists_domain`; `highs` is this call's
-        # own, so it can hold the running result.
-        folded = highs.fma(
-            coeff, self._twist_vectors[level - 1].query(positions), out=highs
+        pairs = FieldVector(
+            self.field, [e for pair in zip(los, his, strict=True) for e in pair]
         )
-        return folded.fma(coeff, r, out=folded).to_list()
+        return self.fold_fibers(pairs, [r], level, indices).to_list()
 
     def fold_fibers(self, values, challenges, level: int, indices) -> FieldVector:
         """Fold fibers of a level-`level` codeword `s = len(challenges)` times,
@@ -746,8 +741,10 @@ class FieldFoldableRS:
         sends pair ``(2i, 2i + 1)`` to position `i`. `values` holds fibers end
         to end and `indices[k]` is the position below fiber `k`; the result
         has one symbol per fiber, entry `k` the value at `indices[k]` of the
-        level-``(level - s)`` codeword. With one challenge it is `fold_pairs`
-        on the pairs of `values`.
+        level-``(level - s)`` codeword. Each fold is one
+        `FieldVector.fold_twisted` call over all the fibers, with the level's
+        table gathered at their pairs' positions. With one challenge it is
+        `fold_pairs` on the pairs of `values`.
         """
         values = self._vector(values)
         steps = len(challenges)
@@ -760,18 +757,9 @@ class FieldFoldableRS:
         for k, r in enumerate(challenges):
             half = 1 << (steps - k - 1)
             positions = array("Q", [j * half + i for j in indices for i in range(half)])
-            lo, hi = values.split_even_odd()
-            coeff = lo
-            coeff.sub(hi, out=coeff)
-            coeff.mul(
-                self._fold_scale_vectors[level - k - 1].query(positions), out=coeff
+            values = values.fold_twisted(
+                self._fold_scale_vectors[level - k - 1].query(positions), r
             )
-            # The gathered tables are over `twists_domain`; `hi` is this
-            # step's own, so it can hold the running result.
-            values = hi.fma(
-                coeff, self._twist_vectors[level - k - 1].query(positions), out=hi
-            )
-            values.fma(coeff, r, out=values)
         return values
 
     def fiber_at(self, word: FieldVector, i: int, size: int):
@@ -854,7 +842,5 @@ class FieldFoldableRS:
     def fold(self, word: FieldVector, r, level: int) -> FieldVector:
         """The full fold of a level-`level` codeword with challenge r: the
         level-(level-1) codeword of the r-folded message, as one call
-        (`FieldVector.fold_twisted` with this level's two tables)."""
-        return word.fold_twisted(
-            self._fold_scale_vectors[level - 1], self._twist_vectors[level - 1], r
-        )
+        (`FieldVector.fold_twisted` with this level's `1 / (2 T)` table)."""
+        return word.fold_twisted(self._fold_scale_vectors[level - 1], r)

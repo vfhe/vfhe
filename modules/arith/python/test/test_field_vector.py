@@ -674,18 +674,33 @@ class TestNativeMovementAndFold:
 
     @pytest.mark.parametrize("n", [1, 8, 18, 26, 200])
     def test_fold_twisted_matches_the_pairwise_formula(self, n):
+        """The kernel against the formula element by element, and against the
+        generic body other implementations run."""
         field = make_field()
         word = FieldVector(field, self.values(field, 2 * n))
         twist2_inv = FieldVector(field, self.values(field, n))
-        twist = FieldVector(field, self.values(field, n))
         r = FieldElement(field, self.values(field, 1)[0])
+        half = (field.one + field.one).inverse()
 
-        folded = word.fold_twisted(twist2_inv, twist, r)
+        folded = word.fold_twisted(twist2_inv, r)
 
         assert len(folded) == n
         for i in range(n):
-            coeff = (word[2 * i] - word[2 * i + 1]) * twist2_inv[i]
-            assert folded[i] == word[2 * i + 1] + coeff * twist[i] + coeff * r
+            lo, hi = word[2 * i], word[2 * i + 1]
+            assert folded[i] == (lo + hi) * half + (lo - hi) * twist2_inv[i] * r
+        assert folded == FieldVector.fold_twisted(word, twist2_inv, r)
+
+    @pytest.mark.parametrize("n", [1, 26, 9000])
+    def test_fold_twisted_inverts_lift_twisted(self, n):
+        """With the table `1 / (2 t)`, a lift of `a` and `b` by `t` folds to
+        `a + r b`."""
+        field = make_field()
+        a = FieldVector(field, self.values(field, n))
+        b = FieldVector(field, self.values(field, n))
+        twist = FieldVector(field, self.values(field, n))
+        r = FieldElement(field, self.values(field, 1)[0])
+        lifted = FieldVector.lift_twisted(a, b, twist)
+        assert lifted.fold_twisted(twist.scale(2).inverse(), r) == a + b * r
 
     # More elements than the kernel holds in one window, so the loop that
     # walks them runs several times and the last one is short.
@@ -707,10 +722,9 @@ class TestNativeMovementAndFold:
         word.sample_random(b"w")
         r = field.random_element(b"r")
         lo, hi = word.split_even_odd()
-        lo.sub(hi, out=lo)
-        lo.mul(c_even, out=lo)
-        want = hi.fma(lo, c_odd)
-        assert word.fold_twisted(c_even, c_odd, r) == want.fma(lo, r, out=want)
+        half = (field.one + field.one).inverse()
+        want = (lo + hi).scale(half) + (lo - hi).mul(c_even).scale(r)
+        assert word.fold_twisted(c_even, r) == want
 
     @pytest.mark.parametrize("n", [1, 8, 18, 26, 200, 9000])
     def test_lift_twisted_is_fma_interleave_with_the_table_and_its_negation(self, n):
@@ -765,21 +779,18 @@ class TestNativeMovementAndFold:
         word = FieldVector(field, self.values(field, 2 * n))
         r = FieldElement(field, self.values(field, 1)[0])
         inverse = table.scale(2).inverse()
-        assert word.fold_twisted(inverse, table, r) == word.fold_twisted(
-            FieldVector(field, [int(e) for e in inverse]), lifted, r
+        assert word.fold_twisted(inverse, r) == word.fold_twisted(
+            FieldVector(field, [int(e) for e in inverse]), r
         )
-        # The lift folds back with the same tables.
+        # The lift folds back with the matching table.
         assert (
-            FieldVector.lift_twisted(a, b, table).fold_twisted(
-                inverse, table, field.one
-            )
-            == a + b
+            FieldVector.lift_twisted(a, b, table).fold_twisted(inverse, r) == a + b * r
         )
         other = FieldVector(ExtensionField(562949953421201, 1), [1] * n)
         with pytest.raises(ValueError, match="different field"):
             a.mul(other)
         with pytest.raises(ValueError, match="different field"):
-            word.fold_twisted(other, other, r)
+            word.fold_twisted(other, r)
 
     def test_a_short_prime_subfield_table_is_tiled_and_lifted(self):
         field = make_field()
@@ -794,14 +805,13 @@ class TestNativeMovementAndFold:
             a, b, tiled, -tiled
         )
 
-    def test_fold_twisted_checks_the_table_lengths(self):
+    def test_fold_twisted_checks_the_table_length(self):
         field = make_field()
         word = FieldVector(field, self.values(field, 16))
-        good = FieldVector(field, self.values(field, 8))
         with pytest.raises(ValueError, match="not 8"):
-            word.fold_twisted(FieldVector(field, 4), good, 1)
+            word.fold_twisted(FieldVector(field, 4), 1)
         with pytest.raises(ValueError, match="not 8"):
-            word.fold_twisted(good, FieldVector(field, 9), 1)
+            word.fold_twisted(FieldVector(field, 9), 1)
 
     def test_interleave_rejects_mismatches(self):
         field = make_field()
