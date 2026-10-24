@@ -8,13 +8,12 @@
 > `protocols/range.py`.
 
 - [Context](#context)
-- [Background: the tools](#background-the-tools-being-used)
+- [Notation](#notation)
 - [Conventions](#conventions-domains-and-index-order)
 - [The lookup protocol (Figure 11)](#the-lookup-protocol--figure-11)
 - [The decomposition protocol (Figure 13)](#the-decomposition-protocol--figure-13)
 - [Soundness](#soundness-bookkeeping-both-protocols)
 - [Sending an oracle](#sending-an-oracle-both-protocols)
-- [The tests](#the-tests)
 
 ## Context
 
@@ -81,100 +80,10 @@ Relation_Range(B, c) on ṽ
     └── 4 × Relation_Eval on f^(1)_α at (0,1,…,1) [terminal]
 ```
 
-## Background: the tools being used
+The framework's vocabulary used below — relations, statements, protocols,
+oracle kinds, `VirtualOracle`, `VirtualEval` — is that of `piop.md` §3–§5.
 
-### Asynchronous programming, and why a PIOP library wants it
-
-A *coroutine* is a function that can pause in the middle and hand control back
-to a scheduler — the *event loop* — which resumes it later. `await x` is the
-pause point: it means "suspend me until `x` has a value". A *future* is that
-not-yet-available value: an empty box someone else will fill. None of this is
-parallel or threaded. Exactly one coroutine runs at a time and the loop only
-switches at `await` points, so there are no races and no locks.
-
-What it buys a proof system is this: an interactive proof is a *data-flow*
-problem — the prover's round-`i+1` message depends on the verifier's round-`i`
-challenge, but anything not downstream of that challenge can proceed. With
-coroutines, prover and verifier are each written as one straight-line script in
-the natural order of the protocol, and the interleaving is *inferred* rather
-than hand-scheduled. `vfhe.piop` does exactly that (the class is called `IOP`;
-"PIOP" is the model it implements):
-
-```python
-async def prove(self, prover, statements):            # the prover's script
-    iop.transcript.write("msg1", table)               # fills a future
-    r = iop.verifier.challenge("chal1")               # derived, not awaited
-    iop.transcript.write("msg2", f(r))
-    return [ ... ]                                    # the statements this reduces to
-
-async def verify(self, verifier, statements):         # the verifier's script
-    t = await iop.transcript.read("msg1")             # suspends until prove writes it
-    r = verifier.challenge("chal1")                   # same value, same label
-    m2 = await iop.transcript.read("msg2")
-    if not check(t, r, m2):
-        raise Rejection("...")
-    return [ ... ]                                    # the identical list
-```
-
-Neither side declares a round number; the ordering is forced by who awaits
-what. `iop.run(statement)` schedules both coroutines on one loop and returns
-the verifier's verdict. Under `IOP(fiat_shamir=True)` the halves come apart:
-`iop.prove(stmt) -> Proof`, and on a *separate* `IOP`,
-`iop.verify(stmt, proof) -> bool`. (Two implementation details worth knowing:
-under Fiat–Shamir every challenge is a hash of the transcript so far, so the
-prover never actually waits; and a prover coroutine that tries to *read*
-raises rather than hanging, since it has no counterparty.)
-
-**The one rule this imposes on protocol code:** both halves must emit the
-*identical* sequence of child statements. Child statement `path`s come from a
-counter on the parent, and `path` namespaces every transcript label, so a
-verify half cannot look at a witness to decide how many children to make.
-
-### The PIOP scaffolding
-
-- **`Relation`** — an indexed relation `R ⊆ (index, instance, witness)`.
-  `fields` declares the instance shape in the canonical Fiat–Shamir order;
-  `check(statement)` is the *ideal* (hypercube-enumerating) decider.
-- **`Statement`** — the claim `instance ∈ L(relation)`. Public only; the
-  witness lives in `Prover.witnesses`. `parents` links the run's DAG.
-- **`Protocol`** — a reduction between *products* of relations, as the pair of
-  coroutines above, each `list[Statement] -> list[Statement]`.
-  `iop.register(RelationType, protocol)` picks the discharge. A statement whose
-  relation has no registered protocol is **terminal**: it is not reduced
-  further, and the verifier decides it directly with `check()`.
-- The two relations that carry this whole construction:
-  - **`Relation_Sum`** — `Σ_{x ∈ {0,1}^n} f(x) = value`, discharged by
-    `Sumcheck` in `n` rounds, reducing to
-  - **`Relation_Eval`** — `f(point) = value`, the terminal claim, on one
-    oracle `f`.
-- **Oracle kinds** (`OracleKind`) — a statement names *oracles*, never
-  tables: `TableOracle(table, public=...)` wraps an arith table,
-  `CommittedOracle` is a commitment and the variables, `ImplicitOracle` a
-  handle, `VirtualOracle` a definition. `Relation_Eval` is *one* relation
-  with several discharges, keyed on what the verifier *has* of the oracle:
-  `public` (terminal, the verifier evaluates the table itself), `committed`
-  (a PCS protocol), `virtual` (`VirtualEval`), `implicit` (held by the
-  Composer of the reduction), `plain` (terminal oracle query). `register`
-  takes a `kind=` argument.
-- **`VirtualOracle(variables, constituents, terms, maps)`** —
-  `p*(x) = Σ_terms coeff · Π_j p_j(h_j(x))`. `terms` is `[(coeff, (j, …)), …]`
-  over constituent indices; `maps[j]` sends each variable of constituent `j`
-  either to one of `variables` (a renaming) or **to a constant**.
-  `degree_in(var)` is the largest number of factors of one term reading `var`.
-- **`Sumcheck` already accepts a `VirtualOracle`** as the oracle of a
-  `Relation_Sum`: the round message carries `degree_in(var) + 1` evaluation
-  nodes. `VirtualEval` then rewrites the final `Relation_Eval` on the virtual
-  oracle: for each distinct (constituent, point) pair it emits one
-  `Relation_Eval`. Public constituents are dropped, because the verifier
-  evaluates them itself. The rewrite draws no challenges and is a
-  deterministic identity, not a probabilistic reduction, so it costs no
-  soundness.
-
-That last pair of bullets is why this maps onto the framework so cleanly:
-**Figure 12's `g` is a `VirtualOracle`**, and Figure 11's two sumchecks are
-two `Relation_Sum` statements over one.
-
-### Notation
+## Notation
 
 Paper notation, all of it used below:
 
@@ -449,14 +358,6 @@ out:
    `µ̃'`, `read_ts`, `final_cts` and `f^{(1)}_α` at the shifted points.
 5. Those claims are `plain`, hence terminal: one oracle query each.
 
-One deliberate deviation from the paper:
-
-- The counter construction of Lemma I.3 is only defined for in-range values, so
-  `Lookup.prove` must reject an out-of-range entry with a clear error rather
-  than index out of bounds — and the rejection tests must therefore go through
-  a *cheating prover* that fabricates counters, so the `False` verdict comes
-  from the verifier and not from a prover crash.
-
 ## The decomposition protocol — Figure 13
 
 The relation is `relations/range.py`, the protocol `protocols/range.py`.
@@ -482,18 +383,13 @@ committed one has no table on the verifier's side), `ℓ` from `ṽ.num_vars`.
 
 1. The prover builds the integer digit table `µ̃` by reading each
    `Polynomial.get_polynomial()` and slicing out `c` base-`β` digits, lifts it
-   to `µ̃' = MLE(field=F_p, …)`, and sends it. (Not via
-   `Polynomial.decompose`, which produces `ring.bit_size // base` limbs by
-   floor division, is unsigned, has zero callers and no test — it is the wrong
-   shape here.)
+   to `µ̃' = MLE(field=F_p, …)`, and sends it.
 2. `r_0 … r_{κ−1} ← Σ^{ℓ+ν}` via `challenge_bits`.
 3. The prover sends `ψ̃'_η = µ̃'(r'_η, ·)` for each `η` — bind the first `m`
    variables, `2^{ℓ+ν−m+γ}` field elements each — and the `κ` ring values
    `w_η = ṽ(x_η)`. Note the two liftings of the same integer challenge: `ṽ` is
    bound at the plain integers `x_η` (a ring table takes an `int` directly),
-   while `µ̃'` must be bound at `π_p(r'_η)`, i.e. `field(r)` per coordinate — a
-   field-backed table folds through `FieldVector.fold`, which wants a field
-   element, not an `int`.
+   while `µ̃'` must be bound at `π_p(r'_η)`, i.e. `field(r)` per coordinate.
 4. `s' ← F_p^{ℓ*−m}` via `challenge`.
 5. The verifier checks, for each `η`: compute both sides as exact Python
    integers, using the balanced lift `ι` to leave `F_p`, then reduce and
@@ -518,13 +414,15 @@ committed one has no table on the verifier's side), `ℓ` from `ṽ.num_vars`.
 
 ## Soundness bookkeeping (both protocols)
 
-Each protocol gets a `soundness_error` method, matching the convention the
-existing protocols follow (`Sumcheck.soundness_error`, `piop.md` §6), reporting
-the paper's own bounds:
+Each protocol's `soundness_error` (`piop.md` §6) reports the paper's own
+bound:
 
 - `RangeDecomposition` (Thm. I.6): `max{ ((ℓ+ν)/σ)^κ , (ℓ+ν+γ−m)/p , δ'_range }`,
   where the third term is what the child `Relation_Lookup` accounts for;
 - `Lookup` (Thm. I.5): `δ'_range = (2^{ℓ*} + 2^{b*}) / p`.
+
+The first term dominates: `κ` is chosen so that `((ℓ+ν)/σ)^κ ≈ 2^{−λ}`
+(eq. 44).
 
 The correctness side conditions — `p > 2β(2σ)^m` (eq. 38) and `p > 2^{ℓ*}` —
 mix constructor parameters with claim dimensions, so they are checked at the
@@ -542,62 +440,12 @@ A table digests itself, so either would do for Fiat–Shamir; the reason is
 variable identity: `MLE_Variable`s compare by identity, and each party should
 build its own table, with its own variable objects, from a message that is
 plain data. Each party then names its table through a plain `TableOracle`.
-It also keeps the message a value rather than a live object, which is what
-the planned canonical byte encoding (`piop.md` §8, item 6) will need.
 
 The compiled variant is a contained change, not a rewrite: the prover commits
 with `vfhe.polycom` and the statements name the `CommittedOracle` that
 `commit` returns instead of a table oracle; the PCS protocol, registered for
 `Relation_Eval`, discharges those claims. The relations, the protocols and
 the DAG are unchanged.
-
-## The tests
-
-Test parameters, small enough for the pure-Python degree-3 rounds:
-`N = 8` (`ν = 3`), `ℓ = 2`, `B = 2^6`, `c = 2` (so `γ = 1`, `β = 8`, `b* = 3`),
-giving `ℓ* = 6` and 64-entry tables; `m = 2`, `σ = 2^8`, `κ = 2`;
-`p = PseudoMersenneField.generate(260, two_adicity=8)` — the existing fixture in
-`test_field_domain.py`, reused verbatim — so `p ≈ 2^260`, against the correctness
-bound `2β(2σ)^m = 2^22` and the lookup requirement `2^{ℓ*} = 2^6`. (`κ = 2` is
-a test-size choice, not a security one; the real bound is
-`((ℓ+ν)/σ)^κ ≈ 2^{−λ}`, eq. 44.) `σ = 2^8 ≤ p_min` holds for any realistic
-prime size. The ring is `Ring(8, prime_size=[30, 30], split_degree=1)`.
-
-`test_lookup.py`
-
-- `Relation_Lookup().check()` accepts an in-range table and rejects one
-  out-of-range entry.
-- An honest run accepts. An out-of-range entry is rejected — by the step-6
-  product check or by the sumcheck, and the test asserts which.
-- The transcript labels are the expected sequence, and both `Relation_Sum`
-  children report `degree == 3` (round messages of 4 nodes).
-- Fiat–Shamir: `IOP(fiat_shamir=True).prove` then a *separate* `IOP(…).verify`
-  accepts; two runs are byte-identical.
-- Replay an honest transcript into a fresh IOP with one label rewritten and
-  assert rejection (the `_replay_with_tamper` harness of
-  `modules/polycom/python/test/test_basefold.py`), keeping the identity-tamper
-  positive control.
-
-`test_range.py`
-
-- A direct unit test of the Figure-13 step-2 identity on honest data — "the
-  decomposition was done correctly": the digits recompose to the coefficients,
-  and `Σ_{δ,k} ι(ψ̃')·eq̃·β^k ≡ uEval(ṽ(x_η), z_η) (mod q)`.
-- End to end: `Relation_Range` over a `ṽ` with coefficients in `[0,B)` accepts.
-- Rejection, as three separate cases, each naming the branch that catches it:
-  1. a coefficient `≥ B` — the digits cannot recompose, so the **mod-`q` check**
-     in step 5 fails;
-  2. an honest `ṽ` with a prover that perturbs one digit of `µ̃` (subclass the
-     protocol to corrupt the table) — again the **mod-`q` check**;
-  3. an honest `ṽ` with a `µ̃` whose digits recompose correctly but where one
-     digit exceeds `β` (borrow a unit from a higher digit) — this passes step 5
-     and is caught by the **lookup branch**.
-- The `κ` claims on `ṽ` and the `κ` on `µ̃'` reach the terminal frontier, and
-  each `check()`s true on an honest run.
-
-The recomposition identity is exact over `Z` only against `ṽ`'s integer
-coefficients, not against the value read out of `R_q`, which has already
-been reduced: `test_recomposition_identity` pins both forms.
 
 ## Bibliography
 

@@ -142,8 +142,8 @@ class RangeDecomposition(Protocol):
           ==  uEval(v(x_eta), z_eta)   (mod q)
 
     with both sides computed as exact integers first. `iota` is sound there
-    because the left side is bounded by `2^m beta sigma^m < p/2`
-    (equation 38), so nothing overflows `F_p`.
+    because every entry of `psi_eta`, as an integer, is bounded by
+    `2^m beta sigma^m < p/2` (equation 38), so nothing overflows `F_p`.
 
     What is left over becomes statements: that each `psi_eta` really is a
     partial evaluation of `mu'` (one `Relation_Eval` on `mu'` per repetition,

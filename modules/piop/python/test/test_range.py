@@ -89,6 +89,13 @@ def _most_acceptances(runs, error, false_failure=1e-6):
     return runs
 
 
+def _assert_rarely_accepted(make_iop, statement, error, runs=64):
+    """Run the false `statement` on `runs` fresh IOPs from `make_iop` and
+    hold the acceptances to what a soundness error of `error` allows."""
+    accepted = sum(bool(make_iop().run(statement)) for _ in range(runs))
+    assert accepted <= _most_acceptances(runs, error)
+
+
 # --- the relations' ideal deciders -----------------------------------------
 
 
@@ -354,28 +361,40 @@ class _Swallow(Protocol):
 
 def test_out_of_range_coefficient_is_rejected(ring, field):
     """Case 1: a coefficient >= B. Its digits truncate, so they no longer
-    recompose, and the mod-q check of step 2 fails."""
+    recompose, and the mod-q check of step 2 fails -- except with probability
+    the soundness error, so the cheating run is repeated."""
     v = _witness(ring, tweak=lambda c: c.__setitem__(3, BOUND + 5))
-    assert not _statement(v).check()  # the claim really is false
-    assert not _iop(ring, field).run(_statement(v))
+    statement = _statement(v)
+    assert not statement.check()  # the claim really is false
+    error = _protocol(field, ring).soundness_error(statement)
+    _assert_rarely_accepted(lambda: _iop(ring, field), statement, error)
 
     # The digits themselves stay inside t_beta here -- truncation keeps them
     # small -- so the lookup branch has nothing to say, and step 2 is the
     # only thing standing between this witness and an accepting run.
-    iop = _iop(ring, field)
-    iop.register(Relation_Lookup, _Swallow(Relation_Lookup))
-    assert not iop.run(_statement(v))
+    def swallowing():
+        iop = _iop(ring, field)
+        iop.register(Relation_Lookup, _Swallow(Relation_Lookup))
+        return iop
+
+    _assert_rarely_accepted(swallowing, statement, error)
 
 
 def test_perturbed_digit_is_rejected(ring, field):
     """Case 2: an honest witness, but the prover alters one digit. The digits
-    stop recomposing, so again the mod-q check fails."""
+    stop recomposing, so again the mod-q check fails, up to the soundness
+    error."""
     v = _witness(ring, seed=5)
+    statement = _statement(v)
 
     def corrupt(table, shape):
         table[0] = (table[0] + 1) % shape.beta
 
-    assert not _iop(ring, field, _cheat(ring, field, corrupt)).run(_statement(v))
+    _assert_rarely_accepted(
+        lambda: _iop(ring, field, _cheat(ring, field, corrupt)),
+        statement,
+        _protocol(field, ring).soundness_error(statement),
+    )
 
 
 def test_borrowed_digit_passes_recomposition_but_fails_the_lookup(ring, field):
