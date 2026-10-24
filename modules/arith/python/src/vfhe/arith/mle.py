@@ -12,7 +12,7 @@ import operator
 from enum import Enum
 from typing import Any
 
-from vfhe.crypto import chain_digest, hash_bytes, int_digest, str_digest
+from vfhe.crypto import DigestChain, hash_bytes, int_digest, str_digest
 from vfhe.util.bindings import ffi, lib
 
 from .base import Field, FieldVector, Polynomial
@@ -35,7 +35,7 @@ class MLE_Variable:
         self.name = name
 
     def digest(self) -> bytes:
-        """By the name: what a transcript absorbs for the variable."""
+        """A 32-byte digest of the variable, by its name."""
         return hash_bytes(b"name" + self.name.encode())
 
     def __repr__(self) -> str:
@@ -596,12 +596,22 @@ class MLE:
         return MLE._like(self, self._entries_copy())
 
     def digest(self) -> bytes:
-        """A 32-byte digest of the table: its basis, its variables and its
-        entries, in order (what a transcript or a statement absorbs)."""
-        parts = [b"mle", str_digest(self.basis.name)]
-        parts += [_digest(v) for v in self.variables]
-        parts += [_digest(entry) for entry in self.table]
-        return chain_digest(parts)
+        """A 32-byte digest of the table: the chain of its basis, its
+        variables in order and one digest of all its entries."""
+        chain = DigestChain().absorb(b"mle").absorb(str_digest(self.basis.name))
+        chain.absorb_packed(b"".join(_digest(v) for v in self.variables))
+        return chain.absorb(self._entries_digest()).digest()
+
+    def _entries_digest(self) -> bytes:
+        """The digest of the entries in index order, as one message: the
+        vector's `hash()` over a field, `RNSPolynomial.digest_sequence` over
+        a ring, and over plain values the hash of their digests packed end to
+        end."""
+        if self.field is not None:
+            return self._vector.hash()
+        if self.ring is not None:
+            return RNSPolynomial.digest_sequence(self._polys)
+        return hash_bytes(b"".join(_digest(entry) for entry in self._entries))
 
     def rename(self, mapping: dict) -> MLE:
         """A copy of this table with its variables relabelled through
@@ -746,10 +756,13 @@ class SparseMLE:
     def digest(self) -> bytes:
         """A 32-byte digest of the table: its variables and its nonzero
         entries in index order (not insertion order)."""
-        parts = [b"sparse"] + [_digest(v) for v in self.variables]
-        for k in sorted(self.evaluations):
-            parts += [int_digest(k), _digest(self.evaluations[k])]
-        return chain_digest(parts)
+        chain = DigestChain().absorb(b"sparse")
+        chain.absorb_packed(b"".join(_digest(v) for v in self.variables))
+        entries = b"".join(
+            int_digest(k) + _digest(self.evaluations[k])
+            for k in sorted(self.evaluations)
+        )
+        return chain.absorb_packed(entries).digest()
 
     def materialize(self, *_ignored) -> MLE:
         """The dense table with the same evaluations, in the same domain."""

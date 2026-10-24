@@ -778,6 +778,27 @@ class RNSPolynomial(Polynomial):
         self.ring.lib.polynomial_RNS_get_hash(result, view.obj)
         return [result[i] for i in range(4)]
 
+    def digest(self) -> bytes:
+        """The 32-byte BLAKE3 digest of the value, taken in the mul domain:
+        the bytes `get_hash` returns as four words."""
+        view = self._viewed_as(repr.ntt)
+        result = ffi.new("uint8_t[32]")
+        self.ring.lib.polynomial_RNS_get_hash(ffi.cast("uint64_t *", result), view.obj)
+        return bytes(result)
+
+    @staticmethod
+    def digest_sequence(polys: list[RNSPolynomial]) -> bytes:
+        """The BLAKE3 digest of one message: for each of `polys` in order,
+        the rows `get_hash` hashes, taken in the mul domain like it."""
+        state = ffi.new("uint8_t[]", lib.hash_stream_size())
+        lib.hash_stream_init(state)
+        for p in polys:
+            view = p._viewed_as(repr.ntt)  # a local: the view owns the rows read
+            p.ring.lib.polynomial_RNS_hash_update(state, view.obj)
+        out = ffi.new("uint8_t[32]")
+        lib.hash_stream_digest(state, out)
+        return bytes(out)
+
     def __hash__(self):
         raise TypeError(
             "not a Python hashable object. Call polynomial.get_hash() for cryptographic hash"

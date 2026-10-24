@@ -109,6 +109,7 @@ void polynomial_RNS_copy_slot(void *out, uint64_t dst, void *in, uint64_t src);
 
 // --- hashing ---
 void polynomial_RNS_get_hash(uint64_t *out, void *p);
+void polynomial_RNS_hash_update(void *state, void *p);
 void polynomial_RNS_expand_seeded(void *out, const uint8_t *seed, uint64_t seed_len,
                                   uint64_t stream);
 bool polynomial_RNS_matches_seeded(void *p, bool canonical, uint64_t index, const uint8_t *seed,

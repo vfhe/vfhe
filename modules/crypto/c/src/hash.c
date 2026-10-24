@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
+#include <string.h>
+
 #include <blake3.h>
 #include <blake3_impl.h>
 
@@ -41,6 +43,37 @@ void hash_stream_update(void *state, const uint8_t *in, uint64_t len)
 void hash_stream_digest(const void *state, uint8_t out[32])
 {
     blake3_hasher_finalize((const blake3_hasher *)state, out, BLAKE3_OUT_LEN);
+}
+
+void hash_chain(uint8_t state[32], const uint8_t *in, uint64_t count, uint64_t len)
+{
+    if (len <= BLAKE3_BLOCK_LEN - BLAKE3_OUT_LEN)
+    {
+        // state | part fits one block. The BLAKE3 digest of a one-block
+        // message is one compression of the zero-padded block, given its true
+        // length and the CHUNK_START, CHUNK_END and ROOT flags.
+        uint8_t block[BLAKE3_BLOCK_LEN] = {0};
+        uint32_t cv[8];
+        memcpy(block, state, BLAKE3_OUT_LEN);
+        for (uint64_t i = 0; i < count; i++)
+        {
+            memcpy(&block[BLAKE3_OUT_LEN], &in[i * len], len);
+            memcpy(cv, IV, sizeof(cv));
+            blake3_compress_in_place(cv, block, (uint8_t)(BLAKE3_OUT_LEN + len), 0,
+                                     CHUNK_START | CHUNK_END | ROOT);
+            store_cv_words(block, cv);
+        }
+        memcpy(state, block, BLAKE3_OUT_LEN);
+        return;
+    }
+    for (uint64_t i = 0; i < count; i++)
+    {
+        blake3_hasher hasher;
+        blake3_hasher_init(&hasher);
+        blake3_hasher_update(&hasher, state, BLAKE3_OUT_LEN);
+        blake3_hasher_update(&hasher, &in[i * len], len);
+        blake3_hasher_finalize(&hasher, state, BLAKE3_OUT_LEN);
+    }
 }
 
 bool hash_batch_fits(uint64_t len)

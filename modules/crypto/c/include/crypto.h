@@ -46,6 +46,11 @@ extern "C"
     void hash_stream_update(void *state, const uint8_t *in, uint64_t len);
     void hash_stream_digest(const void *state, uint8_t out[32]);
 
+    // Advances a hash chain over `count` parts of `len` bytes each, laid out
+    // end to end in `in`: state = BLAKE3(state | part), one part after
+    // another, in place. `in` must not overlap `state`.
+    void hash_chain(uint8_t state[32], const uint8_t *in, uint64_t count, uint64_t len);
+
     // --- Randomness (prng.c) ---------------------------------------------
     //
     // The entropy-backed generators below may be called from any number of

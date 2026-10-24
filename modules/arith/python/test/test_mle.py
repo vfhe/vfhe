@@ -314,3 +314,39 @@ def test_sparse_mle_over_a_ring():
     assert s.evaluate(pt).constant() == want
     assert (s + s).evaluations == {1: 2, 3: 4} and (s + s).ring is ring
     assert s.scale(3).evaluations == {1: 3, 3: 6}
+
+
+def test_field_table_digest_hashes_the_vector_once():
+    field = Field((1 << 61) - 1, 2, w=5)
+    vector = FieldVector(field, 8)
+    vector.sample_random(b"\x01" * 32)
+    table = MLE(field=field, num_vars=3, evaluations=vector)
+    other = table.copy()
+    assert other.digest() == table.digest()
+    other.table[5] = other.table[5] + field.one
+    assert other.digest() != table.digest()
+    renamed = table.rename({table.variables[0]: MLE_Variable("y")})
+    assert renamed.digest() != table.digest()
+    assert table.to_coefficients().digest() != table.digest()
+
+
+def test_ring_table_digest_streams_every_row():
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    entries = [Polynomial(ring).from_array([i, 3 * i + 1]) for i in range(4)]
+    table = MLE(ring=ring, num_vars=2, evaluations=entries)
+    reprs = [p.repr for p in entries]
+    digest = table.digest()
+    assert [p.repr for p in entries] == reprs  # digesting converts copies
+    in_ntt = [p.copy() for p in entries]
+    for p in in_ntt:
+        p.to_NTT()
+    assert MLE(ring=ring, num_vars=2, evaluations=in_ntt).digest() == digest
+    swapped = [entries[1], entries[0], *entries[2:]]
+    assert MLE(ring=ring, num_vars=2, evaluations=swapped).digest() != digest
+    assert type(entries[0]).digest_sequence(entries[:1]) == entries[0].digest()
+
+
+def test_plain_table_digest_follows_the_entries():
+    table = MLE(num_vars=2, evaluations=[1, -2, 3, 10**40])
+    assert table.digest() == MLE(num_vars=2, evaluations=[1, -2, 3, 10**40]).digest()
+    assert table.digest() != MLE(num_vars=2, evaluations=[1, -2, 3, 0]).digest()

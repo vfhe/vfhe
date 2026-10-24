@@ -8,3 +8,4 @@ uint64_t hash_stream_size(void);
 void hash_stream_init(void *state);
 void hash_stream_update(void *state, const uint8_t *in, uint64_t len);
 void hash_stream_digest(const void *state, uint8_t out[32]);
+void hash_chain(uint8_t state[32], const uint8_t *in, uint64_t count, uint64_t len);

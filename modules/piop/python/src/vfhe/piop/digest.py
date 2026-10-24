@@ -15,7 +15,14 @@ from __future__ import annotations
 
 from typing import cast
 
-from vfhe.crypto import bytes_digest, chain_digest, hash_bytes, int_digest, str_digest
+from vfhe.crypto import (
+    DigestChain,
+    bytes_digest,
+    chain_digest,
+    hash_bytes,
+    int_digest,
+    str_digest,
+)
 
 
 def element_digest(value) -> bytes:
@@ -42,7 +49,8 @@ def element_digest(value) -> bytes:
             parts += [element_digest(key), element_digest(val)]
         return chain_digest(parts)
     if isinstance(value, list | tuple):
-        return chain_digest([b"seq"] + [element_digest(v) for v in value])
+        chain = DigestChain().absorb(b"seq")
+        return chain.absorb_packed(b"".join(element_digest(v) for v in value)).digest()
     if hasattr(value, "SerializeToString"):  # a protobuf message, e.g. a circuit
         return hash_bytes(b"proto" + value.SerializeToString())
     digest = getattr(value, "digest", None)

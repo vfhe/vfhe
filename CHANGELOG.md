@@ -23,7 +23,14 @@ versions may contain breaking changes.
 - `vfhe.crypto.digest`: `chain_digest`, the chained digest of
   already-digested parts, and `bytes_digest`, `int_digest`, `str_digest`,
   the canonical digests of primitives every `digest()` method is built
-  from.
+  from; `DigestChain`, the same chain as an accumulator, which absorbs a
+  run of equal-length parts packed in one buffer in a single native call
+  (`hash_chain` in C).
+- `RNSPolynomial.digest_sequence(polys)`: the BLAKE3 digest of the rows of
+  several polynomials as one message (`polynomial_RNS_hash_update` in C).
+- `MLE.digest` covers the entries with one digest of the whole table --
+  `FieldVector.hash()` over a field, `digest_sequence` over a ring -- rather
+  than one per entry.
 - `Basefold.commit(f, prover=prover)` installs on `prover` the table of the
   committed oracle and the opening of its commitment.
 - Oracles committed under different commitment schemes, or under one scheme

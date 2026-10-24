@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.crypto public API re-exports: the basic cryptographic primitives —
 # randomness, hashing and vector commitment — every other module builds on.
-from .digest import bytes_digest, chain_digest, int_digest, str_digest
+from .digest import DigestChain, bytes_digest, chain_digest, int_digest, str_digest
 from .hash import Blake3Stream
 from .merkle import DIGEST_LEN, Merkle, MerklePath, hash_bytes, leaf_digest
 from .prng import SEED_WORDS, EntropyPRNG, SeededPRNG, entropy, seeded
@@ -11,6 +11,7 @@ __all__ = [
     "DIGEST_LEN",
     "SEED_WORDS",
     "Blake3Stream",
+    "DigestChain",
     "EntropyPRNG",
     "Merkle",
     "MerklePath",
