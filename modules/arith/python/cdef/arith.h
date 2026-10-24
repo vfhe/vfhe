@@ -235,6 +235,13 @@ typedef struct _FieldVector
     Modulus mod;
 } *FieldVector;
 uint64_t field_vec_padded_length(uint64_t n);
+typedef struct _RNS_CrtMaps *RNS_CrtMaps;
+RNS_CrtMaps rns_crt_maps_new(void *base, uint64_t row, bool to_slot_zero);
+void rns_crt_maps_free(RNS_CrtMaps maps);
+void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
+                                   RNS_CrtMaps maps);
+void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uint64_t count,
+                                        RNS_CrtMaps maps);
 void field_vec_add(FieldVector out, const FieldVector a, const FieldVector b);
 void field_vec_sub(FieldVector out, const FieldVector a, const FieldVector b);
 void field_vec_neg(FieldVector out, const FieldVector a);

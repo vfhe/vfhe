@@ -10,6 +10,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith.base import Polynomial, Ring, check_spec_keywords
+from vfhe.arith.impl.field.field import ExtensionField
+from vfhe.arith.impl.field.vector import ExtensionFieldVector
 from vfhe.arith.impl.mp.multiprecision import Multiprecision
 from vfhe.arith.number_theory import crt, is_prime
 from vfhe.arith.registry import register
@@ -19,8 +21,18 @@ from vfhe.util.bindings import ffi, lib
 from .rns_base import registry
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     # Type-checking only: `Self` is what an in-place operator returns.
     from typing_extensions import Self
+
+
+#: The fields `RNSRing.residue_field` returns, one per (N, split_degree, prime).
+_RESIDUE_FIELDS: dict[tuple[int, int, int], ExtensionField] = {}
+#: The native tables of the residue-field isomorphisms (`rns_crt_maps_new`),
+#: one per (base address, base row, direction). Bases live as long as the
+#: process, so an address keeps naming the same base.
+_CRT_MAPS: dict[tuple[int, int, bool], Any] = {}
 
 
 def next_power_of_2(x):
@@ -269,6 +281,132 @@ class RNSRing(Ring):
         w = self.lib.rns_base_get_rou_matrix(self.base)
         row_len = self.N // self.split_degree
         return [[w[idx][k] for k in range(row_len)] for idx in self.prime_indices]
+
+    def residue_field(self, index: int) -> ExtensionField:
+        """A residue field of ``R_q`` at the prime ``p = primes[index]``: the
+        field `crt_components` maps into.
+
+        Let ``d = split_degree`` and ``k = N/d``. Modulo ``p``, ``X^N + 1`` is
+        the product of ``k`` irreducible factors ``X^d - w_s``, ``s < k``, one
+        per slot of the incomplete transform (``w_s`` is
+        ``get_rou_matrix()[index][s]``). So the maximal ideals of ``R_q``
+        containing ``p`` are ``P_s = (p, X^d - w_s)``, and each residue field
+        ``R_q/P_s`` is ``F_p[x]/(x^d - w_s)``, with ``x`` the class of ``X``: a
+        field with ``p^d`` elements. This method returns
+        ``R_q/P_0 = F_p[x]/(x^d - w_0)``.
+
+        There is one field object per ``(N, split_degree, p)`` in the
+        process: fields compare by identity, and the components computed
+        through any ring with this prime have to be in the same one.
+        """
+        prime = self.primes[index]
+        key = (self.N, self.split_degree, prime)
+        field = _RESIDUE_FIELDS.get(key)
+        if field is None:
+            rou = self.lib.rns_base_get_rou_matrix(self.base)
+            w0 = int(rou[self.prime_indices[index]][0])
+            field = ExtensionField(prime, self.split_degree, w0)
+            _RESIDUE_FIELDS[key] = field
+        return field
+
+    def _crt_maps(self, index: int, to_slot_zero: bool):
+        """The native tables (`rns_crt_maps_new`) of the isomorphisms between
+        the residue fields at ``primes[index]``: towards `residue_field` if
+        `to_slot_zero`, as `crt_components` applies them, and back otherwise.
+        Built once per base, row and direction."""
+        row = self.prime_indices[index]
+        key = (int(ffi.cast("uintptr_t", self.base)), row, to_slot_zero)
+        maps = _CRT_MAPS.get(key)
+        if maps is None:
+            maps = ffi.gc(
+                self.lib.rns_crt_maps_new(self.base, row, to_slot_zero),
+                self.lib.rns_crt_maps_free,
+            )
+            _CRT_MAPS[key] = maps
+        return maps
+
+    def crt_components(
+        self, elements: Sequence[RNSPolynomial], index: int
+    ) -> ExtensionFieldVector:
+        """The CRT components of `elements` at the prime ``p = primes[index]``:
+        each element's residues modulo the maximal ideals of ``R_q`` that
+        contain ``p``, all carried into the field `residue_field(index)`.
+
+        Let ``k = N/split_degree``. The maximal ideals of ``R_q`` containing
+        ``p`` are ``P_s = (p, X^d - w_s)``, ``s < k``, with ``d``, ``w_s`` and
+        the residue fields ``R_q/P_s`` as in `residue_field`, which returns
+        ``R_q/P_0``. Every ``w_s`` is an odd power ``w_0^(x_s)`` of ``w_0``,
+        and the automorphism ``X -> X^(x_s)`` of ``R_q`` maps ``P_s`` onto
+        ``P_0``; component ``s`` of an element is its residue modulo ``P_s``
+        carried into ``R_q/P_0`` by the isomorphism this induces. Each
+        component is a surjective ring homomorphism ``R_q -> R_q/P_0``, and
+        the ``k`` components together induce an isomorphism
+        ``R_q/pR_q -> (R_q/P_0)^k``. So the components at every prime
+        determine the element; `from_crt_components` is the inverse.
+
+        Entry ``s * len(elements) + b`` of the result is component ``s`` of
+        ``elements[b]``: component ``s`` of all the elements is a contiguous
+        window.
+
+        The elements may belong to any ring with this prime and this ring's
+        ``N`` and ``split_degree``. They are read in the mul domain, through a
+        converted copy when they are not in it.
+        """
+        row = self.prime_indices[index]
+        for element in elements:
+            ring = element.ring
+            if (
+                ring.N != self.N
+                or ring.split_degree != self.split_degree
+                or not (element.rns_mask >> row) & 1
+            ):
+                raise ValueError(
+                    f"an element is not over a ring with prime {self.primes[index]}, "
+                    f"N = {self.N} and split_degree = {self.split_degree}"
+                )
+        # The views own the rows the kernel reads, so they live until it returns.
+        views = [element._viewed_as(repr.ntt) for element in elements]
+        out = ExtensionFieldVector(
+            self.residue_field(index), len(views) * (self.N // self.split_degree)
+        )
+        handles = ffi.new(
+            "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", v.obj) for v in views]
+        )
+        self.lib.polynomial_RNS_crt_components(
+            out._struct, handles, len(views), self._crt_maps(index, True)
+        )
+        return out
+
+    def from_crt_components(
+        self, vectors: Sequence[ExtensionFieldVector]
+    ) -> list[RNSPolynomial]:
+        """The inverse of `crt_components`: the elements of this ring whose
+        components at ``primes[i]`` are ``vectors[i]``, for every ``i``, which
+        is the CRT reconstruction. Returned in the mul domain.
+        """
+        if len(vectors) != self.ell:
+            raise ValueError(
+                f"expected one vector per prime ({self.ell}), got {len(vectors)}"
+            )
+        k = self.N // self.split_degree
+        count, rest = divmod(len(vectors[0]), k)
+        if rest:
+            raise ValueError(f"the components of an element are {k} entries")
+        out = [Polynomial(self) for _ in range(count)]
+        handles = ffi.new(
+            "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", p.obj) for p in out]
+        )
+        for index, vector in enumerate(vectors):
+            if vector.field is not self.residue_field(index):
+                raise ValueError(f"vector {index} is not over residue_field({index})")
+            if len(vector) != count * k:
+                raise ValueError("the vectors hold components of different counts")
+            self.lib.polynomial_RNS_from_crt_components(
+                handles, vector._struct, count, self._crt_maps(index, False)
+            )
+        for p in out:
+            p.repr = repr.ntt
+        return out
 
     def quotient_ring(self, mod_size=None, ell=None, mask=None):
         if not ((mod_size is not None) ^ (ell is not None) ^ (mask is not None)):

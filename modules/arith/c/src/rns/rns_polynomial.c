@@ -2208,6 +2208,264 @@ void polynomial_RNS_copy_slot(RNS_Polynomial out, uint64_t dst, RNS_Polynomial i
     }
 }
 
+/* The tables of rns_crt_maps_new, in the notation of
+   polynomial_RNS_crt_components (arith.h): p is the prime of base row `row`,
+   d the split degree, k = N/d, w_s = base->w[row][s], P_s = (p, X^d - w_s)
+   and R_q/P_s = F_p[x]/(x^d - w_s).
+
+   The base stores w_s = psi^(x_s), with psi a primitive 2k-th root of unity
+   mod p and x_s = brv(s) + 1, brv the reversal of log2(2k) bits; so
+   w_0 = psi, and x_s is odd. The isomorphism R_q/P_s -> R_q/P_0 induced by
+   X -> X^(x_s) sends x^j to x^(j x_s) = w_0^floor(j x_s / d) x^(j x_s mod d),
+   as x^d = w_0 in R_q/P_0. Its inverse is induced by X -> X^(y_s),
+   y_s = x_s^-1 mod 2N, and sends x^j to w_s^floor(j y_s / d) x^(j y_s mod d),
+   as x^d = w_s in R_q/P_s.
+
+   Let e_s be x_s if `to_slot_zero` and y_s otherwise. The map then sends the
+   coefficient of x^j to the coefficient of x^dest_s(j), dest_s(j) = j e_s mod
+   d, multiplied by factor[j * k + s] (w_0^floor(j x_s / d), or
+   w_s^floor(j y_s / d)); e_s is odd and d a power of two, so dest_s is a
+   permutation of [0, d). slot_dest[j * k + s] is dest_s(j). As dest_s
+   depends on s only through e_s mod d, it is constant on runs of consecutive
+   slots: slots run_start[r] .. run_start[r + 1] - 1 form run r, and
+   run_dest[r * d + j] is dest_s(j) on it. `factor32` is `factor` narrowed
+   for a narrow prime, and NULL otherwise. */
+struct _RNS_CrtMaps
+{
+    RNS_Base base;
+    uint64_t row;
+    bool to_slot_zero;
+    uint64_t runs;
+    uint64_t *run_start;
+    uint64_t *run_dest;
+    uint8_t *slot_dest;
+    uint64_t *factor;
+    uint32_t *factor32;
+};
+
+/* a^-1 modulo 2^m, `pow2` = 2^m, for odd a: Newton's iteration doubles the
+   number of correct low bits from the 3 that a^-1 = a gives modulo 8. */
+static uint64_t inverse_odd_mod_pow2(uint64_t a, uint64_t pow2)
+{
+    uint64_t inv = a;
+    for (int i = 0; i < 5; i++)
+        inv *= 2 - a * inv;
+    return inv & (pow2 - 1);
+}
+
+RNS_CrtMaps rns_crt_maps_new(RNS_Base base, uint64_t row, bool to_slot_zero)
+{
+    const uint64_t d = base->split_degree, k = base->N / d, two_n = 2 * base->N;
+    const Modulus mod = base->mods[row];
+    const uint64_t log_2k = (uint64_t)__builtin_ctzll(2 * k);
+    assert(d <= 256); // slot_dest holds a coefficient index in a byte
+
+    /* psi^m for m < 2k: every factor is one of these. */
+    uint64_t *psi_pow = (uint64_t *)safe_malloc(2 * k * sizeof(uint64_t));
+    psi_pow[0] = 1;
+    for (uint64_t m = 1; m < 2 * k; m++)
+        psi_pow[m] = mul_modq(psi_pow[m - 1], base->w[row][0], mod);
+
+    RNS_CrtMaps maps = (RNS_CrtMaps)safe_malloc(sizeof(*maps));
+    maps->base = base;
+    maps->row = row;
+    maps->to_slot_zero = to_slot_zero;
+    maps->factor = (uint64_t *)safe_aligned_malloc(d * k * sizeof(uint64_t));
+    maps->run_start = (uint64_t *)safe_malloc((k + 1) * sizeof(uint64_t));
+    maps->run_dest = (uint64_t *)safe_malloc(k * d * sizeof(uint64_t));
+    maps->slot_dest = (uint8_t *)safe_malloc(d * k);
+    maps->runs = 0;
+    uint64_t previous = UINT64_MAX;
+    for (uint64_t s = 0; s < k; s++)
+    {
+        const uint64_t x = (int_rev((uint32_t)s) >> (32 - log_2k)) + 1;
+        const uint64_t e = to_slot_zero ? x : inverse_odd_mod_pow2(x, two_n);
+        if (e % d != previous)
+        {
+            previous = e % d;
+            maps->run_start[maps->runs] = s;
+            for (uint64_t j = 0; j < d; j++)
+                maps->run_dest[maps->runs * d + j] = j * e % d;
+            maps->runs++;
+        }
+        for (uint64_t j = 0; j < d; j++)
+        {
+            /* w_0 = psi and w_s = psi^(x_s), so both factors are powers of psi. */
+            const uint64_t exponent = to_slot_zero ? j * e / d : (j * e / d) * x;
+            maps->factor[j * k + s] = psi_pow[exponent & (2 * k - 1)];
+            maps->slot_dest[j * k + s] = (uint8_t)(j * e % d);
+        }
+    }
+    maps->run_start[maps->runs] = k;
+    maps->factor32 = NULL;
+    if (rns_row_is_narrow(base, row))
+    {
+        maps->factor32 = (uint32_t *)safe_aligned_malloc(d * k * sizeof(uint32_t));
+        mod_narrow_w32(maps->factor32, maps->factor, d * k);
+    }
+    free(psi_pow);
+    return maps;
+}
+
+void rns_crt_maps_free(RNS_CrtMaps maps)
+{
+    free(maps->run_start);
+    free(maps->run_dest);
+    free(maps->slot_dest);
+    free(maps->factor);
+    free(maps->factor32);
+    free(maps);
+}
+
+/* The two kernels below work on tiles of CRT_TILE_ELEMENTS elements by
+   CRT_TILE_SLOTS slots, one coefficient plane at a time. In the vector of
+   components, one slot of a tile is CRT_TILE_ELEMENTS consecutive words
+   (eight cache lines in one page); in a row, one element of a tile is
+   CRT_TILE_SLOTS consecutive words, a whole number of lane groups for the
+   element-wise product. A tile is 128 KiB at 64-bit words, sized to stay in
+   L2; like FIELD_VEC_MUL_TILE, the sizes are properties of the machine's
+   caches rather than of the algorithm. */
+#define CRT_TILE_ELEMENTS 64
+#define CRT_TILE_SLOTS 256
+
+void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
+                                   RNS_CrtMaps maps)
+{
+    assert(maps->to_slot_zero);
+    if (count == 0)
+        return;
+    const RNS_Base base = maps->base;
+    const uint64_t row = maps->row;
+    const uint64_t d = base->split_degree, k = base->N / d;
+    const uint64_t slots = k < CRT_TILE_SLOTS ? k : CRT_TILE_SLOTS;
+    const Modulus mod = base->mods[row];
+    assert(out->d == d && out->n == count * k);
+    assert(out->mod->q == mod->q && out->w == base->w[row][0]);
+    for (uint64_t b = 0; b < count; b++)
+        assert(in[b]->base == base && ((in[b]->rns_mask >> row) & 1));
+    const bool narrow = rns_row_is_narrow(base, row);
+    /* For the current s0 and j, row t of the tile holds the coefficients of
+       x^j in slots s0 .. s0 + slots - 1 of element b0 + t, each times its
+       factor, at the row's width. */
+    void *tile = safe_aligned_malloc(CRT_TILE_ELEMENTS * slots *
+                                     (narrow ? sizeof(uint32_t) : sizeof(uint64_t)));
+    uint32_t *tile32 = (uint32_t *)tile;
+    uint64_t *tile64 = (uint64_t *)tile;
+    for (uint64_t b0 = 0; b0 < count; b0 += CRT_TILE_ELEMENTS)
+    {
+        const uint64_t nb = count - b0 < CRT_TILE_ELEMENTS ? count - b0 : CRT_TILE_ELEMENTS;
+        for (uint64_t s0 = 0; s0 < k; s0 += slots)
+        {
+            for (uint64_t j = 0; j < d; j++)
+            {
+                const uint64_t at = j * k + s0;
+                for (uint64_t t = 0; t < nb; t++)
+                {
+                    if (narrow)
+                        mod_eltwise_mul_w32(tile32 + t * slots, rns_row32(in[b0 + t], row) + at,
+                                            maps->factor32 + at, slots, mod);
+                    else
+                        mod_eltwise_mul(tile64 + t * slots, rns_row64(in[b0 + t], row) + at,
+                                        maps->factor + at, slots, mod);
+                }
+                /* Tile entry (t, s - s0) is the coefficient of x^dest_s(j) in
+                   component s of element b0 + t, which is entry
+                   s * count + b0 + t of plane dest_s(j): column s - s0 of the
+                   tile becomes nb consecutive entries. */
+                for (uint64_t i = 0; i < slots; i++)
+                {
+                    const uint64_t s = s0 + i;
+                    uint64_t *dst = out->coeffs[maps->slot_dest[j * k + s]] + s * count + b0;
+                    if (narrow)
+                        for (uint64_t t = 0; t < nb; t++)
+                            dst[t] = tile32[t * slots + i];
+                    else
+                        for (uint64_t t = 0; t < nb; t++)
+                            dst[t] = tile64[t * slots + i];
+                }
+            }
+        }
+    }
+    free(tile);
+}
+
+void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uint64_t count,
+                                        RNS_CrtMaps maps)
+{
+    assert(!maps->to_slot_zero);
+    if (count == 0)
+        return;
+    const RNS_Base base = maps->base;
+    const uint64_t row = maps->row;
+    const uint64_t d = base->split_degree, k = base->N / d;
+    const uint64_t slots = k < CRT_TILE_SLOTS ? k : CRT_TILE_SLOTS;
+    const Modulus mod = base->mods[row];
+    assert(in->d == d && in->n == count * k);
+    assert(in->mod->q == mod->q && in->w == base->w[row][0]);
+    for (uint64_t b = 0; b < count; b++)
+        assert(out[b]->base == base);
+    const bool narrow = rns_row_is_narrow(base, row);
+    void *tile = safe_aligned_malloc(CRT_TILE_ELEMENTS * slots *
+                                     (narrow ? sizeof(uint32_t) : sizeof(uint64_t)));
+    uint32_t *tile32 = (uint32_t *)tile;
+    uint64_t *tile64 = (uint64_t *)tile;
+    for (uint64_t b0 = 0; b0 < count; b0 += CRT_TILE_ELEMENTS)
+    {
+        const uint64_t nb = count - b0 < CRT_TILE_ELEMENTS ? count - b0 : CRT_TILE_ELEMENTS;
+        for (uint64_t s0 = 0; s0 < k; s0 += slots)
+        {
+            for (uint64_t j = 0; j < d; j++)
+            {
+                /* The coefficients of x^j in components s0 .. s0 + slots - 1
+                   of elements b0 .. b0 + nb - 1: entries s * count + b0 ..
+                   s * count + b0 + nb - 1 of plane j become column s - s0 of
+                   the tile. The values are below p, so a narrow tile holds
+                   them. */
+                for (uint64_t i = 0; i < slots; i++)
+                {
+                    const uint64_t *src = in->coeffs[j] + (s0 + i) * count + b0;
+                    if (narrow)
+                        for (uint64_t t = 0; t < nb; t++)
+                            tile32[t * slots + i] = (uint32_t)src[t];
+                    else
+                        for (uint64_t t = 0; t < nb; t++)
+                            tile64[t * slots + i] = src[t];
+                }
+                /* Times the factors, tile entry (t, s - s0) is the
+                   coefficient of x^dest_s(j) in slot s of element b0 + t. */
+                for (uint64_t t = 0; t < nb; t++)
+                {
+                    if (narrow)
+                        mod_eltwise_mul_w32(tile32 + t * slots, tile32 + t * slots,
+                                            maps->factor32 + j * k + s0, slots, mod);
+                    else
+                        mod_eltwise_mul(tile64 + t * slots, tile64 + t * slots,
+                                        maps->factor + j * k + s0, slots, mod);
+                }
+                for (uint64_t r = 0; r < maps->runs; r++)
+                {
+                    const uint64_t lo = maps->run_start[r] > s0 ? maps->run_start[r] : s0;
+                    const uint64_t hi =
+                        maps->run_start[r + 1] < s0 + slots ? maps->run_start[r + 1] : s0 + slots;
+                    if (lo >= hi)
+                        continue;
+                    const uint64_t at = maps->run_dest[r * d + j] * k + lo;
+                    for (uint64_t t = 0; t < nb; t++)
+                    {
+                        if (narrow)
+                            memcpy(rns_row32(out[b0 + t], row) + at, tile32 + t * slots + lo - s0,
+                                   (hi - lo) * sizeof(uint32_t));
+                        else
+                            memcpy(rns_row64(out[b0 + t], row) + at, tile64 + t * slots + lo - s0,
+                                   (hi - lo) * sizeof(uint64_t));
+                    }
+                }
+            }
+        }
+    }
+    free(tile);
+}
+
 int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
 {
     const uint64_t N = in->base->N;
