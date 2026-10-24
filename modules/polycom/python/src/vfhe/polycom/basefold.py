@@ -22,7 +22,9 @@ The commitment is a **Merkle root** over the level-d codeword
 ideal oracle, via the BCS compiler [BCS16]. It commits to the codeword's
 adjacent *pairs*, one leaf each — the fold reads a pair, so a single path
 authenticates both operands of a fold check ([ZCF24, Remark 9]'s packed
-leaves), halving both the paths and the tree height. Note the
+leaves), halving both the paths and the tree height. A layer schedule
+(`Basefold`) widens a leaf to the `2^s` adjacent symbols that `s` folds
+reduce to one. Note the
 consequence for the security statement: binding is *computational*
 (collision resistance) layered on the code-distance argument, where the
 oracle-model version is information-theoretic — see `soundness_error`.
@@ -32,16 +34,19 @@ sum_b f(b) * eq~(z, b) == v, run for d rounds interleaved with folds of the
 committed codeword — the same challenge r_s binds the round variable of the
 sumcheck tables and folds the codeword, so the code's message stays the
 coefficient vector of the partially-bound polynomial (see polycom.md for
-the derivation and bibliography). Each round publishes the folded codeword
-as a root; after the d folds the prover sends the remaining kappa-variable
+the derivation and bibliography). The folds are grouped into layers by the
+scheme's schedule, and the round that ends a layer publishes the folded
+codeword as a root -- every round, under the default schedule of one fold
+per layer; after the d folds the prover sends the remaining kappa-variable
 table in the clear. The verifier checks the base sumcheck claim with its
 own eq~ table, re-encodes that table into the level-0 codeword (which it
 therefore holds in full, and which needs no tree), and spot-checks the
 folds: a published bit-string challenge (`Verifier.challenge_bits`) is
 expanded into `rep` query positions, distinct in the level-0 codeword
-(`query_positions`), and each answer — a pair plus its path, at every level
-from d down to 1 — is checked against that level's root and against the
-value the previous level's fold produced.
+(`query_positions`), and each answer — a leaf plus its path, for every
+layer from the top down — is checked against that layer's root and against
+the value the previous layer's folds produced, and refolded with the
+layer's challenges.
 
 Merkle itself is a primitive here, not a `Relation` or a `Protocol`: it
 carries computational binding with no challenges, rounds or reduction, so
@@ -54,9 +59,10 @@ changing any message here.
 
 from __future__ import annotations
 
+from array import array
 from typing import TYPE_CHECKING, Any
 
-from vfhe.arith import MLE, Field, Polynomial, Ring
+from vfhe.arith import MLE, Field, FieldVector, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
 from vfhe.crypto import DIGEST_LEN, Merkle, hash_bytes
 from vfhe.piop import (
@@ -89,6 +95,13 @@ if TYPE_CHECKING:
 #: with the code matching its tables, so which of the two travels through the
 #: protocol is fixed by that pairing rather than by any one signature here.
 Word = Any
+
+
+def _gather(word: Word, positions: list[int]) -> Word:
+    """The symbols of `word` at `positions`, in the word's own form."""
+    if isinstance(word, FieldVector):
+        return word.query(array("Q", positions))
+    return [word[i] for i in positions]
 
 
 def _identity(digest):
@@ -187,10 +200,35 @@ class Basefold:
     `BasefoldEval` falls back to; a verifier's copy of a scheme simply never
     holds one, and the in-process sharing of this object is the same
     convention that lets a verifier hold table oracles it may only query.
+
+    `schedule` groups the code's `d` folds into layers: `schedule[i]` folds
+    make layer `i`, and only the codeword each layer starts from is committed,
+    by a Merkle tree whose leaves are its fibers of `2^schedule[i]` adjacent
+    symbols (the symbols those folds reduce to one). The counts are positive
+    and sum to `d`; the default ``[1] * d`` commits every folded codeword over
+    pair leaves. The commitment is the first layer's tree, so it depends on
+    `schedule[0]`.
     """
 
-    def __init__(self, code: FoldableRS | FieldFoldableRS):
+    def __init__(
+        self, code: FoldableRS | FieldFoldableRS, schedule: list[int] | None = None
+    ):
+        schedule = [1] * code.d if schedule is None else list(schedule)
+        if not schedule or any(
+            not isinstance(folds, int) or folds < 1 for folds in schedule
+        ):
+            raise ValueError(f"schedule must be positive fold counts, got {schedule}")
+        if sum(schedule) != code.d:
+            raise ValueError(
+                f"schedule sums to {sum(schedule)} but the code has depth {code.d}"
+            )
         self.code = code
+        self.schedule = schedule
+        #: The code level each layer starts from, top first, then the level
+        #: the last layer ends at (0).
+        self.levels = [code.d]
+        for folds in schedule:
+            self.levels.append(self.levels[-1] - folds)
         self.openings: dict[BasefoldCommitment, BasefoldOpening] = {}
 
     def _check_polynomial(self, f) -> None:
@@ -204,10 +242,11 @@ class Basefold:
                 f"encodes {self.code.k_d}"
             )
 
-    def merkle_commit(self, word: Word) -> Merkle:
+    def merkle_commit(self, word: Word, folds: int | None = None) -> Merkle:
         """The Merkle tree commitment to a codeword — the vector-commitment
-        step of the scheme, one leaf per adjacent pair (digested by the code,
-        `leaf_digests`); its `root` is what travels (as the polynomial
+        step of the scheme, one leaf per fiber of `2^folds` adjacent symbols
+        (digested by the code, `leaf_digests`), `folds` the first layer's
+        count by default; its `root` is what travels (as the polynomial
         commitment or as a round message).
 
         The digests reach the tree **packed**, which is why nothing here
@@ -217,7 +256,8 @@ class Basefold:
         either the hashing or the tree costs, and paid once per fold level as
         well as once per commit.
         """
-        return Merkle.from_digests(self.code.leaf_digests(word))
+        folds = self.schedule[0] if folds is None else folds
+        return Merkle.from_digests(self.code.leaf_digests(word, 1 << folds))
 
     def commit(
         self, f: MLE, prover: Prover | None = None
@@ -314,6 +354,12 @@ class BasefoldEval(Protocol):
         collision term ([ZCF24, Thm. 4] reduces one to the other). That term
         is a property of BLAKE3 and the security parameter, not of these
         protocol parameters, so it is deliberately not folded in here.
+
+        The bound is stated for [ZCF24]'s protocol, which commits every
+        folded codeword: the default schedule. Under a schedule that groups
+        several folds into a layer, the codewords inside a layer are not
+        committed; the same expression is returned, and that case is not
+        covered by the cited theorem.
         """
         size = exceptional_set_size(domain)
         if size is None:
@@ -347,11 +393,14 @@ class BasefoldEval(Protocol):
 
     def query_positions(self, seed: bytes) -> tuple[int, ...]:
         """The `rep` spot-check positions derived from a bit-string
-        challenge: pair indices at level d, in [0, n_d / 2).
+        challenge: leaf indices of the commitment's tree, in
+        ``[0, n_d / 2^schedule[0])`` -- pair indices at level d under the
+        default schedule.
 
         This scheme's geometry handed to `polycom.query_positions`, which is
-        where the sampler and its rejection rule are: one fold per level, so
-        a walk from level d consumes `d - 1` index bits to reach the level-0
+        where the sampler and its rejection rule are: a leaf index is a
+        position of the codeword the first layer ends at, so a walk from it
+        consumes that level's `levels[1]` index bits to reach the level-0
         codeword, and the positions are rejection-sampled to land there
         pairwise distinct. The constructor's `rep < n0` guarantees
         termination.
@@ -360,23 +409,29 @@ class BasefoldEval(Protocol):
         from the published challenge — the prover to answer, the verifier to
         check.
         """
-        return query_positions(seed, self.code.n_d // 2, self.code.d - 1, self.rep)
+        schedule = self.scheme.schedule
+        return query_positions(
+            seed, self.code.n_d >> schedule[0], self.scheme.levels[1], self.rep
+        )
 
-    def _walk(self, query: int, d: int):
-        """The (level, pair index) chain one query position visits, top level
-        first.
+    def _walk(self, query: int) -> list[tuple[int, int]]:
+        """The (leaf index, offset) chain one query position visits, one entry
+        per layer, top first.
 
-        Folding pair `j` of level `l` yields the single value `W_{l-1}[j]`,
-        which sits in pair `j // 2` of level `l - 1` — at offset `j & 1`
-        inside it. So the walk is forced: with only authenticated pairs the
-        verifier must reuse the value it just derived, which is what chains
-        the levels together (and what makes the queries a proximity test
-        rather than d independent ones).
+        Refolding leaf `j` of a layer yields the single value `W[j]` of the
+        codeword the layer ends at, which is the next layer's starting
+        codeword: there it sits in leaf ``j >> s`` at offset ``j & (2^s - 1)``,
+        `s` that layer's fold count. So the walk is forced: with only
+        authenticated leaves the verifier must reuse the value it just
+        derived, which is what chains the layers together (and what makes the
+        queries a proximity test rather than independent ones). The first
+        layer has no value coming in, and its offset is 0.
         """
-        j = query
-        for level in range(d, 0, -1):
-            yield level, j
-            j //= 2
+        steps, j = [(query, 0)], query
+        for folds in self.scheme.schedule[1:]:
+            steps.append((j >> folds, j & ((1 << folds) - 1)))
+            j >>= folds
+        return steps
 
     async def prove(
         self, prover: Prover, statements: list[Statement]
@@ -418,10 +473,13 @@ class BasefoldEval(Protocol):
         d = self.code.d
         zs = [statement.point[v] for v in commitment.variables]
 
-        # Codewords and their trees by level: level d was built at commit
-        # time and only folded here; each fold's result is committed by root.
-        words: dict[int, Word] = {d: opening.word}
-        trees = {d: opening.tree}
+        # The codeword each layer starts from, and its tree. Level d's were
+        # built at commit time; each later one is the codeword the previous
+        # layer ends at, committed here and published by its root.
+        schedule, levels = self.scheme.schedule, self.scheme.levels
+        words: list[Word] = [opening.word]
+        trees = [opening.tree]
+        word: Word = opening.word
         cur_f = f
         cur_eq = MLE.eq(_domain_of(f), zs, variables=f.variables)
         for s in range(d):
@@ -431,12 +489,12 @@ class BasefoldEval(Protocol):
             r = iop.verifier.challenge(f"{label}/r{s}")
             cur_f = cur_f.evaluate({var: r}, in_place=cur_f is not f)
             cur_eq = cur_eq.evaluate({var: r}, in_place=True)
-            level = d - s
-            folded = self.code.fold(words[level], r, level=level)
-            if level > 1:  # level 0 is the one the verifier re-encodes itself
-                words[level - 1] = folded
-                trees[level - 1] = self.scheme.merkle_commit(folded)
-                iop.transcript.write(f"{label}/pi{s + 1}", trees[level - 1].root)
+            word = self.code.fold(word, r, level=d - s)
+            # Level 0 is the one the verifier re-encodes itself.
+            if d - s - 1 in levels[1:-1]:
+                words.append(word)
+                trees.append(self.scheme.merkle_commit(word, schedule[len(trees)]))
+                iop.transcript.write(f"{label}/pi{s + 1}", trees[-1].root)
         # The base case: the remaining kappa-variable table, in the clear
         # (the verifier re-encodes its coefficients itself).
         iop.transcript.write(f"{label}/h0", cur_f)
@@ -445,14 +503,17 @@ class BasefoldEval(Protocol):
         # the verifier cannot read a committed vector, so query positions are
         # derived from a published bit-string challenge (either party may
         # draw it; honesty = only after h0 is written) and the prover answers
-        # each with the pair and path at every level.
+        # each with the leaf and path of every layer's tree.
         queries = self.query_positions(iop.verifier.challenge_bits(f"{label}/queries"))
         iop.transcript.write(
             f"{label}/answers",
             tuple(
                 tuple(
-                    (self.code.pair_at(words[level], j), trees[level].open(j))
-                    for level, j in self._walk(q, d)
+                    (
+                        self.code.fiber_at(words[i], j, 1 << schedule[i]),
+                        trees[i].open(j),
+                    )
+                    for i, (j, _) in enumerate(self._walk(q))
                 )
                 for q in queries
             ),
@@ -478,9 +539,11 @@ class BasefoldEval(Protocol):
         d = self.code.d
         zs = [statement.point[v] for v in commitment.variables]
 
-        # Roots by level: the commitment is level d, each round message the
-        # level below it (label pi_k carries level d - k).
-        roots = {d: commitment.root}
+        # Roots by layer: the commitment is the first layer's root, and the
+        # root written after the fold that ends a layer is the next layer's
+        # (label pi_k carries the codeword at level d - k).
+        schedule, levels = self.scheme.schedule, self.scheme.levels
+        roots = [commitment.root]
         claim = statement.value
         rs = []
         for s in range(d):
@@ -490,8 +553,8 @@ class BasefoldEval(Protocol):
             r = verifier.challenge(f"{label}/r{s}")
             rs.append(r)
             claim = interpolate_evals(evals, r)
-            if d - s > 1:
-                roots[d - s - 1] = await iop.transcript.read(f"{label}/pi{s + 1}")
+            if d - s - 1 in levels[1:-1]:
+                roots.append(await iop.transcript.read(f"{label}/pi{s + 1}"))
 
         h0 = await iop.transcript.read(f"{label}/h0")
         if not _committed_table(h0) or (1 << h0.num_vars) != self.code.k0:
@@ -523,52 +586,51 @@ class BasefoldEval(Protocol):
 
         walks = []
         for q, answer in zip(queries, answers, strict=True):
-            steps = list(self._walk(q, d))
+            steps = self._walk(q)
             if len(answer) != len(steps):
-                raise Rejection(f"{label}: query {q} answered for {len(answer)} levels")
+                raise Rejection(f"{label}: query {q} answered for {len(answer)} layers")
             walks.append(steps)
 
-        # Every query visits the same levels in the same order, so step `i` is
-        # one level for all of them. Checking a level at a time rather than a
-        # query at a time is what lets the fold be one set of whole-vector
-        # operations instead of a handful of element ones per (query, level);
-        # the paths are independent and stay one at a time.
-        for i in range(d):
-            level = d - i
-            positions = []
-            los, his, belows, paths, pairs = [], [], [], [], []
-            for steps, answer in zip(walks, answers, strict=True):
-                _, j = steps[i]
-                pair, path = answer[i]
-                positions.append(j)
-                paths.append(path)
-                pairs.append(pair)
-                los.append(pair[0])
-                his.append(pair[1])
-                # The folded value must reappear in the next level down: at
-                # offset j & 1 of the pair the walk moves to, or — at the
-                # bottom — in the level-0 codeword the verifier built itself.
-                belows.append(word0[j] if level == 1 else answer[i + 1][0][j & 1])
-
-            # The leaf digests of a level's pairs together, then one path check
-            # apiece: a digest is the hashing this whole check is made of, and
-            # hashing a set of leaves is what the codeword path already does.
-            digests = self.code.leaf_digests_of(pairs)
-            for k, (j, path) in enumerate(zip(positions, paths, strict=True)):
+        # Every query visits the same layers in the same order, so step `i` is
+        # one layer for all of them, and a layer's leaves are checked together:
+        # one word, digested in one call and refolded by whole-word
+        # operations. The paths are independent and are checked one at a time.
+        carried = None  # per query, the value refolded from the layer above
+        for i, folds in enumerate(schedule):
+            level, size = levels[i], 1 << folds
+            positions = [steps[i][0] for steps in walks]
+            try:
+                block: Word = self.code.join_fibers(
+                    [answer[i][0] for answer in answers], size
+                )
+            except ValueError as error:
+                raise Rejection(
+                    f"{label}: malformed leaf at level {level}: {error}"
+                ) from error
+            digests = self.code.leaf_digests(block, size)
+            for k, (j, answer) in enumerate(zip(positions, answers, strict=True)):
                 if not Merkle.verify(
-                    roots[level],
+                    roots[i],
                     j,
-                    path,
+                    answer[i][1],
                     digests[32 * k : 32 * (k + 1)],
                     hash=_identity,
                 ):
                     raise Rejection(
-                        f"{label}: Merkle path rejected at level {level}, pair {j}"
+                        f"{label}: Merkle path rejected at level {level}, leaf {j}"
                     )
-
-            folded = self.code.fold_pairs(los, his, rs[d - level], level, positions)
-            for j, below, value in zip(positions, belows, folded, strict=True):
-                if not (below == value):
-                    raise Rejection(
-                        f"{label}: fold check failed at level {level - 1}, position {j}"
-                    )
+            # The value refolded from the layer above must reappear in this
+            # layer's leaf, at the offset the walk gives.
+            if carried is not None:
+                inside = _gather(
+                    block, [k * size + steps[i][1] for k, steps in enumerate(walks)]
+                )
+                if not (inside == carried):
+                    raise Rejection(f"{label}: fold check failed at level {level}")
+            first = d - level  # the index of this layer's first fold
+            carried = self.code.fold_fibers(
+                block, rs[first : first + folds], level, positions
+            )
+        # The last layer lands in the level-0 codeword the verifier built.
+        if not (_gather(word0, [steps[-1][0] for steps in walks]) == carried):
+            raise Rejection(f"{label}: fold check failed at level 0")

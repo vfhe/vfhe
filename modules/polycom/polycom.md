@@ -57,6 +57,20 @@ evaluation proof reuses. Two consequences worth stating:
   `soundness_error` methods still report only the information-theoretic
   part, and say so.
 
+**Layer schedules.** `Basefold(code, schedule)` groups the `d` folds into
+layers of `schedule[i]` folds, positive counts summing to `d`. Only the
+codeword a layer starts from is committed, and its tree's leaves are the
+fibers of `2^schedule[i]` adjacent symbols: every fold sends pair
+`(2i, 2i + 1)` to position `i`, so the symbols that `s` folds reduce to
+position `j` are the contiguous block `[j 2^s, (j + 1) 2^s)`. A query opens
+one fiber per layer; the verifier refolds it with the layer's challenges
+(`fold_fibers`) and finds the result in the next layer's fiber, at offset
+`j mod 2^s` of leaf `j >> s`, or in the level-0 codeword at the end. The
+default `[1] * d` is the scheme with every folded codeword committed over
+pair leaves. The codewords inside a layer are not committed, so the [ZCF24]
+soundness theorem, stated for the default schedule, does not cover the
+others; `soundness_error` returns the same expression for every schedule.
+
 Fiat-Shamir needs nothing from this module: `fs.FS_Verifier`
 (piop.md §5) derives `challenge` and `challenge_bits` from the transcript
 chain and seeds it with σ₀ = ρ(x), which binds the commitment because the

@@ -104,6 +104,37 @@ def test_fold_all_the_way_down_stays_a_codeword(instantiation):
     assert ok and _equal(decoded, message)
 
 
+def test_fold_fibers_agrees_with_the_fold_chain(instantiation):
+    """Refolding the fiber above a position gives the value the whole-codeword
+    fold chain holds there, for every number of folds from the top; a fiber's
+    leaf digest is the one `leaf_digests` gives it, and at two symbols the
+    pair's."""
+    ring = _ring()
+    code = _code(ring, d=3, instantiation=instantiation)
+    words = {code.d: code.encode([ring.random_element() for _ in range(code.k_d)])}
+    challenges = [ring.random_exceptional() for _ in range(code.d)]
+    for level in range(code.d, 0, -1):
+        words[level - 1] = code.fold(words[level], challenges[code.d - level], level)
+
+    for steps in range(1, code.d + 1):
+        size = 1 << steps
+        below = words[code.d - steps]
+        indices = list(range(0, len(below), 3))
+        fibers = [code.fiber_at(words[code.d], j, size) for j in indices]
+        block = code.join_fibers(fibers, size)
+        folded = code.fold_fibers(block, challenges[:steps], code.d, indices)
+        assert _equal(folded, [below[j] for j in indices]), f"{steps} folds"
+        digests = code.leaf_digests(words[code.d], size)
+        assert code.leaf_digests(block, size) == b"".join(
+            digests[32 * j : 32 * (j + 1)] for j in indices
+        )
+    assert code.leaf_digests(words[code.d]) == b"".join(
+        code_module.pair_digest(pair) for pair in code.pair_leaves(words[code.d])
+    )
+    with pytest.raises(ValueError, match="tuple of 4"):
+        code.join_fibers([tuple(words[code.d][:2])], 4)
+
+
 def test_parameter_validation(instantiation):
     ring = _ring()
     with pytest.raises(ValueError, match="power of two"):

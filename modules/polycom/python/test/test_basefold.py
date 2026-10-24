@@ -8,7 +8,9 @@ oracle-carrying eval claims BasefoldEval resolves to commitments — false
 claims are rejected in-round, and every tamperable surface is caught: a
 round root, the base table, the commitment root, and an authentication
 answer. Dishonest-prover cases replay an honest transcript against a
-verifier-only run, since an in-process prover is honest by construction."""
+verifier-only run, since an in-process prover is honest by construction.
+Layer schedules run over ring codewords too, with fibers of ring elements as
+leaves."""
 
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring
@@ -34,9 +36,9 @@ from vfhe.polycom import (
 from vfhe.polycom.basefold import Word, pair_digest
 
 
-def _setup(num_vars: int, k0: int, c: int, d: int, prime_size=None):
+def _setup(num_vars: int, k0: int, c: int, d: int, prime_size=None, schedule=None):
     ring = Ring(1024, prime_size=prime_size or [49], split_degree=4)
-    scheme = Basefold(FoldableRS(ring, k0=k0, c=c, d=d))
+    scheme = Basefold(FoldableRS(ring, k0=k0, c=c, d=d), schedule)
     variables = [MLE_Variable(f"x{i}") for i in range(num_vars)]
     f = MLE(
         ring=ring,
@@ -268,8 +270,8 @@ def _replay_with_tamper(honest: IOP, ring, scheme, stmt_fields, tamper):
     return iop.loop.run_until_complete(iop.verifier.verify(stmt))
 
 
-def _honest_run(num_vars=4, k0=4, c=4, d=2):
-    ring, scheme, f = _setup(num_vars=num_vars, k0=k0, c=c, d=d)
+def _honest_run(num_vars=4, k0=4, c=4, d=2, schedule=None):
+    ring, scheme, f = _setup(num_vars=num_vars, k0=k0, c=c, d=d, schedule=schedule)
     oracle, opening = scheme.commit(f)
     point, value = _claim(f, ring)
     honest = _iop(ring, scheme, oracle, opening)
@@ -575,3 +577,32 @@ def test_rep_must_fit_the_base_codeword():
         BasefoldEval(scheme, rep=scheme.code.n0)
     with pytest.raises(ValueError, match="base codeword"):
         BasefoldEval(scheme)  # the default rep = 32 exceeds n0 = 16 too
+
+
+@pytest.mark.parametrize("schedule", [[2, 1], [1, 2], [3]], ids=str)
+def test_layer_schedules_over_the_ring(schedule):
+    """Several folds per committed codeword: honest runs accept with one leaf
+    of `2^s` ring elements per layer, a false claim is rejected, and so are a
+    changed symbol in a leaf and a leaf of the wrong width."""
+    ring, scheme, honest, fields = _honest_run(num_vars=5, d=3, schedule=schedule)
+    answers = honest.transcript.entries["basefold/answers"].result()
+    assert [len(leaf) for leaf, _ in answers[0]] == [1 << s for s in schedule]
+    wrong = dict(fields, value=fields["value"] + ring.random_element())
+    assert not _iop(ring, scheme, None, None).run(Statement(Relation_Eval(), **wrong))
+
+    def first_leaf(change):
+        def tamper(label, val):
+            if label != "basefold/answers":
+                return val
+            (top, *rest), *others = val
+            leaf, path = top
+            return (((change(leaf), path), *rest), *others)
+
+        return tamper
+
+    def bump(leaf):
+        return (leaf[0] + ring.random_element(), *leaf[1:])
+
+    assert _replay_with_tamper(honest, ring, scheme, fields, lambda _l, v: v)
+    for tamper in (first_leaf(bump), first_leaf(lambda leaf: leaf[:-1])):
+        assert not _replay_with_tamper(honest, ring, scheme, fields, tamper)

@@ -40,7 +40,9 @@ The architecture and its derivation from the literature are documented in
   scheme). It runs a
   product sumcheck for `sum_b f(b)·eq~(z, b) == v` interleaved with folds of
   the committed codeword (sharing challenges, round kernels, and wire format
-  with `vfhe.piop.sumcheck`), each fold published as a root, a clear base
+  with `vfhe.piop.sumcheck`), each fold published as a root -- or, with a
+  layer schedule (`Basefold(code, schedule)`), only the fold that ends a
+  layer, whose tree's leaves are the fibers that layer refolds -- a clear base
   table the verifier re-encodes, and then a query phase — a published
   bit-string challenge (`Verifier.challenge_bits`) that both parties expand
   into positions with `query_positions` (counter-mode BLAKE3, rejection-

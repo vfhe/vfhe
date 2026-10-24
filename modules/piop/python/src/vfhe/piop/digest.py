@@ -4,11 +4,11 @@
 
 Every object that can appear in a transcript entry, a statement field or an
 index entry has a `digest()` method: the oracles, statements and proofs of
-this package, the tables, polynomials and field elements of `vfhe.arith`,
-the Merkle paths of `vfhe.crypto`. `element_digest` is the one entry point:
-it digests the values that cannot carry a method -- the primitives, the
-containers, a class, a protobuf message -- and calls `digest()` on
-everything else.
+this package, the tables, vectors, polynomials and field elements of
+`vfhe.arith`, the Merkle paths of `vfhe.crypto`. `element_digest` is the one
+entry point: it digests the values that cannot carry a method -- the
+primitives, the containers, a class, a protobuf message -- and calls
+`digest()` on everything else.
 """
 
 from __future__ import annotations
