@@ -23,7 +23,7 @@ from vfhe.piop import (
     with_start,
 )
 from vfhe.piop.protocols import Sumcheck, SumDefStart, VirtualEval
-from vfhe.piop.protocols.prover_view import _eq_weights, _one_of
+from vfhe.piop.protocols.sumcheck.prover_view import _eq_weights, _one_of
 from vfhe.piop.relations import Relation_Sum, Relation_SumDef, Relation_Zero
 from vfhe.piop.virtual import resolve_table
 

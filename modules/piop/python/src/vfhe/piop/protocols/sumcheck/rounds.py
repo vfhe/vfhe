@@ -25,22 +25,10 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any, cast
 
-from vfhe.arith import ArithParent, Polynomial, RNSPolynomial
+from vfhe.arith import Polynomial, RNSPolynomial
 from vfhe.arith.mle import MLE, element_array, mark_ntt, native_table, vector_table
 from vfhe.piop.relation import hypercube
 from vfhe.util.bindings import lib
-
-
-def exceptional_set_size(domain) -> int | None:
-    """|A| for the domain's exceptional set; None if the domain has no size.
-
-    Each arithmetic domain computes its own: the size depends on the
-    representation, and a domain that is not an `ArithParent` (an int, a
-    Fraction) has no exceptional set to report.
-    """
-    if isinstance(domain, ArithParent):
-        return domain.exceptional_set_size
-    return None
 
 
 def interpolate_evals(evals: tuple, r):

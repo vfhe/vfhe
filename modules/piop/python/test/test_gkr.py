@@ -207,7 +207,7 @@ def test_xmult_gate_layer_tables_and_proof():
 
 
 def test_gkr_dense_and_libra_strategies_agree(monkeypatch):
-    from vfhe.piop.protocols.prover_view import _LibraProver, prover_view
+    from vfhe.piop.protocols.sumcheck.prover_view import _LibraProver, prover_view
 
     ring = Ring(1024, prime_size=[49], split_degree=4)
     stmt = _instance(ring=ring)

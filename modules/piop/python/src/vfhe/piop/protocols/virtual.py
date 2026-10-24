@@ -9,11 +9,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vfhe.piop.evaluation import Relation_Eval
-from vfhe.piop.protocol import Protocol, Rejection
+from vfhe.piop.protocol import Protocol, Rejection, exceptional_set_size
 from vfhe.piop.relations import Relation_Sum, Relation_SumDef
 from vfhe.piop.virtual import VirtualOracle, resolve_table, scaled
-
-from .rounds import exceptional_set_size
 
 if TYPE_CHECKING:
     from vfhe.piop.party import Prover, Verifier

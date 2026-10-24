@@ -28,15 +28,13 @@ from vfhe.arith import MLE_Variable
 from vfhe.piop.composer import Composed
 from vfhe.piop.evaluation import Relation_Eval
 from vfhe.piop.oracle import ImplicitOracle
-from vfhe.piop.protocol import Protocol
+from vfhe.piop.protocol import Protocol, exceptional_set_size
 from vfhe.piop.relations.circuit import (
     Relation_CircuitSparseIndex,
     Relation_Equal,
     Relation_Layer,
 )
 from vfhe.piop.virtual import VirtualOracle, resolve_table
-
-from .rounds import exceptional_set_size
 
 if TYPE_CHECKING:
     from vfhe.circuit import gkr

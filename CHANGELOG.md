@@ -394,11 +394,12 @@ versions may contain breaking changes.
   `RangeDecomposition`, `dense_layering`); neither is re-exported by
   `vfhe.piop`, and the modules `vfhe.piop.piop`, `.sumcheck`, `.circuit`,
   `.sparse`, `.lookup` and `.range` are gone. The sumcheck round-message
-  kernels are functions in `vfhe.piop.protocols.rounds` (`round_evals`,
-  `prod_round_evals`, their native, whole-vector and pure-Python paths,
-  `interpolate_evals`, `exceptional_set_size`), no longer static methods of
-  the protocols; the prover's form of a virtual oracle is
-  `vfhe.piop.protocols.prover_view.prover_view(oracle, witnesses,
+  kernels are functions in `vfhe.piop.protocols.sumcheck.rounds`
+  (`round_evals`, `prod_round_evals`, their native, whole-vector and
+  pure-Python paths, `interpolate_evals`), no longer static methods of the
+  protocols, and `exceptional_set_size` is `vfhe.piop.exceptional_set_size`;
+  the prover's form of a virtual oracle is
+  `vfhe.piop.protocols.sumcheck.prover_view.prover_view(oracle, witnesses,
   strategy)`, no longer `VirtualOracle.prover_view`, and the `strategy`
   switch is an attribute of the sumcheck protocols. `Implicit` is
   `ImplicitOracle`; `Party` takes its IOP (`Party(iop)`). The driver, the
