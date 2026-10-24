@@ -380,14 +380,14 @@ extern "C"
     void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVector b,
                                 const FieldVector t, uint64_t period);
 
-    // For `word` read as adjacent pairs: t = (word[2i] - word[2i + 1]) *
-    // twist2_inv[i], out[i] = word[2i + 1] + t * twist[i] + t * r -- the inverse
-    // of field_vec_lift_twisted at twist2_inv = 1 / (2 twist), r aside, and
-    // windowed for the same reason. `word` is 2n elements, everything else n;
-    // `r` is one element. The two tables are d planes or one each.
+    // For `word` read as adjacent pairs: out[i] = (word[2i] + word[2i + 1]) / 2 +
+    // (word[2i] - word[2i + 1]) * twist2_inv[i] * r. With twist2_inv = 1 / (2 t),
+    // a pair field_vec_lift_twisted made from (a, b) with table t folds to
+    // a + r * b. Windowed for the same reason as the lift. `word` is 2n
+    // elements, `out` and the table n; `r` is one element. The table is d
+    // planes or one. The modulus must be odd.
     void field_vec_fold_twisted(FieldVector out, const FieldVector word,
-                                const FieldVector twist2_inv, const FieldVector twist,
-                                const uint64_t *r);
+                                const FieldVector twist2_inv, const uint64_t *r);
     // Sum of the first n elements, into d coefficients.
     void field_vec_sum(uint64_t *out, const FieldVector a);
     // Elementwise inverse by Montgomery's trick: one inversion and three

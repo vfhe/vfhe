@@ -261,7 +261,7 @@ void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldV
                               const FieldVector c_even, const uint64_t *s_even,
                               const FieldVector c_odd, const uint64_t *s_odd);
 void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector twist2_inv,
-                            const FieldVector twist, const uint64_t *r);
+                            const uint64_t *r);
 void field_vec_mul_plane(FieldVector out, const FieldVector a, const FieldVector t);
 void field_vec_fma_plane(FieldVector out, const FieldVector a, const FieldVector b,
                          const FieldVector t);

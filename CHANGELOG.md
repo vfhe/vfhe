@@ -118,8 +118,10 @@ versions may contain breaking changes.
   be multiples of -- stated by `view` before, but not obtainable.
 - Add `FieldVector.fma_interleave(a, b, c_even, c_odd)`: `a + b * c_even` and
   `a + b * c_odd` written straight into one vector of twice the length.
-- Add `FieldVector.fold_twisted(twist2_inv, twist, r)`: a vector of
-  `(P(x), P(-x))` pairs folded to half its length in one call.
+- Add `FieldVector.fold_twisted(twist2_inv, r)`: a vector of adjacent pairs
+  folded to half its length in one call, `out[i] = (w[2i] + w[2i+1]) / 2 +
+  (w[2i] - w[2i+1]) * twist2_inv[i] * r` -- the inverse of `lift_twisted` at
+  `twist2_inv = 1 / (2 t)`, with two extension products per pair.
 - Add `layout=` to `ExtensionFieldNTT.pack` / `unpack`: a caller says
   whether it holds a batch by blocks (the default, as before) or interleaved,
   and the conversion to and from the plan's own layout follows from that and

@@ -1672,45 +1672,45 @@ class FieldVector(metaclass=_ImplementationDispatch):
     def fold_twisted(
         self,
         twist2_inv: FieldVector,
-        twist: FieldVector,
         r,
         out: FieldVector | None = None,
     ) -> FieldVector:
         """This vector read as adjacent pairs and folded with the element
         `r`, one output element per pair::
 
-            t = (self[2i] - self[2i + 1]) * twist2_inv[i]
-            out[i] = self[2i + 1] + t * twist[i] + t * r
+            out[i] = (self[2i] + self[2i + 1]) / 2
+                     + (self[2i] - self[2i + 1]) * twist2_inv[i] * r
 
-        The result is half this vector's length, and the two tables are that
-        length. Written out, it is five passes over half the vector, each
-        reading back what the one before it wrote; here the passes run on a
-        window still in cache, so the vector is read once.
+        The inverse move to `lift_twisted`: with ``twist2_inv = 1 / (2 t)``,
+        a pair `lift_twisted` made from ``a[i]`` and ``b[i]`` with table `t`
+        folds to ``a[i] + r * b[i]``. The result is half this vector's length,
+        and so is the table. It is computed as ``self[2i + 1] + (self[2i] -
+        self[2i + 1]) * c[i]`` with ``c[i] = twist2_inv[i] * r + 1/2``, two
+        products per pair, a window at a time so the vector is read once.
+        The field's characteristic must be odd.
 
-        Over an extension field the tables may also be vectors over the
+        Over an extension field the table may also be a vector over the
         **prime subfield** -- the degree-1 field with the same prime -- and
-        the products are then one prime-field multiply per coefficient plane
-        rather than a full extension multiply. `mul`, `fma` and
-        `lift_twisted` take such a table the same way.
+        its product with `r` is then one prime-field multiply per coefficient
+        plane. `mul`, `fma` and `lift_twisted` take such a table the same way.
 
-        :param twist2_inv: the per-position table dividing out the squared
-            twist.
-        :param twist: the per-position twist of this level.
+        :param twist2_inv: the per-position table, ``1 / (2 t)`` for the
+            inverse of a lift with table `t`.
         :param r: the folding challenge, one element.
         :param out: where to write, of half this length; a new vector when
             omitted.
         :returns: `out`, or the vector allocated for the result.
         """
         half = len(self) // 2
-        for name, table in (("twist2_inv", twist2_inv), ("twist", twist)):
-            if len(table) != half:
-                raise ValueError(f"{name} holds {len(table)} elements, not {half}")
+        if len(twist2_inv) != half:
+            raise ValueError(f"twist2_inv holds {len(twist2_inv)} elements, not {half}")
         result = self._destination(out, half)
+        one = self.field.one
+        c = twist2_inv.scale(r)
+        c.add((one + one).inverse(), out=c)
         lo, hi = self.split_even_odd()
         lo.sub(hi, out=lo)
-        lo.mul(twist2_inv, out=lo)
-        hi.fma(lo, twist, out=result)
-        return result.fma(lo, r, out=result)
+        return hi.fma(lo, c, out=result)
 
     def fold(self, r, block: int = 1) -> FieldVector:
         """``even + r * (odd - even)`` over adjacent pairs, half the length.
