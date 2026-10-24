@@ -1135,6 +1135,52 @@ extern "C"
     void polynomial_RNS_rotate_slot(RNS_Polynomial out, RNS_Polynomial in, uint64_t rot);
     void polynomial_RNS_copy_slot(RNS_Polynomial out, uint64_t dst, RNS_Polynomial in,
                                   uint64_t src);
+    typedef struct _RNS_CrtMaps *RNS_CrtMaps;
+    /* The CRT components of `count` elements of R_q = Z_q[X]/(X^N + 1) at one
+       RNS prime: each element's residues modulo the maximal ideals of R_q
+       containing that prime, all carried into one residue field.
+
+       Notation. Let p be the prime of base row `row` of `base` (the base and
+       row `maps` was built for), d = base->split_degree, k = N/d, and
+       w_s = base->w[row][s] for s < k. Modulo p, X^N + 1 is the product of
+       the k irreducible factors X^d - w_s. So the maximal ideals of R_q
+       containing p are P_s = (p, X^d - w_s), s < k; each residue field
+       R_q/P_s is F_p[x]/(x^d - w_s), x the class of X, a field with p^d
+       elements; and by the CRT, R_q/pR_q is isomorphic to
+       R_q/P_0 x ... x R_q/P_(k-1). In the mul domain, row `row` of an element
+       holds its residue modulo each P_s, called slot s: the coefficient of x^j
+       is at position j * k + s.
+
+       Components. Every w_s is an odd power w_0^(x_s) of w_0. The
+       automorphism X -> X^(x_s) of R_q maps P_s onto P_0, so it induces an
+       isomorphism R_q/P_s -> R_q/P_0; component s of an element is its
+       residue modulo P_s carried into R_q/P_0 by that isomorphism. Each
+       component is thus a surjective ring homomorphism R_q -> R_q/P_0, and
+       the k components together induce an isomorphism
+       R_q/pR_q -> (R_q/P_0)^k.
+
+       Entry s * count + b of `out` is component s of in[b]. `maps` is
+       rns_crt_maps_new(base, row, true); `out` is a vector over
+       R_q/P_0 = F_p[x]/(x^d - w_0) with n = count * k; every in[b] is over
+       `base`, in the mul domain, with `row` active. */
+    void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
+                                       RNS_CrtMaps maps);
+    /* The inverse of polynomial_RNS_crt_components (whose notation this
+       uses): `in` holds the k components of each of `count` elements, laid
+       out as polynomial_RNS_crt_components writes them, and row `row` of
+       out[b] is set, in the mul domain, to the residues of element b modulo
+       P_0, ..., P_(k-1). `maps` is rns_crt_maps_new(base, row, false). The
+       other rows and the masks of out[b] are left alone. */
+    void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uint64_t count,
+                                            RNS_CrtMaps maps);
+    /* Tables for the isomorphisms R_q/P_s -> R_q/P_0, s < k, at the prime of
+       base row `row` of `base` (P_s and k as in polynomial_RNS_crt_components)
+       if `to_slot_zero`, and for their inverses otherwise: what
+       polynomial_RNS_crt_components and polynomial_RNS_from_crt_components,
+       respectively, apply. They depend only on `base` and `row`, so one build
+       serves every call; it takes O(N) modular products. */
+    RNS_CrtMaps rns_crt_maps_new(RNS_Base base, uint64_t row, bool to_slot_zero);
+    void rns_crt_maps_free(RNS_CrtMaps maps);
     void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma);
     void int_array_to_RNS(RNS_Polynomial out, uint64_t *in);
     void polynomial_RNSc_add_integer(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t in2);
