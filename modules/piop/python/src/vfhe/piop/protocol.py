@@ -45,9 +45,10 @@ class Protocol:
     `batching = True` declares a bundle protocol, a many-to-fewer reduction
     [KP23, Def. 4]: the driver hands it a bundle of statements in one
     invocation instead of one at a time — every frontier statement of the
-    relation for most relations; for `Relation_Eval`, every claim on one
-    oracle, *after* every other frontier statement that could still emit a
-    claim on that oracle has been discharged (the parking rule, piop.md §5).
+    relation for most relations; for `Relation_Eval`, every claim on the
+    oracles with one `bundle_key` (by default, one oracle), *after* every
+    other frontier statement that could still emit a claim on such an oracle
+    has been discharged (the parking rule, piop.md §5).
 
     `supported_domains` lists the coefficient-domain types (e.g. Ring) for
     which native (C) kernels exist — declarative metadata, not a dispatch
@@ -76,6 +77,17 @@ class Protocol:
     batching: bool = False
     supported_domains: tuple[type, ...] = ()
     scheme: Any = None
+
+    def bundle_key(self, oracle) -> Any:
+        """What a bundle protocol groups claims on `oracle` by: the driver
+        hands it, together, the frontier claims whose oracles have equal
+        keys, and parks a claim while another frontier statement can still
+        produce a claim on an oracle with its key. The default is the
+        oracle's identity, a bundle per oracle; an evaluation protocol whose
+        opening batches several polynomials returns its scheme instead, for
+        one bundle per scheme. The key must be a function of public data, so
+        that both parties form the same bundles."""
+        return id(oracle)
 
     def reduce(
         self,

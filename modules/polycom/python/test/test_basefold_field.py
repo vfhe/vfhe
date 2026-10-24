@@ -490,9 +490,10 @@ class _SplitClaims(Protocol):  # _TwoClaims -> its two Relation_Eval claims
 
 
 def test_layer_schedule_fiat_shamir_with_two_claims(field):
-    """Two claims on one commitment, opened one after the other: the second
-    claim's challenges are drawn after the first claim's answers, so the
-    chain absorbs a layer's fibers, vectors over the field."""
+    """Two claims on one commitment at different points, under a layer
+    schedule: one batched opening -- the common-point sumcheck, then a single
+    basefold run whose answers carry the layers' fibers, vectors over the
+    field -- that accepts the true values and rejects a false one."""
     scheme, f = _setup(field, num_vars=6, k0=4, c=4, d=4, schedule=[2, 2])
     oracle, opening = scheme.commit(f)
     (p0, v0), (p1, v1) = _claim(f, field), _claim(f, field)
@@ -513,7 +514,10 @@ def test_layer_schedule_fiat_shamir_with_two_claims(field):
     prover = fresh()
     prover.prover.witnesses[oracle.commitment] = opening
     proof = prover.prove(statement([v0, v1]))
-    answers = [label for label, _ in proof.messages if label.endswith("/answers")]
-    assert len(answers) == 2
+    labels = [label for label, _ in proof.messages]
+    assert [label for label in labels if label.endswith("/answers")] == [
+        "basefold/0/answers"
+    ]
+    assert "basefold/0/point/q" in labels
     assert fresh().verify(statement([v0, v1]), proof)
     assert not fresh().verify(statement([v0, v1 + field.one]), proof)
