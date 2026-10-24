@@ -14,6 +14,23 @@ versions may contain breaking changes.
 
 ### Added
 
+- `RNSRing.crt_components(elements, index)`, `from_crt_components(vectors)`
+  and `residue_field(index)`: the CRT components of ring elements at one RNS
+  prime p -- their residues modulo the maximal ideals `P_s = (p, X^d - w_s)`
+  of `R_q` containing p, all carried into the residue field `R_q/P_0` by the
+  isomorphisms the automorphisms `X -> X^(x_s)` induce -- as one extension
+  field vector, and back (`polynomial_RNS_crt_components`,
+  `polynomial_RNS_from_crt_components` and `rns_crt_maps_new` in C).
+- `BasefoldEval` opens several evaluation claims together, at any points
+  and on any of its scheme's commitments: one sumcheck reduces them to a
+  common point and one basefold run opens a random linear combination of
+  the polynomials there ([CCCFGS26, §7, Figs. 3-4]). The sumcheck is skipped
+  when the points coincide, the combination when there is one polynomial.
+  `soundness_error` takes the bundle's `claims` and `polynomials`.
+- `Protocol.bundle_key(oracle)`: what a bundle protocol groups the claims on
+  an oracle by -- the oracle by default; `BasefoldEval` returns its scheme,
+  so the driver hands it every pending claim on the oracles committed under
+  it, parking each until no other statement can produce another.
 - `vfhe.piop.relations.Relation_Lookup` / `vfhe.piop.protocols.Lookup` and
   `Relation_Range` / `RangeDecomposition`: the lookup argument (offline
   memory checking over four grand products, two degree-3 zerochecks over
@@ -400,6 +417,10 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `BasefoldEval` receives, as one bundle, the claims on all the oracles
+  committed under its scheme rather than those on one oracle, and opens a
+  bundle of several claims with the batched opening rather than one run per
+  claim; transcripts of a single claim are unchanged.
 - `BasefoldEval`'s verifier checks a layer's leaves together: one word of
   all the queried leaves, digested in one call and folded with
   `fold_fibers`, then compared with the values the layer above produced as

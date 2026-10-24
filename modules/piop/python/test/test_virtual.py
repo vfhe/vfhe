@@ -208,6 +208,67 @@ def test_parking_rule_waits_for_all_claims_on_an_oracle():
     assert sizes == [2, 2]
 
 
+@pytest.mark.parametrize(
+    ("grouped", "expected"), [(True, [2, 2]), (False, [1, 1, 1, 1])]
+)
+def test_bundle_key_groups_claims_on_several_oracles(grouped, expected):
+    # Zero on (f, g) -> an Eval claim on f and a Sum claim on g, the Eval
+    # first. A bundle protocol whose `bundle_key` maps f and g to one key
+    # gets both Eval claims in one bundle: the claim on f is parked until
+    # the Sum has produced the claim on g. With the default key (the oracle)
+    # nothing waits, and each claim is a bundle of its own.
+    sizes = []
+    x = _vars("x0", "x1")
+    f = TableOracle(MLE(variables=x, evaluations=[1, 2, 3, 4]))
+    g = TableOracle(MLE(variables=x, evaluations=[5, 6, 7, 8]))
+
+    class _Split(Protocol):
+        reduces_from = Relation_Zero
+        reduces_to = (Relation_Eval, Relation_Sum)
+
+        async def prove(self, prover, statements):
+            return self._go(statements)
+
+        async def verify(self, verifier, statements):
+            return self._go(statements)
+
+        def _go(self, statements):
+            return [
+                self.reduce(
+                    statements,
+                    Relation_Eval,
+                    oracles=[f],
+                    point={x[0]: 1, x[1]: 1},
+                    value=4,
+                ),
+                self.reduce(statements, Relation_Sum, oracles=[g], value=26),
+            ]
+
+    class _Bundle(Protocol):
+        reduces_from = Relation_Eval
+        batching = True
+
+        def bundle_key(self, oracle):
+            if grouped and (oracle is f or oracle is g):
+                return "f and g"
+            return super().bundle_key(oracle)
+
+        async def prove(self, prover, statements):
+            sizes.append(len(statements))
+            return []
+
+        async def verify(self, verifier, statements):
+            sizes.append(len(statements))
+            assert all(s.check() for s in statements)
+            return []
+
+    iop = _iop()
+    iop.register(Relation_Zero, _Split())
+    iop.register(Relation_Eval, _Bundle())
+    assert iop.run(Statement(Relation_Zero(), oracles=[f, g]))
+    assert sizes == expected
+
+
 def test_parking_rule_sees_an_oracle_read_through_the_index():
     # As above, but the second frontier statement mentions f only through
     # its relation's index: a statement of `_Reads(index={"table": f})` with

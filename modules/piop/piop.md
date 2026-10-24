@@ -469,13 +469,15 @@ transcript.
   `batching = True` is a *bundle* protocol — a folding reduction
   `R^ℓ → R` [KP23, Def. 4] — and receives, in one invocation, every
   frontier statement of its relation; for `Relation_Eval`, every frontier
-  claim on one oracle — in practice the PCS bundle on a committed oracle,
-  since claims on implicit oracles never reach the driver. Such a claim is
-  **parked** while any other frontier statement, outside its bundle, has
-  that oracle in its *oracle closure* (its oracles and, through the
-  definitions of the defined ones, their constituents, recursively): that
-  statement may still emit a claim on the same oracle, and the bundle
-  should hold them all. Closures are public and static, so both parties
+  claim on the oracles with one `Protocol.bundle_key` — by default one
+  oracle; a PCS evaluation protocol returns its scheme, for one bundle of
+  the claims on every oracle committed under it (claims on implicit oracles
+  never reach the driver). Such a claim is **parked** while any other
+  frontier statement, outside its bundle, has in its *oracle closure* (its
+  oracles and, through the definitions of the defined ones, their
+  constituents, recursively) an oracle with the same key: that statement
+  may still emit a claim that belongs in the bundle, and the bundle should
+  hold them all. Closures are public and static, so both parties
   park identically; definitions form a DAG and non-Eval statements never
   park, so some statement is always ready. This is the two-phase
   scheduling of staged provers (every evaluation claim accumulated, one
@@ -1139,11 +1141,10 @@ therefore lives inside the PCS's evaluation protocol
    combines them inside the composable protocol (§4–§5). Open: a
    `Composed.soundness_error` adding up its subprotocols' errors, the
    inline-discharged sumchecks and `VirtualEval` steps included — today
-   `GKR.soundness_error` reports the output test alone. Open for
-   committed oracles: the
-   PCS bundle protocol still opens each claim on its own; a common-point
-   reduction plus a batched opening (BatchEval [CBBZ23, §3.8]) is the
-   `vfhe.polycom` roadmap. Sumcheck-side batching (one run for several
+   `GKR.soundness_error` reports the output test alone. For
+   committed oracles: done -- `BasefoldEval` bundles the claims on all its
+   scheme's oracles and opens them with a common-point reduction and one
+   batched opening ([CCCFGS26, §7]; polycom.md §3). Sumcheck-side batching (one run for several
    Sum claims) is a bundle variant of `Sumcheck` still to write.
 3a. **Defined-oracle follow-ups**: the two-phase strategy's `O(nnz)`
    bookkeeping loops and the sparse `evaluate` in C (every round is

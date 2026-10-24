@@ -310,11 +310,11 @@ is proved against the commitment that oracle carries. The registry keys
 the protocol by its scheme, so one IOP can hold several schemes -- other
 codes, or other PCSs -- each protocol receiving the claims on the oracles
 committed under its own scheme. It is a *bundle*
-protocol (`batching = True`, piop.md §5): the driver parks the claims on
-one committed oracle until no other frontier statement can produce
-another, then hands them over together, in path order — today each claim
-in the bundle is opened on its own (the `M = 1` case; the batched opening
-is roadmap), so the transcript is the concatenation of the runs below. For
+protocol (`batching = True`, piop.md §5) whose `bundle_key` is its scheme:
+the driver parks the claims on every oracle committed under the scheme
+until no other frontier statement can produce another, then hands them over
+together, in path order. A bundle of one claim is opened by the run below;
+a bundle of several by the batched opening that follows it. For
 a claim on `n` variables with a depth-`d` code (`k_d = 2^n`, `kappa = n - d`
 base variables):
 
@@ -365,6 +365,35 @@ soundness error is `2d/(gamma^3·|A|) + (1 - delta + gamma·d)^rep` for
 admissible `(gamma, delta)` [ZCF24], with `|A|` the per-prime residue field
 size (`BasefoldEval.soundness_error`).
 
+**The batched opening** [CCCFGS26, §7, Figs. 3-4] opens `M > 1` claims
+`f_{c(m)}(z_m) = y_m` on `C` distinct polynomials committed under the scheme:
+
+1. *Common point* (Fig. 3, the HyperPlonk reduction [CBBZ23]): the verifier
+   draws `s`, and a sumcheck over the `l` variables proves
+   `sum_b h(b) = sum_m s^m y_m` for `h(b) = sum_m s^m eq~(z_m, b) f_{c(m)}(b)`,
+   with the same round kernel as the run (`prod_round_evals`, one product
+   per polynomial: the `eq~` tables of the claims on one polynomial are
+   summed first). It ends at a point `r`; the prover sends `q_c = f_c(r)`,
+   and the verifier checks the last round against
+   `sum_m s^m eq~(z_m, r) q_{c(m)}`. When all the `z_m` are one point the
+   step is skipped (`r = z`, `q_c` the claimed value, and two claims on one
+   polynomial must agree).
+2. *Common-point opening* (Fig. 4): the verifier draws `alpha` (when
+   `C > 1`), and the run above proves `u(r) = sum_c alpha^c q_c` for
+   `u = sum_c alpha^c f_c` on the codeword `sum_c alpha^c pi_c` -- the
+   code is linear, over `R_q` too: a ring multiplication acts inside a
+   symbol and the code across symbols. A query on the first layer is
+   answered by each commitment's leaf and path; the verifier authenticates
+   each against its root and combines the leaves with the same `alpha`s.
+   Every later layer is `u`'s own.
+
+The run is written once for both cases: `_ProverRun` / `_VerifierRun` take
+the top codeword and a *first-layer source* -- how a query on the first
+layer is answered and checked -- and the caller draws the query challenge
+between their fold and query phases, so several runs could share one. The
+batching adds `(2l + M - 1)/|A|` and `(C - 1)/|A|` to the soundness error
+(`soundness_error(..., claims=M, polynomials=C)`).
+
 **The PIOP world composes directly**: sumcheck-style reductions end in
 `Relation_Eval` claims carrying oracles, and `BasefoldEval` *is* the
 compiler step of [CHMMVW20] ("queries become opening claims") for them —
@@ -379,11 +408,9 @@ evaluation point.
 
 ## 4. Roadmap
 
-1. **Batched openings**: `BasefoldEval` already receives every pending
-   claim on a commitment as one bundle (piop.md §5) and opens them one by
-   one; the step left is the protocol itself — different-point claims
-   reduced to a common point by sumcheck, then one basefold run on their
-   random linear combination (an `M -> 1` folding reduction).
+1. **BatchFold** [CCCFGS26, §7.1]: openings of claims on `R_q`
+   polynomials through their CRT components, batched per prime over the
+   residue field, on top of the batched opening above.
 2. **C kernels for the ring code above the base** (`fold_at` is
    per-position Python over `Polynomial`, one `Polynomial * list` scaling
    per entry, and the general code's encoder is the same recursion in
@@ -408,6 +435,10 @@ evaluation point.
 - **[BFS20]** Benedikt Bünz, Ben Fisch, Alan Szepieniec. *Transparent
   SNARKs from DARK Compilers*. EUROCRYPT 2020. ePrint 2019/1229.
   <https://eprint.iacr.org/2019/1229>
+- **[CBBZ23]** Binyi Chen, Benedikt Bünz, Dan Boneh, Zhenfei Zhang.
+  *HyperPlonk: Plonk with Linear-Time Prover and High-Degree Custom Gates*.
+  EUROCRYPT 2023, LNCS 14005, pp. 499–530, Springer, 2023. ePrint 2022/1355.
+  <https://eprint.iacr.org/2022/1355>
 - **[CHMMVW20]** Alessandro Chiesa, Yuncong Hu, Mary Maller, Pratyush
   Mishra, Psi Vesely, Nicholas Ward. *Marlin: Preprocessing zkSNARKs with
   Universal and Updatable SRS*. EUROCRYPT 2020. ePrint 2019/1047.

@@ -55,20 +55,25 @@ class Party:
     def _bundle_key(self, stmt: Statement) -> tuple:
         """Statements a bundle protocol receives together: same relation
         type and, for claims on an oracle (`Relation.subject`), the same
-        oracle."""
+        protocol and the same `Protocol.bundle_key` of the oracle -- by
+        default, the same oracle."""
         subject = stmt.relation.subject(stmt)
         if subject is not None:
-            return (type(stmt.relation), id(subject))
+            protocol = self.iop.protocol_for(stmt)
+            if protocol is None:
+                return (type(stmt.relation), id(subject))
+            return (type(stmt.relation), id(protocol), protocol.bundle_key(subject))
         return (type(stmt.relation),)
 
     def _parked(self, stmt: Statement, worklist: list[Statement]) -> bool:
         """The parking rule (piop.md §5): a claim on an oracle headed for a
         bundle protocol waits while any other frontier statement, outside
-        its own bundle, can still produce a claim on the same oracle — i.e.
-        has that oracle in its oracle closure. Definitions form a DAG and
-        statements with no subject never park, so some statement is always
-        ready. Claims on implicit oracles never reach the driver (the
-        Composer consumes them), so this concerns committed and plain
+        its own bundle, can still produce a claim that would join the bundle
+        — i.e. has in its oracle closure an oracle with the same
+        `Protocol.bundle_key` (by default, the same oracle). Definitions form
+        a DAG and statements with no subject never park, so some statement
+        is always ready. Claims on implicit oracles never reach the driver
+        (the Composer consumes them), so this concerns committed and plain
         oracles.
         """
         subject = stmt.relation.subject(stmt)
@@ -78,10 +83,14 @@ class Party:
         if protocol is None or not protocol.batching:
             return False
         key = self._bundle_key(stmt)
+        subject_key = protocol.bundle_key(subject)
         for other in worklist:
             if other is stmt or self._bundle_key(other) == key:
                 continue
-            if any(o is subject for o in oracle_closure(statement_oracles(other))):
+            if any(
+                protocol.bundle_key(o) == subject_key
+                for o in oracle_closure(statement_oracles(other))
+            ):
                 return True
         return False
 
