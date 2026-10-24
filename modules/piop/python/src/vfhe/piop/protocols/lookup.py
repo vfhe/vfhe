@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 #: table's side.
 FINGERPRINTS = ("WSmu", "RS", "WSt", "S")
 
+# Which side of the argument each fingerprint is built over.
+_SIDE = {"WSmu": "mu", "RS": "mu", "WSt": "t", "S": "t"}
+
 
 def counters(values: list[int], beta: int) -> tuple[list[int], list[int]]:
     """The `read_ts` and `final_cts` of Lemma I.3, in one pass.
@@ -252,9 +255,8 @@ class Lookup(Protocol):
             "WSt": [(one, table), (-tau, None)],
             "S": [(one, table), (zeta, final_cts), (-tau, None)],
         }
-        side = {"WSmu": "mu", "RS": "mu", "WSt": "t", "S": "t"}
         return {
-            a: self._layered(parts["W"][side[a]], f1[a], affine[a])
+            a: self._layered(parts["W"][_SIDE[a]], f1[a], affine[a])
             for a in FINGERPRINTS
         }
 
@@ -342,7 +344,6 @@ class Lookup(Protocol):
             a: grand_product(leaves, field.zero)
             for a, leaves in self._leaves(mu_table, parts, zeta, tau).items()
         }
-        side = {"WSmu": "mu", "RS": "mu", "WSt": "t", "S": "t"}
         f1 = {}
         for a in FINGERPRINTS:
             half = 1 << parts["sizes"][a]
@@ -363,7 +364,7 @@ class Lookup(Protocol):
         # of its own, so the layered oracles are handed over as witnesses.
         for a in FINGERPRINTS:
             prover.witnesses[virtual[a]] = MLE(
-                field=field, variables=parts["W"][side[a]], evaluations=trees[a]
+                field=field, variables=parts["W"][_SIDE[a]], evaluations=trees[a]
             )
         return self._outputs(statement, parts, f1, virtual, chi, points, products)
 
@@ -401,7 +402,7 @@ class Lookup(Protocol):
         # Lemma I.3 in fingerprinted form: WS = RS u S becomes one product
         # identity, and the two sum claims below are what pins each of the
         # four products to the oracle it was supposed to be built from.
-        ws_mu, rs, ws_t, s = (products[FINGERPRINTS.index(a)] for a in FINGERPRINTS)
+        ws_mu, rs, ws_t, s = products  # in FINGERPRINTS order
         if not (ws_t * ws_mu == rs * s):
             raise Rejection(
                 f"{label}: the grand products do not satisfy WSt * WSmu == RS * S, "
