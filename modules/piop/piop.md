@@ -219,10 +219,10 @@ kinds are classes, `oracle.py`):
 | kind | the verifier has | an evaluation claim on it |
 |---|---|---|
 | `public` (`TableOracle(table, public=True)`) | the table itself: a wiring predicate, `eq̃`, a public output | terminal — the verifier evaluates it |
-| `committed` (`CommittedOracle`) | a commitment and the variables, no table | the PCS protocol (`vfhe.polycom.BasefoldEval`) |
+| `committed` (`CommittedOracle`) | a commitment, the scheme it was committed under and the variables, no table | the evaluation protocol registered for that scheme (`vfhe.polycom.BasefoldEval`) |
 | `virtual` (`VirtualOracle`) | a local definition over other oracles | `VirtualEval`: rewritten into claims on the constituents, no challenge, error 0 |
 | `implicit` (`ImplicitOracle`) | nothing but the statement it heads | never discharged by a protocol: held by the Composer until its head's layer (§5) |
-| `plain` (`TableOracle(table)`) | the oracle of the ideal model, which it may query | terminal, or the protocol registered without a kind |
+| `plain` (`TableOracle(table)`) | the oracle of the ideal model, which it may query | terminal, or the protocol registered without a kind; refused once a commitment scheme is registered for `Relation_Eval` |
 
 The two *defined* kinds are one idea: an oracle given by a relation on
 other oracles instead of by a table. A **virtual oracle**
@@ -442,10 +442,17 @@ transcript.
   registered protocol are *terminal*. This keeps relations passive data and
   protocols swappable (e.g. a batched sumcheck can replace the plain one
   without touching relations or parties). For `Relation_Eval` the key also
-  carries the oracle kind (§4): the PCS protocol is registered without a
-  kind and receives committed and plain oracles, `VirtualEval` is
-  registered for the virtual kind, and a kind without an entry falls back
-  to the default; claims on public oracles never reach a protocol, and no
+  carries the oracle kind (§4) and the protocol's scheme
+  (`Protocol.scheme`): each commitment scheme's evaluation protocol is
+  registered without a kind, and a claim on a committed oracle goes to the
+  protocol of the scheme it was committed under, so oracles committed under
+  different schemes -- other PCSs, or one PCS with other parameters --
+  are discharged in one IOP; `VirtualEval` is registered for the virtual
+  kind. A claim without an entry of its own falls back to the entry of its
+  kind, then to the default (no kind, no scheme); claims on public oracles
+  never reach a protocol, claims on plain oracles are refused once a
+  scheme is registered for the relation (a plain oracle exists only in the
+  ideal model), and no
   protocol is registered for the implicit kind (a claim on an implicit
   oracle reaching `protocol_for` is an error, §4). Start relations are
   keyed like any other, by exact type, so a subclass's start relation has
@@ -903,8 +910,9 @@ protocol mark, the oracle says what the verifier has of it (§4's kinds).
 decider's one query, at a full point; it raises for an oracle the verifier
 has no table of), `dependencies()`, `digest()` — and the four kinds are
 classes: `TableOracle(table, public=...)` wraps a dense or sparse table,
-`CommittedOracle(variables, commitment)` holds the commitment and the
-variables and nothing else, `ImplicitOracle(variables)` is a handle,
+`CommittedOracle(variables, commitment, scheme)` holds the commitment, the
+scheme it was committed under (which routes its claims, §5) and the
+variables, nothing else, `ImplicitOracle(variables)` is a handle,
 `VirtualOracle` a definition. Oracles are compared by identity: claims are
 bundled, parked and stored on the object. The prover works on tables:
 `resolve_table(oracle, witnesses)` is the table behind an oracle on its

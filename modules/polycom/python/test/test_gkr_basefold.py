@@ -134,7 +134,7 @@ def test_commit_returns_the_committed_oracle():
     assert opening.polynomial is f
     # The digest is the commitment's: another oracle with the same
     # commitment digests the same, whatever table it stands for.
-    other = CommittedOracle(w, oracle.commitment)
+    other = CommittedOracle(w, oracle.commitment, scheme)
     assert element_digest(oracle) == element_digest(other)
     # A table oracle to the same table digests by content, as any plain table.
     assert element_digest(TableOracle(f)) == element_digest(

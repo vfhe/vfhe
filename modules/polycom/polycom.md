@@ -279,9 +279,12 @@ and the tree height.
 
 `BasefoldEval` is that protocol: register
 `iop.register(Relation_Eval, BasefoldEval(scheme, rep))` and every
-evaluation claim is proved against a commitment — the statement's own
-`commitment` field when set, else the scheme's record for the statement's
-oracle (a never-committed oracle is a `LookupError`). It is a *bundle*
+evaluation claim on an oracle committed under `scheme` (the
+`CommittedOracle` that `scheme.commit` returns, which carries the scheme)
+is proved against the commitment that oracle carries. The registry keys
+the protocol by its scheme, so one IOP can hold several schemes -- other
+codes, or other PCSs -- each protocol receiving the claims on the oracles
+committed under its own scheme. It is a *bundle*
 protocol (`batching = True`, piop.md §5): the driver parks the claims on
 one committed oracle until no other frontier statement can produce
 another, then hands them over together, in path order — today each claim

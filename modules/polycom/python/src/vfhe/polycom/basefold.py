@@ -184,7 +184,8 @@ class Basefold:
     the `BasefoldEval` protocol, registered for `Relation_Eval`.
 
     `commit` returns the committed oracle (`piop.CommittedOracle`: the
-    commitment and the variables, what a statement names) and the opening.
+    commitment, the variables and this scheme, what a statement names) and
+    the opening.
     `openings` is the *prover-side* map (commitment -> `BasefoldOpening`)
     `BasefoldEval` falls back to; a verifier's copy of a scheme simply never
     holds one, and the in-process sharing of this object is the same
@@ -225,8 +226,8 @@ class Basefold:
         self, f: MLE, prover: Prover | None = None
     ) -> tuple[CommittedOracle, BasefoldOpening]:
         """Commit to f: encode, build the Merkle tree, return the committed
-        oracle -- the root as the commitment, with the variables -- and the
-        codeword plus tree as the prover's opening data.
+        oracle -- the root as the commitment, with the variables and this
+        scheme -- and the codeword plus tree as the prover's opening data.
 
         Both costs are paid here, once. The opening is recorded on the scheme
         and, with `prover` given, installed on it: `witnesses[commitment] =
@@ -242,7 +243,7 @@ class Basefold:
         commitment = BasefoldCommitment(f.variables, tree.root)
         opening = BasefoldOpening(f, word, tree)
         self.openings[commitment] = opening
-        oracle = CommittedOracle(f.variables, commitment)
+        oracle = CommittedOracle(f.variables, commitment, self)
         if prover is not None:
             prover.witnesses[oracle] = f
             prover.witnesses[commitment] = opening
@@ -267,10 +268,11 @@ class BasefoldEval(Protocol):
     """Basefold's Eval protocol: discharges `Relation_Eval` statements
     against the scheme's code, replacing the terminal oracle query.
 
-    Register with `iop.register(Relation_Eval, BasefoldEval(scheme))` —
-    every evaluation claim reaching the driver is then proved against the
-    commitment its oracle carries (a `CommittedOracle`, as `commit`
-    returns it; a claim on any other oracle is a `TypeError`). This is
+    Register with `iop.register(Relation_Eval, BasefoldEval(scheme))`;
+    the registry keys it by `scheme`, so it receives the evaluation claims
+    on the oracles committed under that scheme (`CommittedOracle`s, as
+    `commit` returns them) and proves each against the commitment its
+    oracle carries. A claim on any other oracle is a `TypeError`. This is
     [CHMMVW20]'s "queries become opening claims" done in place — no
     separate relation, since the commitment is just the oracle's other
     form [ZCF24, §4].
@@ -333,6 +335,11 @@ class BasefoldEval(Protocol):
             raise TypeError(
                 "the evaluation claim is not on a basefold-committed oracle; "
                 "name the oracle scheme.commit(f) returned"
+            )
+        if oracle.scheme is not self.scheme:
+            raise TypeError(
+                "the evaluation claim is on an oracle committed under another "
+                "scheme; register that scheme's evaluation protocol"
             )
         if (1 << commitment.num_vars) != self.code.k_d:
             raise ValueError(

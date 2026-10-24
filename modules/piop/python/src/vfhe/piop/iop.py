@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from .digest import element_digest
 from .fs import FS_Verifier
-from .oracle import ImplicitOracle, OracleKind, oracle_closure
+from .oracle import CommittedOracle, ImplicitOracle, OracleKind, oracle_closure
 from .party import Prover, Verifier
 from .transcript import Proof, Transcript, Variable
 
@@ -59,7 +59,8 @@ class IOP:
         self.fiat_shamir = fiat_shamir
         self.solo = False  # set while one party runs without a counterparty
         self.transcript = Transcript(self)
-        self.protocols = {}  # (type[Relation], OracleKind | None) -> Protocol
+        # (type[Relation], OracleKind | None, scheme | None) -> Protocol
+        self.protocols = {}
         self.prover = (prover or Prover)(self)
         if verifier is None:
             verifier = FS_Verifier if fiat_shamir else Verifier
@@ -81,36 +82,58 @@ class IOP:
 
         A relation whose statements are claims on one oracle
         (`Relation.subject`, as `Relation_Eval`'s are) has several
-        discharges, keyed by the kind of that oracle (`OracleKind`): register
-        the PCS protocol with no kind (the default, reached by committed and
-        plain oracles) and `VirtualEval` for `OracleKind.virtual`. A kind
-        without its own entry falls back to the default; claims on public
-        oracles never reach a protocol, and claims on implicit oracles never
-        reach the driver (the Composer consumes them).
+        discharges, keyed by the kind of that oracle (`OracleKind`) and by
+        the protocol's `Protocol.scheme`: register each commitment scheme's
+        evaluation protocol with no kind, and `VirtualEval` for
+        `OracleKind.virtual`. A claim on a committed oracle goes to the
+        entry of the scheme it was committed under; a claim without an
+        entry of its own falls back to the entry of its kind, then to the
+        default (no kind, no scheme). Claims on public oracles never reach
+        a protocol; claims on plain oracles are refused once a scheme is
+        registered for the relation, since a plain oracle exists only in
+        the ideal model; claims on implicit oracles never reach the driver
+        (the Composer consumes them).
         """
         if kind is OracleKind.implicit:
             raise ValueError("no protocol discharges claims on implicit oracles")
-        self.protocols[(relation_type, kind)] = protocol
+        self.protocols[(relation_type, kind, protocol.scheme)] = protocol
         return protocol
 
     def protocol_for(self, statement: Statement) -> Protocol | None:
         """The protocol discharging `statement`, None if it is terminal."""
         relation = statement.relation
+        rtype = type(relation)
         subject = relation.subject(statement)
-        if subject is not None:
-            kind = subject.kind
-            if kind is OracleKind.implicit:
-                raise RuntimeError(
-                    "an evaluation claim on an implicit oracle reached the driver; "
-                    "claims on a head are consumed by the Composer of the "
-                    "reduction that heads it"
-                )
-            if kind is OracleKind.public:
-                return None
-            exact = self.protocols.get((type(relation), kind))
-            if exact is not None:
-                return exact
-        return self.protocols.get((type(relation), None))
+        if subject is None:
+            return self.protocols.get((rtype, None, None))
+        kind = subject.kind
+        if kind is OracleKind.implicit:
+            raise RuntimeError(
+                "an evaluation claim on an implicit oracle reached the driver; "
+                "claims on a head are consumed by the Composer of the "
+                "reduction that heads it"
+            )
+        if kind is OracleKind.public:
+            return None
+        if kind is OracleKind.plain and any(
+            r is rtype and s is not None for r, _, s in self.protocols
+        ):
+            raise TypeError(
+                f"a {rtype.__name__} claim on a plain oracle while a commitment "
+                "scheme is registered for it: the claim must be on a committed "
+                "oracle (the one the scheme's commit returned)"
+            )
+        scheme = subject.scheme if isinstance(subject, CommittedOracle) else None
+        for key in (
+            (rtype, kind, scheme),
+            (rtype, None, scheme),
+            (rtype, kind, None),
+            (rtype, None, None),
+        ):
+            protocol = self.protocols.get(key)
+            if protocol is not None:
+                return protocol
+        return None
 
     def _bind(self, statement: Statement) -> None:
         """Seed the Fiat-Shamir chain with the claim being proven, so every

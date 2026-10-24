@@ -13,7 +13,16 @@ verifier-only run, since an in-process prover is honest by construction."""
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring
 from vfhe.crypto import DIGEST_LEN, Merkle
-from vfhe.piop import IOP, CommittedOracle, Proof, Relation_Eval, Statement, TableOracle
+from vfhe.piop import (
+    IOP,
+    CommittedOracle,
+    Proof,
+    Protocol,
+    Relation,
+    Relation_Eval,
+    Statement,
+    TableOracle,
+)
 from vfhe.piop.protocols import Sumcheck
 from vfhe.piop.relations import Relation_Sum
 from vfhe.polycom import (
@@ -303,7 +312,9 @@ def test_basefold_rejects_tampered_commitment():
     (named,) = fields["oracles"]
     fields["oracles"] = (
         CommittedOracle(
-            named.variables, BasefoldCommitment(named.variables, bytes(DIGEST_LEN))
+            named.variables,
+            BasefoldCommitment(named.variables, bytes(DIGEST_LEN)),
+            scheme,
         ),
     )
     assert not _replay_with_tamper(honest, ring, scheme, fields, lambda _, v: v)
@@ -416,6 +427,87 @@ def test_basefold_requires_a_committed_oracle():
     iop.register(Relation_Eval, BasefoldEval(scheme, rep=4))
     with pytest.raises(TypeError, match="committed oracle"):
         iop.run(Statement(Relation_Sum(), oracles=[TableOracle(f)], value=total))
+
+
+class _Both(Relation):
+    """Two evaluation claims, one per oracle (synthetic)."""
+
+    name = "both"
+    fields = ("oracles", "points", "values")
+
+
+class _SplitBoth(Protocol):  # _Both -> its two Relation_Eval claims
+    reduces_from = _Both
+    reduces_to = (Relation_Eval,)
+
+    async def prove(self, prover, statements):
+        return self._go(statements)
+
+    async def verify(self, verifier, statements):
+        return self._go(statements)
+
+    def _go(self, statements):
+        (s,) = statements
+        return [
+            self.reduce(statements, oracles=(f,), point=p, value=v)
+            for f, p, v in zip(s.oracles, s.points, s.values, strict=True)
+        ]
+
+
+def _two_schemes():
+    """Two basefold schemes of different sizes, one committed polynomial
+    under each, and the claim on both."""
+    ring, small, f = _setup(num_vars=3, k0=2, c=8, d=2)
+    large = Basefold(FoldableRS(ring, k0=4, c=4, d=2))
+    g = MLE(
+        ring=ring,
+        variables=[MLE_Variable(f"y{i}") for i in range(4)],
+        evaluations=[ring.random_element() for _ in range(16)],
+    )
+    (f_oracle, f_opening), (g_oracle, g_opening) = small.commit(f), large.commit(g)
+    (fp, fv), (gp, gv) = _claim(f, ring), _claim(g, ring)
+    stmt = Statement(
+        _Both(), oracles=(f_oracle, g_oracle), points=[fp, gp], values=[fv, gv]
+    )
+    return ring, (small, large), (f_opening, g_opening), stmt
+
+
+def test_oracles_committed_under_two_schemes_in_one_iop():
+    # Each committed oracle carries the scheme it was committed under, and
+    # its claim reaches that scheme's evaluation protocol: claims under two
+    # basefold schemes of different sizes (two codes) in one run.
+    ring, schemes, openings, stmt = _two_schemes()
+    assert [o.scheme for o in stmt.oracles] == list(schemes)
+    proved: list = []
+
+    class _Counting(BasefoldEval):
+        async def prove(self, prover, statements):
+            proved.append((self.scheme, statements[0].oracles[0]))
+            return await super().prove(prover, statements)
+
+    iop = IOP(domain=ring)
+    iop.register(_Both, _SplitBoth())
+    for scheme in schemes:
+        iop.register(Relation_Eval, _Counting(scheme, rep=4))
+    for oracle, opening in zip(stmt.oracles, openings, strict=True):
+        iop.prover.witnesses[oracle.commitment] = opening
+    assert iop.run(stmt)
+    assert sorted(proved, key=lambda p: p[1].num_vars) == list(
+        zip(schemes, stmt.oracles, strict=True)
+    )
+
+
+def test_oracle_of_an_unregistered_scheme_is_not_discharged():
+    # Only the small scheme's protocol is registered: the claim on the
+    # oracle committed under the large one has no protocol and no decider.
+    ring, (small, _), openings, stmt = _two_schemes()
+    iop = IOP(domain=ring)
+    iop.register(_Both, _SplitBoth())
+    iop.register(Relation_Eval, BasefoldEval(small, rep=4))
+    for oracle, opening in zip(stmt.oracles, openings, strict=True):
+        iop.prover.witnesses[oracle.commitment] = opening
+    with pytest.raises(NotImplementedError, match="committed oracle"):
+        iop.run(stmt)
 
 
 def test_replay_harness_accepts_an_untampered_transcript():

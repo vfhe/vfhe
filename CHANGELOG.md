@@ -26,6 +26,15 @@ versions may contain breaking changes.
   from.
 - `Basefold.commit(f, prover=prover)` installs on `prover` the table of the
   committed oracle and the opening of its commitment.
+- Oracles committed under different commitment schemes, or under one scheme
+  with different parameters (two basefold codes), in one IOP: a
+  `CommittedOracle` carries its `scheme`, a scheme's evaluation protocol
+  declares it as `Protocol.scheme`, and the registry keys the protocol by
+  it, so each claim on a committed oracle reaches the protocol of the
+  scheme it was committed under. A claim with no entry for its scheme
+  falls back to the entry of its kind, then to the default; a claim on a
+  plain oracle is refused (`TypeError`) once a scheme is registered for its
+  relation.
 - `Statement` refuses a bare table among its `oracles` (a `TypeError`
   naming `TableOracle`), and `VirtualOracle` a bare table as a constituent.
 
@@ -397,10 +406,10 @@ versions may contain breaking changes.
 - **BREAKING**: A statement names oracles, never tables. `vfhe.piop.oracle`
   has the oracle classes: `TableOracle(table, public=...)` wraps an arith
   `MLE` or `SparseMLE` (kind `public` for a table the verifier holds,
-  `plain` otherwise); `CommittedOracle(variables, commitment)` is the
-  verifier's view of a committed polynomial -- the commitment and the
-  variables, no table; the prover's table lives in
-  `Prover.witnesses[oracle]`, where `resolve_table` finds it; `ImplicitOracle`
+  `plain` otherwise); `CommittedOracle(variables, commitment, scheme)` is
+  the verifier's view of a committed polynomial -- the commitment, the
+  scheme it was committed under and the variables, no table; the prover's
+  table lives in `Prover.witnesses[oracle]`, where `resolve_table` finds it; `ImplicitOracle`
   is the handle. Every oracle has `kind`, `query(point)` (the ideal
   decider's one query) and `digest()`; `oracle_kind` is gone. `MLE` and
   `SparseMLE` no longer take or carry `public`, and `MLE.eq` returns an
