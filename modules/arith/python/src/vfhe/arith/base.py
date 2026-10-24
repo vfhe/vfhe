@@ -33,7 +33,7 @@ from __future__ import annotations
 from abc import ABC, ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from vfhe.crypto import entropy
+from vfhe.crypto import entropy, hash_bytes
 from vfhe.util._cpu import last_level_cache_bytes
 
 from .registry import registered, resolve
@@ -1781,6 +1781,11 @@ class FieldVector(metaclass=_ImplementationDispatch):
     def hash(self) -> bytes:
         """A 32-byte digest of the whole vector's contents."""
         raise NotImplementedError
+
+    def digest(self) -> bytes:
+        """A 32-byte digest of the vector: its `hash` under a tag of its own,
+        so that a vector of one element does not digest like that element."""
+        return hash_bytes(b"field-vector" + self.hash())
 
     def hash_elements(self, group: int = 1, stride: int = 1) -> memoryview:
         """One digest per window of elements, packed: the leaves a Merkle

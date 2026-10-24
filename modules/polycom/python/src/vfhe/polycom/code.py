@@ -289,7 +289,13 @@ def pair_digest(pair: tuple[RNSPolynomial, RNSPolynomial]) -> bytes:
     codeword never disturbs it.
     """
     lo, hi = pair
-    return hash_bytes(leaf_digest(lo, _element_hash) + leaf_digest(hi, _element_hash))
+    return _fiber_digest((lo, hi))
+
+
+def _fiber_digest(fiber) -> bytes:
+    """The Merkle leaf digest of adjacent symbols: each element's own digest,
+    in order, hashed together. Two symbols give `pair_digest`."""
+    return hash_bytes(b"".join(leaf_digest(e, _element_hash) for e in fiber))
 
 
 #: A per-position table of per-prime scalars: ``table[j][k]`` is the scalar
@@ -671,6 +677,58 @@ class FoldableRS:
             for lo, hi, i in zip(los, his, indices, strict=True)
         ]
 
+    def fold_fibers(self, values, challenges, level: int, indices) -> list:
+        """Fold fibers of a level-`level` codeword `s = len(challenges)` times,
+        one challenge per fold in order, down to the one symbol each
+        determines; see `FieldFoldableRS`, which has a vectorised one. Here
+        each fold is `fold_pairs` over the pairs of every fiber.
+
+        `values` holds fibers of `2^s` adjacent symbols end to end, and
+        `indices[k]` is the position below fiber `k` in the codeword `s`
+        folds below; entry `k` of the result is the value there.
+        """
+        values = list(values)
+        steps = len(challenges)
+        if not 1 <= steps <= level:
+            raise ValueError(f"{steps} folds from level {level}")
+        if len(values) != len(indices) << steps:
+            raise ValueError(
+                f"{len(values)} symbols are not {len(indices)} fibers of {1 << steps}"
+            )
+        for k, r in enumerate(challenges):
+            half = 1 << (steps - k - 1)
+            positions = [j * half + i for j in indices for i in range(half)]
+            values = self.fold_pairs(
+                values[0::2], values[1::2], r, level - k, positions
+            )
+        return values
+
+    def fiber_at(self, word: list, i: int, size: int) -> tuple[RNSPolynomial, ...]:
+        """The `size` adjacent symbols ``word[i size : (i + 1) size]``: the
+        Merkle leaf `i` of a tree over `size`-symbol fibers. A pair is
+        `pair_at`'s tuple."""
+        return tuple(word[i * size : (i + 1) * size])
+
+    def join_fibers(self, fibers, size: int) -> list:
+        """`fibers`, as `fiber_at` returns them, end to end in one list.
+
+        Raises `ValueError` when an entry is not a tuple of `size` elements of
+        this code's ring.
+        """
+        joined = []
+        for fiber in fibers:
+            if (
+                not isinstance(fiber, tuple)
+                or len(fiber) != size
+                or any(
+                    not isinstance(e, RNSPolynomial) or e.ring is not self.ring
+                    for e in fiber
+                )
+            ):
+                raise ValueError(f"a fiber is a tuple of {size} elements of the ring")
+            joined.extend(fiber)
+        return joined
+
     def pair_at(self, word: list, i: int) -> tuple[RNSPolynomial, RNSPolynomial]:
         """Position i's pair, `(word[2i], word[2i + 1])` — the unit the fold
         reads, and the Merkle leaf (see `pair_leaves`)."""
@@ -692,9 +750,10 @@ class FoldableRS:
         """The Merkle leaf digest of one adjacent pair (`pair_digest`)."""
         return pair_digest(pair)
 
-    def leaf_digests(self, word: list) -> bytes | memoryview:
+    def leaf_digests(self, word: list, size: int = 2) -> bytes | memoryview:
         """The leaf digests of every adjacent pair of `word`, packed: leaf `i`
-        is ``digests[32 * i : 32 * (i + 1)]``.
+        is ``digests[32 * i : 32 * (i + 1)]``. With `size`, the leaves are the
+        fibers of that many symbols instead, `fiber_at(word, i, size)`.
 
         This family digests a pair at a time -- the entries are ring elements
         with their own hash -- so the leaves still cost an object each here,
@@ -702,7 +761,9 @@ class FoldableRS:
         the packing saves is the tree builder's half of that: it reads the
         buffer rather than walking a sequence.
         """
-        return b"".join(pair_digest(pair) for pair in self.pair_leaves(word))
+        return b"".join(
+            _fiber_digest(word[i : i + size]) for i in range(0, len(word), size)
+        )
 
     def fold_at(
         self, word: list, r: RNSPolynomial, level: int, i: int

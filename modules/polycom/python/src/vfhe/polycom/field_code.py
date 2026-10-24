@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import math
 import operator
+from array import array
 from typing import TYPE_CHECKING, cast
 
 from vfhe.arith import (
@@ -735,6 +736,74 @@ class FieldFoldableRS:
         )
         return folded.fma(coeff, r, out=folded).to_list()
 
+    def fold_fibers(self, values, challenges, level: int, indices) -> FieldVector:
+        """Fold fibers of a level-`level` codeword `s = len(challenges)` times,
+        one challenge per fold in order, down to the one symbol each
+        determines.
+
+        The fiber above position `j` of the codeword `s` folds below is the
+        `2^s` adjacent symbols ``word[j 2^s : (j + 1) 2^s]``, since every fold
+        sends pair ``(2i, 2i + 1)`` to position `i`. `values` holds fibers end
+        to end and `indices[k]` is the position below fiber `k`; the result
+        has one symbol per fiber, entry `k` the value at `indices[k]` of the
+        level-``(level - s)`` codeword. With one challenge it is `fold_pairs`
+        on the pairs of `values`.
+        """
+        values = self._vector(values)
+        steps = len(challenges)
+        if not 1 <= steps <= level:
+            raise ValueError(f"{steps} folds from level {level}")
+        if len(values) != len(indices) << steps:
+            raise ValueError(
+                f"{len(values)} symbols are not {len(indices)} fibers of {1 << steps}"
+            )
+        for k, r in enumerate(challenges):
+            half = 1 << (steps - k - 1)
+            positions = array("Q", [j * half + i for j in indices for i in range(half)])
+            lo, hi = values.split_even_odd()
+            coeff = lo
+            coeff.sub(hi, out=coeff)
+            coeff.mul(
+                self._fold_scale_vectors[level - k - 1].query(positions), out=coeff
+            )
+            # The gathered tables are over `twists_domain`; `hi` is this
+            # step's own, so it can hold the running result.
+            values = hi.fma(
+                coeff, self._twist_vectors[level - k - 1].query(positions), out=hi
+            )
+            values.fma(coeff, r, out=values)
+        return values
+
+    def fiber_at(self, word: FieldVector, i: int, size: int):
+        """The `size` adjacent symbols ``word[i size : (i + 1) size]``: the
+        Merkle leaf `i` of a tree over `size`-symbol fibers. A pair is
+        `pair_at`'s tuple, a larger fiber a vector."""
+        if size == 2:
+            return self.pair_at(word, i)
+        return word.query(array("Q", range(i * size, (i + 1) * size)))
+
+    def join_fibers(self, fibers, size: int) -> FieldVector:
+        """`fibers`, as `fiber_at` returns them, end to end in one vector.
+
+        Raises `ValueError` when an entry is not a fiber of `size` symbols of
+        this code's field.
+        """
+        if size == 2:
+            if any(not isinstance(pair, tuple) or len(pair) != 2 for pair in fibers):
+                raise ValueError("a pair is a tuple of two field elements")
+            try:
+                return FieldVector(self.field, [e for pair in fibers for e in pair])
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"a pair is not over this field: {error}") from error
+        for fiber in fibers:
+            if (
+                not isinstance(fiber, FieldVector)
+                or fiber.field is not self.field
+                or len(fiber) != size
+            ):
+                raise ValueError(f"a fiber is a vector of {size} elements of the field")
+        return FieldVector.concat(list(fibers))
+
     def pair_at(self, word: FieldVector, i: int) -> tuple[FieldElement, FieldElement]:
         """Position i's pair, `(word[2i], word[2i + 1])` — the unit the fold
         reads, and the Merkle leaf (see `leaf_digest`)."""
@@ -765,16 +834,17 @@ class FieldFoldableRS:
         to build was most of the cost and none of the hashing."""
         return self.field.digest_elements(pair)
 
-    def leaf_digests(self, word: FieldVector) -> memoryview:
+    def leaf_digests(self, word: FieldVector, size: int = 2) -> memoryview:
         """The leaf digests of every adjacent pair of `word`, packed, in one
         pass over the codeword (`FieldVector.hash_elements` with adjacent
         windows). Leaf `i` is ``digests[32 * i : 32 * (i + 1)]``, and equals
-        `leaf_digest` of `pair_at(word, i)`.
+        `leaf_digest` of `pair_at(word, i)`. With `size`, the leaves are the
+        fibers of that many symbols instead, `fiber_at(word, i, size)`.
 
         A read-only view of the kernel's buffer, not a copy of it -- so a
         codeword reaches its root without its digests being duplicated on the
         way. `bytes(...)` is how a caller takes a copy."""
-        return word.hash_elements(group=2, stride=2)
+        return word.hash_elements(group=size, stride=size)
 
     def fold_at(self, word: FieldVector, r, level: int, i: int):
         """Position i of the fold of the level-`level` codeword `word` with

@@ -434,6 +434,14 @@ class TestSamplingAndHashing:
         assert vector.hash() == FieldVector(field, values).hash()
         assert vector.hash() != FieldVector(field, values[:8]).hash()
 
+    def test_digest_is_the_tagged_hash(self, field):
+        values = random_values(field, 9, 27)
+        vector = FieldVector(field, values)
+        assert vector.digest() == FieldVector(field, values).digest()
+        assert vector.digest() != FieldVector(field, values[:8]).digest()
+        assert vector.digest() != vector.hash()
+        assert FieldVector(field, values[:1]).digest() != field(values[0]).digest()
+
     def test_hash_covers_the_canonical_encodings(self, field):
         """The digest is over the encoding, so it is representation-free."""
         values = random_values(field, 4, 26)

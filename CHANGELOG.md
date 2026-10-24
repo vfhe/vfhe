@@ -33,6 +33,25 @@ versions may contain breaking changes.
   than one per entry.
 - `Basefold.commit(f, prover=prover)` installs on `prover` the table of the
   committed oracle and the opening of its commitment.
+- `Basefold(code, schedule)`: a layer schedule groups the code's `d` folds
+  into layers of `schedule[i]` folds, positive counts summing to `d`. Only
+  the codeword each layer starts from is committed, by a Merkle tree whose
+  leaves are its fibers of `2^schedule[i]` adjacent symbols, so a schedule
+  of fewer layers builds fewer trees and opens fewer paths per query. The
+  commitment depends on `schedule[0]`; the default `[1] * d` is the scheme
+  as before, with the same commitments and transcripts.
+  `Basefold.merkle_commit(word, folds)` builds the tree over `2^folds`-symbol
+  fibers. `Basefold.soundness_error` is the [ZCF24] bound, stated for the
+  default schedule.
+- `FieldFoldableRS.fold_fibers(values, challenges, level, indices)` and
+  `FoldableRS.fold_fibers`: fibers of `2^s` adjacent symbols, end to end,
+  folded `s = len(challenges)` times to the one symbol each determines --
+  over a field as whole-vector operations. With them, on both codes,
+  `fiber_at(word, i, size)`, `join_fibers(fibers, size)` and
+  `leaf_digests(word, size)` for fibers of `size` symbols.
+- `FieldVector.digest()`: a 32-byte digest of the vector, its `hash()` under
+  a tag of its own, so a vector can appear in a transcript entry or a
+  statement field.
 - Oracles committed under different commitment schemes, or under one scheme
   with different parameters (two basefold codes), in one IOP: a
   `CommittedOracle` carries its `scheme`, a scheme's evaluation protocol
@@ -379,6 +398,11 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `BasefoldEval`'s verifier checks a layer's leaves together: one word of
+  all the queried leaves, digested in one call and folded with
+  `fold_fibers`, then compared with the values the layer above produced as
+  one vector. A leaf of the wrong shape or over the wrong domain is now a
+  rejection rather than an exception.
 - **BREAKING**: `vfhe.piop` is restructured. The framework is one file per
   concern (`oracle`, `virtual`, `relation`, `protocol`, `transcript`,
   `party`, `fs`, `iop`, `composer`, `digest`) and is what `vfhe.piop`

@@ -213,6 +213,52 @@ def test_fold_agrees_with_the_per_pair_form(field, instantiation):
         word = folded
 
 
+@pytest.mark.parametrize("twist_field", ["field", "prime"])
+def test_fold_fibers_agrees_with_the_fold_chain(field, instantiation, twist_field):
+    """Refolding the fiber above a position gives the value the whole-codeword
+    fold chain holds there, for every number of folds and starting level, and
+    leaves its operand untouched; a fiber read from the codeword is what the
+    leaf digests hash."""
+    if instantiation == "rs" and twist_field == "prime":
+        pytest.skip("the rs code's twists are its evaluation points")
+    code = FieldFoldableRS(
+        field, k0=4, c=2, d=5, instantiation=instantiation, twist_field=twist_field
+    )
+    message = _random(field, code.k_d, b"fold-fibers")
+    words = {code.d: code.encode(message)}
+    challenges = [field.random_element(bytes([level])) for level in range(code.d)]
+    for level in range(code.d, 0, -1):
+        words[level - 1] = code.fold(words[level], challenges[code.d - level], level)
+
+    for level in range(code.d, 0, -1):
+        for steps in range(1, level + 1):
+            size = 1 << steps
+            below = words[level - steps]
+            indices = list(range(0, len(below), 3))
+            fibers = [code.fiber_at(words[level], j, size) for j in indices]
+            block = code.join_fibers(fibers, size)
+            before = FieldVector.concat([block])
+            rs = challenges[code.d - level : code.d - level + steps]
+            folded = code.fold_fibers(block, rs, level, indices)
+            assert folded == below.query(indices), f"level {level}, {steps} folds"
+            assert block == before
+            digests = code.leaf_digests(words[level], size)
+            assert all(
+                code.leaf_digests(block, size)[32 * k : 32 * (k + 1)]
+                == digests[32 * j : 32 * (j + 1)]
+                for k, j in enumerate(indices)
+            )
+
+    with pytest.raises(ValueError, match="fibers of 4"):
+        code.fold_fibers(FieldVector(field, 6), challenges[:2], code.d, [0, 1])
+    with pytest.raises(ValueError, match="folds from level"):
+        code.fold_fibers(FieldVector(field, 8), challenges[:3], 2, [0])
+    with pytest.raises(ValueError, match="vector of 4"):
+        code.join_fibers([FieldVector(field, 2)], 4)
+    with pytest.raises(ValueError, match="tuple of two"):
+        code.join_fibers([(field.one,)], 2)
+
+
 def test_leaf_digests_go_straight_into_a_tree(field, instantiation):
     """The digests are packed, which is exactly what `Merkle.from_digests`
     reads -- the codeword reaches a root with no object per leaf."""

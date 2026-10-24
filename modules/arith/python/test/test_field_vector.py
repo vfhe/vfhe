@@ -472,6 +472,18 @@ class TestSamplingAndHashing:
         assert vector.hash() == FieldVector(field, values).hash()
         assert vector.hash() != FieldVector(field, values[:8]).hash()
 
+    def test_digest_is_the_tagged_hash(self):
+        """`digest` is a function of the contents, like `hash`, and differs
+        from the digest of the one element a single-element vector holds."""
+        field = make_field()
+        values = random_elements(field, 9, seed=24)
+        vector = FieldVector(field, values)
+        assert len(vector.digest()) == 32
+        assert vector.digest() == FieldVector(field, values).digest()
+        assert vector.digest() != FieldVector(field, values[:8]).digest()
+        assert vector.digest() != vector.hash()
+        assert FieldVector(field, values[:1]).digest() != values[0].digest()
+
     def test_digest_elements_is_the_vector_digest(self):
         """`field.digest_elements` skips the vector; it must not skip any of
         the bytes, so it has to equal both the vector's own digest and the
