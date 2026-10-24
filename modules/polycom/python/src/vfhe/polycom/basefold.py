@@ -629,8 +629,8 @@ class BasefoldEval(Protocol):
         else:
             s = iop.verifier.challenge(f"{label}/point/s")
             powers = _powers(s, len(statements), one)
-            # h = sum_c f_c * E_c, E_c = sum of s^m eq~(z_m, .) over the
-            # claims on f_c: one product per polynomial, not per claim.
+            # h = sum_c f_c * E_c, with E_c the sum of s^m eq~(z_m, .) over
+            # the claims on f_c, so a round is one product per polynomial.
             weights: list[MLE] = []
             for c, f in enumerate(fs):
                 terms = [

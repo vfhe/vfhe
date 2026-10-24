@@ -9,7 +9,7 @@ import math
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from vfhe.arith.base import Polynomial, Ring, check_spec_keywords
+from vfhe.arith.base import FieldVector, Polynomial, Ring, check_spec_keywords
 from vfhe.arith.impl.field.field import ExtensionField
 from vfhe.arith.impl.field.vector import ExtensionFieldVector
 from vfhe.arith.impl.mp.multiprecision import Multiprecision
@@ -326,7 +326,10 @@ class RNSRing(Ring):
         return maps
 
     def crt_components(
-        self, elements: Sequence[RNSPolynomial], index: int
+        self,
+        elements: Sequence[RNSPolynomial],
+        index: int,
+        element_major: bool = False,
     ) -> ExtensionFieldVector:
         """The CRT components of `elements` at the prime ``p = primes[index]``:
         each element's residues modulo the maximal ideals of ``R_q`` that
@@ -346,7 +349,8 @@ class RNSRing(Ring):
 
         Entry ``s * len(elements) + b`` of the result is component ``s`` of
         ``elements[b]``: component ``s`` of all the elements is a contiguous
-        window.
+        window. With `element_major`, entry ``b * k + s`` is: the components
+        of one element are a contiguous window.
 
         The elements may belong to any ring with this prime and this ring's
         ``N`` and ``split_degree``. They are read in the mul domain, through a
@@ -373,12 +377,12 @@ class RNSRing(Ring):
             "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", v.obj) for v in views]
         )
         self.lib.polynomial_RNS_crt_components(
-            out._struct, handles, len(views), self._crt_maps(index, True)
+            out._struct, handles, len(views), self._crt_maps(index, True), element_major
         )
         return out
 
     def from_crt_components(
-        self, vectors: Sequence[ExtensionFieldVector]
+        self, vectors: Sequence[FieldVector]
     ) -> list[RNSPolynomial]:
         """The inverse of `crt_components`: the elements of this ring whose
         components at ``primes[i]`` are ``vectors[i]``, for every ``i``, which

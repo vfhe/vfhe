@@ -27,6 +27,29 @@ versions may contain breaking changes.
   the polynomials there ([CCCFGS26, §7, Figs. 3-4]). The sumcheck is skipped
   when the points coincide, the combination when there is one polynomial.
   `soundness_error` takes the bundle's `claims` and `polynomials`.
+- `FieldFoldableRS.residue_code(code, index)`: the code a foldable code over
+  `R_q` induces on the residue field at one of its primes -- the code whose
+  codewords are the CRT components there of the ring code's codewords, with
+  the same tables over the prime subfield; folding commutes with taking
+  components.
+- `FoldableRS(..., twist_field="field")`: the general code over `R_q` with
+  its twists in the residue fields `F_(p^d)` of the ring's primes rather than
+  in `F_p` -- one `FieldFoldableRS` per prime (`residue_codes`), whose
+  codewords are the CRT components of the ring code's. The distance bound
+  runs on `log2 p^d` bits; a twist multiply costs an `F_(p^d)` product.
+  `"prime"`, the integer tables, stays the default.
+- `FieldFoldableRS.encode_batch(messages, count)`, `fold_batch(words,
+  challenges, level)` and `fold_fibers_batch(values, challenges, level,
+  indices)`: several codewords encoded or folded in one call, each fold with
+  its own challenge.
+- `FieldVector.fold_twisted_blocks(untwist, r)`: `fold_twisted` of
+  several blocks sharing one table, block `b` with its own element `r[b]`, in
+  one pass (`field_vec_fold_twisted_blocks` in C).
+- `FieldFoldableRS(..., root_field=)` (`ROOT_FIELDS`): where the general
+  code's base transform may take its root of unity -- `"prime"`, `F_p` only
+  (the default), or `"field"`, the extension when `F_p` has none.
+- `RNSRing.crt_components(..., element_major=True)`: the components of each
+  element together, entry `b * k + s`.
 - `Protocol.bundle_key(oracle)`: what a bundle protocol groups the claims on
   an oracle by -- the oracle by default; `BasefoldEval` returns its scheme,
   so the driver hands it every pending claim on the oracles committed under
@@ -135,10 +158,10 @@ versions may contain breaking changes.
   be multiples of -- stated by `view` before, but not obtainable.
 - Add `FieldVector.fma_interleave(a, b, c_even, c_odd)`: `a + b * c_even` and
   `a + b * c_odd` written straight into one vector of twice the length.
-- Add `FieldVector.fold_twisted(twist2_inv, r)`: a vector of adjacent pairs
+- Add `FieldVector.fold_twisted(untwist, r)`: a vector of adjacent pairs
   folded to half its length in one call, `out[i] = (w[2i] + w[2i+1]) / 2 +
-  (w[2i] - w[2i+1]) * twist2_inv[i] * r` -- the inverse of `lift_twisted` at
-  `twist2_inv = 1 / (2 t)`, with two extension products per pair.
+  (w[2i] - w[2i+1]) * untwist[i] * r` -- the inverse of `lift_twisted` at
+  `untwist = 1 / (2 t)`, with two extension products per pair.
 - Add `layout=` to `ExtensionFieldNTT.pack` / `unpack`: a caller says
   whether it holds a batch by blocks (the default, as before) or interleaved,
   and the conversion to and from the plan's own layout follows from that and
@@ -417,6 +440,12 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: `FieldFoldableRS`'s general code takes the root of its base
+  transform in `F_p` only, unless `root_field="field"`. Over an extension
+  field whose `p - 1` lacks the 2-adicity for the base length, the base is
+  now a Vandermonde product on seeded points instead of a transform on
+  roots in the extension -- another code, so its codewords and commitments
+  change; pass `root_field="field"` for the previous one.
 - `BasefoldEval` receives, as one bundle, the claims on all the oracles
   committed under its scheme rather than those on one oracle, and opens a
   bundle of several claims with the batched opening rather than one run per

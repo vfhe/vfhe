@@ -395,13 +395,13 @@ void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVec
 // `word` read as adjacent pairs, folded with the table and one element r:
 //
 //     out[i] = (word[2i] + word[2i + 1]) / 2
-//              + (word[2i] - word[2i + 1]) * twist2_inv[i] * r
+//              + (word[2i] - word[2i + 1]) * untwist[i] * r
 //
 // computed as word[2i + 1] + (word[2i] - word[2i + 1]) * c[i] with
-// c[i] = twist2_inv[i] * r + 1/2: two products per pair. The passes run a
+// c[i] = untwist[i] * r + 1/2: two products per pair. The passes run a
 // window at a time so that the split's two halves and `c` stay cached instead
 // of being streamed back from memory between each one.
-void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector twist2_inv,
+void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector untwist,
                             const uint64_t *r)
 {
     const uint64_t d = word->d, padded = out->allocated_n;
@@ -418,7 +418,7 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
 
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(3 * d * window * sizeof(uint64_t));
     uint64_t **planes = (uint64_t **)safe_malloc(6 * d * sizeof(uint64_t *));
-    struct _FieldVector lo = *out, hi = *out, c = *out, pair = *word, t2i = *twist2_inv, dst = *out;
+    struct _FieldVector lo = *out, hi = *out, c = *out, pair = *word, t2i = *untwist, dst = *out;
 
     lo.coeffs = planes;
     hi.coeffs = planes + d;
@@ -451,8 +451,8 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
         }
         // The table is d planes, or one when it holds prime-field scalars;
         // either way it is read at this window's offset.
-        for (uint64_t j = 0; j < twist2_inv->d; j++)
-            t2i.coeffs[j] = twist2_inv->coeffs[j] + start;
+        for (uint64_t j = 0; j < untwist->d; j++)
+            t2i.coeffs[j] = untwist->coeffs[j] + start;
         lo.n = hi.n = c.n = t2i.n = dst.n = len;
         lo.allocated_n = hi.allocated_n = c.allocated_n = len;
         t2i.allocated_n = dst.allocated_n = len;
@@ -465,7 +465,7 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
             memset(hi.coeffs[j] + take, 0, (len - take) * sizeof(uint64_t));
         }
 
-        // c = twist2_inv * r + 1/2. A prime-field table scales each plane of
+        // c = untwist * r + 1/2. A prime-field table scales each plane of
         // r by its one plane.
         if (t2i.d == 1 && d > 1)
             for (uint64_t j = 0; j < d; j++)
@@ -478,6 +478,96 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
         field_vec_fma(&dst, &hi, &lo, &c);
     }
 
+    free(planes);
+    free(scratch);
+}
+
+/* Each output element is computed as v + (u - v) * c with
+   c = untwist[i] * r[b] + 1/2, which equals the header's
+   (u + v) / 2 + (u - v) * untwist[i] * r[b] with two products per pair. The
+   output is produced a window at a time: the window's pairs are split into
+   u and v, c is built for its positions, and the result is written, all in a
+   scratch buffer small enough to stay in cache. */
+void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
+                                   const FieldVector untwist, const FieldVector r)
+{
+    const uint64_t d = word->d, m = untwist->n, count = r->n;
+    const uint64_t total = m * count;
+    assert(word->n == 2 * total && out->n == total && r->d == d);
+    if (total == 0)
+        return;
+    const uint64_t half = (word->mod->q + 1) / 2;
+
+    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (3 * d * sizeof(uint64_t));
+    window -= window % MOD_MIN_VECTOR_LEN;
+    if (window < MOD_MIN_VECTOR_LEN)
+        window = MOD_MIN_VECTOR_LEN;
+    if (window > total)
+        window = total;
+
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(3 * d * window * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)safe_malloc(7 * d * sizeof(uint64_t *));
+    uint64_t *r_block = (uint64_t *)safe_malloc(d * sizeof(uint64_t));
+    struct _FieldVector lo = *out, hi = *out, c = *out, pair = *word, dst = *out;
+    struct _FieldVector run = *out, table = *untwist;
+
+    lo.coeffs = planes;
+    hi.coeffs = planes + d;
+    c.coeffs = planes + 2 * d;
+    pair.coeffs = planes + 3 * d;
+    dst.coeffs = planes + 4 * d;
+    run.coeffs = planes + 5 * d;
+    table.coeffs = planes + 6 * d;
+    for (uint64_t j = 0; j < d; j++)
+    {
+        lo.coeffs[j] = scratch + j * window;
+        hi.coeffs[j] = scratch + (d + j) * window;
+        c.coeffs[j] = scratch + (2 * d + j) * window;
+    }
+
+    for (uint64_t start = 0; start < total; start += window)
+    {
+        const uint64_t len = (total - start < window) ? total - start : window;
+        for (uint64_t j = 0; j < d; j++)
+        {
+            dst.coeffs[j] = out->coeffs[j] + start;
+            pair.coeffs[j] = word->coeffs[j] + 2 * start;
+        }
+        lo.n = hi.n = c.n = dst.n = len;
+        lo.allocated_n = hi.allocated_n = c.allocated_n = dst.allocated_n = len;
+        pair.n = pair.allocated_n = 2 * len;
+        field_vec_split_even_odd(&lo, &hi, &pair);
+
+        /* c[t] = untwist[t mod m] * r[t / m] + 1/2 for the output positions
+           t of the window. The window may cover parts of several blocks;
+           the part of block b is the run of the table it covers, scaled by
+           r[b] -- plane by plane when the table holds prime-field scalars. */
+        for (uint64_t pos = start; pos < start + len;)
+        {
+            const uint64_t block = pos / m, offset = pos % m;
+            const uint64_t take = (m - offset < start + len - pos) ? m - offset : start + len - pos;
+            for (uint64_t j = 0; j < d; j++)
+            {
+                r_block[j] = r->coeffs[j][block];
+                run.coeffs[j] = c.coeffs[j] + (pos - start);
+            }
+            for (uint64_t j = 0; j < untwist->d; j++)
+                table.coeffs[j] = untwist->coeffs[j] + offset;
+            run.n = run.allocated_n = table.n = table.allocated_n = take;
+            if (untwist->d == 1 && d > 1)
+                for (uint64_t j = 0; j < d; j++)
+                    mod_eltwise_scale(run.coeffs[j], table.coeffs[0], r_block[j], take, word->mod);
+            else
+                field_vec_scale(&run, &table, r_block);
+            pos += take;
+        }
+        mod_eltwise_add_scalar(c.coeffs[0], c.coeffs[0], half, len, word->mod);
+
+        field_vec_sub(&lo, &lo, &hi);
+        field_vec_fma(&dst, &hi, &lo, &c);
+    }
+
+    free(r_block);
     free(planes);
     free(scratch);
 }

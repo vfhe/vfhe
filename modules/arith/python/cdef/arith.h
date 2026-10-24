@@ -239,7 +239,7 @@ typedef struct _RNS_CrtMaps *RNS_CrtMaps;
 RNS_CrtMaps rns_crt_maps_new(void *base, uint64_t row, bool to_slot_zero);
 void rns_crt_maps_free(RNS_CrtMaps maps);
 void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
-                                   RNS_CrtMaps maps);
+                                   RNS_CrtMaps maps, bool element_major);
 void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uint64_t count,
                                         RNS_CrtMaps maps);
 void field_vec_add(FieldVector out, const FieldVector a, const FieldVector b);
@@ -267,8 +267,10 @@ void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVect
 void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldVector b,
                               const FieldVector c_even, const uint64_t *s_even,
                               const FieldVector c_odd, const uint64_t *s_odd);
-void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector twist2_inv,
+void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector untwist,
                             const uint64_t *r);
+void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
+                                   const FieldVector untwist, const FieldVector r);
 void field_vec_mul_plane(FieldVector out, const FieldVector a, const FieldVector t);
 void field_vec_fma_plane(FieldVector out, const FieldVector a, const FieldVector b,
                          const FieldVector t);

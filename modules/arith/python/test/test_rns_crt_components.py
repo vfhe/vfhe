@@ -97,6 +97,19 @@ def test_matches_the_definition(N, d, sizes, count):
         )
 
 
+def test_element_major_is_the_same_entries_transposed(ring):
+    k = ring.N // ring.split_degree
+    count = 11  # not a multiple of the kernels' tile
+    elements = [ring.random_element() for _ in range(count)]
+    for index in range(ring.ell):
+        by_component = ring.crt_components(elements, index)
+        by_element = ring.crt_components(elements, index, element_major=True)
+        assert by_element.field is by_component.field
+        for b in range(count):
+            for s in range(k):
+                assert by_element[b * k + s] == by_component[s * count + b]
+
+
 def test_slot_zero_is_read_unchanged(ring):
     a = ring.random_element()
     # `get_coeff_matrix` lists each slot's d coefficients together.

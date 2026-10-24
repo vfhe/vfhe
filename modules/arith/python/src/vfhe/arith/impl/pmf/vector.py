@@ -360,7 +360,8 @@ class PseudoMersenneVector(FieldVector):
         return result
 
     def query(self, indices) -> PseudoMersenneVector:
-        """The elements at `indices`, gathered; the front states the contract."""
+        """The elements at `indices`, gathered, as `FieldVector.query`
+        documents."""
         view = index_buffer(indices)
         if view is None:
             positions = [self._checked_index(i) for i in indices]
@@ -391,12 +392,12 @@ class PseudoMersenneVector(FieldVector):
         """``lo + r * (hi - lo)`` per pair, in one kernel pass.
 
         Only the adjacent layout (`block` 1) has a kernel; a wider block
-        gathers the two operands first and then runs the same three
-        whole-vector operations the front spells out.
+        gathers the two operands first and then runs the three whole-vector
+        operations `FieldVector.fold` is written with.
         """
         if block != 1:
-            # The front's formula over the gathered operands; it is written
-            # against the base type, which this one is.
+            # `FieldVector.fold`'s own body over the gathered operands; it is
+            # written against the base type, which this one is.
             return cast("PseudoMersenneVector", super().fold(r, block))
         self._checked_block(block)
         element = self._coerce_element(r)
@@ -405,24 +406,26 @@ class PseudoMersenneVector(FieldVector):
         return result
 
     def chunk_length(self, live: int = 4) -> int:
-        """The front states the contract."""
+        """`FieldVector.chunk_length`, with an element taking one word per
+        limb plane."""
         return self._chunk_length(self.field.limbs * 8, live)
 
     def chain_bytes(self, live: int = 4) -> int:
-        """The front states the contract; here an element is its planes."""
+        """`FieldVector.chain_bytes`, with an element taking one word per limb
+        plane."""
         return len(self) * self.field.limbs * 8 * max(live, 1)
 
     @property
     def padding_unit(self) -> int:
-        """The group width; the front says what it governs."""
+        """The group width: the unit `FieldVector.padding_unit` describes."""
         return lib.pmf_vec_padded_length(1)
 
     def view(self, start: int = 0, length: int | None = None) -> PseudoMersenneVector:
         """`length` elements from `start`, over this vector's own planes.
 
         The padding unit is the group width `pmf_vec_padded_length` rounds
-        to; the front states what `start` and `length` must satisfy against
-        it. The view holds a reference to this vector, so the planes outlive
+        to; `FieldVector.view` states what `start` and `length` must satisfy
+        against it. The view holds a reference to this vector, so the planes outlive
         it.
         """
         start, length = self._checked_view(start, length, lib.pmf_vec_padded_length(1))
@@ -472,8 +475,8 @@ class PseudoMersenneVector(FieldVector):
         """The kernel's own output buffer, viewed rather than copied.
 
         It already writes one digest per window, contiguously, which is the
-        packed layout the front promises -- so there is nothing to do but
-        hand it over. The view holds the buffer alive and is read-only, which
+        packed layout `FieldVector.hash_elements` and `hash_fibers` document,
+        so there is nothing to do but hand it over. The view holds the buffer alive and is read-only, which
         is what makes it safe to pass somewhere that will not copy it either.
         """
         if count == 0:
@@ -483,7 +486,8 @@ class PseudoMersenneVector(FieldVector):
         return memoryview(ffi.buffer(out)).toreadonly()
 
     def hash_elements(self, group: int = 1, stride: int = 1) -> memoryview:
-        """Every window's digest, packed; the front states the contract."""
+        """Every window's digest, packed, as `FieldVector.hash_elements`
+        documents."""
         if group < 1 or stride < 1:
             raise ValueError(
                 f"group and stride must be positive, got {group}, {stride}"

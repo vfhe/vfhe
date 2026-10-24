@@ -548,7 +548,7 @@ def test_a_twisted_pair_fold_is_expressible_in_vector_operations():
     """A twisted pair fold, written over whole vectors.
 
     ``folded[i] = hi + coeff * twist + r * coeff`` with
-    ``coeff = (lo - hi) * twist2_inv``, per position. Written once over
+    ``coeff = (lo - hi) * untwist``, per position. Written once over
     vectors and once as the loop it replaces, so the API is shown to cover
     the case before any consumer is moved onto it.
     """
@@ -678,17 +678,61 @@ class TestNativeMovementAndFold:
         generic body other implementations run."""
         field = make_field()
         word = FieldVector(field, self.values(field, 2 * n))
-        twist2_inv = FieldVector(field, self.values(field, n))
+        untwist = FieldVector(field, self.values(field, n))
         r = FieldElement(field, self.values(field, 1)[0])
         half = (field.one + field.one).inverse()
 
-        folded = word.fold_twisted(twist2_inv, r)
+        folded = word.fold_twisted(untwist, r)
 
         assert len(folded) == n
         for i in range(n):
             lo, hi = word[2 * i], word[2 * i + 1]
-            assert folded[i] == (lo + hi) * half + (lo - hi) * twist2_inv[i] * r
-        assert folded == FieldVector.fold_twisted(word, twist2_inv, r)
+            assert folded[i] == (lo + hi) * half + (lo - hi) * untwist[i] * r
+        assert folded == FieldVector.fold_twisted(word, untwist, r)
+
+    # Blocks shorter than a lane group, ragged against the kernel's window,
+    # aligned with it, and longer than it; one block and many.
+    @pytest.mark.parametrize(
+        ("m", "count"), [(1, 5), (3, 7), (8, 4), (13, 9), (6000, 3)]
+    )
+    @pytest.mark.parametrize("subfield", [False, True])
+    def test_fold_twisted_blocks_is_fold_twisted_per_block(self, m, count, subfield):
+        """Block `b` folded with `r[b]`, all reading one table: the
+        same as `fold_twisted` on each block, over a table in the field or
+        in its prime subfield, and the same as the generic body."""
+        field = make_field()
+        word = FieldVector(field, self.values(field, 2 * m * count))
+        if subfield:
+            ints = [value[0] or 1 for value in self.values(field, m)]
+            table = FieldVector(ExtensionField(PRIME, 1), ints)
+        else:
+            table = FieldVector(field, self.values(field, m))
+        r = FieldVector(field, self.values(field, count))
+
+        folded = word.fold_twisted_blocks(table, r)
+
+        expected = FieldVector.concat(
+            [
+                word.query(range(2 * m * b, 2 * m * (b + 1))).fold_twisted(table, r[b])
+                for b in range(count)
+            ]
+        )
+        assert folded == expected
+        out = FieldVector(field, m * count)
+        assert word.fold_twisted_blocks(table, r, out=out) is out
+        assert out == expected
+        if not subfield:
+            assert FieldVector.fold_twisted_blocks(word, table, r) == expected
+
+    def test_fold_twisted_blocks_checks_its_operands(self):
+        field = make_field()
+        word = FieldVector(field, self.values(field, 24))
+        table = FieldVector(field, self.values(field, 4))
+        with pytest.raises(ValueError, match="blocks"):
+            word.fold_twisted_blocks(table, FieldVector(field, 2))
+        other = ExtensionField(562949953421201, 2, 3)
+        with pytest.raises(ValueError, match="r must be"):
+            word.fold_twisted_blocks(table, FieldVector(other, 3))
 
     @pytest.mark.parametrize("n", [1, 26, 9000])
     def test_fold_twisted_inverts_lift_twisted(self, n):

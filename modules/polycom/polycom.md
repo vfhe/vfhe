@@ -137,11 +137,15 @@ The family is instantiated in one of two ways, chosen by the constructor's
   paper's condition). The base code is a
   Reed-Solomon code on `n0` points, which is what the distance argument
   needs (below) — and one code with **two encoders**: a negacyclic NTT
-  where the field has a root of unity of order `2·n0` anywhere in it (over
-  an extension field arith's batched `ExtensionFieldNTT`, whose root is in
-  `F_p` when `2·n0 | p - 1` and in the extension otherwise; over a ring the
-  `rs_*` kernels when `n0 | N/split_degree`), a Vandermonde product on `n0`
-  seeded distinct points otherwise. Above the base there is no transform at
+  where the field has a root of unity of order `2·n0` in `F_p` (over an
+  extension field arith's batched `ExtensionFieldNTT`, when `2·n0 | p - 1`;
+  over a ring the `rs_*` kernels when `n0 | N/split_degree`), a Vandermonde
+  product on `n0` seeded distinct points otherwise. `root_field="field"`
+  lets an extension field's base transform take its root in the extension
+  when `F_p` has none -- a transform whose butterflies are extension
+  products, about three times slower; off by default, since it only
+  matters for a prime short of 2-adicity and a Vandermonde base serves
+  there too. Above the base there is no transform at
   all, so **any codeword length is served on any field** — Basefold's
   field-agnosticism. Over an extension field the encoder is `O(n log n)`
   in whole-vector passes: the `2^l` base messages of a level-`l` message
@@ -164,6 +168,27 @@ The family is instantiated in one of two ways, chosen by the constructor's
   `fma`, `fold_twisted` and `lift_twisted` take as tables; the message and
   the codeword stay in `F_(p^d)`, and [ZCF24, Rmk. 1] is what carries the
   `F_p` bound to the extension message space.
+
+  **Over a ring** the same choice is `FoldableRS(..., twist_field=)`, with
+  ``"prime"`` the default: the per-prime integer tables of §2's
+  interleaved code. With ``"field"`` the twists live in the residue fields
+  `R_q/P = F_(p^d)` of the ring's primes, which is what a ring that splits
+  only partially is for -- its primes are small, and `p^d` is the field the
+  soundness needs. Such a code is defined by one `FieldFoldableRS` per
+  prime over its residue field (`residue_codes`, full-field twists, tables
+  from a seed derived from the code's and the prime), and a ring codeword
+  is the element-wise CRT lift of theirs: its CRT components at a prime
+  (`RNSRing.crt_components`) are that prime's codewords of the message's
+  components. `encode` runs each prime's code on all `N/d` components at
+  once (`encode_batch`, on the components laid out element-major), `fold`
+  folds each component with the same component of the challenge
+  (`fold_batch`), and the verifier's pair and fiber folds go through the
+  components the same way. A twist multiply costs an `F_(p^d)` product, `d`
+  prime-field products per coefficient where an integer twist costs one;
+  the distance bound runs on `d·log2 p` bits. At 30-bit primes and `d = 4`
+  that is the difference between a bound of 0.52 and 0.80 at
+  `k_d = 2^20, c = 8, k0 = 256` -- about 96 against 44 queries for 100
+  bits from the proximity term.
 - **`"rs"` — every level a Reed-Solomon code on roots of unity**, the FRI
   folding structure [BBHR18], with one transform per level from the same
   providers. With `psi` the `2n`-th root of unity `ntt_new_plan` picks,
@@ -279,6 +304,25 @@ Soundness over the ring reduces to the per-prime components: the sumcheck
 side samples challenges from the exceptional set as in the piop module
 ([GNS23]; [CCCFGS25]), and the code side is a foldable code over each
 residue field.
+
+**The residue code of a ring code** (`FieldFoldableRS.residue_code(code,
+index)`) makes that last statement an object. For a ring code with
+full-field twists it is the code the ring code was built from
+(`code.residue_codes[index]`); for one with integer twists it is built as
+follows. For the prime
+`p = ring.primes[index]`, let `P_s = (p, X^d - w_s)` be the maximal ideals
+of `R_q` containing p and `R_q/P_0` the residue field
+`ring.residue_field(index)`. The ring code applies the same `F_p`-linear maps
+to every coordinate of its symbols (its twists and base points at p are
+integers mod p), and the CRT components at p (`ring.crt_components`) are ring
+homomorphisms onto `R_q/P_0` that fix `F_p`. So component s of
+`code.encode(m)` is the encoding of component s of m under a code over
+`R_q/P_0` with the same tables, read over the prime subfield
+(`twist_field="prime"`), and folding commutes with taking components. That
+code is the residue code: same instantiation and parameters, base encoded by
+the field's transform when it evaluates at the ring code's points (the
+roots agree, since both pick them by the same rule) and by a Vandermonde
+product on those points otherwise.
 
 ## 3. The scheme and its evaluation protocol (`basefold.py`)
 

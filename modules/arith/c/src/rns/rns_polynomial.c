@@ -2329,7 +2329,7 @@ void rns_crt_maps_free(RNS_CrtMaps maps)
 #define CRT_TILE_SLOTS 256
 
 void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
-                                   RNS_CrtMaps maps)
+                                   RNS_CrtMaps maps, bool element_major)
 {
     assert(maps->to_slot_zero);
     if (count == 0)
@@ -2344,6 +2344,38 @@ void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t
     for (uint64_t b = 0; b < count; b++)
         assert(in[b]->base == base && ((in[b]->rns_mask >> row) & 1));
     const bool narrow = rns_row_is_narrow(base, row);
+    if (element_major)
+    {
+        /* Entry b * k + s: the components of one element are contiguous, and
+           a run of slots sharing a destination is a contiguous run of that
+           element's row plane and of the output plane. Each run is one
+           product of the row by its factors, written in place; a narrow row
+           is multiplied at its width and widened. */
+        uint32_t *scratch32 = narrow ? (uint32_t *)safe_aligned_malloc(k * sizeof(uint32_t)) : NULL;
+        for (uint64_t b = 0; b < count; b++)
+        {
+            for (uint64_t j = 0; j < d; j++)
+            {
+                for (uint64_t r = 0; r < maps->runs; r++)
+                {
+                    const uint64_t lo = maps->run_start[r], len = maps->run_start[r + 1] - lo;
+                    const uint64_t at = j * k + lo;
+                    uint64_t *dst = out->coeffs[maps->run_dest[r * d + j]] + b * k + lo;
+                    if (narrow)
+                    {
+                        mod_eltwise_mul_w32(scratch32, rns_row32(in[b], row) + at,
+                                            maps->factor32 + at, len, mod);
+                        mod_widen_w32(dst, scratch32, len);
+                    }
+                    else
+                        mod_eltwise_mul(dst, rns_row64(in[b], row) + at, maps->factor + at, len,
+                                        mod);
+                }
+            }
+        }
+        free(scratch32);
+        return;
+    }
     /* For the current s0 and j, row t of the tile holds the coefficients of
        x^j in slots s0 .. s0 + slots - 1 of element b0 + t, each times its
        factor, at the row's width. */

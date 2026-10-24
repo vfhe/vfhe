@@ -380,14 +380,39 @@ extern "C"
     void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVector b,
                                 const FieldVector t, uint64_t period);
 
-    // For `word` read as adjacent pairs: out[i] = (word[2i] + word[2i + 1]) / 2 +
-    // (word[2i] - word[2i + 1]) * twist2_inv[i] * r. With twist2_inv = 1 / (2 t),
-    // a pair field_vec_lift_twisted made from (a, b) with table t folds to
-    // a + r * b. Windowed for the same reason as the lift. `word` is 2n
-    // elements, `out` and the table n; `r` is one element. The table is d
-    // planes or one. The modulus must be odd.
-    void field_vec_fold_twisted(FieldVector out, const FieldVector word,
-                                const FieldVector twist2_inv, const uint64_t *r);
+    /* The fold that undoes field_vec_lift_twisted. `word` (2n elements) is
+       read as n adjacent pairs (u_i, v_i) = (word[2i], word[2i + 1]), and
+       `out` (n elements) receives
+
+           out[i] = (u_i + v_i) / 2 + (u_i - v_i) * untwist[i] * r.
+
+       If the pairs were made by field_vec_lift_twisted from a, b and a table
+       t, then u_i + v_i = 2 a[i] and u_i - v_i = 2 b[i] t[i]; so with
+       untwist[i] = 1 / (2 t[i]) the result is a[i] + r * b[i], the two
+       vectors the lift combined, recombined with the element r.
+
+       `untwist` is a table of n entries (see above: d planes, or one plane
+       of prime-field scalars) and `r` is one element, d coefficients. The
+       modulus must be odd, so that 2 is invertible. The pairs are processed
+       a window at a time in a scratch buffer that stays in cache, so `word`
+       is read once and `out` written once. */
+    void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector untwist,
+                                const uint64_t *r);
+    /* field_vec_fold_twisted applied to several vectors at once, all with
+       the same table and each with its own element. With count the length of
+       `r`, `word` holds count vectors end to end, 2m elements each; `out`
+       receives their folds end to end, m elements each; and for block
+       b < count and position i < m, with
+       (u, v) = (word[2bm + 2i], word[2bm + 2i + 1]),
+
+           out[bm + i] = (u + v) / 2 + (u - v) * untwist[i] * r[b].
+
+       `untwist` is a table of m entries, as for field_vec_fold_twisted, and
+       `r` holds one element per block. Any m is allowed. It is one windowed
+       pass over `word`, as field_vec_fold_twisted is. The modulus must be
+       odd. */
+    void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
+                                       const FieldVector untwist, const FieldVector r);
     // Sum of the first n elements, into d coefficients.
     void field_vec_sum(uint64_t *out, const FieldVector a);
     // Elementwise inverse by Montgomery's trick: one inversion and three
@@ -1159,12 +1184,13 @@ extern "C"
        the k components together induce an isomorphism
        R_q/pR_q -> (R_q/P_0)^k.
 
-       Entry s * count + b of `out` is component s of in[b]. `maps` is
+       Entry s * count + b of `out` is component s of in[b] -- or, if
+       `element_major`, entry b * k + s. `maps` is
        rns_crt_maps_new(base, row, true); `out` is a vector over
        R_q/P_0 = F_p[x]/(x^d - w_0) with n = count * k; every in[b] is over
        `base`, in the mul domain, with `row` active. */
     void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
-                                       RNS_CrtMaps maps);
+                                       RNS_CrtMaps maps, bool element_major);
     /* The inverse of polynomial_RNS_crt_components (whose notation this
        uses): `in` holds the k components of each of `count` elements, laid
        out as polynomial_RNS_crt_components writes them, and row `row` of

@@ -203,7 +203,7 @@ class ExtensionField(Field):
         return element
 
     def digest_elements(self, elements) -> bytes:
-        """The front states the contract.
+        """`Field.digest_elements`, which documents the operation.
 
         An element already holds its d coefficients contiguously, and a
         vector's digest is those coefficients one element after another -- so
@@ -400,8 +400,8 @@ class ExtensionFieldElement(FieldElement):
         """``self ** (p ** k)``, as the coefficient map it is.
 
         A permutation of the d coefficient positions with one constant each,
-        derived from ``(p, d, w)`` -- not the exponentiation the front
-        defines it as. ``k`` counts modulo d, the order of the group.
+        derived from ``(p, d, w)`` -- not the exponentiation
+        `FieldElement.frobenius` defines it as. ``k`` counts modulo d, the order of the group.
         """
         if not isinstance(k, int) or isinstance(k, bool):
             raise TypeError(f"k must be an int, not {type(k).__name__}")
