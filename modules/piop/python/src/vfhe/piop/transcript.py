@@ -93,7 +93,10 @@ class Transcript:
                 f"read of {label!r} with no counterparty: a prover-only run "
                 "cannot receive messages (only verify halves read)"
             )
-        return await entry
+        # Shielded: a reader cancelled while waiting (a sub-protocol of an
+        # AND-composition that another one's failure stops) must not cancel
+        # the entry itself, which the writer still has to set.
+        return await asyncio.shield(entry)
 
     def _consume(self, label: str) -> None:
         """Take the next message of the replayed proof, which must be the

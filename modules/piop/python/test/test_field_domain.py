@@ -224,9 +224,9 @@ def test_challenge_sampling(field):
     a = field.random_exceptional()
     assert a.field is field or a.field == field
     assert a != field.random_exceptional()
-    s1 = field.exceptional_from_seed(b"seed")
-    assert s1 == field.exceptional_from_seed(b"seed")
-    assert s1 != field.exceptional_from_seed(b"other")
+    s1 = field.random_exceptional(seed=b"seed")
+    assert s1 == field.random_exceptional(seed=b"seed")
+    assert s1 != field.random_exceptional(seed=b"other")
 
 
 def test_sumprod_check_agrees_with_the_walk(field):

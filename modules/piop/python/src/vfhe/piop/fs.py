@@ -11,17 +11,13 @@ else changes: same transcript, same compute-if-absent contract, same
 protocols — the IOP machinery stays FS-unaware, and a run is fully
 deterministic (same statement, same protocols => byte-identical transcript).
 
-Domain challenges need a deterministic bytes -> exceptional-element map.
-Over an RNS ring this module derives one itself
-(`ring_exceptional_from_seed`);
-a domain may instead provide its own `exceptional_from_seed(seed)` method,
-which takes precedence -- every `vfhe.arith.Field` does (a uniform element
-of the field), and so does the test-stub domain.
+Domain challenges need a deterministic bytes -> exceptional-element map:
+the domain's own seeded sampler, `domain.random_exceptional(seed=...)`,
+which every `vfhe.arith` ring and field provides.
 """
 
 from __future__ import annotations
 
-from vfhe.arith import Polynomial, RNSPolynomial, RNSRing
 from vfhe.crypto import hash_bytes
 
 from .party import Verifier
@@ -35,29 +31,6 @@ def expand_bytes(seed: bytes, nbytes: int) -> bytes:
         out += hash_bytes(seed + counter.to_bytes(8, "little"))
         counter += 1
     return out[:nbytes]
-
-
-def ring_exceptional_from_seed(ring: RNSRing, seed: bytes) -> RNSPolynomial:
-    """A deterministic exceptional element of `ring` derived from `seed`.
-
-    The element is a constant chunk: `split_degree` integer coefficients,
-    each uniform below min(primes) (128 bits reduced per coefficient, so the
-    modulo bias is ~2^-80). These chunks form an exceptional set of the
-    documented size |A| = min(p)^split_degree: a nonzero difference has some
-    coefficient in (-min p, min p) \\ {0}, hence is nonzero mod every prime,
-    and a nonzero polynomial of degree < split_degree is coprime to each
-    irreducible degree-split_degree factor of X^N + 1, so the difference is
-    invertible. (A seeded arith-side `sample_exceptional` can replace this;
-    `sample_exceptional`'s own set — a broadcast NTT slot — is sampled
-    differently but has the same size and role.)
-    """
-    bound = min(ring.primes)
-    stream = expand_bytes(seed, 16 * ring.split_degree)
-    coefficients = [
-        int.from_bytes(stream[16 * i : 16 * (i + 1)], "little") % bound
-        for i in range(ring.split_degree)
-    ]
-    return Polynomial(ring).from_array(coefficients)
 
 
 class FS_Verifier(Verifier):
@@ -79,15 +52,9 @@ class FS_Verifier(Verifier):
     def _draw_challenge(self, label: str, domain=None):
         seed = self._derive(b"challenge", label)
         domain = self.iop.domain if domain is None else domain
-        derive = getattr(domain, "exceptional_from_seed", None)
-        if callable(derive):
-            return derive(seed)
-        if isinstance(domain, RNSRing):
-            return ring_exceptional_from_seed(domain, seed)
-        raise TypeError(
-            f"no deterministic exceptional sampler for domain "
-            f"{type(domain).__name__}; give it an exceptional_from_seed method"
-        )
+        if domain is None:
+            raise RuntimeError("this IOP has no domain")
+        return domain.random_exceptional(seed=seed)
 
     def _draw_bits(self, label: str, nbytes: int) -> bytes:
         return expand_bytes(self._derive(b"bits", label), nbytes)

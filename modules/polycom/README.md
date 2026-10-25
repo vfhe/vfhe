@@ -54,8 +54,9 @@ The architecture and its derivation from the literature are documented in
 - `batchfold.py`: `BatchFoldEval` [CCCFGS26, §7], a second Eval protocol
   for basefold commitments over `R_q`: the claims are carried to the CRT
   components at each prime and proved by one basefold run per prime over
-  the residue code (`FieldFoldableRS.residue_code`), the ring leaves
-  answering every prime's first layer.
+  the residue code (`FieldFoldableRS.residue_code`), the primes in lockstep
+  on one shared ring challenge per round (`IOP.and_composition`) and
+  the ring leaves answering every prime's first layer.
 
 Fiat-Shamir needs nothing from this module — `IOP(fiat_shamir=True)` derives
 the fold challenges and the query coins from the transcript and binds the

@@ -269,7 +269,9 @@ class RangeDecomposition(Protocol):
         )
         iop.transcript.write(f"{label}/mu", tuple(mu.polynomial.table))
 
-        points = [self._draw_point(iop, label, shape, eta) for eta in range(self.kappa)]
+        points = [
+            await self._draw_point(iop, label, shape, eta) for eta in range(self.kappa)
+        ]
 
         psis, values = [], []
         for eta, r in enumerate(points):
@@ -282,7 +284,7 @@ class RangeDecomposition(Protocol):
             iop.transcript.write(f"{label}/w{eta}", w)
             values.append(w)
 
-        spot = self._draw_spot(iop, label, shape)
+        spot = await self._draw_spot(iop, label, shape)
         return self._outputs(statement, shape, mu, points, psis, values, spot)
 
     async def verify(
@@ -299,7 +301,9 @@ class RangeDecomposition(Protocol):
             MLE(field=self.field, variables=shape.variables, evaluations=list(table))
         )
 
-        points = [self._draw_point(iop, label, shape, eta) for eta in range(self.kappa)]
+        points = [
+            await self._draw_point(iop, label, shape, eta) for eta in range(self.kappa)
+        ]
 
         free = shape.variables[self.m :]
         psis, values = [], []
@@ -311,7 +315,7 @@ class RangeDecomposition(Protocol):
             )
             values.append(await iop.transcript.read(f"{label}/w{eta}"))
 
-        spot = self._draw_spot(iop, label, shape)
+        spot = await self._draw_spot(iop, label, shape)
 
         for eta, (r, psi, w) in enumerate(zip(points, psis, values, strict=True)):
             self._check_recomposition(shape, r, psi, w, label, eta)
@@ -359,7 +363,9 @@ class RangeDecomposition(Protocol):
         """
         return {shape.variables[i]: self.field(r[i]) for i in range(self.m)}
 
-    def _draw_point(self, iop: Any, label: str, shape: _Shape, eta: int) -> list[int]:
+    async def _draw_point(
+        self, iop: Any, label: str, shape: _Shape, eta: int
+    ) -> list[int]:
         """One `r_eta` in `Sigma^(ell+nu)`, from raw coins.
 
         Not `challenge()`: these are integers, read modulo `q` to query `v`
@@ -369,15 +375,15 @@ class RangeDecomposition(Protocol):
         """
         width = self.alphabet.bit_length() - 1
         count = shape.ell + shape.nu
-        raw = iop.verifier.challenge_bits(f"{label}/r{eta}", width * count)
+        raw = await iop.verifier.challenge_bits(f"{label}/r{eta}", width * count)
         coins = int.from_bytes(raw, "little")
         mask = self.alphabet - 1
         return [(coins >> (width * i)) & mask for i in range(count)]
 
-    def _draw_spot(self, iop: Any, label: str, shape: _Shape) -> list:
+    async def _draw_spot(self, iop: Any, label: str, shape: _Shape) -> list:
         """`s'`, one exceptional-set element of `F_p` per free variable."""
         return [
-            iop.verifier.challenge(f"{label}/s{i}")
+            await iop.verifier.challenge(f"{label}/s{i}")
             for i in range(shape.ell_star - self.m)
         ]
 

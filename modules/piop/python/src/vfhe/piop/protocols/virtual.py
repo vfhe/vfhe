@@ -115,7 +115,8 @@ class SumDefStart(Protocol):
             alphas = [1]
         else:
             alphas = [
-                iop.verifier.challenge(f"{label}/a{i}") for i in range(len(points))
+                await iop.verifier.challenge(f"{label}/a{i}")
+                for i in range(len(points))
             ]
         bodies = [
             G.evaluate({v: p[v] for v in L.variables}, in_place=False) for p in points

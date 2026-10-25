@@ -161,3 +161,36 @@ def test_from_crt_components_checks_its_vectors(ring):
         ring.from_crt_components(vectors[:-1])
     with pytest.raises(ValueError, match="residue_field"):
         ring.from_crt_components(vectors[::-1])
+
+
+def test_a_seeded_exceptional_element_is_its_coefficients_in_every_field(ring):
+    """`Ring.random_exceptional(seed)` read at slot 0 of each prime is
+    `Field.random_exceptional(seed, bound=min(primes))`: the same integer
+    coefficients, below the smallest prime, in every residue field."""
+    bound = min(ring.primes)
+    element = ring.random_exceptional(seed=b"seed")
+    assert element == ring.random_exceptional(seed=b"seed")
+    assert element != ring.random_exceptional(seed=b"other")
+    assert ring.random_exceptional(seed=b"seed", ntt=False) == element
+    coefficients = element.get_polynomial()
+    assert all(c < bound for c in coefficients[: ring.split_degree])
+    assert all(c == 0 for c in coefficients[ring.split_degree :])
+    for index in range(ring.ell):
+        field = ring.residue_field(index)
+        assert ring.crt_components([element], index)[0] == (
+            field.random_exceptional(seed=b"seed", bound=bound)
+        )
+
+
+def test_the_native_exceptional_sampler_writes_the_drawn_integers(ring):
+    """`sample_exceptional` writes, natively and with no transform, the
+    element whose coefficients are the integers `vfhe.crypto.seeded` draws
+    below the smallest prime; unseeded draws are in the same set."""
+    from vfhe.crypto import seeded
+
+    bound, d = min(ring.primes), ring.split_degree
+    integers = seeded.below_many(d, bound, b"exceptional", b"seed")
+    expected = Polynomial(ring).from_array(integers)
+    assert ring.random_exceptional(seed=b"seed") == expected
+    fresh = ring.random_exceptional(ntt=False).get_polynomial()
+    assert all(c < bound for c in fresh[:d]) and not any(fresh[d:])

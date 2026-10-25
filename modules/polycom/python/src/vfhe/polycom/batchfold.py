@@ -17,8 +17,8 @@ the point's coordinates and of the value.
 
 `BatchFoldEval` proves a bundle of M claims f_{c(m)}(z_m) = y_m on C
 polynomials committed under one `Basefold` scheme over R_q. At each prime,
-one after the other, the k*M component claims on the k*C component
-polynomials are reduced, all in F_i:
+the k*M component claims on the k*C component polynomials are reduced, all
+in F_i:
 
 1. to claims at one common point r_i, by one sumcheck [CCCFGS26, Fig. 3],
    which is skipped when every component of every point is the same point
@@ -27,6 +27,14 @@ polynomials are reduced, all in F_i:
    k*C component polynomials [CCCFGS26, Fig. 4];
 3. which one basefold run over the residue code at p_i
    (`FieldFoldableRS.residue_code`) proves.
+
+The primes run in lockstep, as the sub-protocols of one AND-composition
+(`IOP.and_composition`): in each round every prime sends its message, then
+one challenge is drawn for all of them. It is an exceptional element of
+R_q, a polynomial of degree below d with integer coefficients below the
+smallest prime (`Ring.random_exceptional`), and every prime reads it as its
+CRT component 0: the element of F_i with the same integer coefficients. The sumcheck is skipped at every prime or at none, so the
+primes' rounds stay aligned.
 
 The residue code's codewords are the CRT components of the ring code's
 codewords. So u_i's codeword is the same linear combination of the
@@ -38,7 +46,8 @@ verifier authenticates against the ring commitments and maps to the leaves
 of every u_i. The later layers are committed by each run, over F_i.
 
 [CCCFGS26, §7] instead commits to each of the k*L component polynomials
-separately; see `BatchFoldEval.soundness_error`.
+separately and runs each prime with its own query positions; see
+`BatchFoldEval.soundness_error` for why sharing both costs no soundness.
 """
 
 from __future__ import annotations
@@ -47,7 +56,13 @@ from array import array
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import MLE, FieldVector, Polynomial, Ring, RNSPolynomial
-from vfhe.piop import Prover, Rejection, Statement, Verifier, exceptional_set_size
+from vfhe.piop import (
+    Prover,
+    Rejection,
+    Statement,
+    Verifier,
+    exceptional_set_size,
+)
 from vfhe.piop.protocols.sumcheck.rounds import interpolate_evals
 
 from .basefold import (
@@ -124,19 +139,28 @@ class BatchFoldEval(BasefoldEval):
         + (k polynomials - 1) / |F| + (1 - delta + gamma d)^rep)``,
         a union bound over the L primes of the common-point sumcheck, the
         random linear combination and basefold over a residue code. Here
-        |F| is the size of the smallest residue field F_i, l the number of
+        |F| is the size of the smallest residue field F_i, which is also the
+        size of the set the shared challenges come from, l the number of
         variables, k the number of components at a prime, and d the code's
-        depth (not the split degree). `delta` is the residue codes' relative distance (each
-        `residue_protocols[i].code.relative_distance()` reports its own),
-        and `gamma` is the caller's, as in `BasefoldEval.soundness_error`.
-        None if a field's size is unknown.
+        depth (not the split degree). `delta` is the residue codes' relative
+        distance (each `residue_protocols[i].code.relative_distance()`
+        reports its own), and `gamma` is the caller's, as in
+        `BasefoldEval.soundness_error`. None if a field's size is unknown.
 
-        The cited bound is for k*L separately committed component
-        polynomials, each opened with its own query positions. Here the ring
-        commitments serve every prime and the L runs share their query
-        positions; the same expression is returned, and that case is not
-        covered by the cited argument. As in `BasefoldEval.soundness_error`,
-        the hash's collision term is not included.
+        The paper commits to the k*L component polynomials separately and
+        opens each prime with its own query positions and challenges. Here
+        the ring commitments serve every prime, and the primes share their
+        query positions and their challenges (the challenges of the primes
+        are correlated: they are one ring element's components). The
+        per-prime argument still applies. Prime i's checks need its
+        challenges to come after the messages they answer, and its queries
+        to be uniform and drawn after every oracle they check is committed:
+        the ring trees are committed before the protocol and the queries are
+        drawn after every prime has folded. A ring leaf holds every
+        component at its position, which includes what the paper's verifier
+        reads there. The same expression is returned. As in
+        `BasefoldEval.soundness_error`, the hash's collision term is not
+        included.
         """
         sizes = [exceptional_set_size(field) for field in self.fields]
         if any(size is None for size in sizes):
@@ -162,6 +186,24 @@ class BatchFoldEval(BasefoldEval):
         ]
         return self.ring.crt_components(elements, index, element_major=True)
 
+    def _points(self, points: list[list]) -> tuple[list[FieldVector], bool]:
+        """Per prime, the components of the claims' points, entry
+        ``(m * l + t) * k + s`` being component s of coordinate t of z_m;
+        and whether every component of every point is one point at every
+        prime, in which case no prime runs the common-point sumcheck."""
+        flat = [x for point in points for x in point]
+        zs = [self._components(flat, i) for i in range(self.ring.ell)]
+        num_vars = len(points[0])
+        return zs, all(_one_point(z, num_vars, self.slots) for z in zs)
+
+    def _challenge_at_prime(self, seed: bytes, field) -> Any:
+        """A prime's challenge from a round's seed: the ring's exceptional
+        element derived from the seed read in `field` as its CRT component
+        0, which is the element of `field` with the same integer
+        coefficients below the smallest prime (`Field.random_exceptional`
+        with that bound). Every prime reads the same integers."""
+        return field.random_exceptional(seed=seed, bound=min(self.ring.primes))
+
     async def prove(
         self, prover: Prover, statements: list[Statement]
     ) -> list[Statement]:
@@ -177,11 +219,20 @@ class BatchFoldEval(BasefoldEval):
         if iop is None:
             raise RuntimeError("this party is not bound to an IOP")
         label = f"batchfold{statements[0].path}"
-        runs = [
-            self._prove_prime(iop, f"{label}/p{i}", i, openings, owners, points)
-            for i in range(self.ring.ell)
-        ]
-        queries = self.query_positions(iop.verifier.challenge_bits(f"{label}/queries"))
+        zs, skip = self._points(points)
+        runs = await iop.and_composition(
+            label,
+            [
+                self._prove_prime(
+                    iop, f"{label}/p{i}", i, openings, owners, zs[i], skip
+                )
+                for i in range(self.ring.ell)
+            ],
+            challenge_sampler=self._challenge_at_prime,
+        )
+        queries = self.query_positions(
+            await iop.verifier.challenge_bits(f"{label}/queries")
+        )
         # Each run answers its first layer with None: the ring leaves below
         # answer it for every prime.
         layers = [run.answers(queries) for run in runs]
@@ -199,30 +250,32 @@ class BatchFoldEval(BasefoldEval):
         iop.transcript.write(f"{label}/answers", answers)
         return []
 
-    def _prove_prime(
+    async def _prove_prime(
         self,
         iop,
         label: str,
         index: int,
         openings: list[BasefoldOpening],
         owners: list[int],
-        points: list[list],
+        z: FieldVector,
+        skip: bool,
     ) -> _ProverRun:
-        """The prover's reduction at prime `index` (steps 1-2 of the module
-        docstring), then the folds of the basefold run on u_i, whose query
-        answers are left to the caller."""
+        """The prover's sub-protocol at prime `index`: the reduction (steps 1-2 of
+        the module docstring), skipping the sumcheck when `skip`, then the
+        folds of the basefold run on u_i, whose query answers are left to
+        the caller. `z` holds the points' components at this prime
+        (`_points`)."""
         field, k = self.fields[index], self.slots
-        claims, num_vars = len(points), len(points[0])
+        claims = len(owners)
+        num_vars = len(z) // (claims * k)
         ring = self.ring
         # Entry b * k + s of tables[c] is component s of entry b of f_c's
-        # table; entry (m * l + t) * k + s of z is component s of coordinate
-        # t of z_m.
+        # table.
         tables = [
             ring.crt_components(o.polynomial.table, index, element_major=True)
             for o in openings
         ]
-        z = self._components([x for point in points for x in point], index)
-        if _one_point(z, num_vars, k):
+        if skip:
             r = [z[t * k] for t in range(num_vars)]
         else:
             # Step 1: with sigma the verifier's challenge, the sumcheck proves
@@ -230,7 +283,7 @@ class BatchFoldEval(BasefoldEval):
             # h(b) = sum_{m,s} sigma^(m k + s) eq~(z_{m,s}, b) f_{c(m),s}(b).
             # weights[c] is laid out as tables[c], with entry b * k + s the sum
             # over the claims m on f_c of sigma^(m k + s) eq~(z_{m,s}, b).
-            sigma = iop.verifier.challenge(f"{label}/point/s", field)
+            sigma = await iop.verifier.challenge(f"{label}/point/s", field)
             powers = _power_vector(field, sigma, claims * k)
             weights: list[Any] = [None] * len(tables)
             for m, c in enumerate(owners):
@@ -258,7 +311,7 @@ class BatchFoldEval(BasefoldEval):
                     ((t_hi * 2 - t_lo) * (w_hi * 2 - w_lo)).sum(),
                 )
                 iop.transcript.write(f"{label}/point/g{t}", evals)
-                x = iop.verifier.challenge(f"{label}/point/r{t}", field)
+                x = await iop.verifier.challenge(f"{label}/point/r{t}", field)
                 r.append(x)
                 table = t_lo.fma(t_hi - t_lo, x)
                 weight = w_lo.fma(w_hi - w_lo, x)
@@ -267,7 +320,9 @@ class BatchFoldEval(BasefoldEval):
         # Step 2: u = sum_{c,s} alpha^(c k + s) f_{c,s}, on the same
         # combination of the components of the committed codewords.
         alphas = _power_vector(
-            field, iop.verifier.challenge(f"{label}/alpha", field), len(tables) * k
+            field,
+            await iop.verifier.challenge(f"{label}/alpha", field),
+            len(tables) * k,
         )
         u = MLE(
             field=field,
@@ -280,7 +335,7 @@ class BatchFoldEval(BasefoldEval):
             k,
         )
         run = _ProverRun(self.residue_protocols[index], label, u, r, word, _no_answer)
-        run.fold(iop)
+        await run.fold(iop)
         return run
 
     async def verify(
@@ -295,25 +350,34 @@ class BatchFoldEval(BasefoldEval):
         label = f"batchfold{statements[0].path}"
         values = [statement.value for statement in statements]
         count, k = len(commitments), self.slots
-        runs, alphas = [], []
+        zs, skip = self._points(points)
         # The first-layer leaves of u_i at the query positions, computed from
         # the ring leaves once those are authenticated.
         tops: list[Any] = [None] * self.ring.ell
-        for i in range(self.ring.ell):
-            r, alpha, value = await self._verify_prime(
-                iop, verifier, f"{label}/p{i}", i, count, owners, points, values
-            )
-            run = _VerifierRun(
-                self.residue_protocols[i],
-                f"{label}/p{i}",
-                r,
-                value,
-                lambda _answers, _positions, i=i: tops[i],
-            )
-            await run.fold(iop, verifier, self.fields[i])
-            runs.append(run)
-            alphas.append(alpha)
-        queries = self.query_positions(verifier.challenge_bits(f"{label}/queries"))
+        results = await iop.and_composition(
+            label,
+            [
+                self._verify_prime(
+                    iop,
+                    verifier,
+                    f"{label}/p{i}",
+                    i,
+                    count,
+                    owners,
+                    zs[i],
+                    skip,
+                    values,
+                    tops,
+                )
+                for i in range(self.ring.ell)
+            ],
+            challenge_sampler=self._challenge_at_prime,
+        )
+        runs = [run for run, _ in results]
+        alphas = [alpha for _, alpha in results]
+        queries = self.query_positions(
+            await verifier.challenge_bits(f"{label}/queries")
+        )
         answers = await iop.transcript.read(f"{label}/answers")
         if (
             not isinstance(answers, tuple)
@@ -351,20 +415,24 @@ class BatchFoldEval(BasefoldEval):
         index: int,
         count: int,
         owners: list[int],
-        points: list[list],
+        z: FieldVector,
+        skip: bool,
         values: list,
-    ) -> tuple[list, FieldVector, Any]:
-        """The verifier's reduction at prime `index` (steps 1-2 of the module
-        docstring) for claims on `count` polynomials: returns the common
-        point r_i, the combination's coefficients and the value v_i that the
-        basefold run on u_i must prove."""
+        tops: list,
+    ) -> tuple[_VerifierRun, FieldVector]:
+        """The verifier's sub-protocol at prime `index`, for claims on `count`
+        polynomials: the reduction (steps 1-2 of the module docstring),
+        skipping the sumcheck when `skip`, then the folds of the basefold
+        run on u_i. Returns the run, whose query checks are left to the
+        caller and read u_i's first-layer leaves from ``tops[index]``, and
+        the combination's coefficients."""
         field, k = self.fields[index], self.slots
-        claims, num_vars = len(points), len(points[0])
+        claims = len(owners)
+        num_vars = len(z) // (claims * k)
         one = field.one
-        z = self._components([x for point in points for x in point], index)
         # Entry m * k + s is component s of y_m.
         y = self._components(values, index)
-        if _one_point(z, num_vars, k):
+        if skip:
             r = [z[t * k] for t in range(num_vars)]
             blocks: list[Any] = [None] * count
             for m, c in enumerate(owners):
@@ -377,7 +445,7 @@ class BatchFoldEval(BasefoldEval):
                     )
             q = FieldVector.concat(blocks)
         else:
-            sigma = verifier.challenge(f"{label}/point/s", field)
+            sigma = await verifier.challenge(f"{label}/point/s", field)
             powers = _power_vector(field, sigma, claims * k)
             claim = (powers * y).sum()
             r = []
@@ -387,7 +455,7 @@ class BatchFoldEval(BasefoldEval):
                     raise Rejection(f"{label} point round {t}: malformed message")
                 if not (evals[0] + evals[1] == claim):
                     raise Rejection(f"{label} point round {t}: g(0) + g(1) != claim")
-                x = verifier.challenge(f"{label}/point/r{t}", field)
+                x = await verifier.challenge(f"{label}/point/r{t}", field)
                 r.append(x)
                 claim = interpolate_evals(evals, x)
             q = await iop.transcript.read(f"{label}/point/q")
@@ -411,9 +479,17 @@ class BatchFoldEval(BasefoldEval):
             if not (expected == claim):
                 raise Rejection(f"{label}: the common-point values do not match")
         alphas = _power_vector(
-            field, verifier.challenge(f"{label}/alpha", field), count * k
+            field, await verifier.challenge(f"{label}/alpha", field), count * k
         )
-        return r, alphas, (alphas * q).sum()
+        run = _VerifierRun(
+            self.residue_protocols[index],
+            label,
+            r,
+            (alphas * q).sum(),
+            lambda _answers, _positions: tops[index],
+        )
+        await run.fold(iop, verifier, field)
+        return run, alphas
 
 
 def _no_answer(_leaf: int) -> None:

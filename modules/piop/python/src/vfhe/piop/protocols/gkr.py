@@ -62,10 +62,12 @@ class OutputTest(Protocol):
             return None
         return statement.oracles[0].num_vars / size
 
-    def _point(self, iop: IOP, statement: Statement) -> list:
+    async def _point(self, iop: IOP, statement: Statement) -> list:
         label = f"{self.name}{statement.path}"
         out, _ = statement.oracles
-        return [iop.verifier.challenge(f"{label}/r{i}") for i in range(out.num_vars)]
+        return [
+            await iop.verifier.challenge(f"{label}/r{i}") for i in range(out.num_vars)
+        ]
 
     def _outputs(self, statement: Statement, point: list, value) -> list[Statement]:
         out, top = statement.oracles
@@ -94,7 +96,7 @@ class OutputTest(Protocol):
         (statement,) = statements
         iop = prover.iop
         out, top = statement.oracles
-        point = self._point(iop, statement)
+        point = await self._point(iop, statement)
         table = resolve_table(top, prover.witnesses)
         value = table.evaluate(
             dict(zip(table.variables, point, strict=True)), in_place=False
@@ -109,7 +111,7 @@ class OutputTest(Protocol):
         (statement,) = statements
         iop = verifier.iop
         out, _ = statement.oracles
-        point = self._point(iop, statement)
+        point = await self._point(iop, statement)
         if out.public:
             value = out.query(dict(zip(out.variables, point, strict=True)))
         else:

@@ -172,8 +172,31 @@ def test_the_common_point_sumcheck_is_skipped_for_one_point(setting):
     # One integer point, the same in every component: no sumcheck.
     iop = setting.iop()
     assert iop.run(_statement(bundles["two polynomials, one integer point"]))
-    assert not any("/point/" in x for x in _labels(iop))
-    assert "batchfold/0/p0/alpha" in _labels(iop)
+    labels = _labels(iop)
+    assert not any("/point/" in x for x in labels)
+    # The combination's challenge is the first round, then the folds start.
+    assert labels[:2] == ["batchfold/0/round0", "batchfold/0/p0/g0"]
+
+
+def test_the_primes_run_in_lockstep(setting):
+    """Between two rounds' shared seeds, every prime writes its messages,
+    prime 0 first: one challenge per round serves all primes."""
+    iop = setting.iop()
+    assert iop.run(_statement(_bundles(setting)["two polynomials, three points"]))
+    segments: list[list[int]] = [[]]
+    for label in _labels(iop):
+        parts = label.split("/")
+        if parts[2].startswith("round"):
+            segments.append([])
+        elif parts[2].startswith("p"):
+            segments[-1].append(int(parts[2][1:]))
+    primes = list(range(setting.ring.ell))
+    # The rounds of the sumcheck, the combination and the folds; the query
+    # positions and the answers come after the last one.
+    rounds = 1 + 3 + 1 + setting.scheme.code.d
+    assert len(segments) == rounds + 1 and segments[0] == []
+    for segment in segments[1:]:
+        assert sorted(set(segment)) == primes and segment == sorted(segment)
 
 
 def test_a_false_value_anywhere_is_rejected(setting):

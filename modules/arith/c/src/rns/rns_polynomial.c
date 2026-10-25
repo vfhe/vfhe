@@ -432,6 +432,44 @@ void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
     free(scratch);
 }
 
+void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed, uint64_t seed_len)
+{
+    const uint64_t d = out->base->split_degree;
+    const uint64_t poly_size = out->base->N / d;
+    uint64_t bound = UINT64_MAX;
+    for (size_t i = 0; i < out->base->l; i++)
+        if ((out->rns_mask & (1ULL << i)) && out->base->mods[i]->q < bound)
+            bound = out->base->mods[i]->q;
+    uint64_t *a = (uint64_t *)safe_aligned_malloc(d * sizeof(uint64_t));
+    if (seed == NULL)
+        generate_uniform_below(a, d, bound);
+    else
+        prng_sample_below(a, d, bound, "exceptional", seed, seed_len);
+    // Coefficient j of slot k sits at j * poly_size + k; every a_j is below
+    // every prime, so it is already reduced.
+    for (size_t i = 0; i < out->base->l; i++)
+    {
+        if (!(out->rns_mask & (1ULL << i)))
+            continue;
+        for (uint64_t j = 0; j < d; j++)
+        {
+            if (rns_row_is_narrow(out->base, i))
+            {
+                uint32_t *row = out->rows32[i] + j * poly_size;
+                for (uint64_t k = 0; k < poly_size; k++)
+                    row[k] = (uint32_t)a[j];
+            }
+            else
+            {
+                uint64_t *row = out->rows64[i] + j * poly_size;
+                for (uint64_t k = 0; k < poly_size; k++)
+                    row[k] = a[j];
+            }
+        }
+    }
+    free(a);
+}
+
 void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma)
 {
     int64_t *noise_arr = (int64_t *)safe_aligned_malloc(out->base->N * sizeof(int64_t));

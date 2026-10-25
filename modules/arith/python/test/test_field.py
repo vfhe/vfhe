@@ -251,7 +251,7 @@ class TestFieldSurface:
         seeded = field.random_element(b"seed")
         assert seeded == field.random_element(b"seed")
         assert seeded != field.random_element(b"other")
-        assert field.exceptional_from_seed(b"seed") == seeded
+        assert field.random_exceptional(seed=b"seed") == seeded
         fresh = [field.random_element() for _ in range(4)]
         assert len({tuple(e.value) for e in fresh}) == 4
         assert isinstance(field.random_exceptional(), FieldElement)

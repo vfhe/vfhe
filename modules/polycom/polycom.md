@@ -450,15 +450,22 @@ exactly when `f_{i,s}(z_{i,s}) = y_{i,s}` for every prime `i` and slot
 component `s` of `f`'s table. At each prime, the `kM` component claims on
 the `kC` component polynomials go through the two steps above, over `F_i`:
 the common-point sumcheck (skipped when every component of every point is
-one point, e.g. integer points), with challenges drawn in `F_i`
-(`Verifier.challenge(label, domain)`), then the combination
+one point, e.g. integer points, at every prime), then the combination
 `u_i = sum_{c,s} alpha^(ck+s) f_{c,s}`, proved by one run over the residue
 code at `p_i` (`FieldFoldableRS.residue_code`, §2). The residue code's
 codewords are the components of the ring code's, so `u_i`'s codeword is the
 same combination of the components of the committed ring codewords, and no
-other commitment is made. The runs, one for each of the `L` primes of
-`q`, fold one prime after another and
-then answer one set of query positions: a query's first layer is answered
+other commitment is made.
+
+The `L` primes of `q` run in lockstep, as the sub-protocols of one
+AND-composition (`IOP.and_composition`, piop.md §5): in each round every
+prime sends its message, then one challenge serves them all. It is an
+exceptional element of `R_q` -- a polynomial of degree below
+`split_degree` with integer coefficients below the smallest prime
+(`Ring.random_exceptional`) -- read by each prime as its CRT component 0,
+which is the element of `F_i` with the same integers
+(`Field.random_exceptional(seed, bound=min p_i)`, no ring arithmetic). After the last round, the
+primes answer one set of query positions: a query's first layer is answered
 once, by the ring leaves, which the verifier authenticates against the ring
 roots and maps to the leaves of every `u_i`; the later layers are each
 run's own, over `F_i`. The tables are taken element-major (component `s` of
@@ -467,12 +474,17 @@ whole-vector split and fold with block `k`, and the combination is one
 multiply-add per polynomial and `log2 k` pairwise sums.
 
 [CCCFGS26, §7] commits to each of the `kL` component polynomials
-separately and opens each prime with its own queries; sharing the ring
-commitment and the query positions is not covered by its argument.
-`BatchFoldEval.soundness_error` returns its bound,
+separately and opens each prime with its own queries and challenges.
+Sharing the ring commitment, the query positions and the challenges costs
+no soundness: prime `i`'s argument needs its challenges to come after the
+messages they answer, and its queries to be uniform and drawn after every
+oracle they check is committed, which holds (the ring trees precede the
+protocol, the queries follow every prime's folds); and a ring leaf holds
+every component at its position, which includes what the paper's verifier
+reads there. `BatchFoldEval.soundness_error` returns the paper's bound,
 `L·(2d/(gamma^3·|F|) + (2l + kM - 1)/|F| + (kC - 1)/|F| + (1 - delta + gamma·d)^rep)`
-with `|F|` the size of the smallest `F_i` and `d` the code's depth, and
-says so.
+with `|F|` the size of the smallest `F_i` (also the size of the set the
+shared challenges come from) and `d` the code's depth.
 
 **The PIOP world composes directly**: sumcheck-style reductions end in
 `Relation_Eval` claims carrying oracles, and `BasefoldEval` *is* the

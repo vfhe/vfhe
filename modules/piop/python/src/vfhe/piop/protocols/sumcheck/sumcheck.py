@@ -90,7 +90,7 @@ class _SumcheckRounds(Protocol):
         point = {}
         for i, var in enumerate(list(factors[0].variables)):
             iop.transcript.write(f"{label}/g{i}", self._round_message(factors, var))
-            r = iop.verifier.challenge(f"{label}/r{i}")
+            r = await iop.verifier.challenge(f"{label}/r{i}")
             point[var] = r
             # Out of place while a factor is still the table of the
             # statement's own oracle; a prover view (`owned`) brings fresh
@@ -115,7 +115,7 @@ class _SumcheckRounds(Protocol):
             evals = await iop.transcript.read(f"{label}/g{i}")
             if not (evals[0] + evals[1] == claim):
                 raise Rejection(f"{label} round {i}: g(0) + g(1) != claim")
-            r = verifier.challenge(f"{label}/r{i}")
+            r = await verifier.challenge(f"{label}/r{i}")
             point[var] = r
             claim = interpolate_evals(evals, r)
         return await self._verify_tail(iop, statement, label, point, claim)

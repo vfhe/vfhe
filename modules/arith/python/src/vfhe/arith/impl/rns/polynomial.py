@@ -557,8 +557,8 @@ class RNSRing(Ring):
     def random_gaussian_element(self, sigma, ntt=True):
         return Polynomial(self).sample_gaussian(sigma, ntt)
 
-    def random_exceptional(self, ntt=True):
-        return Polynomial(self).sample_exceptional(ntt)
+    def random_exceptional(self, seed=None, ntt=True):
+        return Polynomial(self).sample_exceptional(seed, ntt)
 
 
 class Representation(Enum):
@@ -765,9 +765,11 @@ class RNSPolynomial(Polynomial):
             self.to_NTT()
         return self
 
-    def sample_exceptional(self, ntt=True):
-        self.ring.lib.polynomial_gen_random_RNSc_polynomial(self.obj)
-        self.ring.lib.polynomial_RNS_broadcast_slot(self.obj, self.obj, 0)
+    def sample_exceptional(self, seed=None, ntt=True):
+        if seed is None:
+            self.ring.lib.polynomial_RNS_sample_exceptional(self.obj, ffi.NULL, 0)
+        else:
+            self.ring.lib.polynomial_RNS_sample_exceptional(self.obj, seed, len(seed))
         self.repr = repr.ntt
         if not ntt:
             self.to_coeff()

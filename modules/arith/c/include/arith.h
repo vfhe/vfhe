@@ -910,6 +910,16 @@ extern "C"
                                                             uint64_t size, RNS_Base base);
     void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in);
     void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out);
+    /* A uniform element of the exceptional set of R_q: the polynomial
+       a(X) = a_0 + a_1 X + ... + a_{d-1} X^{d-1}, d = split_degree, with each
+       a_j uniform in [0, p_min), p_min the smallest prime of `out`'s rows.
+       The a_j are drawn from `seed` (prng_sample_below, context
+       "exceptional") or, when `seed` is NULL, from fresh entropy. Written in
+       the mul domain: modulo every factor X^d - w_s of X^N + 1, a has degree
+       below d and is its own residue, so every slot of every row holds the
+       same d values and no transform is needed. */
+    void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed,
+                                           uint64_t seed_len);
     void polynomial_mul_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2);
     void polynomial_sub_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2);
     void polynomial_sub_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1,

@@ -110,7 +110,7 @@ def test_sumcheck_mle_dense():
 
 def test_verifier_challenge_samples_and_publishes():
     iop = _setup(_IntDomain())
-    r = iop.verifier.challenge("r0")
+    r = iop.loop.run_until_complete(iop.verifier.challenge("r0"))
     assert r == 2  # first value of the deterministic stub domain
     assert iop.transcript.entries["r0"].result() == 2
     assert iop.transcript.order == ["r0"]
@@ -121,11 +121,16 @@ def test_verifier_challenge_bits_samples_and_publishes():
     # into derived randomness on both sides. Compute-if-absent like
     # `challenge`, and shapeless — the byte length is the only structure.
     iop = _setup(_IntDomain())
-    seed = iop.verifier.challenge_bits("q0")
+    seed = iop.loop.run_until_complete(iop.verifier.challenge_bits("q0"))
     assert isinstance(seed, bytes) and len(seed) == 32  # 256 bits default
-    assert iop.verifier.challenge_bits("q0") == seed  # recorded, not resampled
+    assert (
+        iop.loop.run_until_complete(iop.verifier.challenge_bits("q0")) == seed
+    )  # recorded, not resampled
     assert iop.transcript.entries["q0"].result() == seed
-    assert len(iop.verifier.challenge_bits("q1", bits=100)) == 13  # ceil(100/8)
+    assert (
+        len(iop.loop.run_until_complete(iop.verifier.challenge_bits("q1", bits=100)))
+        == 13
+    )  # ceil(100/8)
 
 
 def test_sumcheck_soundness_error():

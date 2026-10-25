@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from vfhe.crypto import entropy
 
+from .and_composition import current_subprotocol
 from .oracle import oracle_closure
 from .protocol import Rejection
 from .relation import Statement, statement_oracles
@@ -129,7 +130,7 @@ class Verifier(Party):
     """Sends challenges and is restricted to oracle queries (by convention
     in-process; a commitment compiler can enforce it cryptographically)."""
 
-    def challenge(self, label: str, domain=None):
+    async def challenge(self, label: str, domain=None):
         """The challenge `label`: on first call, sample from the exceptional
         set of `domain` (the IOP's domain by default) and write it to the
         transcript; later calls return the recorded value.
@@ -137,22 +138,27 @@ class Verifier(Party):
         A protocol passes `domain` when its challenge lives in another ring or
         field than the IOP's, such as a residue field of the IOP's ring.
 
-        Either party may call this (`iop.verifier.challenge(label)`) — under
-        Fiat-Shamir the challenge is a deterministic function of the
+        Either party may call this (`await iop.verifier.challenge(label)`) —
+        under Fiat-Shamir the challenge is a deterministic function of the
         transcript so far, so both sides compute the same value; a FS
-        verifier is a subtype overriding only this method, and the IOP
-        machinery stays unaware of FS. Public-coin honesty is the caller's
-        responsibility: draw a challenge only after writing the round
-        message it answers, so the transcript order stays canonical.
-        """
-        entry = self.iop.transcript.entries.get(label)
-        if entry is not None and entry.done():
-            return entry.result()
-        value = self._draw_challenge(label, domain)
-        self.iop.transcript.write(label, value, derived=True)
-        return value
+        verifier is a subtype overriding only the draw, and the IOP machinery
+        stays unaware of FS. Public-coin honesty is the caller's
+        responsibility: draw a challenge only after writing the round message
+        it answers, so the transcript order stays canonical.
 
-    def challenge_bits(self, label: str, bits: int = 256) -> bytes:
+        It is awaited because, inside an AND-composition
+        (`IOP.and_composition`), a challenge is shared with the other
+        sub-protocols and waits until every one of them has written its
+        messages for the round; outside one it returns at once.
+        """
+        bound = current_subprotocol(self.iop)
+        if bound is not None:
+            composition, index = bound
+            domain = self.iop.domain if domain is None else domain
+            return await composition.challenge(index, label, domain)
+        return self._recorded_challenge(label, domain)
+
+    async def challenge_bits(self, label: str, bits: int = 256) -> bytes:
         """The bit-string challenge `label`: on first call, sample
         ceil(bits / 8) uniform bytes and write them to the transcript; later
         calls return the recorded value.
@@ -170,9 +176,30 @@ class Verifier(Party):
         sees it.
 
         Same contract as `challenge` otherwise — compute-if-absent, either
-        party may call it, and a Fiat-Shamir verifier overrides both
-        samplers to derive from the transcript instead.
+        party may call it, a Fiat-Shamir verifier derives it from the
+        transcript instead, and inside an AND-composition it is a round
+        shared with the other sub-protocols.
         """
+        bound = current_subprotocol(self.iop)
+        if bound is not None:
+            composition, index = bound
+            return await composition.challenge_bits(index, label, (bits + 7) // 8)
+        return self._recorded_bits(label, bits)
+
+    def _recorded_challenge(self, label: str, domain=None):
+        """`challenge` outside an AND-composition: the recorded value,
+        or a fresh draw written to the transcript."""
+        entry = self.iop.transcript.entries.get(label)
+        if entry is not None and entry.done():
+            return entry.result()
+        value = self._draw_challenge(label, domain)
+        self.iop.transcript.write(label, value, derived=True)
+        return value
+
+    def _recorded_bits(self, label: str, bits: int) -> bytes:
+        """`challenge_bits` outside an AND-composition, as
+        `_recorded_challenge`; also how an AND-composition draws its round
+        seeds."""
         entry = self.iop.transcript.entries.get(label)
         if entry is not None and entry.done():
             return entry.result()
