@@ -21,10 +21,11 @@ Thm. 19.18]. [CDS94] states its construction for three-round protocols and
 notes that it generalizes to any number of rounds; here the protocols are
 multi-round and public-coin, with one shared challenge per round.
 
-It is neither of the framework's other two compositions: the Composer (`compose`) builds a protocol from layers run one
-after another, a sequential composition [KP23, Thm. 5], and the driver's
-bundles reduce products of relations, the parallel composition of
-[KP23, Thm. 6], whose protocols draw their own challenges.
+It is neither of the framework's other two compositions: the Composer
+(`compose`) builds a protocol from layers run one after another, a
+sequential composition [KP23, Thm. 5], and the driver's bundles reduce
+products of relations, the parallel composition of [KP23, Thm. 6], whose
+protocols draw their own challenges.
 
 A sub-protocol is ordinary protocol code: it writes and reads the transcript
 as usual and draws its challenges with
@@ -42,8 +43,9 @@ its round-j messages. Each sub-protocol receives the challenge
 ``domain.random_exceptional(seed=seed)`` for the domain it asked in, so
 sub-protocols over one domain receive one value. A protocol may pass its own
 `challenge_sampler(seed, domain)` instead, for instance to read one ring
-challenge in a different residue field per sub-protocol. A request for a bit-string challenge (`challenge_bits`)
-receives bytes expanded from the same seed.
+challenge in a different residue field per sub-protocol. A request for a
+bit-string challenge (`challenge_bits`) receives bytes expanded from the
+same seed.
 
 **Order.** The sub-protocols take turns, in the order they are listed: one
 runs until it requests a challenge or returns, and then the next one runs.
@@ -51,10 +53,12 @@ So the transcript order depends only on the sub-protocols' code, never on
 scheduling, which Fiat-Shamir needs (the prover's write order is the chain
 the verifier recomputes, and a stored proof is read back in that order).
 
-**Soundness.** When one of the sub-protocols' statements is false, it is
-false before any challenge is drawn, and accepting requires that
-sub-protocol to accept, so the soundness error of the composition is the
-largest of the sub-protocols' errors -- for each, computed with the challenge
+**Soundness.** Each sub-protocol's statement must be fixed before the
+composition starts (a precondition of `IOP.and_composition`, not checked).
+Then when one of the statements is false, it is false before any challenge
+is drawn, and accepting requires that sub-protocol to accept, so the
+soundness error of the composition is the largest of the sub-protocols'
+errors -- for each, computed with the challenge
 set it actually receives (round by round as well, as [BCFW25] proves for
 parallel copies of an interactive oracle reduction). Sharing the challenges
 gives no amplification: composing copies of one protocol here never lowers
@@ -83,7 +87,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -107,6 +111,19 @@ def current_subprotocol(iop: IOP) -> tuple[ANDComposition, int] | None:
     return bound
 
 
+class _Request(NamedTuple):
+    """What a sub-protocol waits on at the end of its turn. `kind` is
+    `challenge` (`label` the challenge's, `argument` its domain), `bits`
+    (`argument` the byte count) or `batched_call` (`label` the step,
+    `argument` this sub-protocol's operand, `kernel` the function run once
+    on every sub-protocol's operand)."""
+
+    kind: str
+    label: str
+    argument: Any
+    kernel: Any = None
+
+
 class ANDComposition:
     """The state of one `IOP.and_composition` call: the turn order, the
     requests of the current round, and each sub-protocol's received
@@ -126,11 +143,11 @@ class ANDComposition:
         self._turns: list[asyncio.Future] = []
         # Per sub-protocol, the request it is waiting on in the current round,
         # and the value the round gave it.
-        self._requests: dict[int, tuple] = {}
+        self._requests: dict[int, _Request] = {}
         self._values: dict[int, Any] = {}
-        # Per sub-protocol, label -> challenge, so a challenge requested twice
-        # by one sub-protocol is the same value (compute-if-absent, as
-        # outside).
+        # Per sub-protocol, label -> challenge, so that a challenge requested
+        # twice by one sub-protocol is one value, as `Verifier.challenge`
+        # records it outside a composition.
         self._received: list[dict[str, Any]] = []
 
     def _pass_turn(self, index: int) -> None:
@@ -141,40 +158,42 @@ class ANDComposition:
             self._turns[later[0]].set_result(None)
             return
         if not self._requests:
-            return
+            return  # every sub-protocol has returned
         self._close_round()
         self._turns[self._live[0]].set_result(None)
 
     def _close_round(self) -> None:
+        """Answer the round's requests: run the batched call, or draw the
+        round's seed and give every sub-protocol its challenge from it."""
         requests, self._requests = self._requests, {}
-        kinds = {request[0] for request in requests.values()}
+        kinds = {request.kind for request in requests.values()}
         if "batched_call" in kinds:
-            steps = {request[1] for request in requests.values()}
+            steps = {request.label for request in requests.values()}
             if kinds != {"batched_call"} or len(steps) != 1:
                 raise RuntimeError(
                     f"{self.label}: the sub-protocols do not all reach the same "
                     "batched call"
                 )
             order = sorted(requests)
-            kernel = requests[order[0]][3]
-            results = kernel([requests[i][2] for i in order])
+            kernel = requests[order[0]].kernel
+            results = kernel([requests[i].argument for i in order])
             for i, result in zip(order, results, strict=True):
                 self._values[i] = result
             return
-        from .fs import expand_bytes
+        from .fs import expand_bytes  # fs imports party, which imports this module
 
         seed = self.iop.verifier._recorded_bits(f"{self.label}/round{self.rounds}", 256)
         self.rounds += 1
         sampler = self.challenge_sampler
-        for i, (kind, _label, argument, _) in requests.items():
-            if kind != "challenge":
-                self._values[i] = expand_bytes(b"bits" + seed, argument)
+        for i, request in requests.items():
+            if request.kind == "bits":
+                self._values[i] = expand_bytes(b"bits" + seed, request.argument)
             elif sampler is None:
-                self._values[i] = argument.random_exceptional(seed=seed)
+                self._values[i] = request.argument.random_exceptional(seed=seed)
             else:
-                self._values[i] = sampler(seed, argument)
+                self._values[i] = sampler(seed, request.argument)
 
-    async def _request(self, index: int, request: tuple) -> Any:
+    async def _request(self, index: int, request: _Request) -> Any:
         """Wait for the round to close, holding no turn meanwhile."""
         self._requests[index] = request
         self._turns[index] = self.iop.loop.create_future()
@@ -186,18 +205,22 @@ class ANDComposition:
         received = self._received[index]
         if label not in received:
             received[label] = await self._request(
-                index, ("challenge", label, domain, None)
+                index, _Request("challenge", label, domain)
             )
         return received[label]
 
     async def challenge_bits(self, index: int, label: str, nbytes: int) -> bytes:
         received = self._received[index]
         if label not in received:
-            received[label] = await self._request(index, ("bits", label, nbytes, None))
+            received[label] = await self._request(
+                index, _Request("bits", label, nbytes)
+            )
         return received[label]
 
     async def batched_call(self, index: int, step: str, operand, kernel) -> Any:
-        return await self._request(index, ("batched_call", step, operand, kernel))
+        return await self._request(
+            index, _Request("batched_call", step, operand, kernel)
+        )
 
     async def run(self, subprotocols: list[Coroutine]) -> list:
         n = len(subprotocols)

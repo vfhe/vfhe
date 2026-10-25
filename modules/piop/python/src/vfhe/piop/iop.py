@@ -81,14 +81,19 @@ class IOP:
         sub-protocol receives it: the conjunction case of [CDS94, Thm. 8], the
         AND-proof of Σ-protocols [BS23, §19.7.1], one challenge per round
         (`and_composition.py` states the rounds, the order, the soundness and
-        the rules). Returns the sub-protocols' results, in
-        order.
+        the rules). Returns the sub-protocols' results, in order.
 
         `label` names the composition in the transcript: round j's seed is
         the entry ``{label}/round{j}``. `challenge_sampler(seed, domain)`
         returns the challenge a sub-protocol receives when it asks for one in
         `domain`; when it is None, that challenge is
         ``domain.random_exceptional(seed=seed)``.
+
+        Precondition: each sub-protocol's statement is fixed before the
+        composition starts -- what a sub-protocol proves may not depend on
+        messages another sub-protocol writes during the composition. The
+        soundness error of the composition, the largest of the
+        sub-protocols' errors, assumes it, and nothing here checks it.
 
         The first exception a sub-protocol raises (a verifier's `Rejection`,
         a prover's error) cancels the others and is raised from here.

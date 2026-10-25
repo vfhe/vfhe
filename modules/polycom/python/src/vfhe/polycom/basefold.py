@@ -62,7 +62,7 @@ from __future__ import annotations
 from array import array
 from typing import TYPE_CHECKING, Any
 
-from vfhe.arith import MLE, Field, FieldVector, Polynomial, Ring
+from vfhe.arith import MLE, Field, FieldElement, FieldVector, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
 from vfhe.crypto import DIGEST_LEN, Merkle, hash_bytes
 from vfhe.piop import (
@@ -132,6 +132,18 @@ def _one(domain):
     if isinstance(domain, Field):
         return domain.one
     return Polynomial(domain).from_array([1])
+
+
+def _elements_of(domain, message, count: int) -> bool:
+    """Whether a prover's `message` is a tuple of `count` elements of
+    `domain`: `Polynomial` entries over a ring, `FieldElement` entries over
+    a field."""
+    element = FieldElement if isinstance(domain, Field) else Polynomial
+    return (
+        isinstance(message, tuple)
+        and len(message) == count
+        and all(isinstance(x, element) for x in message)
+    )
 
 
 class BasefoldCommitment:
@@ -738,14 +750,16 @@ class BasefoldEval(Protocol):
             point = []
             for t in range(len(points[0])):
                 evals = await iop.transcript.read(f"{label}/point/g{t}")
+                if not _elements_of(domain, evals, 3):
+                    raise Rejection(f"{label} point round {t}: malformed message")
                 if not (evals[0] + evals[1] == claim):
                     raise Rejection(f"{label} point round {t}: g(0) + g(1) != claim")
                 r = await verifier.challenge(f"{label}/point/r{t}")
                 point.append(r)
                 claim = interpolate_evals(evals, r)
-            values = list(await iop.transcript.read(f"{label}/point/q"))
-            if len(values) != len(commitments):
-                raise Rejection(f"{label}: wrong number of values at the common point")
+            values = await iop.transcript.read(f"{label}/point/q")
+            if not _elements_of(domain, values, len(commitments)):
+                raise Rejection(f"{label}: malformed values at the common point")
             expected = None
             for power, c, z in zip(powers, owners, points, strict=True):
                 term = power * _eq_at(z, point, one) * values[c]
@@ -937,9 +951,9 @@ class _ProverRun:
                 layer = len(self.words) - 1
                 if self.commit_layer is not None:
                     await self.commit_layer(layer, s + 1, word)
-                    continue
-                self.trees.append(scheme.merkle_commit(word, schedule[layer]))
-                iop.transcript.write(f"{label}/pi{s + 1}", self.trees[-1].root)
+                else:
+                    self.trees.append(scheme.merkle_commit(word, schedule[layer]))
+                    iop.transcript.write(f"{label}/pi{s + 1}", self.trees[-1].root)
         # The base case: the remaining kappa-variable table, in the clear
         # (the verifier re-encodes its coefficients itself).
         iop.transcript.write(f"{label}/h0", cur_f)
@@ -1018,6 +1032,8 @@ class _VerifierRun:
         claim = self.value
         for s in range(d):
             evals = await iop.transcript.read(f"{label}/g{s}")
+            if not _elements_of(domain, evals, 3):
+                raise Rejection(f"{label} round {s}: malformed message")
             if not (evals[0] + evals[1] == claim):
                 raise Rejection(f"{label} round {s}: g(0) + g(1) != claim")
             r = await verifier.challenge(f"{label}/r{s}", domain)
@@ -1027,7 +1043,10 @@ class _VerifierRun:
                 if self.read_root is not None:
                     self.roots.append(await self.read_root(s + 1))
                 else:
-                    self.roots.append(await iop.transcript.read(f"{label}/pi{s + 1}"))
+                    root = await iop.transcript.read(f"{label}/pi{s + 1}")
+                    if not isinstance(root, bytes) or len(root) != DIGEST_LEN:
+                        raise Rejection(f"{label}: malformed root pi{s + 1}")
+                    self.roots.append(root)
 
         h0 = await iop.transcript.read(f"{label}/h0")
         if not _committed_table(h0) or (1 << h0.num_vars) != code.k0:

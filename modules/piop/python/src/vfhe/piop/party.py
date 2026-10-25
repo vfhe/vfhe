@@ -154,8 +154,9 @@ class Verifier(Party):
         bound = current_subprotocol(self.iop)
         if bound is not None:
             composition, index = bound
-            domain = self.iop.domain if domain is None else domain
-            return await composition.challenge(index, label, domain)
+            return await composition.challenge(
+                index, label, self._challenge_domain(domain)
+            )
         return self._recorded_challenge(label, domain)
 
     async def challenge_bits(self, label: str, bits: int = 256) -> bytes:
@@ -207,14 +208,19 @@ class Verifier(Party):
         self.iop.transcript.write(label, value, derived=True)
         return value
 
+    def _challenge_domain(self, domain):
+        """The domain a challenge is drawn in: `domain`, or the IOP's when
+        None."""
+        domain = self.iop.domain if domain is None else domain
+        if domain is None:
+            raise RuntimeError("this IOP has no domain")
+        return domain
+
     def _draw_challenge(self, label: str, domain=None):
         """Where a domain challenge's value comes from: fresh randomness
         here; the transcript chain in the Fiat-Shamir subtype (fs.py).
         `domain` is the IOP's when None."""
-        domain = self.iop.domain if domain is None else domain
-        if domain is None:
-            raise RuntimeError("this IOP has no domain")
-        return domain.random_exceptional()
+        return self._challenge_domain(domain).random_exceptional()
 
     def _draw_bits(self, label: str, nbytes: int) -> bytes:
         """Where a bit-string challenge's value comes from (see above)."""
