@@ -51,9 +51,14 @@ The architecture and its derivation from the literature are documented in
   level's root and against the fold above. A chain like sumcheck composes
   end-to-end with no bridge: `scheme.commit(f)`, then
   `Relation_Sum -> Sumcheck -> Relation_Eval -> BasefoldEval`.
+- `batchfold.py`: `BatchFoldEval` [CCCFGS26, §7], a second Eval protocol
+  for basefold commitments over `R_q`: the claims are carried to the CRT
+  components at each prime and proved by one basefold run per prime over
+  the residue code (`FieldFoldableRS.residue_code`), the ring leaves
+  answering every prime's first layer.
 
 Fiat-Shamir needs nothing from this module — `IOP(fiat_shamir=True)` derives
 the fold challenges and the query coins from the transcript and binds the
 commitment-carrying statement, so `iop.prove(statement)` yields a `Proof`
-another IOP checks with no prover present. Batched openings and a C kernel
-for the fold are roadmap (polycom.md §4).
+another IOP checks with no prover present. A C kernel for the fold is
+roadmap (polycom.md §4).

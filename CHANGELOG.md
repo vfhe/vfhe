@@ -50,6 +50,16 @@ versions may contain breaking changes.
   (the default), or `"field"`, the extension when `F_p` has none.
 - `RNSRing.crt_components(..., element_major=True)`: the components of each
   element together, entry `b * k + s`.
+- `vfhe.polycom.BatchFoldEval` ([CCCFGS26, §7]): a second Eval protocol for
+  basefold commitments over `R_q`. The claims are carried to the CRT
+  components at each prime and proved there, over the residue field, by the
+  common-point sumcheck, a random linear combination of the components and
+  one basefold run over the residue code. The ring commitments serve every
+  prime, and the runs share one set of query positions, the ring leaves
+  answering every prime's first layer.
+- `Verifier.challenge(label, domain)`: a challenge from the exceptional set
+  of `domain` rather than of the IOP's domain (the Fiat-Shamir verifier
+  derives it the same way).
 - `Protocol.bundle_key(oracle)`: what a bundle protocol groups the claims on
   an oracle by -- the oracle by default; `BasefoldEval` returns its scheme,
   so the driver hands it every pending claim on the oracles committed under

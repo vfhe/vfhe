@@ -129,10 +129,13 @@ class Verifier(Party):
     """Sends challenges and is restricted to oracle queries (by convention
     in-process; a commitment compiler can enforce it cryptographically)."""
 
-    def challenge(self, label: str):
-        """The challenge `label`: on first call, sample from the domain's
-        exceptional set and write it to the transcript; later calls return
-        the recorded value.
+    def challenge(self, label: str, domain=None):
+        """The challenge `label`: on first call, sample from the exceptional
+        set of `domain` (the IOP's domain by default) and write it to the
+        transcript; later calls return the recorded value.
+
+        A protocol passes `domain` when its challenge lives in another ring or
+        field than the IOP's, such as a residue field of the IOP's ring.
 
         Either party may call this (`iop.verifier.challenge(label)`) — under
         Fiat-Shamir the challenge is a deterministic function of the
@@ -145,7 +148,7 @@ class Verifier(Party):
         entry = self.iop.transcript.entries.get(label)
         if entry is not None and entry.done():
             return entry.result()
-        value = self._draw_challenge(label)
+        value = self._draw_challenge(label, domain)
         self.iop.transcript.write(label, value, derived=True)
         return value
 
@@ -177,10 +180,11 @@ class Verifier(Party):
         self.iop.transcript.write(label, value, derived=True)
         return value
 
-    def _draw_challenge(self, label: str):
+    def _draw_challenge(self, label: str, domain=None):
         """Where a domain challenge's value comes from: fresh randomness
-        here; the transcript chain in the Fiat-Shamir subtype (fs.py)."""
-        domain = self.iop.domain
+        here; the transcript chain in the Fiat-Shamir subtype (fs.py).
+        `domain` is the IOP's when None."""
+        domain = self.iop.domain if domain is None else domain
         if domain is None:
             raise RuntimeError("this IOP has no domain")
         return domain.random_exceptional()

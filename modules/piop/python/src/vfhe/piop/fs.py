@@ -76,9 +76,9 @@ class FS_Verifier(Verifier):
         transcript = self.iop.transcript
         return hash_bytes(transcript.state() + tag + label.encode())
 
-    def _draw_challenge(self, label: str):
+    def _draw_challenge(self, label: str, domain=None):
         seed = self._derive(b"challenge", label)
-        domain = self.iop.domain
+        domain = self.iop.domain if domain is None else domain
         derive = getattr(domain, "exceptional_from_seed", None)
         if callable(derive):
             return derive(seed)
