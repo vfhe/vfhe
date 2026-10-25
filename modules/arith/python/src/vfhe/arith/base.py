@@ -605,17 +605,18 @@ class Polynomial(metaclass=_ImplementationDispatch):
         """Overwrite with a uniform element of the ring's exceptional set;
         returns ``self``.
 
-        The set is the polynomials of degree below ``d = split_degree`` whose
-        coefficients are integers below the smallest prime p_min, ``p_min^d``
-        of them (`exceptional_set_size`). A nonzero difference of two of them
-        has a coefficient in ``(-p_min, p_min)`` other than 0, so it is
-        nonzero modulo every prime, and having degree below d it is a unit
-        modulo every irreducible degree-d factor of ``X^N + 1``: it is
-        invertible. Read in a residue field ``F_p[x]/(x^d - w)``
-        (`residue_field`), such an element is the element with the same
-        coefficients, at every prime.
+        The set is the elements whose CRT components (`crt_components`),
+        at every prime, are all one element ``beta = a_0 + a_1 x + ... +
+        a_(d-1) x^(d-1)`` of the residue field, ``d = split_degree``, with
+        integers ``a_j`` below the smallest prime p_min -- the same integers
+        at every prime. There are ``p_min^d`` of them
+        (`exceptional_set_size`). Two distinct ones differ by an element
+        whose components are all ``beta - beta'``; its coefficients differ
+        by integers in ``(-p_min, p_min)``, not all 0, so it is nonzero in
+        every residue field, and the difference is invertible. Their
+        evaluation points are thus one point in every slot.
 
-        The coefficients are uniform below p_min: drawn from ``seed`` by
+        The ``a_j`` are uniform below p_min: drawn from ``seed`` by
         `vfhe.crypto.seeded`, or fresh by `vfhe.crypto.entropy` when it is
         None.
         """
@@ -846,9 +847,10 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         coefficients are integers below ``bound`` instead (``bound^degree``
         elements; any subset of a field is exceptional), drawn by
         `vfhe.crypto.seeded` as `Ring.random_exceptional` draws its
-        coefficients: with ``bound`` the ring's smallest prime, the same
-        integers from the same seed, so fields of different characteristic
-        read one ring element alike.
+        components' coefficients: with ``bound`` the ring's smallest prime
+        and the residue field at one of its primes, this is every CRT
+        component there of the ring element from the same seed, so fields of
+        different characteristic read one ring element alike.
         """
         if bound is None:
             return self.random_element(seed)

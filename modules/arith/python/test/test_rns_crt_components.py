@@ -163,37 +163,32 @@ def test_from_crt_components_checks_its_vectors(ring):
         ring.from_crt_components(vectors[::-1])
 
 
-def test_a_seeded_exceptional_element_is_its_coefficients_in_every_field(ring):
-    """`Ring.random_exceptional(seed)` read at slot 0 of each prime is
-    `Field.random_exceptional(seed, bound=min(primes))`: the same integer
-    coefficients, below the smallest prime, in every residue field."""
-    bound = min(ring.primes)
+def test_an_exceptional_element_has_one_component_everywhere(ring):
+    """Every CRT component of `Ring.random_exceptional(seed)`, at every
+    prime, is `Field.random_exceptional(seed, bound=min(primes))`: one
+    element whose integer coefficients are below the smallest prime, read in
+    every residue field."""
+    bound, k = min(ring.primes), ring.N // ring.split_degree
     element = ring.random_exceptional(seed=b"seed")
     assert element == ring.random_exceptional(seed=b"seed")
     assert element != ring.random_exceptional(seed=b"other")
     assert ring.random_exceptional(seed=b"seed", ntt=False) == element
-    coefficients = element.get_polynomial()
-    assert all(c < bound for c in coefficients[: ring.split_degree])
-    assert all(c == 0 for c in coefficients[ring.split_degree :])
     for index in range(ring.ell):
-        field = ring.residue_field(index)
-        assert ring.crt_components([element], index)[0] == (
-            field.random_exceptional(seed=b"seed", bound=bound)
-        )
+        beta = ring.residue_field(index).random_exceptional(seed=b"seed", bound=bound)
+        components = ring.crt_components([element], index)
+        assert all(components[s] == beta for s in range(k))
 
 
-def test_the_native_exceptional_sampler_writes_the_drawn_integers(ring):
-    """`sample_exceptional` writes, natively and with no transform, the
-    element whose coefficients are the integers `vfhe.crypto.seeded` draws
-    below the smallest prime; unseeded draws are in the same set."""
-    from vfhe.crypto import seeded
-
-    bound, d = min(ring.primes), ring.split_degree
-    integers = seeded.below_many(d, bound, b"exceptional", b"seed")
-    expected = Polynomial(ring).from_array(integers)
-    assert ring.random_exceptional(seed=b"seed") == expected
-    fresh = ring.random_exceptional(ntt=False).get_polynomial()
-    assert all(c < bound for c in fresh[:d]) and not any(fresh[d:])
+def test_exceptional_elements_differ_by_units(ring):
+    """Fresh draws are in the same set, and two distinct elements of it
+    differ by an invertible element."""
+    k = ring.N // ring.split_degree
+    a, b = ring.random_exceptional(), ring.random_exceptional(seed=b"seed")
+    for index in range(ring.ell):
+        components = ring.crt_components([a], index)
+        assert all(components[s] == components[0] for s in range(k))
+    difference = a - b
+    assert difference * difference.fast_inverse() == Polynomial(ring).from_array([1])
 
 
 def test_crt_linear_combination_combines_the_components(ring):

@@ -910,16 +910,6 @@ extern "C"
                                                             uint64_t size, RNS_Base base);
     void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in);
     void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out);
-    /* A uniform element of the exceptional set of R_q: the polynomial
-       a(X) = a_0 + a_1 X + ... + a_{d-1} X^{d-1}, d = split_degree, with each
-       a_j uniform in [0, p_min), p_min the smallest prime of `out`'s rows.
-       The a_j are drawn from `seed` (prng_sample_below, context
-       "exceptional") or, when `seed` is NULL, from fresh entropy. Written in
-       the mul domain: modulo every factor X^d - w_s of X^N + 1, a has degree
-       below d and is its own residue, so every slot of every row holds the
-       same d values and no transform is needed. */
-    void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed,
-                                           uint64_t seed_len);
     void polynomial_mul_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2);
     void polynomial_sub_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2);
     void polynomial_sub_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1,
@@ -1241,6 +1231,22 @@ extern "C"
        serves every call; it takes O(N) modular products. */
     RNS_CrtMaps rns_crt_maps_new(RNS_Base base, uint64_t row, bool to_slot_zero);
     void rns_crt_maps_free(RNS_CrtMaps maps);
+    /* A uniform element of the exceptional set of R_q (notation of
+       polynomial_RNS_crt_components): the element e whose CRT components at
+       every prime are all one element beta = a_0 + a_1 x + ... +
+       a_{d-1} x^{d-1} of R_q/P_0, d = split_degree, with each a_j uniform in
+       [0, p_min), p_min the smallest prime of `out`'s rows -- the same
+       integers at every prime. Two such elements differ by an element whose
+       components are all beta - beta', which is nonzero in every residue
+       field, so the difference is invertible: the set is exceptional, of
+       size p_min^d. The a_j are drawn from `seed` (prng_sample_below,
+       context "exceptional") or, when `seed` is NULL, from fresh entropy.
+       Each row is written in the mul domain by
+       polynomial_RNS_from_crt_components from k copies of beta; maps[i] is
+       rns_crt_maps_new(base, i, false) for every row i of `out`'s mask
+       (the other entries are not read). */
+    void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed,
+                                           uint64_t seed_len, RNS_CrtMaps const *maps);
     void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma);
     void int_array_to_RNS(RNS_Polynomial out, uint64_t *in);
     void polynomial_RNSc_add_integer(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t in2);

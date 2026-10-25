@@ -432,42 +432,39 @@ void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
     free(scratch);
 }
 
-void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed, uint64_t seed_len)
+void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed, uint64_t seed_len,
+                                       RNS_CrtMaps const *maps)
 {
     const uint64_t d = out->base->split_degree;
-    const uint64_t poly_size = out->base->N / d;
+    const uint64_t k = out->base->N / d;
     uint64_t bound = UINT64_MAX;
     for (size_t i = 0; i < out->base->l; i++)
         if ((out->rns_mask & (1ULL << i)) && out->base->mods[i]->q < bound)
             bound = out->base->mods[i]->q;
-    uint64_t *a = (uint64_t *)safe_aligned_malloc(d * sizeof(uint64_t));
+    uint64_t a[d];
     if (seed == NULL)
         generate_uniform_below(a, d, bound);
     else
         prng_sample_below(a, d, bound, "exceptional", seed, seed_len);
-    // Coefficient j of slot k sits at j * poly_size + k; every a_j is below
-    // every prime, so it is already reduced.
+    // k copies of beta, one per component; every a_j is below every prime,
+    // so the same planes serve every row.
+    const uint64_t padded = field_vec_padded_length(k);
+    uint64_t *planes = (uint64_t *)safe_aligned_malloc(d * padded * sizeof(uint64_t));
+    uint64_t *coeffs[d];
+    for (uint64_t j = 0; j < d; j++)
+    {
+        coeffs[j] = planes + j * padded;
+        for (uint64_t s = 0; s < padded; s++)
+            coeffs[j][s] = s < k ? a[j] : 0;
+    }
     for (size_t i = 0; i < out->base->l; i++)
     {
         if (!(out->rns_mask & (1ULL << i)))
             continue;
-        for (uint64_t j = 0; j < d; j++)
-        {
-            if (rns_row_is_narrow(out->base, i))
-            {
-                uint32_t *row = out->rows32[i] + j * poly_size;
-                for (uint64_t k = 0; k < poly_size; k++)
-                    row[k] = (uint32_t)a[j];
-            }
-            else
-            {
-                uint64_t *row = out->rows64[i] + j * poly_size;
-                for (uint64_t k = 0; k < poly_size; k++)
-                    row[k] = a[j];
-            }
-        }
+        struct _FieldVector copies = {coeffs, k, padded, d, out->base->w[i][0], out->base->mods[i]};
+        polynomial_RNS_from_crt_components(&out, &copies, 1, maps[i]);
     }
-    free(a);
+    free(planes);
 }
 
 void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma)

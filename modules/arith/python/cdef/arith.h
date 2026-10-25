@@ -104,7 +104,6 @@ void polynomial_RNSc_scaled_lift(void *out, void *in, uint64_t *delta);
 int polynomial_RNS_inverse(void *out, void *in);
 bool polynomial_eq(void *a, void *b);
 void polynomial_RNS_broadcast_slot(void *out, void *in, uint64_t slot_idx);
-void polynomial_RNS_sample_exceptional(void *out, const uint8_t *seed, uint64_t seed_len);
 void polynomial_RNS_rotate_slot(void *out, void *in, uint64_t rot);
 void polynomial_RNS_copy_slot(void *out, uint64_t dst, void *in, uint64_t src);
 
@@ -238,6 +237,8 @@ typedef struct _FieldVector
 uint64_t field_vec_padded_length(uint64_t n);
 typedef struct _RNS_CrtMaps *RNS_CrtMaps;
 RNS_CrtMaps rns_crt_maps_new(void *base, uint64_t row, bool to_slot_zero);
+void polynomial_RNS_sample_exceptional(void *out, const uint8_t *seed, uint64_t seed_len,
+                                       RNS_CrtMaps const *maps);
 void rns_crt_maps_free(RNS_CrtMaps maps);
 void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
                                    RNS_CrtMaps maps, bool element_major);

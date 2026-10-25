@@ -460,11 +460,18 @@ other commitment is made.
 The `L` primes of `q` run in lockstep, as the sub-protocols of one
 AND-composition (`IOP.and_composition`, piop.md §5): in each round every
 prime sends its message, then one challenge serves them all. It is an
-exceptional element of `R_q` -- a polynomial of degree below
-`split_degree` with integer coefficients below the smallest prime
-(`Ring.random_exceptional`) -- read by each prime as its CRT component 0,
-which is the element of `F_i` with the same integers
-(`Field.random_exceptional(seed, bound=min p_i)`, no ring arithmetic). After the last round, the
+exceptional element of `R_q` (`Ring.random_exceptional`): its CRT
+components at every prime are all one element with integer coefficients
+below the smallest prime, and each prime reads it as that element of `F_i`
+(`Field.random_exceptional(seed, bound=min p_i)`, no ring arithmetic).
+Points made of such elements, which is what sumchecks over `R_q` produce,
+are one point in every slot. Then the common-point sumcheck is skipped when
+the claims share their point, and otherwise its prover runs on one combined
+table per polynomial, `F_c = sum_s sigma^s f_{c,s}`
+(`RNSRing.crt_linear_combination`), instead of `k`: with `z_{m,s} = z_m`,
+`h(b) = sum_m sigma^(mk) eq~(z_m, b) F_{c(m)}(b)`, the same round messages
+from `k` times less work. The values `f_{c,s}(r)` it sends at the end come
+from the component tables bound to `r`. After the last round, the
 primes answer one set of query positions: a query's first layer is answered
 once, by the ring leaves, which the verifier authenticates against the ring
 roots and maps to the leaves of every `u_i`. Each later layer is committed
