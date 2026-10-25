@@ -37,6 +37,14 @@ extern "C"
     // built from, exposed so callers can hash leaves with the same function.
     void merkle_hash(uint8_t *out, const uint8_t *in, uint64_t len);
 
+    // Joined leaf digests: digest i of `out` is the BLAKE3 digest of digest i
+    // of every one of the `part_count` arrays `parts`, concatenated in order.
+    // Each array holds `count` digests of MERKLE_DIGEST_LEN bytes, packed. A
+    // tree over `out` commits to all the arrays' leaves at once, one leaf per
+    // index.
+    void merkle_join_digests(uint8_t *out, const uint8_t *const *parts, uint64_t part_count,
+                             uint64_t count);
+
     // A tree for `size` leaves (>= 1); allocates all levels once, so the same
     // object can be committed to repeatedly.
     Merkle merkle_new(uint64_t size);

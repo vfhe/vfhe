@@ -188,7 +188,7 @@ def test_the_primes_run_in_lockstep(setting):
         parts = label.split("/")
         if parts[2].startswith("round"):
             segments.append([])
-        elif parts[2].startswith("p"):
+        elif parts[2][0] == "p" and parts[2][1:].isdigit():
             segments[-1].append(int(parts[2][1:]))
     primes = list(range(setting.ring.ell))
     # The rounds of the sumcheck, the combination and the folds; the query
@@ -197,6 +197,27 @@ def test_the_primes_run_in_lockstep(setting):
     assert len(segments) == rounds + 1 and segments[0] == []
     for segment in segments[1:]:
         assert sorted(set(segment)) == primes and segment == sorted(segment)
+
+
+def test_each_later_layer_has_one_tree_for_every_prime(setting):
+    """A later fold layer is committed once, by one root for all primes,
+    written after the fold that ends the previous layer; each query answers
+    it with every prime's fiber and one path."""
+    iop = setting.iop()
+    assert iop.run(_statement(_bundles(setting)["two polynomials, three points"]))
+    labels = _labels(iop)
+    d = setting.scheme.code.d
+    assert [x for x in labels if "/pi" in x] == [
+        f"batchfold/0/pi{s}" for s in range(1, d)
+    ]
+    # Prime 0's fold message of the next round follows the root.
+    root = labels.index("batchfold/0/pi1")
+    assert labels[root + 1] == "batchfold/0/p0/g1"
+    answers = iop.transcript.entries["batchfold/0/answers"].result()
+    for _ring_top, later in answers:
+        assert len(later) == d - 1
+        for fibers, _path in later:
+            assert len(fibers) == setting.ring.ell
 
 
 def test_a_false_value_anywhere_is_rejected(setting):
@@ -264,17 +285,33 @@ def test_tampered_messages_are_rejected(setting):
     def shift_prime_leaf(label, value):
         # The second layer's leaf at prime 1, for the first query.
         if label == "batchfold/0/answers":
-            ring_top, layers = value[0]
-            (fiber, path), *rest = layers[1]
-            fiber = (fiber[0] + 1, *fiber[1:])
-            changed = (layers[0], ((fiber, path), *rest))
-            return ((ring_top, changed), *value[1:])
+            ring_top, later = value[0]
+            (fibers, path), *rest = later
+            fiber = fibers[1]
+            fibers = (fibers[0], (fiber[0] + 1, *fiber[1:]), *fibers[2:])
+            return ((ring_top, ((fibers, path), *rest)), *value[1:])
         return value
 
     def drop_prime(label, value):
+        # The second layer answered without prime 1's fiber.
         if label == "batchfold/0/answers":
-            ring_top, layers = value[0]
-            return ((ring_top, layers[:1]), *value[1:])
+            ring_top, later = value[0]
+            (fibers, path), *rest = later
+            return ((ring_top, ((fibers[:1], path), *rest)), *value[1:])
+        return value
+
+    def swap_layer_path(label, value):
+        # The second layer's path of another query.
+        if label == "batchfold/0/answers":
+            (ring_top, later), (_, other), *rest = value
+            (fibers, _path), *tail = later
+            changed = ((fibers, other[0][1]), *tail)
+            return ((ring_top, changed), (_, other), *rest)
+        return value
+
+    def shift_root(label, value):
+        if label == "batchfold/0/pi1":
+            return bytes([value[0] ^ 1]) + value[1:]
         return value
 
     for tamper in (
@@ -285,6 +322,8 @@ def test_tampered_messages_are_rejected(setting):
         swap_ring_leaf,
         shift_prime_leaf,
         drop_prime,
+        swap_layer_path,
+        shift_root,
     ):
         assert not _replay(setting, honest, claims, tamper), tamper.__name__
 
@@ -295,7 +334,7 @@ def test_one_commitment_opens_under_either_protocol(setting):
         assert setting.iop(protocol=protocol).run(_statement(claims)), protocol
 
 
-def test_soundness_error_is_the_union_over_the_primes(setting):
+def test_soundness_error_is_one_primes_error(setting):
     protocol = BatchFoldEval(setting.scheme, rep=3)
     statement = Statement(Relation_Eval(), oracles=(setting.of,), point={}, value=0)
     fields = [setting.ring.residue_field(i) for i in range(setting.ring.ell)]
@@ -305,13 +344,15 @@ def test_soundness_error_is_the_union_over_the_primes(setting):
         statement, setting.ring, 0.01, 0.5, claims=3, polynomials=2
     )
     d, k, num_vars = 2, 16, 3
-    per_prime = (
+    # The largest of the primes' errors, all over a challenge set of size
+    # min p_i^4: no factor for the two primes.
+    expected = (
         2 * d / (0.01**3 * size)
         + (2 * num_vars + 3 * k - 1) / size
         + (2 * k - 1) / size
         + (1 - 0.5 + 0.01 * d) ** 3
     )
-    assert error == pytest.approx(2 * per_prime)
+    assert error == pytest.approx(expected)
 
 
 def test_a_scheme_over_a_field_is_refused():

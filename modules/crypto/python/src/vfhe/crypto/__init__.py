@@ -4,7 +4,14 @@
 # randomness, hashing and vector commitment — every other module builds on.
 from .digest import DigestChain, bytes_digest, chain_digest, int_digest, str_digest
 from .hash import Blake3Stream
-from .merkle import DIGEST_LEN, Merkle, MerklePath, hash_bytes, leaf_digest
+from .merkle import (
+    DIGEST_LEN,
+    Merkle,
+    MerklePath,
+    hash_bytes,
+    join_digests,
+    leaf_digest,
+)
 from .prng import SEED_WORDS, EntropyPRNG, SeededPRNG, entropy, seeded
 
 __all__ = [
@@ -21,6 +28,7 @@ __all__ = [
     "entropy",
     "hash_bytes",
     "int_digest",
+    "join_digests",
     "leaf_digest",
     "seeded",
     "str_digest",

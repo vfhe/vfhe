@@ -356,6 +356,75 @@ class RNSRing(Ring):
         ``N`` and ``split_degree``. They are read in the mul domain, through a
         converted copy when they are not in it.
         """
+        views = self._crt_operands(elements, index)
+        out = ExtensionFieldVector(
+            self.residue_field(index), len(views) * (self.N // self.split_degree)
+        )
+        handles = ffi.new(
+            "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", v.obj) for v in views]
+        )
+        self.lib.polynomial_RNS_crt_components(
+            out._struct, handles, len(views), self._crt_maps(index, True), element_major
+        )
+        return out
+
+    def crt_linear_combination(
+        self,
+        parts: Sequence[Sequence[RNSPolynomial]],
+        index: int,
+        coefficients: FieldVector,
+    ) -> ExtensionFieldVector:
+        """A linear combination of CRT components at ``p = primes[index]``,
+        in the field `residue_field(index)`: entry b of the result is the sum,
+        over c and s, of ``coefficients[c * k + s]`` times component s
+        (`crt_components`) of ``parts[c][b]``, with ``k = N/split_degree``.
+        Every ``parts[c]`` holds the same number of elements.
+
+        It equals multiplying the components laid out element-major by the
+        coefficients and summing each element's k entries over c and s, but
+        the components are never formed: each coefficient of an entry is one
+        inner product of the elements' mul-domain words with a table built
+        from the coefficients (`polynomial_RNS_crt_linear_combination`). This
+        is the precomputation of [ACGS24, ePrint 2023/1949, App. C, Eqs. 3-4]
+        for a linear combination of slots: each slot is an inner product with
+        the element's words, so the combination is one inner product with
+        the coefficients' combination of those vectors.
+        """
+        field = self.residue_field(index)
+        k = self.N // self.split_degree
+        if coefficients.field is not field or len(coefficients) != len(parts) * k:
+            raise ValueError(
+                f"the coefficients are {len(parts)} * {k} elements of residue_field({index})"
+            )
+        count = len(parts[0]) if parts else 0
+        if any(len(part) != count for part in parts):
+            raise ValueError("the parts hold different numbers of elements")
+        # The views own the rows the kernel reads, so they live until it returns.
+        views = [self._crt_operands(part, index) for part in parts]
+        arrays = [
+            ffi.new(
+                "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", v.obj) for v in part]
+            )
+            for part in views
+        ]
+        handles = ffi.new("RNS_Polynomial *[]", arrays)
+        out = ExtensionFieldVector(field, count)
+        self.lib.polynomial_RNS_crt_linear_combination(
+            out._struct,
+            handles,
+            len(parts),
+            count,
+            coefficients._struct,
+            self._crt_maps(index, True),
+        )
+        return out
+
+    def _crt_operands(
+        self, elements: Sequence[RNSPolynomial], index: int
+    ) -> list[RNSPolynomial]:
+        """`elements` in the mul domain (converted copies where they are
+        not), after checking they are over a ring with ``primes[index]`` and
+        this ring's ``N`` and ``split_degree``."""
         row = self.prime_indices[index]
         for element in elements:
             ring = element.ring
@@ -368,18 +437,7 @@ class RNSRing(Ring):
                     f"an element is not over a ring with prime {self.primes[index]}, "
                     f"N = {self.N} and split_degree = {self.split_degree}"
                 )
-        # The views own the rows the kernel reads, so they live until it returns.
-        views = [element._viewed_as(repr.ntt) for element in elements]
-        out = ExtensionFieldVector(
-            self.residue_field(index), len(views) * (self.N // self.split_degree)
-        )
-        handles = ffi.new(
-            "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", v.obj) for v in views]
-        )
-        self.lib.polynomial_RNS_crt_components(
-            out._struct, handles, len(views), self._crt_maps(index, True), element_major
-        )
-        return out
+        return [element._viewed_as(repr.ntt) for element in elements]
 
     def from_crt_components(
         self, vectors: Sequence[FieldVector]

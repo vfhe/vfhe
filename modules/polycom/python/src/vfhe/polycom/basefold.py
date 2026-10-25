@@ -87,7 +87,7 @@ from .code import pair_digest as pair_digest
 from .queries import query_positions
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from .code import FoldableRS
     from .field_code import FieldFoldableRS
@@ -879,9 +879,12 @@ class _ProverRun:
     The run starts from `word` and does not hold a tree for it: `top_answer`
     answers a query on leaf `j` of the first layer, in whatever form the
     caller's commitment to `word` takes. Every later layer's codeword is
-    committed here and published by its root. `fold` writes the rounds and
-    the base table; `answers` builds the reply to the query positions, once
-    the caller has drawn them.
+    committed here and published by its root -- or, with `commit_layer`,
+    handed to ``await commit_layer(layer, step, word)``, which commits it as
+    the caller's protocol does (the root then written after fold `step`),
+    and `answers` is the caller's too. `fold` writes the rounds and the base
+    table; `answers` builds the reply to the query positions, once the caller
+    has drawn them.
     """
 
     def __init__(
@@ -892,12 +895,14 @@ class _ProverRun:
         zs: list,
         word: Word,
         top_answer: Callable[[int], Any],
+        commit_layer: Callable[[int, int, Word], Awaitable[None]] | None = None,
     ) -> None:
         self.protocol = protocol
         self.label = label
         self.f = f
         self.zs = zs
         self.top_answer = top_answer
+        self.commit_layer = commit_layer
         #: The codeword each layer starts from.
         self.words: list[Word] = [word]
         #: The trees of the layers after the first, in order (the first
@@ -930,6 +935,9 @@ class _ProverRun:
             if d - s - 1 in levels[1:-1]:
                 self.words.append(word)
                 layer = len(self.words) - 1
+                if self.commit_layer is not None:
+                    await self.commit_layer(layer, s + 1, word)
+                    continue
                 self.trees.append(scheme.merkle_commit(word, schedule[layer]))
                 iop.transcript.write(f"{label}/pi{s + 1}", self.trees[-1].root)
         # The base case: the remaining kappa-variable table, in the clear
@@ -963,8 +971,12 @@ class _VerifierRun:
     queries, whose leaf indices are `positions`, against the caller's
     commitment to that codeword, and returns their leaves joined into one
     word (as `_check_layer` does for a single tree); it raises `Rejection`
-    when they do not check. `fold` reads the rounds and the base table, and
-    `check` the answers to the query positions the caller drew.
+    when they do not check. The later layers are committed by the run's
+    own trees, whose roots it reads -- or, when the caller commits them,
+    ``await read_root(step)`` reads the root written after fold `step` and
+    ``check_layer(layer, answers, positions)`` checks a later layer's answers
+    as `top_check` does the first's. `fold` reads the rounds and the base
+    table, and `check` the answers to the query positions the caller drew.
     """
 
     def __init__(
@@ -974,12 +986,16 @@ class _VerifierRun:
         zs: list,
         value,
         top_check: Callable[[list, list[int]], Word],
+        read_root: Callable[[int], Awaitable[bytes]] | None = None,
+        check_layer: Callable[[int, list, list[int]], Word] | None = None,
     ) -> None:
         self.protocol = protocol
         self.label = label
         self.zs = zs
         self.value = value
         self.top_check = top_check
+        self.read_root = read_root
+        self.check_layer = check_layer
         #: The roots of the layers after the first, in order.
         self.roots: list[bytes] = []
         #: The round challenges.
@@ -1008,7 +1024,10 @@ class _VerifierRun:
             self.rs.append(r)
             claim = interpolate_evals(evals, r)
             if d - s - 1 in levels[1:-1]:
-                self.roots.append(await iop.transcript.read(f"{label}/pi{s + 1}"))
+                if self.read_root is not None:
+                    self.roots.append(await self.read_root(s + 1))
+                else:
+                    self.roots.append(await iop.transcript.read(f"{label}/pi{s + 1}"))
 
         h0 = await iop.transcript.read(f"{label}/h0")
         if not _committed_table(h0) or (1 << h0.num_vars) != code.k0:
@@ -1062,6 +1081,8 @@ class _VerifierRun:
             layer = [answer[i] for answer in answers]
             if i == 0:
                 block = self.top_check(layer, positions)
+            elif self.check_layer is not None:
+                block = self.check_layer(i, layer, positions)
             else:
                 block = _check_layer(
                     code, label, level, self.roots[i - 1], layer, positions, size

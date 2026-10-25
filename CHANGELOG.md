@@ -58,6 +58,21 @@ versions may contain breaking changes.
   shared ring challenge per round read at every prime as its CRT component
   0. The ring commitments serve every prime, and the runs share one set of
   query positions, the ring leaves answering every prime's first layer.
+  Each later fold layer is committed by one Merkle tree for all primes,
+  answered with every prime's fiber and one path.
+  `soundness_error` reports one prime's error over the smallest residue
+  field: a false bundle fails at a prime fixed before any challenge, so no
+  factor for the number of primes is needed.
+- `RNSRing.crt_linear_combination(parts, index, coefficients)`
+  (`polynomial_RNS_crt_linear_combination` in C): a linear combination,
+  with coefficients in the residue field, of the CRT components of several
+  arrays of ring elements, computed as inner products of the elements'
+  mul-domain words with one table per array and output coefficient, without
+  forming the components (the precomputation of HELIOPOLIS [ACGS24],
+  ePrint 2023/1949, App. C). BatchFold forms its combinations with it.
+- `vfhe.crypto.join_digests(parts)` (`merkle_join_digests` in C): leaf
+  digests joining several packed digest arrays index by index, so one
+  Merkle tree commits to several codewords of one length.
 - `IOP.and_composition(label, subprotocols, challenge_sampler=None)`: runs
   sub-protocols as their AND-composition, one challenge per round shared by
   all of them. They take turns in a fixed order, so the transcript order

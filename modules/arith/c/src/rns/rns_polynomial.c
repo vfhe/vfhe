@@ -2459,6 +2459,77 @@ void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t
     free(tile);
 }
 
+void polynomial_RNS_crt_linear_combination(FieldVector out, RNS_Polynomial *const *parts,
+                                           uint64_t part_count, uint64_t count,
+                                           const FieldVector coefficients, RNS_CrtMaps maps)
+{
+    assert(maps->to_slot_zero);
+    const RNS_Base base = maps->base;
+    const uint64_t row = maps->row;
+    const uint64_t d = base->split_degree, k = base->N / d, n = base->N;
+    const Modulus mod = base->mods[row];
+    const uint64_t q = mod->q, w = base->w[row][0];
+    assert(out->d == d && out->n == count && out->mod->q == q && out->w == w);
+    assert(coefficients->d == d && coefficients->n == part_count * k);
+    if (count == 0)
+        return;
+    if (part_count == 0)
+    {
+        for (uint64_t t = 0; t < d; t++)
+            memset(out->coeffs[t], 0, count * sizeof(uint64_t));
+        return;
+    }
+    /* table[(c * d + t) * n + j * k + s] is coefficient t of
+       a * x^(dest_s(j)) * factor, a = coefficients[c * k + s]: what the word
+       j * k + s of slot s contributes, per unit, to coefficient t of the
+       combination. Multiplying a by x^m moves coefficient t - m to t, and
+       the ones that pass x^d come back times w. */
+    uint64_t *table = (uint64_t *)safe_aligned_malloc(part_count * d * n * sizeof(uint64_t));
+    for (uint64_t c = 0; c < part_count; c++)
+        for (uint64_t j = 0; j < d; j++)
+            for (uint64_t s = 0; s < k; s++)
+            {
+                const uint64_t i = j * k + s, m = maps->slot_dest[i];
+                for (uint64_t t = 0; t < d; t++)
+                {
+                    uint64_t a = coefficients->coeffs[(t + d - m) % d][c * k + s];
+                    if (t < m)
+                        a = mul_modq(a, w, mod);
+                    table[(c * d + t) * n + i] = mul_modq(a, maps->factor[i], mod);
+                }
+            }
+    const bool narrow = rns_row_is_narrow(base, row);
+    uint64_t *wide = narrow ? (uint64_t *)safe_aligned_malloc(n * sizeof(uint64_t)) : NULL;
+    uint64_t *acc = (uint64_t *)safe_aligned_malloc(d * n * sizeof(uint64_t));
+    for (uint64_t b = 0; b < count; b++)
+    {
+        memset(acc, 0, d * n * sizeof(uint64_t));
+        for (uint64_t c = 0; c < part_count; c++)
+        {
+            const RNS_Polynomial p = parts[c][b];
+            assert(p->base == base && ((p->rns_mask >> row) & 1));
+            uint64_t *words = wide;
+            if (narrow)
+                mod_widen_w32(wide, rns_row32(p, row), n);
+            else
+                words = rns_row64(p, row);
+            for (uint64_t t = 0; t < d; t++)
+                mod_eltwise_mul_addto(acc + t * n, words, table + (c * d + t) * n, n, mod);
+        }
+        // n words of 64 bits, n far below 2^64: the sum fits in 128 bits.
+        for (uint64_t t = 0; t < d; t++)
+        {
+            unsigned __int128 sum = 0;
+            for (uint64_t i = 0; i < n; i++)
+                sum += acc[t * n + i];
+            out->coeffs[t][b] = modq_wide((uint64_t)(sum >> 64), (uint64_t)sum, mod);
+        }
+    }
+    free(acc);
+    free(wide);
+    free(table);
+}
+
 void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uint64_t count,
                                         RNS_CrtMaps maps)
 {
