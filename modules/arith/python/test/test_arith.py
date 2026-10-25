@@ -523,6 +523,43 @@ def test_fast_inverse_generic(split_degree):
     assert coeffs[0] == 1 and all(c == 0 for c in coeffs[1:])
 
 
+# (N, split_degree, prime sizes): narrow (28-bit) and wide rows, several
+# primes, and rings with enough slots for the vectorized inversion.
+INVERSE_SHAPES = [
+    (16, 4, [28, 30]),
+    (64, 2, [28, 50]),
+    (256, 4, [28, 40, 60]),
+    (512, 16, [61, 28]),
+    (8192, 4, [28, 60]),
+]
+
+
+@pytest.mark.parametrize(
+    "shape", INVERSE_SHAPES, ids=lambda s: f"N{s[0]}-d{s[1]}-{s[2]}"
+)
+def test_fast_inverse_generic_shapes(shape):
+    N_, d, sizes = shape
+    ring = Ring(N_, prime_size=sizes, split_degree=d)
+    lowest = ring.mask & -ring.mask
+    # The ring itself, and a ring over the same base without its first prime.
+    for r in (ring, ring.quotient_ring(mask=ring.mask & ~lowest)):
+        a = Polynomial(r).from_array([rng.randrange(1 << 27) for _ in range(N_)])
+        a.to_NTT()
+        inv = a.fast_inverse()
+        one = a * inv
+        one.to_coeff()
+        coeffs = one.get_polynomial()
+        assert coeffs[0] == 1 and all(c == 0 for c in coeffs[1:])
+
+        # Slot s is entries s * d .. s * d + d - 1 of a row of the NTT matrix;
+        # make the last slot of the last prime zero.
+        m = [list(row) for row in a.get_coeff_matrix(repr=repr.ntt)]
+        m[-1][N_ - d :] = [0] * d
+        z = Polynomial(r).from_coeff_matrix(m, repr=repr.ntt)
+        with pytest.raises(ValueError, match="zero slot is not invertible"):
+            z.fast_inverse()
+
+
 # --------------------------------------------------------------------------
 # Short transforms and short element-wise lengths
 #

@@ -1214,7 +1214,8 @@ extern "C"
        it is linear in the slot's d words. Each coefficient of entry b is
        therefore one inner product of every row-`row` word of parts[c][b]
        with a table built once from `coefficients` and the maps, summed over
-       c. This is the precomputation of [ACGS24, ePrint 2023/1949, App. C, Eqs. 3-4] for a linear combination of slots: each slot is an inner
+       c. This is the precomputation of [ACGS24, ePrint 2023/1949, App. C,
+       Eqs. 3-4] for a linear combination of slots: each slot is an inner
        product with the element's words, so the combination is one inner
        product with the coefficients' combination of those vectors, and the
        slots are never computed. `maps` is rns_crt_maps_new(base, row,
