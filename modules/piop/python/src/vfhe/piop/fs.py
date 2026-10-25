@@ -51,10 +51,7 @@ class FS_Verifier(Verifier):
 
     def _draw_challenge(self, label: str, domain=None):
         seed = self._derive(b"challenge", label)
-        domain = self.iop.domain if domain is None else domain
-        if domain is None:
-            raise RuntimeError("this IOP has no domain")
-        return domain.random_exceptional(seed=seed)
+        return self._challenge_domain(domain).random_exceptional(seed=seed)
 
     def _draw_bits(self, label: str, nbytes: int) -> bytes:
         return expand_bytes(self._derive(b"bits", label), nbytes)

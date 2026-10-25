@@ -231,23 +231,24 @@ class BatchFoldEval(BasefoldEval):
         return zs, all(_one_point(z, num_vars, self.slots) for z in zs)
 
     def _challenge_at_prime(self, seed: bytes, field) -> Any:
-        """A prime's challenge from a round's seed: the ring's exceptional
-        element derived from the seed, read in `field` -- each of its CRT
-        components there, which is the element of `field` whose integer
-        coefficients below the smallest prime the seed gives
-        (`Field.random_exceptional` with that bound). Every prime reads the
-        same integers."""
+        """One round's challenge in `field`, the residue field of a prime:
+        the element of `field` whose coefficients are the integers below the
+        smallest prime of R_q that `seed` determines
+        (`Field.random_exceptional` with that bound). Every prime derives the
+        same integers from the seed, so the primes' challenges are the CRT
+        components, the same in every slot, of one exceptional element of
+        R_q."""
         return field.random_exceptional(seed=seed, bound=min(self.ring.primes))
 
     def _layer_committer(
         self, iop, shared: str, index: int, trees: dict[int, Merkle]
     ) -> Callable[[int, int, Any], Awaitable[None]]:
-        """How prime `index`'s run commits a later layer: one tree for that
+        """How prime `index`'s run commits a later layer: by one tree for that
         layer across every prime, whose leaf j joins the primes' leaves j
-        (`_joint_tree`), built once every prime has folded to it
-        (`IOP.batched_call`) and kept in ``trees[layer]``. Its root is written
-        once, as ``{shared}/pi{step}``, by prime 0, which the composition
-        runs first once every prime has reached the step."""
+        (`_joint_tree`). The tree is built once every prime has folded to the
+        layer (`IOP.batched_call`) and kept in ``trees[layer]``; its root is
+        written once, as ``{shared}/pi{step}``, by prime 0, which the
+        composition's turn order runs first at every step."""
 
         async def commit_layer(layer: int, step: int, word) -> None:
             name = f"{shared}/pi{step}"
@@ -362,6 +363,17 @@ class BatchFoldEval(BasefoldEval):
         claims = len(owners)
         num_vars = len(z) // (claims * k)
         ring = self.ring
+
+        def component_tables() -> FieldVector:
+            # Every polynomial's element-major component table, side by side:
+            # entry (c * 2^l + b) * k + s is f_{c,s}(b).
+            return FieldVector.concat(
+                [
+                    ring.crt_components(o.polynomial.table, index, element_major=True)
+                    for o in openings
+                ]
+            )
+
         if skip:
             r = [z[t * k] for t in range(num_vars)]
         else:
@@ -388,14 +400,7 @@ class BatchFoldEval(BasefoldEval):
                 )
                 block = 1
             else:
-                table = FieldVector.concat(
-                    [
-                        ring.crt_components(
-                            o.polynomial.table, index, element_major=True
-                        )
-                        for o in openings
-                    ]
-                )
+                table = component_tables()
                 weight = FieldVector.concat(
                     _slot_weights(z, owners, powers, len(openings), num_vars, k)
                 )
@@ -421,14 +426,7 @@ class BatchFoldEval(BasefoldEval):
                 # The rounds bound the combinations F_c; the values at r of
                 # the component polynomials themselves come from their tables,
                 # bound to r the same way.
-                table = FieldVector.concat(
-                    [
-                        ring.crt_components(
-                            o.polynomial.table, index, element_major=True
-                        )
-                        for o in openings
-                    ]
-                )
+                table = component_tables()
                 for x in r:
                     t_lo, t_hi = table.split_even_odd(k)
                     table = t_lo.fma(t_hi - t_lo, x)
@@ -518,7 +516,7 @@ class BatchFoldEval(BasefoldEval):
             )
         ):
             raise Rejection(f"{label}: malformed answers")
-        size = 1 << self.scheme.schedule[0]
+        size = 1 << schedule[0]
         blocks = [
             _check_layer(
                 self.code,
