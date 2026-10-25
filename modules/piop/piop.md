@@ -409,9 +409,12 @@ transcript.
   protobuf messages by itself, every other value by its own `digest()`
   (arith's tables, polynomials and field elements, `vfhe.crypto`'s Merkle
   paths, this module's oracles, statements and proofs).
-- **Challenges.** `iop.verifier.challenge(label)` returns the challenge
+- **Challenges.** `await iop.verifier.challenge(label)` returns the challenge
   `label`: the first call samples it from the domain's exceptional set (§6)
   and writes it to the transcript; later calls return the recorded value.
+  It is awaited because inside an AND-composition (below) a challenge is
+  shared with other sub-protocols and waits for them; outside one it
+  returns at once.
   `challenge(label, domain)` samples from another domain's exceptional set
   instead, for a protocol whose challenges live in another ring or field
   than the IOP's (e.g. a residue field of the IOP's ring).
@@ -430,13 +433,11 @@ transcript.
   behind the samplers: each value is `H(transcript.state() ‖ tag ‖ label)`
   — the tag separates the two samplers, the label keeps back-to-back
   challenges distinct — and `IOP.run` seeds the chain with
-  `element_digest(root statement)`. Domain challenges need a deterministic
-  bytes → exceptional-element map: a domain's own `exceptional_from_seed`
-  takes precedence; over a `Ring`, `fs.ring_exceptional_from_seed` derives
-  a constant chunk of `split_degree` coefficients below `min(pᵢ)` — an
-  exceptional set of the same size `min(pᵢ)^split_degree` (nonzero
-  small-coefficient chunks of degree < split_degree are coprime to every
-  irreducible factor), replaceable by a seeded arith-side sampler later.
+  `element_digest(root statement)`. Domain challenges come from the
+  domain's own seeded sampler, `domain.random_exceptional(seed=...)`; over
+  a `Ring` that is a polynomial of degree below `split_degree` with integer
+  coefficients below `min(pᵢ)`, the exceptional set of size
+  `min(pᵢ)^split_degree`, and over a `Field` a uniform element.
   Nothing else changes — same protocols, same transcript — and an FS run
   is fully deterministic: same statement, same registry ⇒ byte-identical
   transcript (the tests assert this end-to-end, basefold included).
@@ -501,6 +502,77 @@ transcript.
   sampling challenge *i* (a crashed prover is re-raised rather than left to
   deadlock the verifier). An `IOP` object is single-use — one run consumes
   its transcript.
+- **AND-composition.** `await iop.and_composition(label, subprotocols)`
+  (`and_composition.py`) runs several sub-protocols — one coroutine each,
+  the calling party's side of each — as their AND-composition: the composed
+  protocol proves that every sub-protocol's statement holds, and in round
+  `j` every sub-protocol writes its round-`j` messages, then one challenge
+  is drawn and every sub-protocol receives it. It is the conjunction case of
+  [CDS94, Thm. 8], which proves a monotone combination of statements by
+  splitting the verifier's challenge among one public-coin protocol per
+  statement with a secret sharing scheme for the dual combination: for a
+  conjunction every share is the challenge itself, so every protocol
+  answers it unchanged — the AND-proof of Σ-protocols, stated and proved in
+  [BS23, §19.7.1, Thm. 19.18]. [CDS94] states its construction for
+  three-round protocols and notes that it generalizes to any number of
+  rounds; here the protocols are multi-round, with one shared challenge per
+  round. A sub-protocol is ordinary protocol
+  code; inside the composition its `await iop.verifier.challenge(label,
+  domain)` waits for the other sub-protocols instead of drawing at once
+  (the binding travels in a context variable, so the protocol never names
+  the composition), and an existing protocol's half runs unchanged as one.
+  Papers describe such protocols as "run Π_i for i ∈ [L] in parallel, on
+  the same challenges", and the code is that sentence: a list of the Π_i's
+  coroutines handed to one call.
+  - *Not the other two compositions.* The framework has three, distinct:
+    the Composer (`compose`, below) builds a protocol from layers run one
+    after another, a sequential composition [KP23, Thm. 5]; the driver's
+    bundles reduce products of relations, the parallel composition of
+    [KP23, Thm. 6], whose protocols draw their own challenges; and an
+    AND-composition runs sub-protocols inside one protocol on shared
+    challenges.
+  - *Rounds* are matched by position: round `j` is the `j`-th challenge
+    request of every sub-protocol still running, whatever its label; one
+    that returns leaves. Each round draws one seed, the bit-string challenge
+    `{label}/round{j}`, after every sub-protocol's messages, and each
+    receives `domain.random_exceptional(seed=seed)` for the domain it asked
+    in, so sub-protocols over one domain receive one value, or what the
+    composition's `challenge_sampler(seed, domain)` returns. BatchFold
+    passes one, reading
+    one ring challenge in a different residue field per sub-protocol
+    (polycom.md §3).
+  - *Order*: the sub-protocols take turns in list order — one runs until it
+    requests a challenge or returns — so the transcript order depends only
+    on their code, never on scheduling. A counting barrier that woke every
+    sub-protocol at once would not do: one that yields mid-turn would
+    interleave its writes with another's, and a stored proof, read back in
+    the prover's order, would no longer match the verifier's.
+  - *Soundness*: when one of the sub-protocols' statements is false, it is
+    false before any challenge, and acceptance needs that sub-protocol to
+    accept, so the composition's error is the largest of the sub-protocols'
+    errors, each computed with the challenge set it receives; round-by-round
+    soundness, the notion Fiat–Shamir needs, composes the same way
+    ([BCFW25] proves it for parallel copies of an interactive oracle
+    reduction). Shared challenges give no amplification: copies of one
+    protocol composed here keep its error.
+  - *Rules*: a sub-protocol must not wait for something only another one
+    produces (it holds the turn while it runs, so the wait never ends — the
+    independence the composition assumes); a protocol called inside a
+    sub-protocol shares its challenges by position too; an AND-composition
+    inside a sub-protocol draws its seeds directly during that
+    sub-protocol's turn, and its rounds are not the outer one's; and with
+    fresh randomness a sub-protocol's challenge is still derived from the
+    round's seed. The first exception a sub-protocol raises (a `Rejection`,
+    a prover error) cancels the others and is raised from the call, and
+    `Transcript.read` shields the entry it awaits, so a cancelled reader
+    leaves it for its writer.
+  - `await iop.batched_call(step, operand, kernel)` is the other
+    synchronization point: every sub-protocol hands in an operand and
+    `kernel` runs once on all of them — a batched native kernel in place of
+    one call per sub-protocol; it writes nothing to the transcript, and
+    outside an AND-composition it is the kernel on the one operand. This is
+    where the composition meets native multithreading: a step whose
+    operands are small per sub-protocol is fused across them here.
 
 ### Layered reductions and the Composer
 
@@ -754,11 +826,11 @@ Tha22, §4.1]. A field is simply the degenerate case `A = F`.
 *coefficient domain*, not of a statement or protocol, so the domain object is
 responsible for sampling from it. `vfhe.arith.Ring` already provisions this:
 its `exceptional_set_size` parameter picks the `split_degree` so the residue
-factors are large enough, and `Ring.random_exceptional()` /
-`Polynomial.sample_exceptional()` sample challenges. For `vfhe.arith.Field`
-the whole field is exceptional and uniform sampling suffices, and
-`vfhe.arith.Field` spells it under the same names a `Ring` has
-(`random_exceptional`, `exceptional_from_seed`). The `IOP` object holds the domain and delegates; no
+factors are large enough, and `Ring.random_exceptional(seed=None)` /
+`Polynomial.sample_exceptional(seed=None)` sample challenges, from a fresh
+seed or the given one. For `vfhe.arith.Field` the whole field is
+exceptional and uniform sampling suffices, under the same name,
+`random_exceptional(seed=None)`. The `IOP` object holds the domain and delegates; no
 `sampling_set` is ever carried by statements. Sampling happens in exactly one
 place — `Verifier.challenge`, which calls `domain.random_exceptional()`
 (the name both `Ring` and `Field` have) on the IOP's domain, or on the
@@ -812,10 +884,10 @@ published to the transcript, so the Fiat-Shamir subtype (`fs.FS_Verifier`,
 §5) overrides exactly the two draw hooks behind them (`_draw_challenge`,
 `_draw_bits`):
 
-- `challenge(label, domain=None)` — a coefficient-domain element from the
-  exceptional set (§6) of the IOP's domain or of `domain`, what reductions
-  consume and what `soundness_error` accounts for;
-- `challenge_bits(label, bits)` — raw uniform coins as a byte string,
+- `await challenge(label, domain=None)` — a coefficient-domain element from
+  the exceptional set (§6) of the IOP's domain or of `domain`, what
+  reductions consume and what `soundness_error` accounts for;
+- `await challenge_bits(label, bits)` — raw uniform coins as a byte string,
   deliberately shapeless: how they become protocol randomness — spot-check
   positions (§2's "the verifier may query it at a few positions"), a
   permutation, a subset — is the *protocol's* business, expanded on its
@@ -1180,8 +1252,7 @@ therefore lives inside the PCS's evaluation protocol
    hashes transcript values but does not serialize them, so a `Proof`
    holds live Python objects rather than an argument *string*
    [CY24, §4.1] (§5). With it come `digest()` hooks for any new transcript
-   value types, and a seeded arith-side `sample_exceptional` to replace
-   `fs.ring_exceptional_from_seed` (§5, §6).
+   value types.
 7. **A native non-interactive verifier**: port the FS verifier to C once
    the encoding above exists — the hot path is hashing and per-round
    coefficient arithmetic, and the Python design already constrains it to a
@@ -1193,6 +1264,12 @@ therefore lives inside the PCS's evaluation protocol
   Proofs for Convolutional Neural Network Predictions and Accuracy*. ACM
   CCS 2021, pp. 2968–2985. <https://doi.org/10.1145/3460120.3485379>
   (Generalized GKR gates: §4.)
+- **[BCFW25]** Benedikt Bünz, Alessandro Chiesa, Giacomo Fenzi, William
+  Wang. *Linear-Time Accumulation Schemes*. TCC 2025, Springer, 2025.
+  doi:10.1007/978-3-032-12287-2_13. ePrint 2025/753.
+  <https://eprint.iacr.org/2025/753>
+- **[BS23]** Dan Boneh, Victor Shoup. *A Graduate Course in Applied
+  Cryptography*, version 0.6, January 2023. <https://toc.cryptobook.us/>
 - **[BCRSW19]** Eli Ben-Sasson, Alessandro Chiesa, Michael Riabzev, Nicholas
   Spooner, Madars Virza, Nicholas P. Ward. *Aurora: Transparent Succinct
   Arguments for R1CS*. EUROCRYPT 2019, LNCS 11476, pp. 103–128, Springer,
@@ -1213,6 +1290,10 @@ therefore lives inside the PCS's evaluation protocol
   *Delegating Computation: Interactive Proofs for Muggles*. STOC 2008;
   Journal of the ACM 62(4), Article 27, 2015.
   <https://dl.acm.org/doi/10.1145/2699436>
+- **[CDS94]** Ronald Cramer, Ivan Damgård, Berry Schoenmakers. *Proofs of
+  Partial Knowledge and Simplified Design of Witness Hiding Protocols*.
+  CRYPTO 1994, LNCS 839, pp. 174–187, Springer, 1994.
+  doi:10.1007/3-540-48658-5_19
 - **[CHMMVW20]** Alessandro Chiesa, Yuncong Hu, Mary Maller, Pratyush Mishra,
   Psi Vesely, Nicholas Ward. *Marlin: Preprocessing zkSNARKs with Universal
   and Updatable SRS*. EUROCRYPT 2020, LNCS 12105, pp. 738–768, Springer,

@@ -54,9 +54,23 @@ versions may contain breaking changes.
   basefold commitments over `R_q`. The claims are carried to the CRT
   components at each prime and proved there, over the residue field, by the
   common-point sumcheck, a random linear combination of the components and
-  one basefold run over the residue code. The ring commitments serve every
-  prime, and the runs share one set of query positions, the ring leaves
-  answering every prime's first layer.
+  one basefold run over the residue code. The primes run in lockstep, one
+  shared ring challenge per round read at every prime as its CRT component
+  0. The ring commitments serve every prime, and the runs share one set of
+  query positions, the ring leaves answering every prime's first layer.
+- `IOP.and_composition(label, subprotocols, challenge_sampler=None)`: runs
+  sub-protocols as their AND-composition, one challenge per round shared by
+  all of them. They take turns in a fixed order, so the transcript order
+  depends only on the protocols; an existing protocol's half runs unchanged
+  as a sub-protocol. `IOP.batched_call(step, operand, kernel)` hands every
+  sub-protocol's operand to one kernel call.
+- `Ring.random_exceptional(seed=None)`, `Polynomial.sample_exceptional(
+  seed=None)` and `Field.random_exceptional(seed=None, bound=None)`: the
+  exceptional samplers take an optional seed, and the field's an optional
+  bound on its coefficients. Both draw their coefficients uniformly with
+  `vfhe.crypto.seeded` (or `entropy` without a seed), so a seeded ring
+  element and the bounded field element from the same seed have the same
+  coefficients.
 - `Verifier.challenge(label, domain)`: a challenge from the exceptional set
   of `domain` rather than of the IOP's domain (the Fiat-Shamir verifier
   derives it the same way).
@@ -450,6 +464,27 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: `Verifier.challenge` and `Verifier.challenge_bits` are
+  coroutines: write `await iop.verifier.challenge(label)`. Inside an
+  AND-composition a challenge waits for the other sub-protocols; outside one
+  it returns at once, with the same values and transcripts as before.
+- **BREAKING**: `Field.exceptional_from_seed(seed)` and
+  `fs.ring_exceptional_from_seed(ring, seed)` are removed; use
+  `random_exceptional(seed=seed)` on the field or ring. The Fiat-Shamir
+  verifier draws through it. Field challenges keep their values; ring
+  challenges are now drawn by `vfhe.crypto.seeded`'s rejection sampler,
+  which makes their coefficients exactly uniform (the previous reduction of
+  128-bit words was slightly biased), so ring transcripts change.
+- The ring's exceptional sampler draws, without a seed too, from its
+  exceptional set: a polynomial of degree below `split_degree` with integer
+  coefficients below the smallest prime. It is native
+  (`polynomial_RNS_sample_exceptional`) and needs no transform: such a
+  polynomial is its own residue in every slot, so the coefficients are
+  written into every slot directly. It used to copy a random slot,
+  sampled independently modulo each prime, into every slot -- a larger set
+  whose differences are not all invertible.
+- `Transcript.read` shields the entry it awaits, so cancelling a reader
+  leaves the entry for its writer.
 - **BREAKING**: `FieldFoldableRS`'s general code takes the root of its base
   transform in `F_p` only, unless `root_field="field"`. Over an extension
   field whose `p - 1` lacks the 2-adicity for the base length, the base is

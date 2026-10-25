@@ -10,7 +10,7 @@ produce byte-identical transcripts.
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring, RNSRing
 from vfhe.piop import IOP, FS_Verifier, Proof, Statement, TableOracle, element_digest
-from vfhe.piop.fs import expand_bytes, ring_exceptional_from_seed
+from vfhe.piop.fs import expand_bytes
 from vfhe.piop.protocols import Sumcheck, SumcheckProd
 from vfhe.piop.relations import Relation_Sum, Relation_SumProd
 
@@ -90,11 +90,11 @@ def test_element_digest_walker():
         element_digest(object())
 
 
-def test_ring_exceptional_from_seed_deterministic():
+def test_seeded_ring_challenges_are_deterministic():
     ring = _ring()
-    a = ring_exceptional_from_seed(ring, b"seed")
-    b = ring_exceptional_from_seed(ring, b"seed")
-    c = ring_exceptional_from_seed(ring, b"other")
+    a = ring.random_exceptional(seed=b"seed")
+    b = ring.random_exceptional(seed=b"seed")
+    c = ring.random_exceptional(seed=b"other")
     assert a == b
     assert a != c
 
@@ -157,15 +157,14 @@ def test_fs_sumcheckprod():
 class _SeededDomain:
     """Interactive-and-FS-capable stub: integers derived from seeds."""
 
-    def random_exceptional(self) -> int:
-        raise AssertionError("FS runs must not sample")
-
-    def exceptional_from_seed(self, seed: bytes) -> int:
+    def random_exceptional(self, seed: bytes | None = None) -> int:
+        if seed is None:
+            raise AssertionError("FS runs must not sample")
         return int.from_bytes(seed[:8], "little")
 
 
 def test_fs_domain_hook_and_plain_tables():
-    # A domain-provided exceptional_from_seed takes precedence, and the FS
+    # The FS verifier draws through the domain's seeded sampler, and the FS
     # path works over plain (ring-less) tables too.
     v = [MLE_Variable("x0"), MLE_Variable("x1")]
     f = MLE(variables=v, evaluations=[1, 2, 3, 4])
@@ -287,7 +286,7 @@ def test_fs_challenge_bits_deterministic():
     def draw() -> bytes:
         iop = IOP(domain=_SeededDomain(), fiat_shamir=True)
         iop.transcript.bind(b"root")
-        return iop.verifier.challenge_bits("queries", 128)
+        return iop.loop.run_until_complete(iop.verifier.challenge_bits("queries", 128))
 
     one, two = draw(), draw()
     assert one == two and len(one) == 16

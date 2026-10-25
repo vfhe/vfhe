@@ -104,6 +104,7 @@ void polynomial_RNSc_scaled_lift(void *out, void *in, uint64_t *delta);
 int polynomial_RNS_inverse(void *out, void *in);
 bool polynomial_eq(void *a, void *b);
 void polynomial_RNS_broadcast_slot(void *out, void *in, uint64_t slot_idx);
+void polynomial_RNS_sample_exceptional(void *out, const uint8_t *seed, uint64_t seed_len);
 void polynomial_RNS_rotate_slot(void *out, void *in, uint64_t rot);
 void polynomial_RNS_copy_slot(void *out, uint64_t dst, void *in, uint64_t src);
 

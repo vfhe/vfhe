@@ -34,6 +34,15 @@ other module builds on.
     evaluations: add / sub / scale only, `evaluate` raises. The layer is
     asyncio-free; a consumer's unresolved protocol values are its own concern.
 
+Sampling names follow one rule: on a ring or a field, `random_*` returns a
+new element (`Ring.random_element`, `Ring.random_exceptional`,
+`Field.random_element`, `Field.random_exceptional`); on an element or a
+vector, `sample_*` overwrites it in place and returns it
+(`Polynomial.sample_uniform`, `sample_gaussian`, `sample_exceptional`,
+`FieldVector.sample_random`). The exceptional samplers take an optional
+`seed`, from which the element is derived; without one, a fresh seed is
+drawn.
+
 `python/cdef/arith.h` declares the C ABI Python calls (opaque handles plus a
 few structs cdef'd for field access); `python/cdef/mle.h` the dense-MLE
 kernels of `c/src/mle.c`.

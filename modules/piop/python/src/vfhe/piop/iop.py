@@ -6,8 +6,9 @@ protocols, the parties, and the three runners."""
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from .and_composition import ANDComposition, current_subprotocol
 from .digest import element_digest
 from .fs import FS_Verifier
 from .oracle import CommittedOracle, ImplicitOracle, OracleKind, oracle_closure
@@ -15,6 +16,8 @@ from .party import Prover, Verifier
 from .transcript import Proof, Transcript, Variable
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
     from .protocol import Protocol
     from .relation import Relation, Statement
 
@@ -65,6 +68,48 @@ class IOP:
         if verifier is None:
             verifier = FS_Verifier if fiat_shamir else Verifier
         self.verifier = verifier(self)
+
+    async def and_composition(
+        self,
+        label: str,
+        subprotocols: list[Coroutine],
+        challenge_sampler: Callable[[bytes, Any], Any] | None = None,
+    ) -> list:
+        """Run `subprotocols` -- coroutines, each the calling party's side of
+        one sub-protocol -- as their AND-composition: in each round every
+        sub-protocol sends its messages, then one challenge is drawn and every
+        sub-protocol receives it: the conjunction case of [CDS94, Thm. 8], the
+        AND-proof of Σ-protocols [BS23, §19.7.1], one challenge per round
+        (`and_composition.py` states the rounds, the order, the soundness and
+        the rules). Returns the sub-protocols' results, in
+        order.
+
+        `label` names the composition in the transcript: round j's seed is
+        the entry ``{label}/round{j}``. `challenge_sampler(seed, domain)`
+        returns the challenge a sub-protocol receives when it asks for one in
+        `domain`; when it is None, that challenge is
+        ``domain.random_exceptional(seed=seed)``.
+
+        The first exception a sub-protocol raises (a verifier's `Rejection`,
+        a prover's error) cancels the others and is raised from here.
+        """
+        composition = ANDComposition(self, label, challenge_sampler)
+        return await composition.run(list(subprotocols))
+
+    async def batched_call(
+        self, step: str, operand, kernel: Callable[[list], list]
+    ) -> Any:
+        """`kernel` applied once to the operands of every sub-protocol of the
+        running AND-composition: each sub-protocol calls this with its own
+        `operand` and receives its entry of ``kernel(operands)``, operands in
+        sub-protocol order. `step` names the call, and every sub-protocol of
+        a round must reach the same one. Writes nothing to the transcript.
+        Outside an AND-composition, ``kernel([operand])[0]``."""
+        bound = current_subprotocol(self)
+        if bound is None:
+            return kernel([operand])[0]
+        composition, index = bound
+        return await composition.batched_call(index, step, operand, kernel)
 
     def new_variable(self, name: str) -> Variable:
         return Variable(name, self)

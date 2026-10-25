@@ -33,7 +33,7 @@ from __future__ import annotations
 from abc import ABC, ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from vfhe.crypto import entropy, hash_bytes
+from vfhe.crypto import entropy, hash_bytes, seeded
 from vfhe.util._cpu import last_level_cache_bytes
 
 from .registry import registered, resolve
@@ -51,6 +51,13 @@ if TYPE_CHECKING:
 # Seed length for an unseeded field sampler: 256 bits, matching the width the
 # C expanders absorb.
 _SEED_BYTES = 32
+
+
+#: The context string of the seeded exceptional samplers, so that a ring and
+#: a field draw the same integers from one seed (`Field.random_exceptional`).
+#: The ring's sampler is native (`polynomial_RNS_sample_exceptional`) and
+#: passes the same string.
+_EXCEPTIONAL_CONTEXT = b"exceptional"
 
 
 class ArithParent(ABC):
@@ -304,13 +311,15 @@ class Ring(ArithParent, metaclass=_ImplementationDispatch):
         """
         raise NotImplementedError
 
-    def random_exceptional(self, ntt: bool = True) -> Polynomial:
-        """A uniform element of the ring's exceptional set.
+    def random_exceptional(
+        self, seed: bytes | None = None, ntt: bool = True
+    ) -> Polynomial:
+        """A uniform element of the ring's exceptional set: a new
+        `Polynomial` filled by `Polynomial.sample_exceptional`, which says
+        what the set is.
 
-        Every difference of two such elements is invertible, which is what a
-        protocol challenge needs. `exceptional_set_size` is how large the set
-        is.
-
+        :param seed: Derive the element from this seed; a fresh one is drawn
+            when it is None.
         :param ntt: Return it in the mul domain rather than the canonical one.
         """
         raise NotImplementedError
@@ -590,8 +599,26 @@ class Polynomial(metaclass=_ImplementationDispatch):
         """Overwrite with discrete-Gaussian coefficients; returns ``self``."""
         raise NotImplementedError
 
-    def sample_exceptional(self, ntt: bool = True) -> Polynomial:
-        """Overwrite with an exceptional-set element; returns ``self``."""
+    def sample_exceptional(
+        self, seed: bytes | None = None, ntt: bool = True
+    ) -> Polynomial:
+        """Overwrite with a uniform element of the ring's exceptional set;
+        returns ``self``.
+
+        The set is the polynomials of degree below ``d = split_degree`` whose
+        coefficients are integers below the smallest prime p_min, ``p_min^d``
+        of them (`exceptional_set_size`). A nonzero difference of two of them
+        has a coefficient in ``(-p_min, p_min)`` other than 0, so it is
+        nonzero modulo every prime, and having degree below d it is a unit
+        modulo every irreducible degree-d factor of ``X^N + 1``: it is
+        invertible. Read in a residue field ``F_p[x]/(x^d - w)``
+        (`residue_field`), such an element is the element with the same
+        coefficients, at every prime.
+
+        The coefficients are uniform below p_min: drawn from ``seed`` by
+        `vfhe.crypto.seeded`, or fresh by `vfhe.crypto.entropy` when it is
+        None.
+        """
         raise NotImplementedError
 
     # --- arithmetic ---
@@ -808,15 +835,32 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
             seed = entropy.bytes(_SEED_BYTES)
         return self._uniform_from_seed(seed)
 
-    def random_exceptional(self) -> FieldElement:
-        """A fresh element of the exceptional set, which for a field is the
-        whole field: a uniform element. The name a protocol verifier calls."""
-        return self.random_element()
+    def random_exceptional(
+        self, seed: bytes | None = None, bound: int | None = None
+    ) -> FieldElement:
+        """A uniform element of the field's exceptional set, which for a field
+        is the whole field: `random_element`, deterministic from ``seed`` when
+        one is given.
 
-    def exceptional_from_seed(self, seed: bytes) -> FieldElement:
-        """The exceptional-set element a Fiat-Shamir transcript derives from
-        ``seed``: for a field, a uniform element."""
-        return self.random_element(seed)
+        With ``bound``, a uniform element of the subset whose ``degree``
+        coefficients are integers below ``bound`` instead (``bound^degree``
+        elements; any subset of a field is exceptional), drawn by
+        `vfhe.crypto.seeded` as `Ring.random_exceptional` draws its
+        coefficients: with ``bound`` the ring's smallest prime, the same
+        integers from the same seed, so fields of different characteristic
+        read one ring element alike.
+        """
+        if bound is None:
+            return self.random_element(seed)
+        if seed is None:
+            coefficients = entropy.below_many(self.degree, bound)
+        else:
+            coefficients = seeded.below_many(
+                self.degree, bound, _EXCEPTIONAL_CONTEXT, seed
+            )
+        if self.degree == 1:
+            return FieldElement(self, coefficients[0])
+        return FieldElement(self, coefficients)
 
 
 class FieldElement(metaclass=_ImplementationDispatch):

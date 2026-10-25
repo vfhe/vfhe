@@ -546,13 +546,15 @@ class BasefoldEval(Protocol):
             opening.word,
             lambda j: _layer_answer(self.code, opening.word, opening.tree, j, size),
         )
-        run.fold(iop)
+        await run.fold(iop)
         # The query phase, which only exists once the codewords are roots:
         # the verifier cannot read a committed vector, so query positions are
         # derived from a published bit-string challenge (either party may
         # draw it; honesty = only after h0 is written) and the prover answers
         # each with the leaf and path of every layer's tree.
-        queries = self.query_positions(iop.verifier.challenge_bits(f"{label}/queries"))
+        queries = self.query_positions(
+            await iop.verifier.challenge_bits(f"{label}/queries")
+        )
         iop.transcript.write(f"{label}/answers", run.answers(queries))
 
     async def verify(
@@ -586,7 +588,9 @@ class BasefoldEval(Protocol):
             ),
         )
         await run.fold(iop, verifier, domain)
-        queries = self.query_positions(verifier.challenge_bits(f"{label}/queries"))
+        queries = self.query_positions(
+            await verifier.challenge_bits(f"{label}/queries")
+        )
         run.check(queries, await iop.transcript.read(f"{label}/answers"))
 
     async def _prove_batch(self, prover: Prover, statements: list[Statement]) -> None:
@@ -627,7 +631,7 @@ class BasefoldEval(Protocol):
             point = points[0]
             values = [statements[owners.index(c)].value for c in range(len(fs))]
         else:
-            s = iop.verifier.challenge(f"{label}/point/s")
+            s = await iop.verifier.challenge(f"{label}/point/s")
             powers = _powers(s, len(statements), one)
             # h = sum_c f_c * E_c, with E_c the sum of s^m eq~(z_m, .) over
             # the claims on f_c, so a round is one product per polynomial.
@@ -654,7 +658,7 @@ class BasefoldEval(Protocol):
                         else tuple(a + b for a, b in zip(evals, term, strict=True))
                     )
                 iop.transcript.write(f"{label}/point/g{t}", evals)
-                r = iop.verifier.challenge(f"{label}/point/r{t}")
+                r = await iop.verifier.challenge(f"{label}/point/r{t}")
                 point.append(r)
                 tables = [
                     f.evaluate({f.variables[0]: r}, in_place=f is not fs[c])
@@ -675,7 +679,9 @@ class BasefoldEval(Protocol):
                     self.code, openings[0].word, openings[0].tree, j, size
                 )
         else:
-            alphas = _powers(iop.verifier.challenge(f"{label}/alpha"), len(fs), one)
+            alphas = _powers(
+                await iop.verifier.challenge(f"{label}/alpha"), len(fs), one
+            )
             u = fs[0].scale(alphas[0])
             for f, alpha in zip(fs[1:], alphas[1:], strict=True):
                 term = f.scale(alpha)
@@ -690,8 +696,10 @@ class BasefoldEval(Protocol):
                 )
 
         run = _ProverRun(self, label, u, point, word, top_answer)
-        run.fold(iop)
-        queries = self.query_positions(iop.verifier.challenge_bits(f"{label}/queries"))
+        await run.fold(iop)
+        queries = self.query_positions(
+            await iop.verifier.challenge_bits(f"{label}/queries")
+        )
         iop.transcript.write(f"{label}/answers", run.answers(queries))
 
     async def _verify_batch(
@@ -721,7 +729,7 @@ class BasefoldEval(Protocol):
                         f"{label}: two values claimed for one polynomial at one point"
                     )
         else:
-            s = verifier.challenge(f"{label}/point/s")
+            s = await verifier.challenge(f"{label}/point/s")
             powers = _powers(s, len(statements), one)
             claim = None
             for power, statement in zip(powers, statements, strict=True):
@@ -732,7 +740,7 @@ class BasefoldEval(Protocol):
                 evals = await iop.transcript.read(f"{label}/point/g{t}")
                 if not (evals[0] + evals[1] == claim):
                     raise Rejection(f"{label} point round {t}: g(0) + g(1) != claim")
-                r = verifier.challenge(f"{label}/point/r{t}")
+                r = await verifier.challenge(f"{label}/point/r{t}")
                 point.append(r)
                 claim = interpolate_evals(evals, r)
             values = list(await iop.transcript.read(f"{label}/point/q"))
@@ -761,7 +769,7 @@ class BasefoldEval(Protocol):
                 )
         else:
             alphas = _powers(
-                verifier.challenge(f"{label}/alpha"), len(commitments), one
+                await verifier.challenge(f"{label}/alpha"), len(commitments), one
             )
             value = None
             for alpha, v in zip(alphas, values, strict=True):
@@ -789,7 +797,9 @@ class BasefoldEval(Protocol):
 
         run = _VerifierRun(self, label, point, value, top_check)
         await run.fold(iop, verifier, domain)
-        queries = self.query_positions(verifier.challenge_bits(f"{label}/queries"))
+        queries = self.query_positions(
+            await verifier.challenge_bits(f"{label}/queries")
+        )
         run.check(queries, await iop.transcript.read(f"{label}/answers"))
 
 
@@ -894,7 +904,7 @@ class _ProverRun:
         #: layer's answers come from `top_answer`).
         self.trees: list[Merkle] = []
 
-    def fold(self, iop) -> None:
+    async def fold(self, iop) -> None:
         """The d interleaved rounds -- round message, challenge, the bind of
         both sumcheck tables and the fold of the codeword with that challenge,
         and the root of every codeword a layer starts from -- then the
@@ -912,7 +922,7 @@ class _ProverRun:
             var = cur_f.variables[0]
             evals = prod_round_evals([cur_f, cur_eq])
             iop.transcript.write(f"{label}/g{s}", evals)
-            r = iop.verifier.challenge(f"{label}/r{s}", domain)
+            r = await iop.verifier.challenge(f"{label}/r{s}", domain)
             cur_f = cur_f.evaluate({var: r}, in_place=cur_f is not f)
             cur_eq = cur_eq.evaluate({var: r}, in_place=True)
             word = code.fold(word, r, level=d - s)
@@ -994,7 +1004,7 @@ class _VerifierRun:
             evals = await iop.transcript.read(f"{label}/g{s}")
             if not (evals[0] + evals[1] == claim):
                 raise Rejection(f"{label} round {s}: g(0) + g(1) != claim")
-            r = verifier.challenge(f"{label}/r{s}", domain)
+            r = await verifier.challenge(f"{label}/r{s}", domain)
             self.rs.append(r)
             claim = interpolate_evals(evals, r)
             if d - s - 1 in levels[1:-1]:

@@ -61,15 +61,20 @@ relation toolbox, `vfhe.piop.relations`; and the protocols,
   futures `Value` / `Variable`.
 - `party.py`: `Party` / `Prover` / `Verifier`: the worklist driver both
   parties run (with the parking rule for evaluation claims), the prover's
-  `witnesses`, and the verifier's two samplers — `challenge(label)`, an
-  exceptional-set element, and `challenge_bits(label, bits)`, raw published
-  coins; either party may call them, a Fiat-Shamir verifier overrides both.
+  `witnesses`, and the verifier's two samplers — `await challenge(label)`,
+  an exceptional-set element, and `await challenge_bits(label, bits)`, raw
+  published coins; either party may call them, a Fiat-Shamir verifier
+  overrides both.
+- `and_composition.py`: the AND-composition behind
+  `IOP.and_composition(label, subprotocols)`, sub-protocols run on one
+  shared challenge per round (they take turns in a fixed order, so the
+  transcript does not depend on scheduling), and `IOP.batched_call`, one
+  kernel call over every sub-protocol's operand.
 - `fs.py`: `FS_Verifier`, the Fiat-Shamir transform as a `Verifier` subtype
   overriding exactly the two draw hooks: each value is
   `H(transcript.state() | tag | label)`, so it binds the root statement and
-  every prior message. Ring challenges come from
-  `ring_exceptional_from_seed` unless the domain provides its own
-  `exceptional_from_seed`.
+  every prior message. Domain challenges come from the domain's seeded
+  sampler, `random_exceptional(seed=...)`.
 - `iop.py`: `IOP`, one protocol execution: the event loop, the coefficient
   domain, the transcript, the two parties and the relation → protocol
   registry (`register(relation, protocol, kind=None)`; `Relation_Eval` is

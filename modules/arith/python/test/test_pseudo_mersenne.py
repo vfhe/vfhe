@@ -599,7 +599,7 @@ class TestUniformSamplerAPI:
         seeded = field.random_element(b"seed")
         assert seeded == field.random_element(b"seed") == field.random(b"seed")
         assert seeded != field.random_element(b"other")
-        assert field.exceptional_from_seed(b"seed") == seeded
+        assert field.random_exceptional(seed=b"seed") == seeded
         assert_canonical(seeded, field)
 
     def test_unseeded_draws_are_fresh(self, field):
