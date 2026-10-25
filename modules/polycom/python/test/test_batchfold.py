@@ -29,6 +29,7 @@ from vfhe.polycom import (
     BatchFoldEval,
     FieldFoldableRS,
     FoldableRS,
+    batchfold,
 )
 
 
@@ -79,12 +80,17 @@ class _Setting:
         table = [self.ring.random_element() for _ in range(8)]
         return MLE(ring=self.ring, variables=variables, evaluations=table)
 
-    def point(self, f: MLE, integer: bool = False) -> dict:
-        if integer:
+    def point(self, f: MLE, kind: str = "exceptional") -> dict:
+        """A point for `f`: of exceptional elements, whose CRT components are
+        all one element (the points ring sumchecks produce); of integers; or
+        of uniform ring elements, whose components differ."""
+        if kind == "integer":
             return {
                 v: Polynomial(self.ring).from_array([3 + i])
                 for i, v in enumerate(f.variables)
             }
+        if kind == "general":
+            return {v: self.ring.random_element() for v in f.variables}
         return {v: self.ring.random_exceptional() for v in f.variables}
 
     def claim(self, which: str, point: dict | None = None) -> tuple:
@@ -111,7 +117,8 @@ def setting(request):
 
 def _bundles(setting: _Setting) -> dict:
     first = setting.claim("f")
-    integer = setting.claim("f", setting.point(setting.f, integer=True))
+    integer = setting.claim("f", setting.point(setting.f, "integer"))
+    general = setting.claim("f", setting.point(setting.f, "general"))
     return {
         "one claim": [first],
         "two polynomials, three points": [
@@ -127,6 +134,15 @@ def _bundles(setting: _Setting) -> dict:
         "two polynomials, one integer point": [
             integer,
             setting.claim("g", setting.same_point(integer, "g")),
+        ],
+        "two polynomials, one general point": [
+            general,
+            setting.claim("g", setting.same_point(general, "g")),
+        ],
+        "two polynomials, three general points": [
+            general,
+            setting.claim("f", setting.point(setting.f, "general")),
+            setting.claim("g", setting.point(setting.g, "general")),
         ],
     }
 
@@ -167,15 +183,36 @@ def test_the_common_point_sumcheck_is_skipped_for_one_point(setting):
     bundles = _bundles(setting)
     # One ring point whose components differ: the sumcheck runs.
     iop = setting.iop()
-    assert iop.run(_statement(bundles["two polynomials, one point"]))
+    assert iop.run(_statement(bundles["two polynomials, one general point"]))
     assert "batchfold/0/p0/point/q" in _labels(iop)
-    # One integer point, the same in every component: no sumcheck.
-    iop = setting.iop()
-    assert iop.run(_statement(bundles["two polynomials, one integer point"]))
-    labels = _labels(iop)
-    assert not any("/point/" in x for x in labels)
-    # The combination's challenge is the first round, then the folds start.
-    assert labels[:2] == ["batchfold/0/round0", "batchfold/0/p0/g0"]
+    # One point of exceptional elements or of integers, the same in every
+    # component: no sumcheck.
+    for name in ("two polynomials, one point", "two polynomials, one integer point"):
+        iop = setting.iop()
+        assert iop.run(_statement(bundles[name]))
+        labels = _labels(iop)
+        assert not any("/point/" in x for x in labels), name
+        # The combination's challenge is the first round, then the folds start.
+        assert labels[:2] == ["batchfold/0/round0", "batchfold/0/p0/g0"], name
+
+
+def test_points_constant_in_slots_take_the_shorter_rounds(setting, monkeypatch):
+    """Points of exceptional elements are one point in every slot, and the
+    prover then runs the common-point sumcheck on one combined table per
+    polynomial: the transcript is the one the general rounds write."""
+    claims = _bundles(setting)["two polynomials, three points"]
+    for z in (claims[0][1], claims[2][1]):
+        for x in z.values():
+            for index in range(setting.ring.ell):
+                components = setting.ring.crt_components([x], index)
+                assert all(c == components[0] for c in components)
+    shorter = setting.iop(fiat_shamir=True)
+    proof = shorter.prove(_statement(claims))
+    assert "batchfold/0/p0/point/q" in _labels(shorter)
+    monkeypatch.setattr(batchfold, "_constant_in_slots", lambda _z, _k: False)
+    general = setting.iop(fiat_shamir=True)
+    assert general.prove(_statement(claims)).digest() == proof.digest()
+    assert general.transcript.state() == shorter.transcript.state()
 
 
 def test_the_primes_run_in_lockstep(setting):
@@ -230,7 +267,7 @@ def test_a_false_value_anywhere_is_rejected(setting):
 
 
 def test_two_values_for_one_polynomial_at_one_point_are_rejected(setting):
-    oracle, point, value = setting.claim("f", setting.point(setting.f, integer=True))
+    oracle, point, value = setting.claim("f", setting.point(setting.f, "integer"))
     claims = [(oracle, point, value), (oracle, point, value + 1)]
     assert not setting.iop().run(_statement(claims))
 

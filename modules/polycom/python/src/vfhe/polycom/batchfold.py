@@ -31,10 +31,17 @@ in F_i:
 The primes run in lockstep, as the sub-protocols of one AND-composition
 (`IOP.and_composition`): in each round every prime sends its message, then
 one challenge is drawn for all of them. It is an exceptional element of
-R_q, a polynomial of degree below d with integer coefficients below the
-smallest prime (`Ring.random_exceptional`), and every prime reads it as its
-CRT component 0: the element of F_i with the same integer coefficients. The sumcheck is skipped at every prime or at none, so the
-primes' rounds stay aligned.
+R_q (`Ring.random_exceptional`), whose CRT components at every prime are all
+one element with integer coefficients below the smallest prime, and every
+prime reads it as that element of F_i. The sumcheck is skipped at every
+prime or at none, so the primes' rounds stay aligned.
+
+Points made of such elements -- what a sumcheck over R_q produces -- are one
+point in every slot. Then the sumcheck is skipped when the claims share
+their point, and otherwise its prover runs on one combined table per
+polynomial, ``F_c = sum_s sigma^s f_(c,s)``, instead of k: with
+``z_(m,s) = z_m``, ``h(b) = sum_m sigma^(m k) eq~(z_m, b) F_(c(m))(b)``,
+so the round messages are the same.
 
 The residue code's codewords are the CRT components of the ring code's
 codewords. So u_i's codeword is the same linear combination of the
@@ -225,10 +232,11 @@ class BatchFoldEval(BasefoldEval):
 
     def _challenge_at_prime(self, seed: bytes, field) -> Any:
         """A prime's challenge from a round's seed: the ring's exceptional
-        element derived from the seed read in `field` as its CRT component
-        0, which is the element of `field` with the same integer
-        coefficients below the smallest prime (`Field.random_exceptional`
-        with that bound). Every prime reads the same integers."""
+        element derived from the seed, read in `field` -- each of its CRT
+        components there, which is the element of `field` whose integer
+        coefficients below the smallest prime the seed gives
+        (`Field.random_exceptional` with that bound). Every prime reads the
+        same integers."""
         return field.random_exceptional(seed=seed, bound=min(self.ring.primes))
 
     def _layer_committer(
@@ -360,36 +368,45 @@ class BatchFoldEval(BasefoldEval):
             # Step 1: with sigma the verifier's challenge, the sumcheck proves
             # sum_b h(b) = sum_{m,s} sigma^(m k + s) y_{m,s} for
             # h(b) = sum_{m,s} sigma^(m k + s) eq~(z_{m,s}, b) f_{c(m),s}(b).
-            # Entry b * k + s of tables[c] is component s of entry b of f_c's
-            # table, and weights[c] is laid out the same way, with entry
-            # b * k + s the sum over the claims m on f_c of
-            # sigma^(m k + s) eq~(z_{m,s}, b).
-            tables = [
-                ring.crt_components(o.polynomial.table, index, element_major=True)
-                for o in openings
-            ]
             sigma = await iop.verifier.challenge(f"{label}/point/s", field)
             powers = _power_vector(field, sigma, claims * k)
-            weights: list[Any] = [None] * len(tables)
-            for m, c in enumerate(owners):
-                # eq~(z, b) is the product over t of z_t if bit t of b is 1
-                # and of 1 - z_t if it is 0, so each coordinate doubles the
-                # table, bit t becoming the highest bit of b so far.
-                weight = _window(powers, m * k, k)
-                for t in range(num_vars):
-                    zt = _tile(_window(z, (m * num_vars + t) * k, k), len(weight))
-                    high = weight * zt
-                    weight = FieldVector.concat([weight - high, high])
-                weights[c] = weight if weights[c] is None else weights[c] + weight
+            if _constant_in_slots(z, k):
+                # Every point is one point in every slot, z_{m,s} = z_m, so
+                # h(b) = sum_m sigma^(m k) eq~(z_m, b) F_{c(m)}(b) with
+                # F_c = sum_s sigma^s f_{c,s}: the same round messages, from
+                # one table per polynomial instead of k.
+                table = FieldVector.concat(
+                    [
+                        ring.crt_linear_combination(
+                            [o.polynomial.table], index, _window(powers, 0, k)
+                        )
+                        for o in openings
+                    ]
+                )
+                weight = FieldVector.concat(
+                    _slot_free_weights(z, owners, powers, len(openings), num_vars, k)
+                )
+                block = 1
+            else:
+                table = FieldVector.concat(
+                    [
+                        ring.crt_components(
+                            o.polynomial.table, index, element_major=True
+                        )
+                        for o in openings
+                    ]
+                )
+                weight = FieldVector.concat(
+                    _slot_weights(z, owners, powers, len(openings), num_vars, k)
+                )
+                block = k
             # Every polynomial's table and weights side by side: a round binds
             # bit 0 of b in all of them, and in this layout the entries that
-            # bit pairs are k apart.
-            table = FieldVector.concat(tables)
-            weight = FieldVector.concat(weights)
+            # bit pairs are `block` apart.
             r = []
             for t in range(num_vars):
-                t_lo, t_hi = table.split_even_odd(k)
-                w_lo, w_hi = weight.split_even_odd(k)
+                t_lo, t_hi = table.split_even_odd(block)
+                w_lo, w_hi = weight.split_even_odd(block)
                 evals = (
                     (t_lo * w_lo).sum(),
                     (t_hi * w_hi).sum(),
@@ -400,6 +417,21 @@ class BatchFoldEval(BasefoldEval):
                 r.append(x)
                 table = t_lo.fma(t_hi - t_lo, x)
                 weight = w_lo.fma(w_hi - w_lo, x)
+            if block == 1:
+                # The rounds bound the combinations F_c; the values at r of
+                # the component polynomials themselves come from their tables,
+                # bound to r the same way.
+                table = FieldVector.concat(
+                    [
+                        ring.crt_components(
+                            o.polynomial.table, index, element_major=True
+                        )
+                        for o in openings
+                    ]
+                )
+                for x in r:
+                    t_lo, t_hi = table.split_even_odd(k)
+                    table = t_lo.fma(t_hi - t_lo, x)
             # Entry c * k + s is f_{c,s}(r).
             iop.transcript.write(f"{label}/point/q", table)
         # Step 2: u = sum_{c,s} alpha^(c k + s) f_{c,s}, on the same
@@ -696,6 +728,67 @@ def _power_vector(field: Field, x, n: int) -> FieldVector:
         out = FieldVector.concat([out, out.scale(step)])
         step = step * step
     return out if len(out) == n else _window(out, 0, n)
+
+
+def _slot_weights(
+    z: FieldVector,
+    owners: list[int],
+    powers: FieldVector,
+    count: int,
+    num_vars: int,
+    k: int,
+) -> list[FieldVector]:
+    """Per polynomial c, laid out as its element-major component table: entry
+    ``b * k + s`` is the sum over the claims m on f_c of
+    ``sigma^(m k + s) eq~(z_{m,s}, b)``, `powers` holding the sigma powers and
+    `z` the points' components (`_points`)."""
+    weights: list[Any] = [None] * count
+    for m, c in enumerate(owners):
+        # eq~(z, b) is the product over t of z_t if bit t of b is 1 and of
+        # 1 - z_t if it is 0, so each coordinate doubles the table, bit t
+        # becoming the highest bit of b so far.
+        weight = _window(powers, m * k, k)
+        for t in range(num_vars):
+            zt = _tile(_window(z, (m * num_vars + t) * k, k), len(weight))
+            high = weight * zt
+            weight = FieldVector.concat([weight - high, high])
+        weights[c] = weight if weights[c] is None else weights[c] + weight
+    return weights
+
+
+def _slot_free_weights(
+    z: FieldVector,
+    owners: list[int],
+    powers: FieldVector,
+    count: int,
+    num_vars: int,
+    k: int,
+) -> list[FieldVector]:
+    """`_slot_weights` for points that are one point in every slot
+    (`_constant_in_slots`): per polynomial c, entry b is the sum over the
+    claims m on f_c of ``sigma^(m k) eq~(z_m, b)``."""
+    weights: list[Any] = [None] * count
+    for m, c in enumerate(owners):
+        weight = FieldVector(z.field, [powers[m * k]])
+        for t in range(num_vars):
+            high = weight.scale(z[(m * num_vars + t) * k])
+            weight = FieldVector.concat([weight - high, high])
+        weights[c] = weight if weights[c] is None else weights[c] + weight
+    return weights
+
+
+def _constant_in_slots(z: FieldVector, k: int) -> bool:
+    """Whether every coordinate whose components `z` holds (entry
+    ``i * k + s`` = component s of coordinate i) has one component in every
+    slot."""
+    heads = z.query(array("Q", range(0, len(z), k)))
+    # Each head repeated k times: interleaving a vector with itself doubles
+    # every entry in place, and k is a power of two.
+    repeated = k
+    while repeated > 1:
+        heads = FieldVector.interleave(heads, heads)
+        repeated //= 2
+    return heads == z
 
 
 def _one_point(z: FieldVector, num_vars: int, k: int) -> bool:

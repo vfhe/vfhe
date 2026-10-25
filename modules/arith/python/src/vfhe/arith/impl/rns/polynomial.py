@@ -33,6 +33,10 @@ _RESIDUE_FIELDS: dict[tuple[int, int, int], ExtensionField] = {}
 #: one per (base address, base row, direction). Bases live as long as the
 #: process, so an address keeps naming the same base.
 _CRT_MAPS: dict[tuple[int, int, bool], Any] = {}
+#: Per (base address, prime mask): the inverse `_CRT_MAPS` of every row of the
+#: mask, in an array indexed by base row, as `sample_exceptional` hands them
+#: to the kernel.
+_INVERSE_CRT_MAPS_BY_ROW: dict[tuple[int, int], Any] = {}
 
 
 def next_power_of_2(x):
@@ -324,6 +328,19 @@ class RNSRing(Ring):
             )
             _CRT_MAPS[key] = maps
         return maps
+
+    def _inverse_crt_maps_by_row(self):
+        """The maps `_crt_maps(index, False)` of every prime, in a native
+        array indexed by base row (the other entries unset). Built once per
+        base and prime set; the maps it points to live in `_CRT_MAPS`."""
+        key = (int(ffi.cast("uintptr_t", self.base)), self.mask)
+        handles = _INVERSE_CRT_MAPS_BY_ROW.get(key)
+        if handles is None:
+            handles = ffi.new("RNS_CrtMaps[]", self.rns_rows)
+            for index, row in enumerate(self.prime_indices):
+                handles[row] = self._crt_maps(index, False)
+            _INVERSE_CRT_MAPS_BY_ROW[key] = handles
+        return handles
 
     def crt_components(
         self,
@@ -824,10 +841,12 @@ class RNSPolynomial(Polynomial):
         return self
 
     def sample_exceptional(self, seed=None, ntt=True):
+        ring = self.ring
+        maps = ring._inverse_crt_maps_by_row()
         if seed is None:
-            self.ring.lib.polynomial_RNS_sample_exceptional(self.obj, ffi.NULL, 0)
+            ring.lib.polynomial_RNS_sample_exceptional(self.obj, ffi.NULL, 0, maps)
         else:
-            self.ring.lib.polynomial_RNS_sample_exceptional(self.obj, seed, len(seed))
+            ring.lib.polynomial_RNS_sample_exceptional(self.obj, seed, len(seed), maps)
         self.repr = repr.ntt
         if not ntt:
             self.to_coeff()

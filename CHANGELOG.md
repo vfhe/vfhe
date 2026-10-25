@@ -490,14 +490,18 @@ versions may contain breaking changes.
   challenges are now drawn by `vfhe.crypto.seeded`'s rejection sampler,
   which makes their coefficients exactly uniform (the previous reduction of
   128-bit words was slightly biased), so ring transcripts change.
-- The ring's exceptional sampler draws, without a seed too, from its
-  exceptional set: a polynomial of degree below `split_degree` with integer
-  coefficients below the smallest prime. It is native
-  (`polynomial_RNS_sample_exceptional`) and needs no transform: such a
-  polynomial is its own residue in every slot, so the coefficients are
-  written into every slot directly. It used to copy a random slot,
-  sampled independently modulo each prime, into every slot -- a larger set
-  whose differences are not all invertible.
+- The ring's exceptional set is the elements whose CRT components at
+  every prime are all one element with `split_degree` integer coefficients
+  below the smallest prime (size `p_min^split_degree`, as before), sampled
+  natively (`polynomial_RNS_sample_exceptional`), with or without a seed.
+  Evaluation points made of challenges are then one point in every slot.
+  The sampler used to copy a random slot, sampled independently modulo each
+  prime, into every slot -- a larger set whose differences are not all
+  invertible. Ring challenges and transcripts change.
+- `BatchFoldEval`'s common-point sumcheck is skipped for claims at one
+  point made of exceptional elements, and for distinct such points its
+  prover runs on one combined table per polynomial instead of one per CRT
+  component, with the same messages.
 - `Transcript.read` shields the entry it awaits, so cancelling a reader
   leaves the entry for its writer.
 - **BREAKING**: `FieldFoldableRS`'s general code takes the root of its base

@@ -435,9 +435,10 @@ transcript.
   challenges distinct — and `IOP.run` seeds the chain with
   `element_digest(root statement)`. Domain challenges come from the
   domain's own seeded sampler, `domain.random_exceptional(seed=...)`; over
-  a `Ring` that is a polynomial of degree below `split_degree` with integer
-  coefficients below `min(pᵢ)`, the exceptional set of size
-  `min(pᵢ)^split_degree`, and over a `Field` a uniform element.
+  a `Ring` that is an element whose CRT components at every prime are all
+  one element with `split_degree` integer coefficients below `min(pᵢ)`,
+  from the exceptional set of size `min(pᵢ)^split_degree`, and over a
+  `Field` a uniform element.
   Nothing else changes — same protocols, same transcript — and an FS run
   is fully deterministic: same statement, same registry ⇒ byte-identical
   transcript (the tests assert this end-to-end, basefold included).
