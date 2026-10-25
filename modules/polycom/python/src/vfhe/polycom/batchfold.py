@@ -43,7 +43,10 @@ as the commitment of every u_i. The L runs answer one set of query
 positions, drawn after every run has folded: a query's first layer is
 answered once, by the leaves of the committed ring codewords, which the
 verifier authenticates against the ring commitments and maps to the leaves
-of every u_i. The later layers are committed by each run, over F_i.
+of every u_i. Each later layer is committed once for all primes: one Merkle
+tree whose leaf j joins every prime's leaf j (`vfhe.crypto.join_digests`),
+built when every prime has folded to that layer, so a query answers it with
+every prime's fiber and a single path.
 
 [CCCFGS26, §7] instead commits to each of the k*L component polynomials
 separately and runs each prime with its own query positions; see
@@ -56,6 +59,7 @@ from array import array
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import MLE, FieldVector, Polynomial, Ring, RNSPolynomial
+from vfhe.crypto import Merkle, join_digests
 from vfhe.piop import (
     Prover,
     Rejection,
@@ -71,6 +75,7 @@ from .basefold import (
     BasefoldOpening,
     _check_layer,
     _committed_table,
+    _identity,
     _layer_answer,
     _ProverRun,
     _VerifierRun,
@@ -79,7 +84,7 @@ from .code import FoldableRS
 from .field_code import FieldFoldableRS
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable
 
     from vfhe.arith import Field
 
@@ -133,34 +138,57 @@ class BatchFoldEval(BasefoldEval):
         claims: int = 1,
         polynomials: int = 1,
     ) -> float | None:
-        """[CCCFGS26, §7]'s bound for a bundle of `claims` evaluation claims
-        on `polynomials` distinct polynomials:
-        ``L * (2d / (gamma^3 |F|) + (2l + k claims - 1) / |F|
-        + (k polynomials - 1) / |F| + (1 - delta + gamma d)^rep)``,
-        a union bound over the L primes of the common-point sumcheck, the
-        random linear combination and basefold over a residue code. Here
-        |F| is the size of the smallest residue field F_i, which is also the
-        size of the set the shared challenges come from, l the number of
-        variables, k the number of components at a prime, and d the code's
-        depth (not the split degree). `delta` is the residue codes' relative
-        distance (each `residue_protocols[i].code.relative_distance()`
-        reports its own), and `gamma` is the caller's, as in
-        `BasefoldEval.soundness_error`. None if a field's size is unknown.
+        """The information-theoretic soundness error for a bundle of `claims`
+        evaluation claims on `polynomials` distinct polynomials:
+        ``2d / (gamma^3 |F|) + (2l + k claims - 1) / |F|
+        + (k polynomials - 1) / |F| + (1 - delta + gamma d)^rep``,
+        one prime's error: the common-point sumcheck [CCCFGS26, §7.1], the
+        random linear combination [CCCFGS26, §7.2, Lemma 5] and basefold over
+        a residue code [ZCF24]. Here |F| = min_i p_i^d is the size of the
+        smallest residue field, which is also the size of the set the shared
+        challenges come from, l the number of variables, k the number of
+        components at a prime, and d the code's depth (not the split degree).
+        `delta` is the smallest of the residue codes' relative distances
+        (``min(p.code.relative_distance() for p in residue_protocols)``),
+        and `gamma` is the caller's, as in `BasefoldEval.soundness_error`.
+        None if a field's size is unknown.
+
+        Why one prime's error, not L times it. The ring commitment fixes the
+        committed codeword before the protocol, and the statement fixes the
+        claims, so whether the components at prime i are codewords whose
+        polynomials satisfy the component claims is decided, for every i,
+        before any challenge or query is drawn. When the bundle is false,
+        some prime i fails in this way, and the verifier accepts only if
+        that prime's checks pass, which happens with probability at most
+        that prime's error. Each prime's error is bounded by the expression
+        above: its challenges come after the messages they answer and are
+        uniform over a set of size |F| (they are one ring element's
+        components, so the primes' challenges are correlated, which no
+        prime's argument looks at), and its query positions are uniform and
+        drawn after every oracle they check is committed. The same holds
+        round by round, which Fiat-Shamir needs: the composition is doomed
+        when that prime's run is ([BCFW25] proves it for parallel copies of
+        an interactive oracle reduction). The ring sumcheck over R_q, which
+        through the CRT is the per-prime sumchecks on one shared challenge,
+        likewise has no factor for the number of primes [CCCFGS25, Thm. 2.6].
+        [CCCFGS26, §7] states its bound with a factor L + 1, for its L + 1
+        primes run independently.
 
         The paper commits to the k*L component polynomials separately and
-        opens each prime with its own query positions and challenges. Here
-        the ring commitments serve every prime, and the primes share their
-        query positions and their challenges (the challenges of the primes
-        are correlated: they are one ring element's components). The
-        per-prime argument still applies. Prime i's checks need its
-        challenges to come after the messages they answer, and its queries
-        to be uniform and drawn after every oracle they check is committed:
-        the ring trees are committed before the protocol and the queries are
-        drawn after every prime has folded. A ring leaf holds every
-        component at its position, which includes what the paper's verifier
-        reads there. The same expression is returned. As in
-        `BasefoldEval.soundness_error`, the hash's collision term is not
-        included.
+        opens each prime with its own query positions and challenges; here
+        the ring commitments serve every prime and the primes share both, as
+        well as one tree per later layer. A ring leaf holds every component
+        at its position, and a later layer's leaf every prime's fiber at its
+        position, which includes what the paper's verifier reads there; and
+        every layer's tree is committed before the queries are drawn.
+
+        Two terms rest on assumptions. The fold term 2d / (gamma^3 |F|) is
+        [ZCF24]'s for fold challenges uniform over the whole field; here
+        they are uniform over a subset of size |F|, which keeps the bound if
+        it comes from counting the challenges that fold badly (the ring
+        `BasefoldEval` makes the same assumption). And as in
+        `BasefoldEval.soundness_error`, the bound is stated for the default
+        schedule, and the hash's collision term is not included.
         """
         sizes = [exceptional_set_size(field) for field in self.fields]
         if any(size is None for size in sizes):
@@ -168,13 +196,12 @@ class BatchFoldEval(BasefoldEval):
         size = min(s for s in sizes if s is not None)
         d, k = self.code.d, self.slots
         num_vars = self.code.k_d.bit_length() - 1
-        per_prime = (
+        return (
             2 * d / (gamma**3 * size)
             + (2 * num_vars + k * claims - 1) / size
             + (k * polynomials - 1) / size
             + (1 - delta + gamma * d) ** self.rep
         )
-        return len(self.fields) * per_prime
 
     def _components(self, values: list, index: int) -> FieldVector:
         """The CRT components at prime `index` of `values` (ring elements or
@@ -204,6 +231,40 @@ class BatchFoldEval(BasefoldEval):
         with that bound). Every prime reads the same integers."""
         return field.random_exceptional(seed=seed, bound=min(self.ring.primes))
 
+    def _layer_committer(
+        self, iop, shared: str, index: int, trees: dict[int, Merkle]
+    ) -> Callable[[int, int, Any], Awaitable[None]]:
+        """How prime `index`'s run commits a later layer: one tree for that
+        layer across every prime, whose leaf j joins the primes' leaves j
+        (`_joint_tree`), built once every prime has folded to it
+        (`IOP.batched_call`) and kept in ``trees[layer]``. Its root is written
+        once, as ``{shared}/pi{step}``, by prime 0, which the composition
+        runs first once every prime has reached the step."""
+
+        async def commit_layer(layer: int, step: int, word) -> None:
+            name = f"{shared}/pi{step}"
+            size = 1 << self.scheme.schedule[layer]
+            tree = await iop.batched_call(
+                name, word, lambda words: self._joint_tree(words, size)
+            )
+            trees[layer] = tree
+            if index == 0:
+                iop.transcript.write(name, tree.root)
+
+        return commit_layer
+
+    def _joint_tree(self, words: list, size: int) -> list[Merkle]:
+        """The tree over the primes' codewords `words` (one per prime, of one
+        length) whose leaf j joins every prime's fiber j of `size` symbols:
+        its digest hashes the primes' leaf digests j together. Returned once
+        per prime, as `IOP.batched_call` hands out results."""
+        digests = [
+            protocol.code.leaf_digests(word, size)
+            for protocol, word in zip(self.residue_protocols, words, strict=True)
+        ]
+        tree = Merkle.from_digests(join_digests(digests))
+        return [tree] * len(words)
+
     async def prove(
         self, prover: Prover, statements: list[Statement]
     ) -> list[Statement]:
@@ -220,11 +281,20 @@ class BatchFoldEval(BasefoldEval):
             raise RuntimeError("this party is not bound to an IOP")
         label = f"batchfold{statements[0].path}"
         zs, skip = self._points(points)
+        # The tree of each layer after the first, shared by every prime.
+        trees: dict[int, Merkle] = {}
         runs = await iop.and_composition(
             label,
             [
                 self._prove_prime(
-                    iop, f"{label}/p{i}", i, openings, owners, zs[i], skip
+                    iop,
+                    f"{label}/p{i}",
+                    i,
+                    openings,
+                    owners,
+                    zs[i],
+                    skip,
+                    self._layer_committer(iop, label, i, trees),
                 )
                 for i in range(self.ring.ell)
             ],
@@ -233,19 +303,32 @@ class BatchFoldEval(BasefoldEval):
         queries = self.query_positions(
             await iop.verifier.challenge_bits(f"{label}/queries")
         )
-        # Each run answers its first layer with None: the ring leaves below
-        # answer it for every prime.
-        layers = [run.answers(queries) for run in runs]
-        size = 1 << self.scheme.schedule[0]
+        # Per query: the ring leaves, which answer the first layer for every
+        # prime; then, for each later layer, every prime's fiber and the one
+        # path of the shared tree.
+        schedule = self.scheme.schedule
+        size = 1 << schedule[0]
         answers = tuple(
             (
                 tuple(
                     _layer_answer(self.code, opening.word, opening.tree, q, size)
                     for opening in openings
                 ),
-                tuple(prime[n][1:] for prime in layers),
+                tuple(
+                    (
+                        tuple(
+                            protocol.code.fiber_at(run.words[i], j, 1 << schedule[i])
+                            for protocol, run in zip(
+                                self.residue_protocols, runs, strict=True
+                            )
+                        ),
+                        trees[i].open(j),
+                    )
+                    for i, (j, _) in enumerate(self._walk(q))
+                    if i > 0
+                ),
             )
-            for n, q in enumerate(queries)
+            for q in queries
         )
         iop.transcript.write(f"{label}/answers", answers)
         return []
@@ -259,30 +342,32 @@ class BatchFoldEval(BasefoldEval):
         owners: list[int],
         z: FieldVector,
         skip: bool,
+        commit_layer: Callable[[int, int, Any], Awaitable[None]],
     ) -> _ProverRun:
         """The prover's sub-protocol at prime `index`: the reduction (steps 1-2 of
         the module docstring), skipping the sumcheck when `skip`, then the
         folds of the basefold run on u_i, whose query answers are left to
         the caller. `z` holds the points' components at this prime
-        (`_points`)."""
+        (`_points`), and `commit_layer` commits the run's later layers
+        (`_layer_committer`)."""
         field, k = self.fields[index], self.slots
         claims = len(owners)
         num_vars = len(z) // (claims * k)
         ring = self.ring
-        # Entry b * k + s of tables[c] is component s of entry b of f_c's
-        # table.
-        tables = [
-            ring.crt_components(o.polynomial.table, index, element_major=True)
-            for o in openings
-        ]
         if skip:
             r = [z[t * k] for t in range(num_vars)]
         else:
             # Step 1: with sigma the verifier's challenge, the sumcheck proves
             # sum_b h(b) = sum_{m,s} sigma^(m k + s) y_{m,s} for
             # h(b) = sum_{m,s} sigma^(m k + s) eq~(z_{m,s}, b) f_{c(m),s}(b).
-            # weights[c] is laid out as tables[c], with entry b * k + s the sum
-            # over the claims m on f_c of sigma^(m k + s) eq~(z_{m,s}, b).
+            # Entry b * k + s of tables[c] is component s of entry b of f_c's
+            # table, and weights[c] is laid out the same way, with entry
+            # b * k + s the sum over the claims m on f_c of
+            # sigma^(m k + s) eq~(z_{m,s}, b).
+            tables = [
+                ring.crt_components(o.polynomial.table, index, element_major=True)
+                for o in openings
+            ]
             sigma = await iop.verifier.challenge(f"{label}/point/s", field)
             powers = _power_vector(field, sigma, claims * k)
             weights: list[Any] = [None] * len(tables)
@@ -318,23 +403,30 @@ class BatchFoldEval(BasefoldEval):
             # Entry c * k + s is f_{c,s}(r).
             iop.transcript.write(f"{label}/point/q", table)
         # Step 2: u = sum_{c,s} alpha^(c k + s) f_{c,s}, on the same
-        # combination of the components of the committed codewords.
+        # combination of the components of the committed codewords, each
+        # formed in one call without the components themselves.
         alphas = _power_vector(
             field,
             await iop.verifier.challenge(f"{label}/alpha", field),
-            len(tables) * k,
+            len(openings) * k,
         )
         u = MLE(
             field=field,
             variables=list(openings[0].polynomial.variables),
-            evaluations=_combine(tables, alphas, k),
+            evaluations=ring.crt_linear_combination(
+                [o.polynomial.table for o in openings], index, alphas
+            ),
         )
-        word = _combine(
-            [ring.crt_components(o.word, index, element_major=True) for o in openings],
-            alphas,
-            k,
+        word = ring.crt_linear_combination([o.word for o in openings], index, alphas)
+        run = _ProverRun(
+            self.residue_protocols[index],
+            label,
+            u,
+            r,
+            word,
+            _no_answer,
+            commit_layer=commit_layer,
         )
-        run = _ProverRun(self.residue_protocols[index], label, u, r, word, _no_answer)
         await run.fold(iop)
         return run
 
@@ -349,11 +441,14 @@ class BatchFoldEval(BasefoldEval):
             raise RuntimeError("this party is not bound to an IOP")
         label = f"batchfold{statements[0].path}"
         values = [statement.value for statement in statements]
-        count, k = len(commitments), self.slots
+        count = len(commitments)
         zs, skip = self._points(points)
         # The first-layer leaves of u_i at the query positions, computed from
         # the ring leaves once those are authenticated.
         tops: list[Any] = [None] * self.ring.ell
+        # (layer, prime) -> the prime's leaves of that later layer at the
+        # query positions, once the shared trees authenticate them.
+        later: dict[tuple[int, int], Any] = {}
         results = await iop.and_composition(
             label,
             [
@@ -368,6 +463,8 @@ class BatchFoldEval(BasefoldEval):
                     skip,
                     values,
                     tops,
+                    later,
+                    label,
                 )
                 for i in range(self.ring.ell)
             ],
@@ -379,10 +476,14 @@ class BatchFoldEval(BasefoldEval):
             await verifier.challenge_bits(f"{label}/queries")
         )
         answers = await iop.transcript.read(f"{label}/answers")
+        schedule = self.scheme.schedule
         if (
             not isinstance(answers, tuple)
             or len(answers) != len(queries)
-            or any(not _answer_shape(a, count, self.ring.ell) for a in answers)
+            or any(
+                not _answer_shape(a, count, self.ring.ell, len(schedule) - 1)
+                for a in answers
+            )
         ):
             raise Rejection(f"{label}: malformed answers")
         size = 1 << self.scheme.schedule[0]
@@ -398,13 +499,26 @@ class BatchFoldEval(BasefoldEval):
             )
             for c, commitment in enumerate(commitments)
         ]
-        for i, run in enumerate(runs):
-            tops[i] = _combine(
-                [self.ring.crt_components(b, i, element_major=True) for b in blocks],
-                alphas[i],
-                k,
+        walks = [self._walk(q) for q in queries]
+        codes = [protocol.code for protocol in self.residue_protocols]
+        for layer in range(1, len(schedule)):
+            leaves = _check_joint_layer(
+                codes,
+                label,
+                self.scheme.levels[layer],
+                runs[0].roots[layer - 1],
+                [a[1][layer - 1] for a in answers],
+                [walk[layer][0] for walk in walks],
+                1 << schedule[layer],
             )
-            run.check(queries, tuple((None, *a[1][i]) for a in answers))
+            for prime, block in enumerate(leaves):
+                later[layer, prime] = block
+        # Every layer is checked through `tops` and `later`, so the runs see
+        # no answers of their own.
+        placeholders = tuple((None,) * len(schedule) for _ in answers)
+        for i, run in enumerate(runs):
+            tops[i] = self.ring.crt_linear_combination(blocks, i, alphas[i])
+            run.check(queries, placeholders)
         return []
 
     async def _verify_prime(
@@ -419,13 +533,17 @@ class BatchFoldEval(BasefoldEval):
         skip: bool,
         values: list,
         tops: list,
+        later: dict,
+        shared: str,
     ) -> tuple[_VerifierRun, FieldVector]:
         """The verifier's sub-protocol at prime `index`, for claims on `count`
         polynomials: the reduction (steps 1-2 of the module docstring),
         skipping the sumcheck when `skip`, then the folds of the basefold
         run on u_i. Returns the run, whose query checks are left to the
-        caller and read u_i's first-layer leaves from ``tops[index]``, and
-        the combination's coefficients."""
+        caller and read u_i's first-layer leaves from ``tops[index]`` and its
+        later layers' from ``later[layer, index]``, and the combination's
+        coefficients. The later layers' roots are the shared trees', under
+        `shared`."""
         field, k = self.fields[index], self.slots
         claims = len(owners)
         num_vars = len(z) // (claims * k)
@@ -487,6 +605,8 @@ class BatchFoldEval(BasefoldEval):
             r,
             (alphas * q).sum(),
             lambda _answers, _positions: tops[index],
+            read_root=lambda step: iop.transcript.read(f"{shared}/pi{step}"),
+            check_layer=lambda layer, _answers, _positions: later[layer, index],
         )
         await run.fold(iop, verifier, field)
         return run, alphas
@@ -498,19 +618,59 @@ def _no_answer(_leaf: int) -> None:
     return None
 
 
-def _answer_shape(answer, commitments: int, primes: int) -> bool:
-    """Whether one query's answer is ``(ring leaves, per-prime layers)``:
-    a tuple of one entry per commitment, and a tuple of one tuple per
-    prime."""
+def _answer_shape(answer, commitments: int, primes: int, layers: int) -> bool:
+    """Whether one query's answer is ``(ring leaves, later layers)``: a tuple
+    of one entry per commitment, and a tuple of one ``(fibers, path)`` per
+    later layer, with one fiber per prime."""
     return (
         isinstance(answer, tuple)
         and len(answer) == 2
         and isinstance(answer[0], tuple)
         and len(answer[0]) == commitments
         and isinstance(answer[1], tuple)
-        and len(answer[1]) == primes
-        and all(isinstance(layers, tuple) for layers in answer[1])
+        and len(answer[1]) == layers
+        and all(
+            isinstance(entry, tuple)
+            and len(entry) == 2
+            and isinstance(entry[0], tuple)
+            and len(entry[0]) == primes
+            for entry in answer[1]
+        )
     )
+
+
+def _check_joint_layer(
+    codes: list, label: str, level: int, root: bytes, answers, positions, size: int
+) -> list:
+    """Every prime's leaves of a later layer at the query positions, checked
+    against the layer's shared tree: each answer is ``(fibers, path)``, one
+    fiber per prime, and the leaf the path authenticates joins the primes'
+    leaf digests (`vfhe.crypto.join_digests`). Returns, per prime, its
+    fibers joined into one word in query order, as `_check_layer` does for a
+    tree of one codeword. Raises `Rejection` on a malformed fiber or a path
+    that does not authenticate."""
+    blocks = []
+    prime = 0
+    try:
+        for prime, code in enumerate(codes):
+            fibers = [answer[0][prime] for answer in answers]
+            blocks.append(code.join_fibers(fibers, size))
+    except ValueError as error:
+        raise Rejection(
+            f"{label}: malformed leaf at level {level}, prime {prime}: {error}"
+        ) from error
+    digests = join_digests(
+        [
+            code.leaf_digests(block, size)
+            for code, block in zip(codes, blocks, strict=True)
+        ]
+    )
+    for k, (j, answer) in enumerate(zip(positions, answers, strict=True)):
+        if not Merkle.verify(
+            root, j, answer[1], digests[32 * k : 32 * (k + 1)], hash=_identity
+        ):
+            raise Rejection(f"{label}: Merkle path rejected at level {level}, leaf {j}")
+    return blocks
 
 
 def _window(vector: FieldVector, start: int, length: int) -> FieldVector:
@@ -544,21 +704,3 @@ def _one_point(z: FieldVector, num_vars: int, k: int) -> bool:
     m) are all one point in every component."""
     first = [z[t * k] for t in range(num_vars) for _ in range(k)]
     return _tile(FieldVector(z.field, first), len(z)) == z
-
-
-def _combine(tables: Sequence[FieldVector], alphas: FieldVector, k: int) -> FieldVector:
-    """``sum_{c,s} alphas[c k + s] * (component s of table c)``, entry by
-    entry, for tables of components laid out as `crt_components` with
-    ``element_major`` lays them out (entry ``b * k + s`` = component s of
-    element b); entry b of the result is the sum for element b."""
-    out = tables[0] * _tile(_window(alphas, 0, k), len(tables[0]))
-    for c in range(1, len(tables)):
-        coefficients = _tile(_window(alphas, c * k, k), len(tables[c]))
-        out = out.fma(tables[c], coefficients)
-    # Sum each run of k adjacent entries, halving the runs: k is a power of
-    # two.
-    while k > 1:
-        lo, hi = out.split_even_odd()
-        out = lo + hi
-        k //= 2
-    return out

@@ -6,7 +6,7 @@ and the leaf-hashing contract (`.hash()` or an explicit `hash=` callable).
 
 import pytest
 from vfhe.arith import Field, FieldElement, Polynomial, Ring
-from vfhe.crypto import Merkle, MerklePath, entropy
+from vfhe.crypto import Merkle, MerklePath, entropy, join_digests
 from vfhe.crypto.merkle import DIGEST_LEN, hash_bytes, leaf_digest
 
 
@@ -205,3 +205,18 @@ class TestFromDigests:
         for bad in (b"", b"\x00" * 31, b"\x00" * 33):
             with pytest.raises(ValueError, match="multiple of"):
                 Merkle.from_digests(bad)
+
+
+def test_join_digests_hashes_each_index_across_the_arrays():
+    parts = [bytes(range(i, i + 96)) for i in (0, 7, 50)]
+    joined = join_digests(parts)
+    assert len(joined) == 96
+    for j in range(3):
+        expected = hash_bytes(b"".join(part[32 * j : 32 * (j + 1)] for part in parts))
+        assert joined[32 * j : 32 * (j + 1)] == expected
+    # Read-only views are accepted, as a kernel's digest buffer is one.
+    assert join_digests([memoryview(part) for part in parts]) == joined
+    with pytest.raises(ValueError):
+        join_digests([parts[0], parts[1][:64]])
+    with pytest.raises(ValueError):
+        join_digests([])

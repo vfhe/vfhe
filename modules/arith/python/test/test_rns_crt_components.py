@@ -194,3 +194,55 @@ def test_the_native_exceptional_sampler_writes_the_drawn_integers(ring):
     assert ring.random_exceptional(seed=b"seed") == expected
     fresh = ring.random_exceptional(ntt=False).get_polynomial()
     assert all(c < bound for c in fresh[:d]) and not any(fresh[d:])
+
+
+def test_crt_linear_combination_combines_the_components(ring):
+    """Entry b is sum over c, s of coefficients[c k + s] times component s of
+    parts[c][b], as computed from `crt_components` laid out element-major."""
+    from vfhe.arith import FieldVector
+
+    k = ring.N // ring.split_degree
+    parts = [[ring.random_element() for _ in range(5)] for _ in range(3)]
+    for index in range(ring.ell):
+        field = ring.residue_field(index)
+        coefficients = FieldVector(field, 3 * k)
+        coefficients.sample_random(b"coefficients")
+        combination = ring.crt_linear_combination(parts, index, coefficients)
+        assert len(combination) == 5
+        tables = [
+            ring.crt_components(part, index, element_major=True) for part in parts
+        ]
+        for b in range(5):
+            expected = field(0)
+            for c, table in enumerate(tables):
+                for s in range(k):
+                    expected = expected + coefficients[c * k + s] * table[b * k + s]
+            assert combination[b] == expected
+    with pytest.raises(ValueError):
+        ring.crt_linear_combination(parts, 0, FieldVector(ring.residue_field(0), k))
+
+
+def test_components_agree_with_field_base_conversion(ring):
+    """Component s is slot s carried into slot 0's field by the isomorphism
+    `field_base_conversion` computes element by element (the one ring
+    inversion uses): the tables of `crt_components` and that function are
+    two forms of one map."""
+    from vfhe.util.bindings import ffi, lib
+
+    d, k = ring.split_degree, ring.N // ring.split_degree
+    element = ring.random_element()
+    # Per prime, slot s's d coefficients at s * d + j.
+    slots = element.get_coeff_matrix(repr.ntt)
+    base = ffi.cast("RNS_Base", ring.base)
+    for index in range(ring.ell):
+        row = ring.prime_indices[index]
+        components = ring.crt_components([element], index)
+        for s in range(k):
+            source = ffi.new("uint64_t[]", slots[index][s * d : (s + 1) * d])
+            out = ffi.new("uint64_t[]", d)
+            lib.field_base_conversion(
+                out, source, s, 0, d, k, base.w[row], base.mods[row]
+            )
+            component = components[s]
+            expected = [int(c) for c in component.value] if d > 1 else [int(component)]
+            assert [out[j] for j in range(d)] == expected

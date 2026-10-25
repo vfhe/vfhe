@@ -38,6 +38,31 @@ def hash_bytes(data: bytes) -> bytes:
     return bytes(out)
 
 
+def join_digests(parts: Sequence[bytes | bytearray | memoryview]) -> bytes:
+    """Leaf digests that join several packed digest arrays index by index:
+    digest i is the BLAKE3 digest of digest i of every array in `parts`,
+    concatenated in order.
+
+    The arrays hold the same number of `DIGEST_LEN`-byte digests. A tree
+    over the result (`Merkle.from_digests`) has one leaf per index, and that
+    leaf commits to the leaf at that index of every array: several codewords
+    of one length committed by one tree. Computed natively in one call.
+    """
+    if not parts:
+        raise ValueError("join_digests needs at least one array")
+    length = len(parts[0])
+    if length % DIGEST_LEN or any(len(part) != length for part in parts):
+        raise ValueError(
+            f"the arrays must hold the same number of {DIGEST_LEN}-byte digests"
+        )
+    count = length // DIGEST_LEN
+    buffers = [ffi.from_buffer(part) for part in parts]
+    pointers = ffi.new("const uint8_t *[]", buffers)
+    out = ffi.new("uint8_t[]", length)
+    lib.merkle_join_digests(out, pointers, len(parts), count)
+    return bytes(ffi.buffer(out))
+
+
 def _as_digest(value) -> bytes:
     """Normalize a hash value to `DIGEST_LEN` raw bytes.
 

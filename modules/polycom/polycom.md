@@ -467,11 +467,21 @@ which is the element of `F_i` with the same integers
 (`Field.random_exceptional(seed, bound=min p_i)`, no ring arithmetic). After the last round, the
 primes answer one set of query positions: a query's first layer is answered
 once, by the ring leaves, which the verifier authenticates against the ring
-roots and maps to the leaves of every `u_i`; the later layers are each
-run's own, over `F_i`. The tables are taken element-major (component `s` of
-entry `b` at `b·k + s`), so a sumcheck round over all `kC` tables is one
-whole-vector split and fold with block `k`, and the combination is one
-multiply-add per polynomial and `log2 k` pairwise sums.
+roots and maps to the leaves of every `u_i`. Each later layer is committed
+once for all primes, which lockstep makes possible -- every prime reaches
+it at the same moment: one Merkle tree whose leaf `j` hashes every prime's
+leaf digest `j` together (`vfhe.crypto.join_digests`), built through
+`IOP.batched_call` and its root written once, so a query answers the layer
+with every prime's fiber and a single path, `L` times fewer paths than one
+tree per prime. The sumcheck's tables are taken element-major (component
+`s` of entry `b` at `b·k + s`), so a round over all `kC` tables is one
+whole-vector split and fold with block `k`. The combinations -- `u_i`'s
+table and codeword, and the verifier's first-layer leaves -- never form the
+components: `RNSRing.crt_linear_combination` folds the component maps and
+the coefficients into one table per polynomial and output coefficient, and
+each output coefficient is then an inner product with the elements'
+mul-domain words -- the precomputation [ACGS24] gives for a linear
+combination of slots (App. C, Eqs. 3-4, of the ePrint version).
 
 [CCCFGS26, §7] commits to each of the `kL` component polynomials
 separately and opens each prime with its own queries and challenges.
@@ -480,11 +490,28 @@ no soundness: prime `i`'s argument needs its challenges to come after the
 messages they answer, and its queries to be uniform and drawn after every
 oracle they check is committed, which holds (the ring trees precede the
 protocol, the queries follow every prime's folds); and a ring leaf holds
-every component at its position, which includes what the paper's verifier
-reads there. `BatchFoldEval.soundness_error` returns the paper's bound,
-`L·(2d/(gamma^3·|F|) + (2l + kM - 1)/|F| + (kC - 1)/|F| + (1 - delta + gamma·d)^rep)`
-with `|F|` the size of the smallest `F_i` (also the size of the set the
-shared challenges come from) and `d` the code's depth.
+every component at its position, as a shared layer leaf every prime's
+fiber, which includes what the paper's verifier reads there.
+
+The soundness error is one prime's,
+`2d/(gamma^3·|F|) + (2l + kM - 1)/|F| + (kC - 1)/|F| + (1 - delta + gamma·d)^rep`
+(`BatchFoldEval.soundness_error`), with `|F|` the size of the smallest
+`F_i` (also the size of the set the shared challenges come from), `delta`
+the smallest residue code distance and `d` the code's depth -- not `L`
+times it, as the paper's `L + 1` independent runs are stated. The ring
+commitment and the statement fix, before any challenge, at which primes the
+components fail to be codewords satisfying the component claims; a false
+bundle fails at some prime, and the verifier accepts only if that prime's
+checks pass, whose probability the expression bounds whatever the other
+primes do. Round-by-round soundness, which Fiat-Shamir needs, composes the
+same way ([BCFW25] proves it for parallel copies of an interactive oracle
+reduction), and the ring sumcheck -- through the CRT, per-prime sumchecks on
+one shared challenge -- has no factor for the number of primes either
+[CCCFGS25, Thm. 2.6]. One term rests on an assumption: `2d/(gamma^3·|F|)`
+is [ZCF24]'s for fold challenges uniform over the whole field, and here
+they are uniform over a subset of size `|F|`, which keeps the bound if it
+comes from counting the challenges that fold badly (the ring `BasefoldEval`
+makes the same assumption).
 
 **The PIOP world composes directly**: sumcheck-style reductions end in
 `Relation_Eval` claims carrying oracles, and `BasefoldEval` *is* the
@@ -500,10 +527,7 @@ evaluation point.
 
 ## 4. Roadmap
 
-1. **A BatchFold kernel** that takes the CRT components of the committed
-   codewords and combines them in one pass; today that is the component
-   map, then a multiply-add per polynomial and `log2 k` pairwise sums.
-2. **C kernels for the ring code above the base** (`fold_at` is
+1. **C kernels for the ring code above the base** (`fold_at` is
    per-position Python over `Polynomial`, one `Polynomial * list` scaling
    per entry, and the general code's encoder is the same recursion in
    Python; the field code is whole-vector throughout, and only the base
@@ -517,6 +541,16 @@ evaluation point.
   Efficient Field-Agnostic Polynomial Commitment Schemes from Foldable
   Codes*. CRYPTO 2024. ePrint 2023/1705.
   <https://eprint.iacr.org/2023/1705>
+- **[ACGS24]** Diego F. Aranha, Anamaria Costache, Antonio Guimarães,
+  Eduardo Soria-Vazquez. *HELIOPOLIS: Verifiable Computation over
+  Homomorphically Encrypted Data from Interactive Oracle Proofs is
+  Practical*. ASIACRYPT 2024, pp. 302–334, Springer, 2024.
+  doi:10.1007/978-981-96-0935-2_10. ePrint 2023/1949.
+  <https://eprint.iacr.org/2023/1949>
+- **[BCFW25]** Benedikt Bünz, Alessandro Chiesa, Giacomo Fenzi, William
+  Wang. *Linear-Time Accumulation Schemes*. TCC 2025, Springer, 2025.
+  doi:10.1007/978-3-032-12287-2_13. ePrint 2025/753.
+  <https://eprint.iacr.org/2025/753>
 - **[BBHR18]** Eli Ben-Sasson, Iddo Bentov, Yinon Horesh, Michael Riabzev.
   *Fast Reed-Solomon Interactive Oracle Proofs of Proximity*. ICALP 2018.
   <https://drops.dagstuhl.de/opus/volltexte/2018/9018/>

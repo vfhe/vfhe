@@ -35,6 +35,19 @@ void merkle_hash(uint8_t *out, const uint8_t *in, uint64_t len)
     blake3_hasher_finalize(&hasher, out, MERKLE_DIGEST_LEN);
 }
 
+void merkle_join_digests(uint8_t *out, const uint8_t *const *parts, uint64_t part_count,
+                         uint64_t count)
+{
+    for (uint64_t i = 0; i < count; i++)
+    {
+        blake3_hasher hasher;
+        blake3_hasher_init(&hasher);
+        for (uint64_t p = 0; p < part_count; p++)
+            blake3_hasher_update(&hasher, parts[p] + i * MERKLE_DIGEST_LEN, MERKLE_DIGEST_LEN);
+        blake3_hasher_finalize(&hasher, out + i * MERKLE_DIGEST_LEN, MERKLE_DIGEST_LEN);
+    }
+}
+
 Merkle merkle_new(uint64_t size)
 {
     if (size < 1)

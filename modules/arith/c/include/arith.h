@@ -1201,6 +1201,29 @@ extern "C"
        `base`, in the mul domain, with `row` active. */
     void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
                                        RNS_CrtMaps maps, bool element_major);
+    /* A linear combination of CRT components (notation of
+       polynomial_RNS_crt_components): with parts[c][b], c < part_count and
+       b < count, entry b of `out` is
+
+           sum over c < part_count and s < k of coefficients[c * k + s] times
+           component s of parts[c][b],
+
+       computed without forming the components. Component s is a monomial
+       map of slot s -- the coefficient of x^j there, times a constant, goes
+       to the coefficient of x^(dest_s(j)) -- so multiplied by a coefficient
+       it is linear in the slot's d words. Each coefficient of entry b is
+       therefore one inner product of every row-`row` word of parts[c][b]
+       with a table built once from `coefficients` and the maps, summed over
+       c. This is the precomputation of [ACGS24, ePrint 2023/1949, App. C, Eqs. 3-4] for a linear combination of slots: each slot is an inner
+       product with the element's words, so the combination is one inner
+       product with the coefficients' combination of those vectors, and the
+       slots are never computed. `maps` is rns_crt_maps_new(base, row,
+       true); `out` and `coefficients` are over R_q/P_0, with n = count and
+       part_count * k; every parts[c][b] is over `base`, in the mul domain,
+       with `row` active. */
+    void polynomial_RNS_crt_linear_combination(FieldVector out, RNS_Polynomial *const *parts,
+                                               uint64_t part_count, uint64_t count,
+                                               const FieldVector coefficients, RNS_CrtMaps maps);
     /* The inverse of polynomial_RNS_crt_components (whose notation this
        uses): `in` holds the k components of each of `count` elements, laid
        out as polynomial_RNS_crt_components writes them, and row `row` of

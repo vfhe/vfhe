@@ -5,6 +5,8 @@
 // plain byte buffers (cffi accepts a `bytes` object for a `const uint8_t *`).
 
 void merkle_hash(uint8_t *out, const uint8_t *in, uint64_t len);
+void merkle_join_digests(uint8_t *out, const uint8_t *const *parts, uint64_t part_count,
+                         uint64_t count);
 void *merkle_new(uint64_t size);
 void merkle_free(void *mk);
 void merkle_commit(void *mk, const uint8_t *leaf_digests);
