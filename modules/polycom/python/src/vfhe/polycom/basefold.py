@@ -906,12 +906,13 @@ class _ProverRun:
         f = self.f
         word: Word = self.words[0]
         cur_f = f
-        cur_eq = MLE.eq(_domain_of(f), self.zs, variables=f.variables)
+        domain = _domain_of(f)
+        cur_eq = MLE.eq(domain, self.zs, variables=f.variables)
         for s in range(d):
             var = cur_f.variables[0]
             evals = prod_round_evals([cur_f, cur_eq])
             iop.transcript.write(f"{label}/g{s}", evals)
-            r = iop.verifier.challenge(f"{label}/r{s}")
+            r = iop.verifier.challenge(f"{label}/r{s}", domain)
             cur_f = cur_f.evaluate({var: r}, in_place=cur_f is not f)
             cur_eq = cur_eq.evaluate({var: r}, in_place=True)
             word = code.fold(word, r, level=d - s)
@@ -979,7 +980,9 @@ class _VerifierRun:
     async def fold(self, iop, verifier: Verifier, domain) -> None:
         """Reads the d rounds -- each round message checked against the
         running claim -- and the roots, then the base table, which must
-        satisfy the final claim; computes the level-0 codeword from it."""
+        satisfy the final claim; computes the level-0 codeword from it. The
+        round challenges are drawn in `domain`, the ring or field of the
+        committed table's coefficients."""
         protocol, label = self.protocol, self.label
         code = protocol.code
         d = code.d
@@ -991,7 +994,7 @@ class _VerifierRun:
             evals = await iop.transcript.read(f"{label}/g{s}")
             if not (evals[0] + evals[1] == claim):
                 raise Rejection(f"{label} round {s}: g(0) + g(1) != claim")
-            r = verifier.challenge(f"{label}/r{s}")
+            r = verifier.challenge(f"{label}/r{s}", domain)
             self.rs.append(r)
             claim = interpolate_evals(evals, r)
             if d - s - 1 in levels[1:-1]:

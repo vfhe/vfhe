@@ -438,6 +438,42 @@ between their fold and query phases, so several runs could share one. The
 batching adds `(2l + M - 1)/|A|` and `(C - 1)/|A|` to the soundness error
 (`soundness_error(..., claims=M, polynomials=C)`).
 
+**BatchFold** [CCCFGS26, §7] (`batchfold.py`, `BatchFoldEval`) is a second
+Eval protocol for the same ring commitments: it proves claims on `R_q`
+polynomials by basefold runs over the residue fields instead of over
+`R_q`. At the prime `p_i`, the CRT components (`RNSRing.crt_components`)
+map an element of `R_q` to `k = N/split_degree` elements of the field
+`F_i = RNSRing.residue_field(i)`, which has `p_i^split_degree` elements,
+and they are ring homomorphisms. So `f(z) = y` holds
+exactly when `f_{i,s}(z_{i,s}) = y_{i,s}` for every prime `i` and slot
+`s < k`, where `f_{i,s}` is the polynomial over `F_i` whose table is
+component `s` of `f`'s table. At each prime, the `kM` component claims on
+the `kC` component polynomials go through the two steps above, over `F_i`:
+the common-point sumcheck (skipped when every component of every point is
+one point, e.g. integer points), with challenges drawn in `F_i`
+(`Verifier.challenge(label, domain)`), then the combination
+`u_i = sum_{c,s} alpha^(ck+s) f_{c,s}`, proved by one run over the residue
+code at `p_i` (`FieldFoldableRS.residue_code`, §2). The residue code's
+codewords are the components of the ring code's, so `u_i`'s codeword is the
+same combination of the components of the committed ring codewords, and no
+other commitment is made. The runs, one for each of the `L` primes of
+`q`, fold one prime after another and
+then answer one set of query positions: a query's first layer is answered
+once, by the ring leaves, which the verifier authenticates against the ring
+roots and maps to the leaves of every `u_i`; the later layers are each
+run's own, over `F_i`. The tables are taken element-major (component `s` of
+entry `b` at `b·k + s`), so a sumcheck round over all `kC` tables is one
+whole-vector split and fold with block `k`, and the combination is one
+multiply-add per polynomial and `log2 k` pairwise sums.
+
+[CCCFGS26, §7] commits to each of the `kL` component polynomials
+separately and opens each prime with its own queries; sharing the ring
+commitment and the query positions is not covered by its argument.
+`BatchFoldEval.soundness_error` returns its bound,
+`L·(2d/(gamma^3·|F|) + (2l + kM - 1)/|F| + (kC - 1)/|F| + (1 - delta + gamma·d)^rep)`
+with `|F|` the size of the smallest `F_i` and `d` the code's depth, and
+says so.
+
 **The PIOP world composes directly**: sumcheck-style reductions end in
 `Relation_Eval` claims carrying oracles, and `BasefoldEval` *is* the
 compiler step of [CHMMVW20] ("queries become opening claims") for them —
@@ -452,9 +488,9 @@ evaluation point.
 
 ## 4. Roadmap
 
-1. **BatchFold** [CCCFGS26, §7.1]: openings of claims on `R_q`
-   polynomials through their CRT components, batched per prime over the
-   residue field, on top of the batched opening above.
+1. **A BatchFold kernel** that takes the CRT components of the committed
+   codewords and combines them in one pass; today that is the component
+   map, then a multiply-add per polynomial and `log2 k` pairwise sums.
 2. **C kernels for the ring code above the base** (`fold_at` is
    per-position Python over `Polynomial`, one `Polynomial * list` scaling
    per entry, and the general code's encoder is the same recursion in

@@ -8,6 +8,7 @@ from .basefold import (
     BasefoldOpening,
     pair_digest,
 )
+from .batchfold import BatchFoldEval
 from .code import (
     DEFAULT_SEED,
     DISTANCE_BOUNDS,
@@ -31,6 +32,7 @@ __all__ = [
     "BasefoldCommitment",
     "BasefoldEval",
     "BasefoldOpening",
+    "BatchFoldEval",
     "FieldFoldableRS",
     "FoldableRS",
     "batch_inverse",

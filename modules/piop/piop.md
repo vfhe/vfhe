@@ -412,6 +412,9 @@ transcript.
 - **Challenges.** `iop.verifier.challenge(label)` returns the challenge
   `label`: the first call samples it from the domain's exceptional set (§6)
   and writes it to the transcript; later calls return the recorded value.
+  `challenge(label, domain)` samples from another domain's exceptional set
+  instead, for a protocol whose challenges live in another ring or field
+  than the IOP's (e.g. a residue field of the IOP's ring).
   Challenge generation is a property of the *verifier*, not of a protocol —
   public coin means a challenge is fresh randomness and nothing else — so
   protocols call this method and never sample themselves. *Either party*
@@ -758,7 +761,8 @@ the whole field is exceptional and uniform sampling suffices, and
 (`random_exceptional`, `exceptional_from_seed`). The `IOP` object holds the domain and delegates; no
 `sampling_set` is ever carried by statements. Sampling happens in exactly one
 place — `Verifier.challenge`, which calls `domain.random_exceptional()`
-(the name both `Ring` and `Field` have) — and per-protocol soundness accounting is a
+(the name both `Ring` and `Field` have) on the IOP's domain, or on the
+domain the caller passes — and per-protocol soundness accounting is a
 protocol method —
 `Sumcheck.soundness_error` reports `d·n/|A|`, with `|A| =
 min(p_i)^split_degree` for a `Ring` and `p^d` for a `Field`, read from the
@@ -808,9 +812,9 @@ published to the transcript, so the Fiat-Shamir subtype (`fs.FS_Verifier`,
 §5) overrides exactly the two draw hooks behind them (`_draw_challenge`,
 `_draw_bits`):
 
-- `challenge(label)` — a coefficient-domain element from the exceptional
-  set (§6), what reductions consume and what `soundness_error` accounts
-  for;
+- `challenge(label, domain=None)` — a coefficient-domain element from the
+  exceptional set (§6) of the IOP's domain or of `domain`, what reductions
+  consume and what `soundness_error` accounts for;
 - `challenge_bits(label, bits)` — raw uniform coins as a byte string,
   deliberately shapeless: how they become protocol randomness — spot-check
   positions (§2's "the verifier may query it at a few positions"), a
