@@ -2609,86 +2609,48 @@ void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uin
 
 int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)
 {
-    const uint64_t N = in->base->N;
-    const uint64_t d = in->base->split_degree;
-    const uint64_t poly_size = N / d;
+    const RNS_Base base = in->base;
+    const uint64_t d = base->split_degree, k = base->N / d;
     out->rns_mask = in->rns_mask;
-    assert(out->base->N == N);
+    assert(out->base->N == base->N);
 
-    uint64_t *prefix = (uint64_t *)safe_aligned_malloc(poly_size * d * sizeof(uint64_t));
-    uint64_t *B = (uint64_t *)safe_aligned_malloc(poly_size * d * sizeof(uint64_t));
-    uint64_t *T = (uint64_t *)safe_aligned_malloc(d * sizeof(uint64_t));
-    uint64_t *tmp_field = (uint64_t *)safe_aligned_malloc(d * sizeof(uint64_t));
+    /* Row i holds the residues of `in` modulo the k maximal ideals P_s of R_q
+       containing its prime p (the slots; notation of
+       polynomial_RNS_crt_components), and is invertible exactly when no slot
+       is zero. The CRT components carry the k slots into the one field
+       R_q/P_0 = F_p[x]/(x^d - w_0) by ring isomorphisms, so the inverses of
+       the components, carried back, are the inverses of the slots. `slots`
+       holds the k components of one row. */
+    const uint64_t padded = field_vec_padded_length(k);
+    uint64_t *block = (uint64_t *)safe_aligned_malloc(d * padded * sizeof(uint64_t));
+    uint64_t **planes = (uint64_t **)safe_malloc(d * sizeof(uint64_t *));
+    for (uint64_t j = 0; j < d; j++)
+        planes[j] = block + j * padded;
+    struct _FieldVector slots = {.coeffs = planes, .n = k, .allocated_n = padded, .d = d};
+    field_vec_clear_padding(&slots);
 
     int status = 0;
-
-    for (size_t i = 0; i < in->base->l; i++)
+    for (uint64_t i = 0; i < base->l; i++)
     {
-        if (in->rns_mask & (1ULL << i))
+        if (!((in->rns_mask >> i) & 1))
+            continue;
+        slots.mod = base->mods[i];
+        slots.w = base->w[i][0];
+        RNS_CrtMaps to_slot_zero = rns_crt_maps_new(base, i, true);
+        polynomial_RNS_crt_components(&slots, &in, 1, to_slot_zero, true);
+        rns_crt_maps_free(to_slot_zero);
+        if (!field_vec_inv(&slots, &slots))
         {
-            Modulus mod = in->base->mods[i];
-            const uint64_t *w_i = in->base->w[i];
-            uint64_t w0 = w_i[0];
-            /* One width test for the row; the gathers and scatters below are a
-               slot's column across the split blocks, which is one element of
-               the degree-d extension. */
-            const bool narrow = rns_row_is_narrow(in->base, i);
-
-            for (size_t s = 0; s < poly_size; s++)
-            {
-                uint64_t A_s[d];
-                if (narrow)
-                    rns_row_gather_slot_column_narrow(A_s, in->rows32[i], s, d, poly_size);
-                else
-                    rns_row_gather_slot_column_wide(A_s, in->rows64[i], s, d, poly_size);
-                field_base_conversion(&B[s * d], A_s, s, 0, d, poly_size, w_i, mod);
-            }
-
-            for (size_t j = 0; j < d; j++)
-            {
-                prefix[j] = B[j];
-            }
-            for (size_t s = 1; s < poly_size; s++)
-            {
-                field_ext_mul(&prefix[s * d], &prefix[(s - 1) * d], &B[s * d], d, w0, mod);
-            }
-
-            if (!field_ext_inv(T, &prefix[(poly_size - 1) * d], d, w0, mod))
-            {
-                status = -2;
-                break;
-            }
-
-            for (size_t s = poly_size - 1; s > 0; s--)
-            {
-                uint64_t O_s[d];
-                field_ext_mul(O_s, T, &prefix[(s - 1) * d], d, w0, mod);
-
-                uint64_t A_inv_s[d];
-                field_base_conversion(A_inv_s, O_s, 0, s, d, poly_size, w_i, mod);
-                if (narrow)
-                    rns_row_scatter_slot_column_narrow(out->rows32[i], A_inv_s, s, d, poly_size);
-                else
-                    rns_row_scatter_slot_column_wide(out->rows64[i], A_inv_s, s, d, poly_size);
-
-                field_ext_mul(tmp_field, T, &B[s * d], d, w0, mod);
-                memcpy(T, tmp_field, d * sizeof(uint64_t));
-            }
-
-            uint64_t A_inv_0[d];
-            field_base_conversion(A_inv_0, T, 0, 0, d, poly_size, w_i, mod);
-            if (narrow)
-                rns_row_scatter_slot_column_narrow(out->rows32[i], A_inv_0, 0, d, poly_size);
-            else
-                rns_row_scatter_slot_column_wide(out->rows64[i], A_inv_0, 0, d, poly_size);
+            status = -2;
+            break;
         }
+        RNS_CrtMaps from_slot_zero = rns_crt_maps_new(base, i, false);
+        polynomial_RNS_from_crt_components(&out, &slots, 1, from_slot_zero);
+        rns_crt_maps_free(from_slot_zero);
     }
 
-    free(prefix);
-    free(B);
-    free(T);
-    free(tmp_field);
-
+    free(planes);
+    free(block);
     return status;
 }
 

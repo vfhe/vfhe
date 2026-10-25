@@ -196,23 +196,6 @@ static void RNS_FN(rns_row_copy_slot)(RNS_W *out, const RNS_W *in, uint64_t dst,
         out[j * poly_size + dst] = in[j * poly_size + src];
 }
 
-/* A slot's coefficients across the split blocks, gathered out and scattered
-   back: that column is one element of the degree-`split_degree` extension, and
-   the caller inverts it there. */
-static void RNS_FN(rns_row_gather_slot_column)(uint64_t *out, const RNS_W *in, uint64_t s,
-                                               uint64_t split_degree, uint64_t poly_size)
-{
-    for (uint64_t j = 0; j < split_degree; j++)
-        out[j] = in[j * poly_size + s];
-}
-
-static void RNS_FN(rns_row_scatter_slot_column)(RNS_W *out, const uint64_t *in, uint64_t s,
-                                                uint64_t split_degree, uint64_t poly_size)
-{
-    for (uint64_t j = 0; j < split_degree; j++)
-        out[j * poly_size + s] = (RNS_W)in[j];
-}
-
 /* Coefficient-wise inverse of a whole row, by the prefix-product trick: one
    pass up accumulating products, one inversion, one pass down. Returns -2 if
    any coefficient is zero, in which case `out` is untouched. */
