@@ -186,9 +186,8 @@ class Ring(ArithParent, metaclass=_ImplementationDispatch):
     representation of the same mathematical ring has none of them. Code that
     reads them should say `RNSRing`, which is also what ``Ring(...)`` returns.
 
-    Rings have no value equality: two rings are the same object or they are
-    not (`intersec` compares by identity). Match rings across a scheme by the
-    implementation's own key -- for RNS, the prime `RNSRing.mask`.
+    Rings compare equal by their parameters: two `RNSRing` objects over the
+    same primes are one ring, whichever object holds it.
     """
 
     if TYPE_CHECKING:

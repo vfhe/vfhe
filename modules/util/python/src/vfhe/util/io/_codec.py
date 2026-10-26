@@ -1,108 +1,48 @@
 # SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""`Codec`, `Encoded`, and the registry of codecs by tag and by type."""
+"""The type classes: `Encoder`, `Decoder`, and `Codec`, both at once."""
 
 from __future__ import annotations
 
-import importlib
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Hashable, Iterable, Sequence
+    from typing import IO
 
-    from ._bytes import Payload, Sink
-    from ._stream import ReadContext, WriteContext
+T = TypeVar("T")
 
 
-@dataclass
-class Encoded:
-    """A codec's encoding of an object.
+class Encoder(ABC, Generic[T]):
+    """Writes a ``T`` to a binary stream.
 
-    ``meta`` is JSON-serializable. A record has either a payload of exactly
-    ``size`` bytes, written by ``write(sink)``, or ``children``: values written
-    as records of their own and handed back to `Codec.decode`.
+    An encoder writes the object's own bytes and nothing around them, so what
+    one encoder writes, another may follow on the same stream.
     """
 
-    meta: dict[str, Any]
-    size: int = 0
-    write: Callable[[Sink], None] | None = None
-    children: Sequence[Any] = ()
+    @abstractmethod
+    def encode(self, obj: T, stream: IO[bytes], /) -> None:
+        """Writes ``obj`` to ``stream``. Raises `TypeError` for an object the codec does not cover and `ValueError` for one it cannot write."""
 
 
-class Codec:
-    """How one type becomes a record and back.
+class Decoder(ABC, Generic[T]):
+    """Reads a ``T`` from a binary stream.
 
-    ``tag`` is ``"<package>.<name>"``, where ``vfhe.<package>`` registers the
-    codec; a reader meeting an unknown tag imports that package. ``types`` are
-    the classes it writes, subclasses included unless they have their own.
-    A ``secret`` codec is only written by ``dump_secret``.
-
-    A ``definition`` codec writes objects that others share: each is written
-    once, before its first use, and referred to by the id `WriteContext.ref`
-    returns. ``identity`` is what `ReadContext.bound` matches against the
-    objects passed to ``load``; ``bindings`` lists the definitions an object
-    contains, which are bound along with it.
+    A decoder consumes exactly the bytes its encoder wrote, so decoders chain
+    on one stream in the order their encoders ran.
     """
 
-    tag: ClassVar[str] = ""
-    types: ClassVar[tuple[type, ...]] = ()
-    secret: ClassVar[bool] = False
-    definition: ClassVar[bool] = False
+    @abstractmethod
+    def decode(self, stream: IO[bytes], /) -> T:
+        """Returns the object at the head of ``stream``. Raises `EOFError` when the stream ends inside the object and `ValueError` on bytes it cannot read."""
 
-    # Positional-only, so implementations may rename their parameters.
-
-    def encode(self, obj: Any, ctx: WriteContext, /) -> Encoded:
-        raise NotImplementedError
-
-    def decode(
-        self,
-        meta: dict[str, Any],
-        payload: Payload,
-        children: list[Any],
-        ctx: ReadContext,
-        /,
-    ) -> Any:
-        """The object back. ``payload`` is empty for a record with children."""
-        raise NotImplementedError
-
-    def identity(self, _obj: Any, /) -> Hashable | None:
-        return None
-
-    def bindings(self, _obj: Any, /) -> Iterable[Any]:
-        return ()
+    def decode_strict(self, stream: IO[bytes], /) -> T:
+        """`decode`, then checks that the stream has ended: for a whole file or buffer. Raises `ValueError` when bytes follow the object. On a socket the check waits for the peer to close, so use `decode` there."""
+        obj = self.decode(stream)
+        if stream.read(1):
+            raise ValueError("trailing bytes after the decoded object")
+        return obj
 
 
-_BY_TAG: dict[str, Codec] = {}
-_BY_TYPE: dict[type, Codec] = {}
-
-
-def register(codec: Codec) -> Codec:
-    """Make ``codec`` the one for its tag and types. Returns it."""
-    if not codec.tag or "." not in codec.tag:
-        raise ValueError(f"a codec tag is '<package>.<name>', got {codec.tag!r}")
-    _BY_TAG[codec.tag] = codec
-    for t in codec.types:
-        _BY_TYPE[t] = codec
-    return codec
-
-
-def codec_for(obj: Any) -> Codec:
-    for t in type(obj).__mro__:
-        codec = _BY_TYPE.get(t)
-        if codec is not None:
-            return codec
-    raise TypeError(
-        f"no vfhe.util.io codec for {type(obj).__module__}.{type(obj).__qualname__}"
-    )
-
-
-def codec_for_tag(tag: str) -> Codec:
-    codec = _BY_TAG.get(tag)
-    if codec is None:
-        # The package named by the tag registers its codecs on import.
-        importlib.import_module("vfhe." + tag.split(".", 1)[0])
-        codec = _BY_TAG.get(tag)
-    if codec is None:
-        raise ValueError(f"unknown record type {tag!r}")
-    return codec
+class Codec(Encoder[T], Decoder[T]):
+    """An `Encoder` and a `Decoder` of one ``T``: what a type's codec implements."""

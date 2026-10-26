@@ -5,3 +5,5 @@ vfhe.util.io
 ============
 
 .. automodule:: vfhe.util.io
+
+.. automodule:: vfhe.util.io.protobuf

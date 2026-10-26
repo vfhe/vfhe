@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Serialization of vfhe.arith: RNS rings and polynomials.
+//
+// Every message travels length-prefixed, as protobuf's own framing: its size
+// as a varint, then its bytes. A codec of vfhe.util.io writes and reads the
+// messages of one object in a fixed order, stated on each message.
+syntax = "proto3";
+
+package vfhe.arith.io.v1;
+
+// An RNS ring Z_q[X]/(X^N + 1), q the product of `primes`.
+//
+// A reader hands back its own ring with the same `n`, `split_degree` and
+// `primes`, else builds one. `roots` is not part of that identity: it is
+// checked when NTT-domain rows are read, since those only mean the same to a
+// reader with the same roots.
+message Ring {
+  // The degree N, a power of two.
+  uint32 n = 1;
+  // The incomplete NTT's split degree: the coefficients each residue slot
+  // holds.
+  uint32 split_degree = 2;
+  // The primes in the ring's own order, which the level chain depends on.
+  repeated uint64 primes = 3;
+  // Each prime's NTT root of unity, in the order of `primes`.
+  repeated uint64 roots = 4;
+}
+
+// The domain rows are in.
+enum Domain {
+  DOMAIN_UNSPECIFIED = 0;
+  // Coefficients.
+  DOMAIN_COEFF = 1;
+  // NTT values, under the roots the ring records.
+  DOMAIN_NTT = 2;
+}
+
+// How a row packs its residues, as the C row encoding lays them out. A reader
+// refuses a packing it does not know.
+enum Packing {
+  PACKING_UNSPECIFIED = 0;
+  // Each residue as a 4-byte little-endian word for a prime up to 2^32, an
+  // 8-byte one above.
+  PACKING_WORD = 1;
+  // Each residue in exactly the bits its prime needs, rows packed back to
+  // back.
+  PACKING_TIGHT = 2;
+}
+
+// A polynomial's rows, one per prime in ascending prime value, each of the
+// ring's N residues in order. Its `Ring` precedes it in the stream.
+message Polynomial {
+  Domain domain = 1;
+  Packing packing = 2;
+  // The rows, back to back; a reader checks every residue against its prime.
+  bytes rows = 3;
+}

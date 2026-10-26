@@ -2,18 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """RNS rings and polynomials through vfhe.util.io, and polynomials from a seed."""
 
+import io
 import json
 import os
-import struct
 import subprocess
 import sys
 import textwrap
 
 import pytest
+from _vfhe_proto.vfhe.arith.io.v1 import io_pb2 as pb
+from google.protobuf import proto
 from vfhe.arith import Polynomial, Ring
 from vfhe.arith import repr as Repr
+from vfhe.arith.codec import PolynomialCodec, RingCodec
 from vfhe.util.bindings import ffi, lib
-from vfhe.util.io import Serializer
 
 # Narrow (stored 32-bit), a prime between 2^30 and 2^32 (stored 64-bit,
 # written as 4-byte words), and wide primes up to the 62-bit limit.
@@ -37,8 +39,8 @@ def test_polynomial_round_trip(sizes, split, packing, domain, held):
     ring = _ring(256, sizes, split)
     p = Polynomial(ring).from_bigint_array(_values(ring))
     p.to_repr(held)
-    s = Serializer(packing=packing, domain=domain)
-    back = s.loads(s.dumps(p), rings=[ring])
+    codec = PolynomialCodec(RingCodec(ring), packing, domain)
+    back = codec.decode(io.BytesIO(dumps(codec, p)))
     assert back.ring is ring
     expected = {"held": held, "mul": Repr.ntt, "canonical": Repr.coeff}[domain]
     assert back.repr == expected
@@ -49,69 +51,73 @@ def test_polynomial_round_trip(sizes, split, packing, domain, held):
 def test_tight_packing_is_smaller_by_the_bit_count():
     ring = _ring(1024, [28, 50], 1)
     p = Polynomial(ring).from_bigint_array(_values(ring))
-    word = len(Serializer(packing="word", checksum=False).dumps(p))
-    tight = len(Serializer(packing="tight", checksum=False).dumps(p))
+    word = len(_messages(dumps(PolynomialCodec(packing="word"), p))[1].rows)
+    tight = len(_messages(dumps(PolynomialCodec(packing="tight"), p))[1].rows)
     assert word - tight == 1024 * (4 + 8) - 1024 * (28 + 50) // 8
 
 
 def test_ring_rebuilt_from_its_primes():
     ring = _ring(128, [40, 45, 50], 2)
     p = Polynomial(ring).from_bigint_array(_values(ring))
-    back = Serializer().loads(Serializer().dumps(p))
+    back = PolynomialCodec().decode(io.BytesIO(dumps(PolynomialCodec(), p)))
     assert back.ring is not ring
     assert back.ring.primes == ring.primes  # the ring's own order, kept
     assert back.ring.mask == ring.mask
     assert back == p
 
 
-def _rows(data: bytes):
-    pos, out = 16, []
-    while pos < len(data):
-        _, tag_len, meta_len, size = struct.unpack_from("<B3xIQQ", data, pos)
-        pos += 24
-        tag = data[pos : pos + tag_len].decode()
-        pos += tag_len
-        meta_at = pos
-        pos += meta_len
-        if size:
-            pos += -pos % 64
-        out.append((tag, meta_at, meta_len, pos, size))
-        pos += size + (32 if data[8] & 1 else 0)
-    return out
+def dumps(codec, obj) -> bytes:
+    buf = io.BytesIO()
+    codec.encode(obj, buf)
+    return buf.getvalue()
+
+
+def _messages(data: bytes) -> tuple[pb.Ring, pb.Polynomial]:
+    """A polynomial's stream: its ring, then its rows."""
+    f = io.BytesIO(data)
+    return proto.parse_length_prefixed(pb.Ring, f), proto.parse_length_prefixed(
+        pb.Polynomial, f
+    )
+
+
+def _dumps_messages(*messages) -> bytes:
+    f = io.BytesIO()
+    for message in messages:
+        proto.serialize_length_prefixed(message, f)
+    return f.getvalue()
 
 
 def test_a_residue_above_its_prime_is_refused():
     ring = _ring(64, [50], 1)
     p = Polynomial(ring).from_bigint_array(_values(ring))
     for packing in ["word", "tight"]:
-        s = Serializer(packing=packing, checksum=False)
-        data = bytearray(s.dumps(p))
-        _, _, _, offset, _ = next(
-            r for r in _rows(bytes(data)) if r[0] == "arith.rns_polynomial"
-        )
-        data[offset : offset + 7] = b"\xff" * 7  # >= 2^50 in the first residue
+        ring_message, poly = _messages(dumps(PolynomialCodec(packing=packing), p))
+        poly.rows = b"\xff" * 7 + poly.rows[7:]  # >= 2^50 in the first residue
         with pytest.raises(ValueError, match="not below"):
-            s.loads(bytes(data))
-        unchecked = Serializer(packing=packing, checksum=False, validate=False)
-        unchecked.loads(bytes(data))
+            PolynomialCodec().decode(io.BytesIO(_dumps_messages(ring_message, poly)))
+
+
+@pytest.mark.parametrize("field", ["packing", "domain"])
+def test_an_unknown_packing_or_domain_is_refused(field):
+    ring = _ring(64, [50], 1)
+    p = Polynomial(ring).from_bigint_array(_values(ring))
+    ring_message, poly = _messages(dumps(PolynomialCodec(), p))
+    setattr(poly, field, 7)  # a value this vfhe lacks
+    with pytest.raises(ValueError, match=f"unknown row {field}"):
+        PolynomialCodec().decode(io.BytesIO(_dumps_messages(ring_message, poly)))
 
 
 def test_ntt_rows_need_the_same_roots():
     ring = _ring(64, [50], 1)
     p = Polynomial(ring).from_bigint_array(_values(ring))
     p.to_NTT()
-    s = Serializer(checksum=False)
-    data = s.dumps(p)
-    _, at, n, _, _ = next(r for r in _rows(data) if r[0] == "arith.rns_ring")
-    meta = json.loads(data[at : at + n])
-    root = str(meta["roots"][0]).encode()
-    # Another value of the same length, so the framing does not move.
-    other = str(int(root) - 1).encode().rjust(len(root), b"1")
-    tampered = data[:at] + data[at : at + n].replace(root, other) + data[at + n :]
+    ring_message, poly = _messages(dumps(PolynomialCodec(), p))
+    ring_message.roots[0] -= 1
     with pytest.raises(ValueError, match="other roots of unity"):
-        s.loads(tampered)
+        PolynomialCodec().decode(io.BytesIO(_dumps_messages(ring_message, poly)))
     # The coefficient domain does not depend on the roots.
-    s.loads(Serializer(domain="canonical", checksum=False).dumps(p))
+    canonical = PolynomialCodec(domain="canonical")
+    canonical.decode(io.BytesIO(dumps(canonical, p)))
 
 
 def test_seeded_polynomial_is_its_rows_expansion():
@@ -154,7 +160,7 @@ _CHILD = textwrap.dedent(
     import json, sys
     from vfhe.arith import Polynomial, Ring
     from vfhe.arith import repr as Repr
-    from vfhe.util.io import Serializer
+    from vfhe.arith.codec import PolynomialCodec
     primes = json.loads(sys.argv[1])
     # Populate the base with the primes in reverse, and another prime first,
     # so every prime sits at another base index than in the writer.
@@ -162,7 +168,7 @@ _CHILD = textwrap.dedent(
     for p in reversed(primes):
         Ring(256, primes=[p], prime_size=[p.bit_length()], split_degree=1)
     with open(sys.argv[2], "rb") as f:
-        p = Serializer().load(f)
+        p = PolynomialCodec().decode(f)
     print(json.dumps({"ntt": p.repr == Repr.ntt,
                       "rows": p.get_coeff_matrix(repr=Repr.ntt),
                       "primes": p.ring.primes}))
@@ -177,7 +183,7 @@ def test_another_process_with_another_base_order_reads_the_same(tmp_path):
     p.to_NTT()
     path = tmp_path / "p.vfhe"
     with open(path, "wb") as f:
-        Serializer().dump(p, f)
+        PolynomialCodec().encode(p, f)
     # The child picks its own engine: under an emulator it runs on the bare CPU.
     env = {k: v for k, v in os.environ.items() if k != "VFHE_ENGINE"}
     out = subprocess.run(  # noqa: S603 - this interpreter, a fixed script

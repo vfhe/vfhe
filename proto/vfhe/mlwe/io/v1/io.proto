@@ -1,0 +1,153 @@
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Serialization of vfhe.mlwe: schemes, samples, key-switch keys, MGSW
+// ciphertexts, LWE samples and secret keys.
+//
+// Every message travels length-prefixed, as protobuf's own framing. A sample
+// is one message; a key or an MGSW ciphertext is a header message, the scheme
+// its samples share, then one message per sample, so a key of any size
+// streams one sample at a time.
+syntax = "proto3";
+
+package vfhe.mlwe.io.v1;
+
+import "vfhe/arith/io/v1/io.proto";
+
+// An MLWE scheme as its chain of rings.
+//
+// A reader hands back its own scheme with the same class, rings, special
+// rings, rank and kind-specific parameters, else builds one, with a warning
+// when it was given schemes to match.
+message Scheme {
+  // Level i's ring, from the full modulus down.
+  repeated vfhe.arith.io.v1.Ring rings = 1;
+  // Level i's ring extended by the special primes, which key switching
+  // divides by; the same as `rings` when there are none.
+  repeated vfhe.arith.io.v1.Ring special_rings = 2;
+  // How many special primes the special rings carry.
+  uint32 special_primes = 3;
+  // The module rank r: the number of mask components of a sample.
+  uint32 rank = 4;
+  // Whether gadget digits are balanced (centered) when key switching.
+  bool balanced = 5;
+}
+
+// How a gadget product decomposes an element, which its keys are generated
+// for: the RNS gadget when `log_base` is absent, the radix gadget otherwise.
+message Gadget {
+  // The radix gadget's digit width in bits, w: residues split into base-2^w
+  // digits. Absent for the RNS gadget.
+  optional uint32 log_base = 1;
+  // How many top digits of each residue are kept; all when absent.
+  optional uint32 digits = 2;
+  // How many primes one RNS digit covers; 1 is one digit per prime.
+  uint32 primes_per_digit = 3;
+}
+
+// An MGSW scheme: an MLWE scheme and the gadget its ciphertexts decompose
+// against. A reader matches it as it matches a `Scheme`.
+message MGSWScheme {
+  Scheme mlwe_scheme = 1;
+  // How many of the ring's primes the gadget covers.
+  uint32 ell = 2;
+  Gadget gadget = 3;
+  bool balanced = 4;
+}
+
+// How a mask is expanded from its seed. A reader refuses an expansion it does
+// not know, since a wrong one yields a wrong mask without any other sign.
+enum SeedExpansion {
+  SEED_EXPANSION_UNSPECIFIED = 0;
+  // AES-128 in counter mode, keyed from the seed and the (component, prime)
+  // labels, each residue rejection-sampled below its prime: crypto.h's
+  // prng_expand_below.
+  SEED_EXPANSION_AES128_CTR = 1;
+}
+
+// One MLWE sample: its body `b` and its mask components `a` as `Polynomial`
+// rows over `ring`, all in `domain` and `packing`.
+//
+// A fresh sample whose mask still matches its seed carries the 32-byte `seed`
+// and its `seed_expansion` in place of `a`, halving it; the mask is expanded
+// again on load. The sample's scheme precedes it in the stream, or precedes
+// the samples of the key it belongs to.
+message Sample {
+  vfhe.arith.io.v1.Ring ring = 1;
+  // The level of `ring` in the scheme, or -1 for a ring that is none of the
+  // scheme's levels, such as a special ring.
+  sint32 lvl = 2;
+  // The number of mask components, the scheme's rank, or the extended rank of
+  // a product before relinearization.
+  uint32 rank = 3;
+  vfhe.arith.io.v1.Domain domain = 4;
+  vfhe.arith.io.v1.Packing packing = 5;
+  // Whether the sample is a product awaiting relinearization.
+  bool extended = 6;
+  // The mask's seed, 32 bytes, when the mask is its expansion; empty
+  // otherwise.
+  bytes seed = 7;
+  // The body's rows.
+  bytes b = 8;
+  // The mask components' rows, `rank` of them; none when `seed` is set.
+  repeated bytes a = 9;
+  // Set whenever `seed` is.
+  SeedExpansion seed_expansion = 10;
+}
+
+// A key-switch key (an MLWE_Set) as its header. A flat set lists in
+// `lengths` the samples of each component, -1 for an absent one; the scheme
+// the samples share follows the header, then the samples, component by
+// component. A nested set holds `sets` sets instead, each written as a
+// `KeySwitchKey` of its own, which follow.
+message KeySwitchKey {
+  // The gadget the samples were generated for.
+  Gadget gadget = 1;
+  bool balanced = 2;
+  repeated sint32 lengths = 3;
+  uint32 sets = 4;
+}
+
+// An MGSW ciphertext as its header; its `samples` samples follow, over the
+// scheme's MLWE scheme.
+message MGSW {
+  MGSWScheme scheme = 1;
+  uint32 samples = 2;
+}
+
+// An LWE sample of dimension `n` over `ring`'s primes: per prime in ascending
+// value, the n mask words then the body word, each an 8-byte little-endian
+// residue.
+message LWE {
+  vfhe.arith.io.v1.Ring ring = 1;
+  uint32 n = 2;
+  // (n + 1) words per prime, back to back; a reader checks every residue
+  // against its prime.
+  bytes words = 3;
+}
+
+// An MLWE secret key: its small signed coefficients, component by component,
+// each `width` bytes two's complement little-endian. Its scheme precedes it
+// in the stream.
+message Key {
+  // The ring the key is held over.
+  vfhe.arith.io.v1.Ring ring = 1;
+  // The error distribution's standard deviation the key samples with.
+  double sigma = 2;
+  // Bytes per coefficient: the smallest of 1, 2, 4, 8 holding every one.
+  uint32 width = 3;
+  // Coefficients per component, in order.
+  repeated uint32 lengths = 4;
+  bytes coefficients = 5;
+}
+
+// An LWE secret key, as `Key` writes coefficients.
+message LWEKey {
+  vfhe.arith.io.v1.Ring ring = 1;
+  // The dimension: the number of coefficients.
+  uint32 n = 2;
+  // The error distribution's standard deviation, when the key carries one.
+  optional double sigma = 3;
+  uint32 width = 4;
+  bytes coefficients = 5;
+}

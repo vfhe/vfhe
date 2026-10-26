@@ -33,7 +33,7 @@ from vfhe.mlwe import (
     MLWE_Set,
     PlaintextMatrix,
 )
-from vfhe.mlwe.io import seed_still_holds
+from vfhe.mlwe.codec import seed_still_holds
 from vfhe.util import parallel
 from vfhe.util.bindings import ffi
 
