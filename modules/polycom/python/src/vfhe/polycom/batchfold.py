@@ -312,35 +312,29 @@ class BatchFoldEval(BasefoldEval):
         queries = self.query_positions(
             await iop.verifier.challenge_bits(f"{label}/queries")
         )
-        # Per query: the ring leaves, which answer the first layer for every
-        # prime; then, for each later layer, every prime's fiber and the one
-        # path of the shared tree.
-        schedule = self.scheme.schedule
-        size = 1 << schedule[0]
-        answers = tuple(
-            (
-                tuple(
-                    _layer_answer(self.code, opening.word, opening.tree, q, size)
-                    for opening in openings
-                ),
-                tuple(
-                    (
-                        tuple(
-                            protocol.code.fiber_at(run.words[i], j, 1 << schedule[i])
-                            for protocol, run in zip(
-                                self.residue_protocols, runs, strict=True
-                            )
-                        ),
-                        trees[i].open(j),
-                    )
-                    for i, (j, _) in enumerate(self._walk(q))
-                    if i > 0
-                ),
-            )
-            for q in queries
-        )
+        answers = tuple(self._query_answer(openings, runs, trees, q) for q in queries)
         iop.transcript.write(f"{label}/answers", answers)
         return []
+
+    def _query_answer(self, openings, runs, trees: dict[int, Merkle], q: int):
+        """The answer to query `q`: the ring leaves, which answer the first
+        layer for every prime; then, for each later layer, every prime's
+        fiber and the one path of the shared tree."""
+        schedule = self.scheme.schedule
+        top = tuple(
+            _layer_answer(self.code, opening.word, opening.tree, q, 1 << schedule[0])
+            for opening in openings
+        )
+        later = []
+        for layer, (j, _) in enumerate(self._walk(q)):
+            if layer == 0:
+                continue
+            fibers = tuple(
+                protocol.code.fiber_at(run.words[layer], j, 1 << schedule[layer])
+                for protocol, run in zip(self.residue_protocols, runs, strict=True)
+            )
+            later.append((fibers, trees[layer].open(j)))
+        return top, tuple(later)
 
     async def _prove_prime(
         self,
@@ -473,12 +467,6 @@ class BatchFoldEval(BasefoldEval):
         values = [statement.value for statement in statements]
         count = len(commitments)
         zs, skip = self._points(points)
-        # The first-layer leaves of u_i at the query positions, computed from
-        # the ring leaves once those are authenticated.
-        tops: list[Any] = [None] * self.ring.ell
-        # (layer, prime) -> the prime's leaves of that later layer at the
-        # query positions, once the shared trees authenticate them.
-        later: dict[tuple[int, int], Any] = {}
         results = await iop.and_composition(
             label,
             [
@@ -492,8 +480,6 @@ class BatchFoldEval(BasefoldEval):
                     zs[i],
                     skip,
                     values,
-                    tops,
-                    later,
                     label,
                 )
                 for i in range(self.ring.ell)
@@ -531,8 +517,10 @@ class BatchFoldEval(BasefoldEval):
         ]
         walks = [self._walk(q) for q in queries]
         codes = [protocol.code for protocol in self.residue_protocols]
-        for layer in range(1, len(schedule)):
-            leaves = _check_joint_layer(
+        # Per later layer, every prime's leaves at the query positions,
+        # authenticated by the layer's shared tree.
+        later = [
+            _check_joint_layer(
                 codes,
                 label,
                 self.scheme.levels[layer],
@@ -541,14 +529,13 @@ class BatchFoldEval(BasefoldEval):
                 [walk[layer][0] for walk in walks],
                 1 << schedule[layer],
             )
-            for prime, block in enumerate(leaves):
-                later[layer, prime] = block
-        # Every layer is checked through `tops` and `later`, so the runs see
-        # no answers of their own.
-        placeholders = tuple((None,) * len(schedule) for _ in answers)
+            for layer in range(1, len(schedule))
+        ]
+        # Every layer is authenticated above; u_i's first-layer leaves are
+        # the combination of the ring leaves.
         for i, run in enumerate(runs):
-            tops[i] = self.ring.crt_linear_combination(blocks, i, alphas[i])
-            run.check(queries, placeholders)
+            top = self.ring.crt_linear_combination(blocks, i, alphas[i])
+            run.check_folds(queries, [top, *(leaves[i] for leaves in later)])
         return []
 
     async def _verify_prime(
@@ -562,17 +549,14 @@ class BatchFoldEval(BasefoldEval):
         z: FieldVector,
         skip: bool,
         values: list,
-        tops: list,
-        later: dict,
         shared: str,
     ) -> tuple[_VerifierRun, FieldVector]:
         """The verifier's sub-protocol at prime `index`, for claims on `count`
         polynomials: the reduction (steps 1-2 of the module docstring),
         skipping the sumcheck when `skip`, then the folds of the basefold
         run on u_i. Returns the run, whose query checks are left to the
-        caller and read u_i's first-layer leaves from ``tops[index]`` and its
-        later layers' from ``later[layer, index]``, and the combination's
-        coefficients. The later layers' roots are the shared trees', under
+        caller (`_VerifierRun.check_folds`, on leaves the caller
+        authenticates), and the combination's coefficients. The later layers' roots are the shared trees', under
         `shared`."""
         field, k = self.fields[index], self.slots
         claims = len(owners)
@@ -634,9 +618,8 @@ class BatchFoldEval(BasefoldEval):
             label,
             r,
             (alphas * q).sum(),
-            lambda _answers, _positions: tops[index],
+            None,
             read_root=lambda step: iop.transcript.read(f"{shared}/pi{step}"),
-            check_layer=lambda layer, _answers, _positions: later[layer, index],
         )
         await run.fold(iop, verifier, field)
         return run, alphas

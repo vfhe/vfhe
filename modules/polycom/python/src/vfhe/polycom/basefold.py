@@ -987,10 +987,11 @@ class _VerifierRun:
     word (as `_check_layer` does for a single tree); it raises `Rejection`
     when they do not check. The later layers are committed by the run's
     own trees, whose roots it reads -- or, when the caller commits them,
-    ``await read_root(step)`` reads the root written after fold `step` and
-    ``check_layer(layer, answers, positions)`` checks a later layer's answers
-    as `top_check` does the first's. `fold` reads the rounds and the base
-    table, and `check` the answers to the query positions the caller drew.
+    ``await read_root(step)`` reads the root written after fold `step`.
+    `fold` reads the rounds and the base table, and `check` the answers to
+    the query positions the caller drew. A caller that authenticates every
+    layer's leaves itself passes no `top_check` and calls `check_folds` on
+    them instead of `check`.
     """
 
     def __init__(
@@ -999,9 +1000,8 @@ class _VerifierRun:
         label: str,
         zs: list,
         value,
-        top_check: Callable[[list, list[int]], Word],
+        top_check: Callable[[list, list[int]], Word] | None,
         read_root: Callable[[int], Awaitable[bytes]] | None = None,
-        check_layer: Callable[[int, list, list[int]], Word] | None = None,
     ) -> None:
         self.protocol = protocol
         self.label = label
@@ -1009,7 +1009,6 @@ class _VerifierRun:
         self.value = value
         self.top_check = top_check
         self.read_root = read_root
-        self.check_layer = check_layer
         #: The roots of the layers after the first, in order.
         self.roots: list[bytes] = []
         #: The round challenges.
@@ -1074,13 +1073,12 @@ class _VerifierRun:
 
     def check(self, queries, answers) -> None:
         """Checks the answers to `queries`: every layer's leaves against its
-        commitment, and each query's walk -- the value refolded from one
-        layer's leaf must reappear in the next layer's leaf, and at the end in
-        the level-0 codeword."""
+        commitment (the first layer's with `top_check`, the later layers'
+        against the run's roots), then each query's walk (`check_folds`)."""
         protocol, label = self.protocol, self.label
-        code = protocol.code
-        d = code.d
         schedule, levels = protocol.scheme.schedule, protocol.scheme.levels
+        if self.top_check is None:
+            raise RuntimeError(f"{label}: no top_check for the first layer")
         if len(answers) != len(queries):
             raise Rejection(f"{label}: wrong number of query answers")
         walks = []
@@ -1089,6 +1087,38 @@ class _VerifierRun:
             if len(answer) != len(steps):
                 raise Rejection(f"{label}: query {q} answered for {len(answer)} layers")
             walks.append(steps)
+        blocks = []
+        for i, folds in enumerate(schedule):
+            positions = [steps[i][0] for steps in walks]
+            layer = [answer[i] for answer in answers]
+            if i == 0:
+                blocks.append(self.top_check(layer, positions))
+            else:
+                blocks.append(
+                    _check_layer(
+                        protocol.code,
+                        label,
+                        levels[i],
+                        self.roots[i - 1],
+                        layer,
+                        positions,
+                        1 << folds,
+                    )
+                )
+        self.check_folds(queries, blocks)
+
+    def check_folds(self, queries, blocks: list[Word]) -> None:
+        """Checks each query's walk through layers whose leaves are already
+        authenticated: ``blocks[i]`` holds layer i's leaves at the queries'
+        positions, joined into one word in query order (as `_check_layer`
+        returns them). The value refolded from one layer's leaf must
+        reappear in the next layer's leaf, and at the end in the level-0
+        codeword."""
+        protocol, label = self.protocol, self.label
+        code = protocol.code
+        d = code.d
+        schedule, levels = protocol.scheme.schedule, protocol.scheme.levels
+        walks = [protocol._walk(q) for q in queries]
 
         # Every query visits the same layers in the same order, so step `i` is
         # one layer for all of them, and a layer's leaves are checked together:
@@ -1097,15 +1127,7 @@ class _VerifierRun:
         for i, folds in enumerate(schedule):
             level, size = levels[i], 1 << folds
             positions = [steps[i][0] for steps in walks]
-            layer = [answer[i] for answer in answers]
-            if i == 0:
-                block = self.top_check(layer, positions)
-            elif self.check_layer is not None:
-                block = self.check_layer(i, layer, positions)
-            else:
-                block = _check_layer(
-                    code, label, level, self.roots[i - 1], layer, positions, size
-                )
+            block = blocks[i]
             # The value refolded from the layer above must reappear in this
             # layer's leaf, at the offset the walk gives.
             if carried is not None:

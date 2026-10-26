@@ -149,6 +149,8 @@ class ANDComposition:
         # twice by one sub-protocol is one value, as `Verifier.challenge`
         # records it outside a composition.
         self._received: list[dict[str, Any]] = []
+        # The first failure of a sub-protocol, which `run` re-raises.
+        self._failure: BaseException | None = None
 
     def _pass_turn(self, index: int) -> None:
         """Hand the turn to the next running sub-protocol after `index`; past
@@ -164,7 +166,10 @@ class ANDComposition:
 
     def _close_round(self) -> None:
         """Answer the round's requests: run the batched call, or draw the
-        round's seed and give every sub-protocol its challenge from it."""
+        round's seed and give every sub-protocol its value from it: a
+        challenge from `challenge_sampler` (by default the domain's
+        `random_exceptional`), and a bit-string challenge as bytes expanded
+        from ``b"bits"`` followed by the seed."""
         requests, self._requests = self._requests, {}
         kinds = {request.kind for request in requests.values()}
         if "batched_call" in kinds:
@@ -176,7 +181,13 @@ class ANDComposition:
                 )
             order = sorted(requests)
             kernel = requests[order[0]].kernel
-            results = kernel([requests[i].argument for i in order])
+            results = list(kernel([requests[i].argument for i in order]))
+            if len(results) != len(order):
+                raise RuntimeError(
+                    f"{self.label}: batched call {requests[order[0]].label!r} "
+                    f"returned {len(results)} results for {len(order)} "
+                    "sub-protocols"
+                )
             for i, result in zip(order, results, strict=True):
                 self._values[i] = result
             return
@@ -227,7 +238,6 @@ class ANDComposition:
         self._live = list(range(n))
         self._turns = [self.iop.loop.create_future() for _ in range(n)]
         self._received = [{} for _ in range(n)]
-        failure: list[BaseException] = []
 
         async def run_subprotocol(index: int, subprotocol: Coroutine) -> Any:
             _current_subprotocol.set((self, index))
@@ -242,8 +252,8 @@ class ANDComposition:
                 # A failing sub-protocol keeps the turn: one resumed now would
                 # run until it is cancelled below, possibly in the middle of a
                 # transcript read.
-                if not failure:
-                    failure.append(error)
+                if self._failure is None:
+                    self._failure = error
                     for turn in self._turns:
                         turn.cancel()
                 raise
@@ -263,8 +273,8 @@ class ANDComposition:
                 _, pending = await asyncio.wait(
                     pending, return_when=asyncio.FIRST_EXCEPTION
                 )
-                if failure:
-                    raise failure[0]
+                if self._failure is not None:
+                    raise self._failure
             return [task.result() for task in tasks]
         finally:
             for task in tasks:
