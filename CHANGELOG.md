@@ -16,6 +16,11 @@ versions may contain breaking changes.
 
 - Python 3.15 support, tested in CI, built as wheels and declared in the
   classifiers.
+- Add per-module benchmarks, `make bench`: Python benchmarks of a module's
+  API in `modules/<mod>/python/bench/` and C benchmarks of its kernels in
+  `modules/<mod>/c/bench/`, timed per engine and thread limit into a results
+  file that `tools/bench/compare.py` compares with another. The complete
+  depth of `make test` runs every benchmark once.
 - `RNSRing.crt_components(elements, index)`, `from_crt_components(vectors)`
   and `residue_field(index)`: the CRT components of ring elements at one RNS
   prime p -- their residues modulo the maximal ideals `P_s = (p, X^d - w_s)`

@@ -10,6 +10,7 @@
         "build",
         "build/proto",
         "test/smoke",
+        "tools/bench",
         "modules/arith/python/src",
         "modules/circuit/python/src",
         "modules/crypto/python/src",

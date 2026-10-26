@@ -144,6 +144,43 @@ foreach engine_name : engines.keys()
     endforeach
 endforeach
 
+# --- Benchmarks ---------------------------------------------------------------
+
+# One executable per engine and file, built when tools/bench/run.py asks for it.
+# <engine>-bench-smoke runs every benchmark once at its first shape, so a
+# benchmark that no longer runs fails the complete suite.
+bench_include_dirs = vfhe_c_include_dirs + include_directories('../tools/bench')
+
+foreach engine_name, c_args : engines
+    bench_executables = []
+    foreach bench_file : vfhe_c_benchmarks
+        bench_executables += executable(
+            engine_name + '-bench-' + fs.stem(bench_file),
+            bench_file,
+            include_directories: bench_include_dirs,
+            c_args: c_args,
+            link_with: static_libs[engine_name],
+            build_by_default: false,
+        )
+    endforeach
+
+    test(
+        engine_name + '-bench-smoke',
+        py,
+        args: [
+            files('../tools/bench/run.py'),
+            '--smoke',
+            '--no-build',
+            '--engine', engine_name,
+            '--build-dir', meson.project_build_root(),
+        ],
+        depends: bench_executables,
+        env: pytest_asan_env + {'PYTHONDONTWRITEBYTECODE': '1'},
+        workdir: meson.project_source_root(),
+        timeout: 1800,
+    )
+endforeach
+
 # --- Fuzzing ------------------------------------------------------------------
 
 if get_option('fuzz') == ''

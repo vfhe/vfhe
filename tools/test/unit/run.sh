@@ -36,6 +36,8 @@ for suite in $(echo "${SUITES:-c,complete}" | tr ',' ' '); do
     for each in $engines; do
         case $suite in
             c) set -- "$@" "$each-c-*" ;;
+            # the complete depth also runs every benchmark once
+            complete) set -- "$@" "$each-py-complete" "$each-bench-smoke" ;;
             *) set -- "$@" "$each-py-$suite" ;;
         esac
     done
