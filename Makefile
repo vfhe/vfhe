@@ -21,14 +21,29 @@ REQUIREMENT ?=
 INDEX ?= pypi
 # Names of smoke test cases, space separated. Empty runs every one of them.
 SMOKE_CASES ?=
+# Benchmarks: modules (comma separated, empty for all), thread limits, the tier
+# (headline or full), a glob on names, repetitions (empty for each benchmark's
+# own), CPUs to pin to, and the label that names the results file.
+MODULE ?=
+THREADS ?= 1
+TIER ?= headline
+BENCH ?=
+REPS ?=
+PIN ?=
+LABEL ?= run
 
 # In precedence: the artefact DIST names, a requirement from INDEX, or the sdist.
 PACKAGE = $(or $(wildcard $(DIST)),$(REQUIREMENT),$(wildcard dist/*.tar.gz))
 
 export PYTHONDONTWRITEBYTECODE := 1
 
-.PHONY: build clean deps dev-env docs format help lint release-notes sbom-embed sdist smoke spellcheck test wheel
+.PHONY: bench build clean deps dev-env docs format help lint release-notes sbom-embed sdist smoke spellcheck test wheel
 .DEFAULT_GOAL := help
+
+bench: build  ## time benchmarks into results/bench (MODULE=arith ENGINE=<name> THREADS=1,8 TIER=full BENCH='ntt*' PIN=0-31 LABEL=x)
+	$(PYTHON) tools/bench/run.py --build-dir build --threads $(THREADS) --tier $(TIER) --label $(LABEL) \
+		$(if $(MODULE),--module $(MODULE)) $(if $(ENGINE),--engine $(ENGINE)) \
+		$(if $(BENCH),--bench '$(BENCH)') $(if $(REPS),--reps $(REPS)) $(if $(PIN),--pin $(PIN))
 
 build:    ## compile everything into build/ (KERNELS=<engine> alone, VFHE_SANITIZE=address)
 	meson setup build

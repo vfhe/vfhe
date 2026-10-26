@@ -27,6 +27,8 @@ select = [
 
 [lint.per-file-ignores]
 "modules/*/python/test/**" = ["S101", "SLF001"]
+# A benchmark's check asserts on the result it is handed.
+"modules/*/python/bench/**" = ["S101"]
 # An implementation's element, field and vector classes share private state:
 # a vector borrows its field's native parameters.
 "modules/arith/python/src/vfhe/arith/impl/**" = ["SLF001"]

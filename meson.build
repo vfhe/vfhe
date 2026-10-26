@@ -23,6 +23,7 @@ vfhe_c_include_dirs = []       # -I paths, private dirs too
 vfhe_c_public_headers = []     # the wrapper's #include lines
 vfhe_c_unit_tests = []         # c/test/unit suites
 vfhe_c_fuzz_tests = []         # c/test/fuzz fuzzers
+vfhe_c_benchmarks = []         # c/bench executables
 vfhe_python_cdefs = []         # what Python may call of the headers
 
 # --- Modules ------------------------------------------------------------------

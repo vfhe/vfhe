@@ -201,7 +201,8 @@ The matrix has two orthogonal axes.
 
 - **Suites** say *what* runs — **c** (`modules/*/c/test`), **fast** (the
   default Python subset), **complete** (adds the heavy
-  `@pytest.mark.complete` computations), and the **smoke** cases
+  `@pytest.mark.complete` computations, and runs every
+  [benchmark](#benchmarking) once), and the **smoke** cases
   (`test/smoke`) against an installed package.
 - **Engines** say *which implementation* runs underneath — **portable**
   everywhere, **avx512ifma** on x86_64, **neon** on arm64, and more as
@@ -285,6 +286,97 @@ python .cache/oss-fuzz/infra/helper.py build_fuzzers --external . --sanitizer ad
 python .cache/oss-fuzz/infra/helper.py run_fuzzer --external . <target> [reproducer-file]
 ```
 
+## Benchmarking
+
+Benchmarks time a module's public API, in
+`modules/<mod>/python/bench/bench_<topic>.py`, and the C kernels below it, in
+`modules/<mod>/c/bench/bench_<topic>.c`. They are not tests: the complete
+depth of `make test` runs each one once, at its smallest shape, so that a
+benchmark the code has outgrown fails there rather than going stale.
+
+```bash
+make bench                                   # the headline tier, on every engine this CPU runs
+make bench TIER=full MODULE=arith,fhe        # every benchmark of two modules
+make bench ENGINE=avx512ifma THREADS=1,8,32  # one engine, at three thread limits
+make bench BENCH='ntt*' REPS=15 PIN=0-31     # a name glob, more repetitions, pinned to CPUs 0-31
+make bench LABEL=before                      # names the results file
+tools/bench/compare.py results/bench/<run>-before.jsonl results/bench/<run>-after.jsonl
+```
+
+The headline tier is the few benchmarks that summarise each module, each
+timing an operation sequence as a user runs it, such as a multiply followed
+by its rescale, rather than one step of it. The full tier is all of them.
+Each engine and module runs in its own process with `VFHE_ENGINE` pinned,
+and each C benchmark file is one executable per engine,
+`<engine>-bench-<stem>`, which the runner builds when it needs it.
+
+A result keeps the seconds per call of every repetition, their minimum and
+their median, where each repetition times as many calls as fill 50 ms after
+a warm-up, plus the minor page faults per call. Compare minimums. Results go
+to `results/bench/<time>-<machine>-<verdict>-<label>.jsonl`, one line per
+benchmark, shape, engine and thread count, with the commit, whether the tree
+was dirty, the compiler and build options, the `VFHE_*` environment and the
+machine's state. The runner refuses a build with coverage, sanitizers or
+optimisation below `-O2`, whose timings mean nothing.
+
+The verdict says whether the machine's timings can be trusted. It is
+`untrusted` when the machine is WSL or battery powered, when a CPU quota or a
+clock held at its minimum slows it, or when a hypervisor or other work took
+CPU time at the start or the end of the run; `tools/bench/machine.py` has the
+exact rules. An untrusted run can show the direction of a change large
+enough to clear its noise, never its size: quote numbers from trusted runs
+only.
+
+`tools/bench/compare.py` prints the new minimum over the old for every row
+the two files share. A row's spread is `(max - min) / min` over its
+repetitions, and a change smaller than the larger of the two spreads is
+noise, so the row reads `~` rather than `faster` or `slower`. A row the
+change cannot have touched should read `~`; when it does not, the
+measurement moved, not the code.
+
+### Writing a benchmark
+
+A Python benchmark is a setup decorated with `benchmark`. It builds what the
+timed call needs and returns a `Case`:
+
+```python
+from harness import Case, Shape, benchmark
+from vfhe.arith import Polynomial, Ring
+
+
+@benchmark(shapes=["ckks-n12-3p", "ckks-n13-7p"], tier="headline")
+def polynomial_product(shape: Shape) -> Case:
+    ring = Ring(1 << shape["log_n"], prime_size=shape["prime_bits"], split_degree=1)
+    a = Polynomial(ring).from_bigint_array([1, 2, 3])
+    b = Polynomial(ring).from_bigint_array([3, 4])
+    a.to_NTT()
+    b.to_NTT()
+    return Case(lambda: a.__imul__(b))
+```
+
+- The setup runs once per shape, under a fixed seed, after arith's caches are
+  emptied. Only `Case.op` is timed.
+- `Case.check`, when given, receives one result of `op` before timing, at
+  every thread count, and raises when it is wrong. A wrong result records a
+  failure, never a time.
+- `op`'s result is dropped inside the timed window, so freeing it counts.
+  Prefer in-place operations where the API has them: a benchmark that
+  allocates on every call mostly measures the allocator.
+- Shapes are the named parameter sets of `tools/bench/shapes.py`, shared so
+  that results line up across modules. A set that one benchmark alone uses is
+  a `Shape` in its own file. List shapes smallest first; the smoke run uses
+  the first.
+- An in-place floating-point operation repeated thousands of times can drive
+  its values into denormals, which compute many times slower. Restore the
+  operand on every call, or alternate between two buffers.
+- The runner sets the thread limit; a benchmark never does.
+
+A C benchmark defines an array of `BenchCase` and returns `bench_main()` from
+`main()`; `tools/bench/bench.h` documents the contract. Pass `op`'s output to
+`BENCH_KEEP`, or the compiler may delete the work. List the file in the
+module's `vfhe_c_benchmarks`. Its stem names the executable, so stems are
+unique across modules.
+
 ## Documentation
 
 `make docs` builds the site into `build/docs/html` from `docs/site/`, a Sphinx
@@ -329,7 +421,8 @@ A module carries only the parts it needs. `circuit` is Python with no C,
 `polycom` has no C tests, and `arith` has everything.
 
 1. **Python package.** `modules/<mod>/python/src/vfhe/<mod>/__init__.py` plus
-   its implementation modules, and the pytest suite in `python/test/`. A
+   its implementation modules, the pytest suite in `python/test/`, and its
+   benchmarks in `python/bench/`. A
    module holding several implementations of one interface gives each its own
    subpackage, `impl/<name>/` (`arith`).
 2. **C sources.** `c/src/*.c` and `c/include/*.h`, grouped in subdirectories
@@ -337,8 +430,8 @@ A module carries only the parts it needs. `circuit` is Python with no C,
    `<file>.c` that needs one representation. A module exposing C to
    Python also writes `python/cdef/<name>.h`, the declarations Python may
    call, in cffi's cdef dialect. Kernels worth testing below the Python
-   surface add a Unity suite in `c/test/unit/`, and a libFuzzer fuzzer in
-   `c/test/fuzz/`.
+   surface add a Unity suite in `c/test/unit/`, a libFuzzer fuzzer in
+   `c/test/fuzz/`, and a benchmark in `c/bench/`.
 3. **Protobuf schema.** Not under the module: every wire format lives in the
    repository's `proto/` tree, as `proto/vfhe/<mod>/<name>/v1/<name>.proto`
    with `package vfhe.<mod>.<name>.v1`, following buf's convention that a
@@ -356,14 +449,14 @@ testing policy.
 Each module's `meson.build` appends what it contributes to the lists the
 root `meson.build` declares — `vfhe_c_sources`, `vfhe_c_include_dirs`,
 `vfhe_c_public_headers`, `vfhe_c_unit_tests`, `vfhe_c_fuzz_tests`,
-`vfhe_python_cdefs` — and installs what it owns. A new module costs its
+`vfhe_c_benchmarks`, `vfhe_python_cdefs` — and installs what it owns. A new module costs its
 directory plus one `subdir()` line in the root; a new file costs one line in
 the module's own list. Misspell a list and meson stops, naming the file and
 the correct name, because the lists are plain variables.
 
 The root reads the lists to build one extension per engine, and
-`test/meson.build` to build the static libraries, the test programs and the
-fuzzers. Python-facing modules also list their import path in
+`test/meson.build` to build the static libraries, the test programs, the
+fuzzers and the benchmark executables. Python-facing modules also list their import path in
 `pyrightconfig.json` and in `test/meson.build`'s `pythonpath`.
 
 ### Adding an engine
