@@ -196,7 +196,7 @@ def test_blind_rotate(theta, window):
     sample.to_coeff()
     a = [-x for x in sample.get_a_poly(0).get_polynomial(signed=True)]
     for f, j in zip(factors, ship._assign_windows(sparse_key), strict=True):
-        assert f.lvl == 0 and f.delta == scheme.scaling_factor
+        assert f.lvl == 0 and f.delta == ship.factor_scale
         got = scheme.decode(scheme.decrypt(f, dense), f.delta)
         assert _max_error(got, _factor(a, j, sparse_key.key[0][j], ship.q0)) < 1e-3
 
@@ -297,6 +297,36 @@ def test_output_scale_is_the_callers(setup):
     for bad in (0.0, -1.0, math.inf):
         with pytest.raises(ValueError, match="output scale"):
             SHIP(scheme, h=H, theta=6, output_scale=bad)
+
+
+def test_tree_terms_share_one_scale(setup):
+    # By default the factors and pt0 are at one scale, so no node of the
+    # product tree is rescaled below the others.
+    scheme, ship, *_ = setup
+    assert ship._pt0_scale() == pytest.approx(ship.factor_scale, rel=1e-12)
+    assert ship.factor_scale != scheme.scaling_factor
+
+
+def test_factor_scale_is_the_callers(setup):
+    # The scheme's scale for the factors: pt0 makes up the rest, and the
+    # output still lands on output_scale.
+    scheme, _ship, dense, _sparse, key = setup
+    ship = SHIP(
+        scheme,
+        h=H,
+        theta=6,
+        base=4,
+        gamma=GAMMA,
+        window=16,
+        factor_scale=scheme.scaling_factor,
+    )
+    mu = _values(6)
+    out = ship.bootstrap(_slot_input(scheme, ship, dense, mu), key)
+    assert out.delta == pytest.approx(ship.output_scale)
+    assert _max_error(_slots(scheme, out, dense), mu) < TOLERANCE
+    for bad in (0.0, -1.0, math.inf):
+        with pytest.raises(ValueError, match="factor scale"):
+            SHIP(scheme, h=H, theta=6, factor_scale=bad)
 
 
 def test_bootstrap_does_not_depend_on_the_thread_count(setup):

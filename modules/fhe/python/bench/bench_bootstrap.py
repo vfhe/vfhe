@@ -209,7 +209,7 @@ def gp25_rotate(shape: Shape) -> Case:
 def ship_bootstrap(shape: Shape) -> Case:
     """The SHIP bootstrap [CHKS25] of ``N/2`` real slots, from the SlotToCoeff level.
 
-    The check bounds every slot's error by 1/4: it rejects a wrong result, and says
+    The check bounds every slot's error by 1/8: it rejects a wrong result, and says
     nothing about the bootstrap's precision.
     """
     n_ring = 1 << shape["log_n"]
@@ -240,6 +240,6 @@ def ship_bootstrap(shape: Shape) -> Case:
 
     def check(result: CKKS_Ciphertext) -> None:
         got = scheme.decode(scheme.decrypt(result, dense), result.delta)
-        assert max(abs(g.real - v) for g, v in zip(got, values, strict=True)) < 0.25
+        assert max(abs(g.real - v) for g, v in zip(got, values, strict=True)) < 0.125
 
     return Case(lambda: ship.bootstrap(c, key), check=check)
