@@ -472,8 +472,10 @@ versions may contain breaking changes.
   `input_scale`, and outputs leave at `output_lvl` and `output_scale`, by
   default the scale that comes back to `input_scale` when every level in
   between multiplies and rescales, so bootstrap, multiply, bootstrap needs no
-  rescaling of its own. At the paper's LL13 parameters (N = 2^13): about 5.1
-  bits of worst-slot precision. Native encoders `ship_encode_pi` /
+  rescaling of its own. All `h + 1` terms of the product tree share one scale
+  (`factor_scale`), the one that lands the tree's output on `output_scale`,
+  so no node of the tree is rescaled below the others. At the paper's LL13
+  parameters (N = 2^13): about 4.7 bits of worst-slot precision. Native encoders `ship_encode_pi` /
   `ship_encode_pt0`.
 - Add `FoldableRS.relative_distance(security_bits)` /
   `FieldFoldableRS.relative_distance(security_bits)`: a lower bound on the

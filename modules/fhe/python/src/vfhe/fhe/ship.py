@@ -104,6 +104,16 @@ class SHIP:
     ``s_l = sqrt(p_l * s_(l+1))``, ``p_l`` the primes level ``l`` drops, so
     that bootstrap, multiply, bootstrap needs no rescaling of its own.
 
+    ``factor_scale`` is the scale of the ``h`` blind-rotation factors. By
+    default all ``h + 1`` terms of the product tree, pt0 included, share one
+    scale ``d``, the one with ``d^(h+1) / prod_k p_k^(m_k) = output_scale``
+    (``m_k`` the products of tree level ``k``, ``p_k`` the primes it drops).
+    Every rescale of the tree then rounds at about ``d``. With any other
+    value, pt0 alone makes up the difference to ``output_scale``, and every
+    node on its path is rescaled at pt0's scale; when that is lower than the
+    factors', the rounding noise of those rescales, which grows with the
+    key's norm, dominates the output's error. The keys do not depend on it.
+
     ``gadget_params`` is the gadget of every key-switch key. ``slot_to_coeff``
     defaults to `CKKS_LinearTransform.slot_to_coeff` at the SlotToCoeff level,
     built on first use.
@@ -121,6 +131,7 @@ class SHIP:
         gadget_params: GadgetParams | None = None,
         slot_to_coeff: CKKS_LinearTransform | None = None,
         output_scale: float | None = None,
+        factor_scale: float | None = None,
     ) -> None:
         N = scheme.N
         M = N // 2
@@ -170,6 +181,16 @@ class SHIP:
         if not 0 < output_scale < math.inf:
             raise ValueError("the output scale must be positive and finite")
         self.output_scale = output_scale
+        if factor_scale is None:
+            # d^(h+1) / prod_k p_k^(m_k) = output_scale, in log2: d^(h+1) is
+            # ~2^1500 at N = 2^15.
+            log_d = math.log2(output_scale) + sum(
+                m * math.log2(self._dropped(k)) for k, m in enumerate(self._products())
+            )
+            factor_scale = math.pow(2.0, log_d / (h + 1))
+        if not 0 < factor_scale < math.inf:
+            raise ValueError("the factor scale must be positive and finite")
+        self.factor_scale = factor_scale
 
         # A window covers an arc of slots starting at its alignment; the mux
         # step's index ranges over ceil(span / theta) values.
@@ -197,20 +218,26 @@ class SHIP:
         rings = self.scheme.rings
         return math.prod(p for p in rings[lvl].primes if p not in rings[lvl + 1].primes)
 
+    def _products(self) -> list[int]:
+        """``m_k``, the products tree level ``k`` computes on the ``h + 1``
+        terms, whatever pairs they take."""
+        products, factors = [], self.h + 1
+        for _ in range(self.depth):
+            products.append(factors // 2)
+            factors -= products[-1]
+        return products
+
     def _pt0_scale(self) -> float:
         """The scale that puts the product tree's output at `output_scale`.
 
-        Every other factor is at the scheme's scale ``Delta``, and a product
-        is rescaled by the primes its level drops, so the output's scale is
-        pt0's times ``Delta^h / prod_k p_k^(m_k)``, ``m_k`` the products of
-        tree level ``k``, whatever pairs they take.
+        Every other factor is at `factor_scale` ``d``, and a product is
+        rescaled by the primes its level drops, so the output's scale is
+        pt0's times ``d^h / prod_k p_k^(m_k)``. With the default
+        `factor_scale` this is ``d`` itself.
         """
         ratio = 1.0
-        factors = self.h + 1
-        for k in range(self.depth):
-            products = factors // 2
-            ratio *= (self.scheme.scaling_factor / self._dropped(k)) ** products
-            factors -= products
+        for k, products in enumerate(self._products()):
+            ratio *= (self.factor_scale / self._dropped(k)) ** products
         return self.output_scale / ratio
 
     @property
@@ -493,9 +520,9 @@ class SHIP:
     def blind_rotate(
         self, sparse: MLWE, key: SHIP_Key, n_threads: int = 0
     ) -> list[CKKS_Ciphertext]:
-        """The ``h`` factors of [CHKS25, Alg. 1], at level 0 and the scheme's
-        scale. ``sparse`` is at the lowest level under the input key, and only
-        its mask ``a`` is read. Factor ``t`` holds
+        """The ``h`` factors of [CHKS25, Alg. 1], at level 0 and
+        `factor_scale`. ``sparse`` is at the lowest level under the input key,
+        and only its mask ``a`` is read. Factor ``t`` holds
         ``(omega^((-s_j X^j a)_i))_(i < N/2)``, ``s_j`` the coefficient of
         window ``t``.
         """
@@ -515,14 +542,12 @@ class SHIP:
             ffi.new("void *[]", [p.obj for p in pis]),
             sparse.obj_a_i(0),
             theta,
-            scheme.scaling_factor,
+            self.factor_scale,
             cr.plan,
             cr.slot_positions,
             n_threads,
         ):
-            raise ValueError(
-                f"the scaling factor {scheme.scaling_factor} is not finite"
-            )
+            raise ValueError(f"the factor scale {self.factor_scale} is not finite")
         for p in pis:
             p.repr = repr.ntt
             _restrict(p, special.mask)
@@ -551,7 +576,7 @@ class SHIP:
             c.repr = repr.ntt
         scheme.round_division_batch(factors, 0, n_threads)
         for c in factors:
-            c.delta = scheme.scaling_factor
+            c.delta = self.factor_scale
 
         # Mux step, a digit of the giant index at a time, then the alignment.
         for p in range(self.digits):
