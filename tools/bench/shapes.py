@@ -33,4 +33,8 @@ SHAPES: dict[str, dict[str, Any]] = {
         "special_bits": [60],
         "scale_bits": 40,
     },
+    # The degree-2 extension of a 49-bit prime field, x^2 - w with w the
+    # smallest non-residue; vectors of 2^log_length elements.
+    "fp2-q49-l16": {"prime": 562949953421201, "degree": 2, "log_length": 16},
+    "fp2-q49-l20": {"prime": 562949953421201, "degree": 2, "log_length": 20},
 }

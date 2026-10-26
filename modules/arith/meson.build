@@ -59,6 +59,10 @@ vfhe_c_unit_tests += files(
     'c/test/unit/test_number_theory.c',
     'c/test/unit/test_pmf_ntt.c',
 )
+vfhe_c_benchmarks += files(
+    'c/bench/bench_mod.c',
+    'c/bench/bench_ntt.c',
+)
 vfhe_c_fuzz_tests += files(
     'c/test/fuzz/fuzz_ntt.c',
     'c/test/fuzz/fuzz_field_ext.c',
