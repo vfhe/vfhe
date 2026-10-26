@@ -3,6 +3,7 @@
 """CKKS and BFV schemes, ciphertexts and keys, the bootstrapping key
 containers and CKKS linear transforms through vfhe.util.io."""
 
+import io
 import random
 
 import pytest
@@ -17,8 +18,24 @@ from vfhe.fhe import (
     CKKS_LinearTransform,
     CKKS_Scheme,
 )
+from vfhe.fhe.codec import (
+    BFVSchemeCodec,
+    CGGI16KeyCodec,
+    CKKSCiphertextCodec,
+    CKKSSchemeCodec,
+    LinearTransformCodec,
+    SABKeyCodec,
+)
 from vfhe.mlwe import MLWE_Scheme
-from vfhe.util.io import Serializer
+from vfhe.mlwe.codec import (
+    KeySwitchKeyCodec,
+    MGSWCodec,
+    MGSWSchemeCodec,
+    MLWEKeyCodec,
+    MLWESchemeCodec,
+    SampleCodec,
+)
+from vfhe.util.io import DictCodec, IntCodec, ListCodec, TupleCodec
 
 
 def _mod_switch(v: int, q: int, p: int) -> int:
@@ -27,7 +44,30 @@ def _mod_switch(v: int, q: int, p: int) -> int:
 
 
 N = 64
-PROFILES = ["default", "compact", "fast"]
+PACKINGS = ["word", "tight"]
+
+
+def dumps(codec, obj) -> bytes:
+    buf = io.BytesIO()
+    codec.encode(obj, buf)
+    return buf.getvalue()
+
+
+def loads(codec, data):
+    return codec.decode(io.BytesIO(data))
+
+
+def roundtrip(codec, obj):
+    return loads(codec, dumps(codec, obj))
+
+
+def _sab_codec(io_scheme, rotation, gp25):
+    """GP25's key: MGSW ciphertexts over the rotation scheme, key-switch keys over either scheme."""
+    schemes = MLWESchemeCodec(io_scheme, rotation)
+    mgsw = MGSWCodec(
+        MGSWSchemeCodec(gp25.mgsw_scheme, inner=schemes), SampleCodec(schemes)
+    )
+    return SABKeyCodec(mgsw, KeySwitchKeyCodec(SampleCodec(schemes)))
 
 
 def _ckks():
@@ -54,16 +94,18 @@ def _same(c1, c2):
     )
 
 
-@pytest.mark.parametrize("profile", PROFILES)
-def test_ckks_ciphertexts_keep_their_scaling_factor(profile):
+@pytest.mark.parametrize("packing", PACKINGS)
+def test_ckks_ciphertexts_keep_their_scaling_factor(packing):
     scheme, key = _ckks()
     scheme.rlk = scheme.gen_rlk(key, key)
     x, y = _values(N // 2, 1), _values(N // 2, 2)
     cx = scheme.encrypt(scheme.encode(x), key)
     cy = scheme.encrypt(scheme.encode(y), key)
     prod = cx * cy  # relinearized and rescaled: a lower level, another delta
-    s = Serializer(profile)
-    got = s.loads(s.dumps({"x": cx, "prod": prod}), schemes=scheme)
+    ct = CKKSCiphertextCodec(CKKSSchemeCodec(scheme), packing=packing)
+    got = dict(
+        zip(("x", "prod"), roundtrip(TupleCodec(ct, ct), (cx, prod)), strict=True)
+    )
     assert isinstance(got["prod"], CKKS_Ciphertext)
     assert got["prod"].delta == prod.delta and got["prod"].lvl == prod.lvl
     assert got["x"].delta == cx.delta
@@ -77,11 +119,25 @@ def test_ckks_ciphertexts_keep_their_scaling_factor(profile):
     )
 
 
+def test_a_ckks_ciphertext_or_scheme_needs_its_own_codec():
+    scheme, key = _ckks()
+    c = scheme.encrypt(scheme.encode(_values(N // 2)), key)
+    with pytest.raises(TypeError, match="CKKS_Ciphertext needs its own codec"):
+        dumps(SampleCodec(CKKSSchemeCodec(scheme)), c)
+    with pytest.raises(TypeError, match="CKKS_Scheme needs its own codec"):
+        dumps(MLWESchemeCodec(scheme), scheme)
+
+
 def test_ckks_rotation_keys_by_step():
     scheme, key = _ckks()
     keys = {k: scheme.gen_rotation_key(key, k) for k in (1, 3)}
-    s = Serializer("compact")
-    got = s.loads(s.dumps(keys), schemes=scheme)
+    codec = DictCodec(
+        IntCodec(),
+        ListCodec(
+            KeySwitchKeyCodec(SampleCodec(CKKSSchemeCodec(scheme), packing="tight"))
+        ),
+    )
+    got = roundtrip(codec, keys)
     assert sorted(got) == [1, 3]
     x = _values(N // 2)
     c = scheme.encrypt(scheme.encode(x), key)
@@ -93,8 +149,13 @@ def test_ckks_scheme_rebuilt_with_its_scaling_factor():
     scheme, key = _ckks()
     x = _values(N // 2)
     c = scheme.encrypt(scheme.encode(x), key)
-    s = Serializer()
-    got, got_key = s.loads(s.dumps_secret([c, key]))
+    writer = TupleCodec(
+        CKKSCiphertextCodec(CKKSSchemeCodec(scheme)),
+        MLWEKeyCodec(CKKSSchemeCodec(scheme)),
+    )
+    schemes = CKKSSchemeCodec()
+    reader = TupleCodec(CKKSCiphertextCodec(schemes), MLWEKeyCodec(schemes))
+    got, got_key = loads(reader, dumps(writer, (c, key)))
     rebuilt = got.scheme
     assert isinstance(rebuilt, CKKS_Scheme) and rebuilt is not scheme
     assert rebuilt.scaling_factor == scheme.scaling_factor
@@ -107,19 +168,30 @@ def test_ckks_scheme_rebuilt_with_its_scaling_factor():
         special_rings=scheme.special_rings,
     )
     with pytest.warns(UserWarning, match="matches none"):
-        assert s.loads(s.dumps(c), schemes=other).scheme is not other
+        data = dumps(CKKSCiphertextCodec(CKKSSchemeCodec(scheme)), c)
+        assert (
+            loads(CKKSCiphertextCodec(CKKSSchemeCodec(other)), data).scheme is not other
+        )
 
 
-@pytest.mark.parametrize("profile", PROFILES)
-def test_bfv(profile):
+@pytest.mark.parametrize("packing", PACKINGS)
+def test_bfv(packing):
     ring = Ring(N, prime_size=[17, 45, 45, 45, 50], split_degree=1)
     scheme = BFV_Scheme(ring, special_primes=1)
     key = scheme.key_gen_sparse(N // 8, 3.2)
     values = [entropy.below(scheme.t) - scheme.t // 2 for _ in range(scheme.n_slots)]
     ct = scheme.encrypt(scheme.encode(values), key)
-    s = Serializer(profile)
-    assert s.loads(s.dumps(ct), schemes=scheme).scheme is scheme
-    got, got_key = s.loads(s.dumps_secret([ct, key]))
+    assert (
+        roundtrip(SampleCodec(BFVSchemeCodec(scheme), packing=packing), ct).scheme
+        is scheme
+    )
+    writer = TupleCodec(
+        SampleCodec(BFVSchemeCodec(scheme), packing=packing),
+        MLWEKeyCodec(BFVSchemeCodec(scheme)),
+    )
+    schemes = BFVSchemeCodec()
+    reader = TupleCodec(SampleCodec(schemes), MLWEKeyCodec(schemes))
+    got, got_key = loads(reader, dumps(writer, (ct, key)))
     rebuilt = got.scheme
     assert isinstance(rebuilt, BFV_Scheme) and rebuilt.t == scheme.t
     assert rebuilt.decode(rebuilt.decrypt(got, got_key)) == scheme.decode(
@@ -135,7 +207,7 @@ def test_linear_transform_keeps_its_encoding():
         d: [complex(rng.uniform(-1, 1), 0) for _ in range(n)] for d in (0, 1, 5)
     }
     lt = CKKS_LinearTransform(scheme, diagonals, scale=2**30)
-    got = Serializer().loads(Serializer().dumps(lt), schemes=scheme)
+    got = roundtrip(LinearTransformCodec(CKKSSchemeCodec(scheme)), lt)
     assert got.rotations == lt.rotations and got.baby_steps == lt.baby_steps
     keys = {k: scheme.gen_rotation_key(key, k) for k in lt.rotations}
     c = scheme.encrypt(scheme.encode(_values(N // 2)), key)
@@ -151,21 +223,29 @@ def test_cggi16_bootstrap_key():
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=False)
     cggi16 = CGGI16(out_scheme)
     bk = cggi16.generate_bootstrap_key(input_key.extract_lwe_key(), output_key)
-    s = Serializer("compact")
-    data = s.dumps(bk)
-    got = s.loads(data, schemes=[out_scheme, cggi16.mgsw_scheme])
+    codec = CGGI16KeyCodec(
+        MGSWCodec(
+            MGSWSchemeCodec(cggi16.mgsw_scheme),
+            SampleCodec(MLWESchemeCodec(out_scheme), packing="tight"),
+        )
+    )
+    data = dumps(codec, bk)
+    got = loads(codec, data)
     assert len(got.bk) == len(bk.bk)
     assert (got.n, got.unfolding) == (256, 1)
     assert all(g.scheme is cggi16.mgsw_scheme for g in got.bk)
     for g, o in zip(got.bk, bk.bk, strict=True):
         assert all(_same(a, b) for a, b in zip(g.obj, o.obj, strict=True))
-    assert len(data) < 0.55 * len(Serializer("compact", seeded=False).dumps(bk))
+    unseeded = CGGI16KeyCodec(
+        MGSWCodec(MGSWSchemeCodec(), SampleCodec(seeded=False, packing="tight"))
+    )
+    assert len(data) < 0.55 * len(dumps(unseeded, bk))
 
 
 def test_cggi16_unfolded_bootstrap_key_layout():
     bk = CGGI16_Key()
     bk.n, bk.unfolding = 7, 3
-    got = Serializer().loads(Serializer().dumps(bk))
+    got = roundtrip(CGGI16KeyCodec(MGSWCodec()), bk)
     assert (got.n, got.unfolding, got.bk) == (7, 3, [])
 
 
@@ -184,9 +264,7 @@ def test_gp25_bootstrap_key(deterministic_prng, n):
     rotation_key = rotation.key_gen_sparse(16, 3.2)
     gp25 = GP25(rotation)
     sab = gp25.generate_bootstrap_key(input_key, rotation_key, output_key, 3, 7)
-    got = Serializer().loads(
-        Serializer().dumps(sab), schemes=[io, rotation, gp25.mgsw_scheme]
-    )
+    got = roundtrip(_sab_codec(io, rotation, gp25), sab)
     assert (got.n, got.h, got.gap_bits) == (n, 3, 7)
     assert (got.hw_reducing_lvl, got.output_lvl) == (len(io.rings) - 1, 0)
     assert all(
@@ -220,9 +298,7 @@ def test_gp25_bootstrap_key_with_two_bit_layers(deterministic_prng):
     rotation_key = rotation.key_gen_sparse(16, 3.2)
     gp25 = GP25(rotation, bits_per_layer=2)
     sab = gp25.generate_bootstrap_key(input_key, rotation_key, output_key, 3, 7)
-    got = Serializer().loads(
-        Serializer().dumps(sab), schemes=[io, rotation, gp25.mgsw_scheme]
-    )
+    got = roundtrip(_sab_codec(io, rotation, gp25), sab)
     assert (sab.bits_per_layer, got.bits_per_layer) == (2, 2)
     assert len(got.gaps[0][0]) == 3 * 3 + 1  # three pairs and a single bit
     q = rotation.rings[0].q_l
@@ -248,9 +324,7 @@ def test_gp25_bootstrap_key_without_an_output_key(deterministic_prng):
     rotation_key = rotation.key_gen_sparse(16, 3.2)
     gp25 = GP25(rotation)
     sab = gp25.generate_bootstrap_key(input_key, rotation_key, None, 3, 7)
-    got = Serializer().loads(
-        Serializer().dumps(sab), schemes=[io, rotation, gp25.mgsw_scheme]
-    )
+    got = roundtrip(_sab_codec(io, rotation, gp25), sab)
     assert (got.hw_reducing_lvl, got.output_lvl) == (None, None)
     assert got.hw_reducing_key is None and got.output_switch_key is None
 

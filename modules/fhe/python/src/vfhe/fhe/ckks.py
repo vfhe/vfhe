@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import TYPE_CHECKING, cast
 
@@ -12,7 +13,7 @@ from vfhe.arith import (
     RNSRing,
     repr,
 )
-from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
+from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, SchemeParameters
 from vfhe.util.bindings import ffi
 
 if TYPE_CHECKING:
@@ -48,6 +49,10 @@ class CKKS_Scheme(MLWE_Scheme):
         )
         self.scaling_factor = scaling_factor
         self.complex_ring = ComplexRing(self.ring.N // 2)
+
+    @property
+    def parameters(self) -> SchemeParameters:
+        return dataclasses.replace(super().parameters, extra=(self.scaling_factor,))
 
     def encode(
         self,

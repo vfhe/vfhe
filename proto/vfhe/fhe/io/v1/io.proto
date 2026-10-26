@@ -1,0 +1,91 @@
+// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-License-Identifier: Apache-2.0
+//
+// Serialization of vfhe.fhe: the CKKS and BFV schemes, CKKS ciphertexts and
+// linear transforms, and the bootstrapping keys of GP25 and CGGI16.
+//
+// Every message travels length-prefixed, as protobuf's own framing. The
+// schemes wrap vfhe.mlwe's `Scheme` with their own parameters; a BFV
+// ciphertext is a plain `Sample` of a BFV scheme. A key container is a header
+// message followed by its parts, each through its own codec.
+syntax = "proto3";
+
+package vfhe.fhe.io.v1;
+
+import "vfhe/mlwe/io/v1/io.proto";
+
+// A CKKS scheme: an MLWE scheme and its default scaling factor.
+message CKKSScheme {
+  vfhe.mlwe.io.v1.Scheme scheme = 1;
+  double scaling_factor = 2;
+}
+
+// A BFV scheme: an MLWE scheme and its plaintext modulus.
+message BFVScheme {
+  vfhe.mlwe.io.v1.Scheme scheme = 1;
+  // The plaintext modulus as a count of level 0's first primes, in the ring's
+  // order.
+  uint32 plaintext_primes = 2;
+}
+
+// A CKKS ciphertext: a sample and the scaling factor it holds. Its
+// `CKKSScheme` precedes it in the stream, or precedes the samples of the key
+// it belongs to.
+message CKKSCiphertext {
+  vfhe.mlwe.io.v1.Sample sample = 1;
+  // The ciphertext's actual scaling factor, which rescaling changes.
+  double delta = 2;
+}
+
+// GP25's bootstrapping key as its header. Its parts follow, each through the
+// codec the key codec was built with: the gaps, a list of lists of lists of
+// MGSW ciphertexts; the signs, an optional list of lists of MGSW
+// ciphertexts; then the automorphism, trace-repack, Hamming-weight-reducing
+// and output switch keys, each an optional key-switch key.
+message SABKey {
+  // The input dimension.
+  uint32 n = 1;
+  // Non-zero coefficients per component of the input key.
+  uint32 h = 2;
+  // Bits of a gap between the input key's non-zero coefficients.
+  uint32 gap_bits = 3;
+  // Rotation bits per layer of the blind rotation, 1 or 2.
+  uint32 bits_per_layer = 4;
+  // The level the Hamming-weight-reducing key switch runs at, when there is
+  // one.
+  optional sint32 hw_reducing_lvl = 5;
+  // The level the output is repacked at, when there is an output key.
+  optional sint32 output_lvl = 6;
+}
+
+// CGGI16's bootstrapping key as its header; its `keys` MGSW ciphertexts
+// follow, 2^u - 1 per step of the blind rotation.
+message CGGI16Key {
+  // The input dimension.
+  uint32 n = 1;
+  // The input coefficients u one step of the blind rotation consumes.
+  uint32 unfolding = 2;
+  uint32 keys = 3;
+}
+
+// A CKKS linear transform as its header, holding the encoded diagonals so the
+// encoding need not be redone. Its `CKKSScheme` precedes it in the stream;
+// its diagonals follow it as `Polynomial` messages, one per `Diagonal`, in
+// order.
+message LinearTransform {
+  // The slot matrix's dimension, each diagonal's length.
+  uint32 n = 1;
+  // The level the diagonals are encoded for.
+  sint32 lvl = 2;
+  // The baby-step count of the baby-step giant-step evaluation.
+  uint32 baby_steps = 3;
+  // The scaling factor the diagonals were encoded at.
+  double scale = 4;
+  repeated Diagonal diagonals = 5;
+}
+
+// Where one encoded diagonal sits: giant step `j`, baby step `i`.
+message Diagonal {
+  uint32 j = 1;
+  uint32 i = 2;
+}

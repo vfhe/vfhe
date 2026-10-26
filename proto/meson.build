@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 
-schemas = files('vfhe/circuit/gkr/v1/gkr.proto')
+schemas = files(
+    'vfhe/arith/io/v1/io.proto',
+    'vfhe/circuit/gkr/v1/gkr.proto',
+    'vfhe/fhe/io/v1/io.proto',
+    'vfhe/mlwe/io/v1/io.proto',
+)
 
 protoc_args = ['-I' + meson.current_source_dir()]
 foreach schema : schemas

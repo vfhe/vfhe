@@ -8,10 +8,12 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-# autodoc imports vfhe. The build directory holds the engines and _vfhe_flags;
-# the portable engine is the one every machine has.
+# autodoc imports vfhe. The build directory holds the engines and _vfhe_flags,
+# build/proto the protobuf bindings; the portable engine is the one every
+# machine has.
 sys.path[:0] = [
     str(ROOT / "build"),
+    str(ROOT / "build" / "proto"),
     *map(str, sorted(ROOT.glob("modules/*/python/src"))),
 ]
 os.environ.setdefault("VFHE_ENGINE", "portable")

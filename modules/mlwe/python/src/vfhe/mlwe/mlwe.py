@@ -25,6 +25,8 @@ from vfhe.util.parallel import local_num_threads
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from vfhe.arith.impl.rns.polynomial import RingParameters
+
     from .lwe import LWE, LWE_Key
 
 # Bytes of the seed a sample's mask is expanded from (`MLWE.seed`).
@@ -87,6 +89,20 @@ class LibMLWE:
 
 
 lib_rlwe = LibMLWE()
+
+
+@dataclasses.dataclass(frozen=True)
+class SchemeParameters:
+    """What makes two schemes the same: their class, their chain of rings, the
+    special rings, the module rank, and ``extra``, a subclass's own parameters
+    in its order. Keys and ciphertexts depend on these and on nothing else the
+    scheme holds."""
+
+    kind: type
+    rings: tuple[RingParameters, ...]
+    special_rings: tuple[RingParameters, ...]
+    rank: int
+    extra: tuple = ()
 
 
 class MLWE_Scheme:
@@ -181,6 +197,22 @@ class MLWE_Scheme:
         self.max_lvl = max_lvl
         self.tmp = Polynomial(self.rings[0])
         self.rlk: MLWE_Set | list | None = None
+
+    @property
+    def parameters(self) -> SchemeParameters:
+        """What this scheme is, for equality and for matching a stored scheme to a live one."""
+        return SchemeParameters(
+            type(self),
+            tuple(r.parameters for r in self.rings),
+            tuple(r.parameters for r in self.special_rings),
+            self.r,
+        )
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MLWE_Scheme) and self.parameters == other.parameters
+
+    def __hash__(self) -> int:
+        return hash(self.parameters)
 
     @property
     def ring(self) -> RNSRing:

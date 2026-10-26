@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import dataclasses
 import math
 from operator import itemgetter
 
@@ -12,7 +13,7 @@ from vfhe.arith import (
     crt,
     repr,
 )
-from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set
+from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, SchemeParameters
 from vfhe.util.bindings import lib
 
 
@@ -124,6 +125,10 @@ class BFV_Scheme(MLWE_Scheme):
         #: `itemgetter` applies a whole permutation in one call.
         self._to_slot_order = itemgetter(*self._slot_perm)
         self._to_transform_order = itemgetter(*inverse)
+
+    @property
+    def parameters(self) -> SchemeParameters:
+        return dataclasses.replace(super().parameters, extra=(self.plaintext_ring.ell,))
 
     # --- encoding ---
 

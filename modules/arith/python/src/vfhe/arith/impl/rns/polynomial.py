@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import array
 import contextlib
+import dataclasses
 import itertools
 import math
 from enum import Enum
@@ -65,6 +66,17 @@ def _row(p, idx: int):
     return p.rows64[idx]
 
 
+@dataclasses.dataclass(frozen=True)
+class RingParameters:
+    """What makes two `RNSRing` objects the same ring: degree, split degree and
+    the primes, in the ring's order. Stable across processes, where `RNSRing.mask`
+    is not."""
+
+    N: int
+    split_degree: int
+    primes: tuple[int, ...]
+
+
 class RNSRing(Ring):
     """Z_q[X]/(X^N + 1) with q an RNS product, over the incomplete NTT.
 
@@ -90,8 +102,8 @@ class RNSRing(Ring):
     primes: list[int]
     #: Each prime's index in the shared base, in the same order as `primes`.
     prime_indices: list[int]
-    #: Bitmask over the shared base selecting this ring's primes: the ring's
-    #: identity, and how one ring is matched to another across a scheme.
+    #: Bitmask over the shared base selecting this ring's primes: how one ring
+    #: is matched to another across a scheme, within one process.
     mask: int
     #: Per-prime widths in bits, in the order of `primes`.
     prime_size: list[int]
@@ -526,6 +538,17 @@ class RNSRing(Ring):
                 delta_arr[idx] = delta_big_int % self.primes[k]
             return ffi.new("uint64_t[]", delta_arr)
         return delta_big_int
+
+    @property
+    def parameters(self) -> RingParameters:
+        """What this ring is, for equality and for matching a stored ring to a live one."""
+        return RingParameters(self.N, self.split_degree, tuple(self.primes))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, RNSRing) and self.parameters == other.parameters
+
+    def __hash__(self) -> int:
+        return hash(self.parameters)
 
     def intersec(self, other: RNSRing) -> RNSRing:
         if self == other:

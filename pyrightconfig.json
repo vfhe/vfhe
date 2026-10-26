@@ -23,6 +23,7 @@
         "**/.*",
         "**/__pycache__",
         "build/*.p",
+        "build/proto",
         "dist",
         "external"
     ]

@@ -263,21 +263,36 @@ versions may contain breaking changes.
   (off by default). `VFHE_MEMPOOL_CAPACITY` and
   `VFHE_MEMPOOL_WIPE_ON_RELEASE=1` set the defaults. A sanitized build
   bypasses the pool.
-- Add serialization, `vfhe.util.io`: `Serializer.dump` / `dumps` write one value
-  per stream -- a vfhe object, `None`, a JSON scalar, or lists, tuples and
-  dicts of values -- and `load` / `loads` read it back, binding each scheme to
-  the caller's with the same primes and parameters (`schemes=`, `rings=`).
-  Shared objects such as rings and schemes are written once. Codecs cover RNS
-  rings and polynomials, MLWE and MGSW schemes, samples, key-switch keys, MGSW
-  ciphertexts, LWE samples and keys, the CKKS and BFV schemes, CKKS
-  ciphertexts, `SAB_Key`, `CGGI16_Key` and `CKKS_LinearTransform`; `register`
-  adds a `Codec`. Secret keys are written only by `dump_secret` /
-  `dumps_secret`. `Options` (presets in `PROFILES`: `"default"`, `"compact"`,
-  `"fast"`): `seeded` (default) stores a fresh sample or key as its 32-byte
-  mask seed and its body, halving its size; `packing="tight"` stores each
-  residue in exactly the bits its prime needs; `domain` picks the rows'
-  domain; `checksum` and `validate` (both default) check records and residues
-  on load.
+- Add serialization, `vfhe.util.io`: the type classes `Encoder`, `Decoder` and
+  `Codec`. `codec.encode(obj, f)` writes an object to a binary stream and
+  `codec.decode(f)` reads one back, consuming exactly the bytes its encoder
+  wrote (`decode_strict` also refuses trailing bytes), so codecs compose: `ListCodec`, `DictCodec`, `TupleCodec` and
+  `OptionalCodec` build one codec from others, and `IntCodec`, `FloatCodec`,
+  `BoolCodec`, `StrCodec` and `BytesCodec` cover plain values. A vfhe codec is
+  built from the codecs of what its objects hold --
+  `KeySwitchKeyCodec(SampleCodec(MLWESchemeCodec(scheme), packing="tight"))` --
+  and streams a key of any size one sample at a time, its scheme written once.
+  A ring or scheme codec
+  built with the caller's objects hands them back where the stream's
+  `parameters` match, so a loaded ciphertext refers to the scheme holding the
+  keys; one built with none rebuilds them from the stream, once.
+  `PolynomialCodec(rings, packing, domain)` and `SampleCodec(schemes, seeded,
+  packing, domain)` choose tight or word rows, the rows' domain, and whether a
+  fresh sample is written as its 32-byte mask seed, which halves it. A stream
+  names its row packing and seed expansion, and a reader refuses ones it does
+  not know. Every residue is checked against its prime on load. The format is
+  `vfhe.util.io.protobuf.ObjectMessageCodec`, a length-prefixed protobuf message per
+  object, with the schemas under `proto/vfhe/<module>/io/v1/`, checked by
+  `buf`. Codecs cover RNS rings and polynomials, MLWE and MGSW schemes,
+  samples, key-switch keys, MGSW ciphertexts, LWE samples, the secret keys
+  (`MLWEKeyCodec`, `LWEKeyCodec`), the CKKS and BFV schemes, CKKS
+  ciphertexts, `SAB_Key`, `CGGI16_Key` and `CKKS_LinearTransform`.
+- Give rings and schemes value equality: `RNSRing`, `MLWE_Scheme` and its
+  subclasses, and `MGSW_Scheme` compare and hash by `parameters`, a frozen
+  value of what keys and ciphertexts depend on (degree, split degree and primes
+  for a ring; class, ring chains, rank and a subclass's own parameters for a
+  scheme). Two objects over the same primes are one ring, whichever holds it;
+  `vfhe.util.io` binds a stored scheme to the caller's by the same value.
 - Add `MLWE_Scheme.key_gen(sigma_err, distribution="ternary")`: a key with
   every coefficient uniform in `{-1, 0, 1}`.
 - Add `MLWE(..., obj=)`: adopt a native sample.

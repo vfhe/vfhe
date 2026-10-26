@@ -2,10 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import dataclasses
+
 from vfhe.arith import Polynomial, RNSPolynomial, domain_of, repr
 from vfhe.util.bindings import ffi, lib
 
-from .mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set, _monomial
+from .mlwe import (
+    MLWE,
+    GadgetParams,
+    MLWE_Key,
+    MLWE_Scheme,
+    MLWE_Set,
+    SchemeParameters,
+    _monomial,
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class MGSWParameters:
+    """What makes two MGSW schemes the same: the MLWE scheme, how many primes
+    the gadget covers, and the gadget. Keys do not depend on ``balanced``."""
+
+    mlwe: SchemeParameters
+    ell: int
+    gadget: GadgetParams
 
 
 # RNS MGSW scheme (similar to RGSW)
@@ -37,6 +57,17 @@ class MGSW_Scheme:
         )
         self.balanced = MLWE_scheme.balanced if balanced is None else balanced
         self.native_gadget_params = self.gadget_params.native(self.balanced)
+
+    @property
+    def parameters(self) -> MGSWParameters:
+        """What this scheme is, for equality and for matching a stored scheme to a live one."""
+        return MGSWParameters(self.mlwe_scheme.parameters, self.ell, self.gadget_params)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MGSW_Scheme) and self.parameters == other.parameters
+
+    def __hash__(self) -> int:
+        return hash(self.parameters)
 
     def gadget_scalars(self, lvl: int = 0) -> list[list[int]]:
         """The gadget elements, as the per-prime scaling vectors to encrypt.
