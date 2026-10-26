@@ -20,6 +20,10 @@ vfhe_c_unit_tests += files(
     'c/test/unit/test_memory_pool.c',
     'c/test/unit/test_parallel.c',
 )
+vfhe_c_benchmarks += files(
+    'c/bench/bench_memory_pool.c',
+    'c/bench/bench_parallel.c',
+)
 vfhe_python_cdefs += files(
     'python/cdef/memory_pool.h',
     'python/cdef/parallel.h',
