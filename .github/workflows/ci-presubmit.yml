@@ -122,11 +122,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { engine: portable, os: macos-26, python: "3.10" }
+          - { engine: portable, os: macos-26, python: "3.11" }
           - { engine: portable, os: macos-26, python: "3.14" }
-          - { engine: portable, os: ubuntu-24.04, python: "3.10" }
+          - { engine: portable, os: ubuntu-24.04, python: "3.11" }
           - { engine: portable, os: ubuntu-24.04, python: "3.14", coverage: "true" }
-          - { engine: portable, os: ubuntu-24.04-arm, python: "3.10" }
+          - { engine: portable, os: ubuntu-24.04-arm, python: "3.11" }
           - { engine: portable, os: ubuntu-24.04-arm, python: "3.14" }
           - { engine: avx512ifma, os: ubuntu-24.04, python: "3.14", coverage: "true", emulate: "1" }
           - { engine: neon, os: macos-26, python: "3.14" }

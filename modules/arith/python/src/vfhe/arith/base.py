@@ -41,10 +41,7 @@ from .spec import Capability, Domain, Spec
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence
-
-    # Type-checking only, so it adds no runtime dependency: `Self` is what an
-    # in-place operator returns, and typing has it only from 3.11.
-    from typing_extensions import Self
+    from typing import Self
 
     from .impl.rns.polynomial import RNSPolynomial, RNSRing
 

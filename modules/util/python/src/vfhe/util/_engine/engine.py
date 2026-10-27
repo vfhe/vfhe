@@ -12,7 +12,7 @@ import sys
 from vfhe.util import _cpu as cpu
 
 
-class Engine(str, enum.Enum):
+class Engine(enum.StrEnum):
     """Represents all of vFHE's C, compiled into one extension for one instruction set.
 
     Members are in order of preference, fastest first; `select` relies on that

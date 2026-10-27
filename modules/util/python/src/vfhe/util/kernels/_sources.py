@@ -73,8 +73,8 @@ def source_tree() -> SourceTree:
         staging = pathlib.Path(tempfile.mkdtemp(dir=out.parent))
         try:
             with tarball.open("rb") as f, tarfile.open(fileobj=f) as t:
-                # `filter` exists from Python 3.12 and the 3.10.12 / 3.11.4
-                # security releases on; this is the documented check for it.
+                # `filter` exists from Python 3.12 and the 3.11.4 security
+                # release on; this is the documented check for it.
                 if hasattr(tarfile, "data_filter"):
                     t.extractall(staging, filter="data")
                 else:
