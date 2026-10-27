@@ -377,6 +377,24 @@ A C benchmark defines an array of `BenchCase` and returns `bench_main()` from
 module's `vfhe_c_benchmarks`. Its stem names the executable, so stems are
 unique across modules.
 
+### Publishing a reference run
+
+[`PERFORMANCE.md`](https://github.com/vfhe/vfhe/blob/main/docs/PERFORMANCE.md)
+and `tools/bench/baselines/<machine>.jsonl` both come from one reference run:
+a trusted run of a committed tree, usually the headline tier on every engine
+and the full tier on the fastest. Regenerate both from the run's files rather
+than editing either:
+
+```bash
+tools/bench/report.py page results/bench/<run>-headline.jsonl results/bench/<run>-full.jsonl
+tools/bench/report.py baseline results/bench/<run>-headline.jsonl results/bench/<run>-full.jsonl
+```
+
+The page shows the headline tier and the full tier's bootstraps (`--include`
+adds other benchmarks by name). A pull request that claims a speedup compares
+its own run on the reference machine against the baseline with
+`tools/bench/compare.py`.
+
 ## Documentation
 
 `make docs` builds the site into `build/docs/html` from `docs/site/`, a Sphinx

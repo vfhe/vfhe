@@ -9,6 +9,7 @@
    :maxdepth: 1
 
    guides/usage
+   guides/performance
    guides/architecture
    guides/development
    guides/workflows
