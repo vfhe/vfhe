@@ -70,8 +70,11 @@ custom_target(
 # opaque; -Wundef, so a misspelt VFHE_HAVE_* in an #if warns; on ELF, direct
 # calls within the module.
 common_c_args = ['-DVFHE_BUILDING_LIBRARY', '-Wundef']
+# GCC decides interposition at the LTO link, so the extension links with it too.
+extension_link_args = []
 if host_machine.system() == 'linux'
     common_c_args += ['-fno-semantic-interposition']
+    extension_link_args += ['-fno-semantic-interposition']
 endif
 
 engines = {}
@@ -156,6 +159,7 @@ foreach engine_name, c_args : engines
         name_suffix: 'so',
         include_directories: vfhe_c_include_dirs,
         c_args: c_args,
+        link_args: extension_link_args,
         override_options: ['b_lundef=false', 'b_lto=true'],
         dependencies: [m_dep, thread_dep, py.dependency(embed: false)],
         install: true,

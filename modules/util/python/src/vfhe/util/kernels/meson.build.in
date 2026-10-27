@@ -9,6 +9,12 @@ project('vfhe-kernels', 'c', default_options: ['c_std=gnu11', 'buildtype=release
 # LTO is the point: inlining vfhe's kernels into the caller's loops is the
 # reason to build at all.
 options = ['b_lto=true', 'b_lundef=false']
+# On ELF, direct calls within the module. GCC decides interposition at the LTO
+# link, so the module links with it too.
+module_link_args = []
+if host_machine.system() == 'linux'
+    module_link_args += ['-fno-semantic-interposition']
+endif
 includes = include_directories(@INCLUDE_DIRS@)
 python = import('python').find_installation('@PYTHON@')
 deps = [
@@ -34,6 +40,7 @@ shared_module(
     [@USER_SOURCES@],
     objects: vfhe.extract_all_objects(recursive: true),
     c_args: [@USER_C_ARGS@],
+    link_args: module_link_args,
     include_directories: includes,
     dependencies: deps,
     override_options: options,
