@@ -16,12 +16,15 @@ from vfhe.mlwe.mlwe import (
     MLWE_Scheme,
     SchemeParameters,
 )
+from vfhe.util.io import Codec
 from vfhe.util.io.protobuf import ObjectMessageCodec
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import IO
 
 
+T = TypeVar("T")
 S = TypeVar("S", bound=MLWE_Scheme)
 
 
@@ -160,3 +163,27 @@ class MGSWSchemeCodec(ObjectMessageCodec[MGSW_Scheme, pb.MGSWScheme]):
                 inner, ell=message.ell, gadget_params=params, balanced=message.balanced
             )
         return scheme
+
+
+class BundleCodec(Codec[T]):
+    """A bundle of keys of one ``scheme``, such as a dict of rotation keys: the scheme once, through ``schemes``, then the bundle through the codec ``build`` makes of a scheme.
+
+    ``build`` composes the bundle's shape from codecs `bound` to the scheme it
+    is given, such as ``DictCodec(IntCodec(), ListCodec(keys.bound(scheme)))``.
+    `encode` builds it for ``scheme``; `decode` for the scheme it reads, which
+    is ``scheme`` where the parameters match.
+    """
+
+    def __init__(
+        self, schemes: SchemeCodec, scheme: Any, build: Callable[[Any], Codec[T]]
+    ) -> None:
+        self.schemes = schemes
+        self.scheme = scheme
+        self.build = build
+
+    def encode(self, obj: T, stream: IO[bytes], /) -> None:
+        self.schemes.encode(self.scheme, stream)
+        self.build(self.scheme).encode(obj, stream)
+
+    def decode(self, stream: IO[bytes], /) -> T:
+        return self.build(self.schemes.decode(stream)).decode(stream)

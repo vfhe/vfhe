@@ -4,11 +4,17 @@
 
 from __future__ import annotations
 
+import weakref
+
 from _vfhe_proto.vfhe.arith.io.v1 import io_pb2 as pb
 from vfhe.arith.impl.rns.polynomial import RingParameters, RNSRing
 from vfhe.util.io.protobuf import ObjectMessageCodec
 
 from .rows import ntt_roots
+
+#: The roots the last stream wrote for a ring, through any codec: a sample
+#: names its ring through its scheme, whose rings another codec may have read.
+_ROOTS: weakref.WeakKeyDictionary[RNSRing, list[int]] = weakref.WeakKeyDictionary()
 
 
 class RingCodec(ObjectMessageCodec[RNSRing, pb.Ring]):
@@ -24,9 +30,6 @@ class RingCodec(ObjectMessageCodec[RNSRing, pb.Ring]):
 
     def __init__(self, *known: RNSRing) -> None:
         self.rings: dict[RingParameters, RNSRing] = {r.parameters: r for r in known}
-        self._roots: dict[
-            RNSRing, list[int]
-        ] = {}  # the roots a stream wrote for a ring
 
     def to_message(self, ring: RNSRing) -> pb.Ring:
         return pb.Ring(
@@ -48,12 +51,12 @@ class RingCodec(ObjectMessageCodec[RNSRing, pb.Ring]):
                 split_degree=message.split_degree,
             )
         written = dict(zip(message.primes, message.roots, strict=True))
-        self._roots[ring] = [written[p] for p in ring.primes]
+        _ROOTS[ring] = [written[p] for p in ring.primes]
         return ring
 
     def require_same_transform(self, ring: RNSRing) -> None:
-        """Refuses NTT-domain rows written under another NTT convention."""
-        roots = self._roots.get(ring)
+        """Refuses NTT-domain rows written under another NTT convention: the roots the last stream wrote for ``ring``, through any codec, differ from its own."""
+        roots = _ROOTS.get(ring)
         if roots is not None and roots != ntt_roots(ring):
             raise ValueError(
                 "the stream holds NTT-domain rows written with other roots of unity; "

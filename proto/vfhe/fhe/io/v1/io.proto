@@ -38,10 +38,11 @@ message CKKSCiphertext {
 }
 
 // GP25's bootstrapping key as its header. Its parts follow, each through the
-// codec the key codec was built with: the gaps, a list of lists of lists of
-// MGSW ciphertexts; the signs, an optional list of lists of MGSW
-// ciphertexts; then the automorphism, trace-repack, Hamming-weight-reducing
-// and output switch keys, each an optional key-switch key.
+// codec the key codec was built with: the MGSW scheme of its ciphertexts,
+// once; the gaps, a list of lists of lists of MGSW ciphertexts; the signs, an
+// optional list of lists of MGSW ciphertexts; then the automorphism,
+// trace-repack, Hamming-weight-reducing and output switch keys, each an
+// optional key-switch key with its scheme.
 message SABKey {
   // The input dimension.
   uint32 n = 1;
@@ -58,8 +59,8 @@ message SABKey {
   optional sint32 output_lvl = 6;
 }
 
-// CGGI16's bootstrapping key as its header; its `keys` MGSW ciphertexts
-// follow, 2^u - 1 per step of the blind rotation.
+// CGGI16's bootstrapping key as its header; their MGSW scheme, once, then its
+// `keys` MGSW ciphertexts follow, 2^u - 1 per step of the blind rotation.
 message CGGI16Key {
   // The input dimension.
   uint32 n = 1;

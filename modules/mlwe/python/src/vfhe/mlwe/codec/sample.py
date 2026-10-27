@@ -16,7 +16,7 @@ from vfhe.arith.codec.rows import (
     rows_options,
     target_domain,
 )
-from vfhe.mlwe.mgsw import MGSW
+from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
 from vfhe.mlwe.mlwe import (
     MLWE,
     MLWE_Set,
@@ -34,7 +34,7 @@ from .scheme import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterator
     from typing import IO
 
 
@@ -68,11 +68,11 @@ class SampleCodec(Codec[MLWE]):
     ``seeded`` writes a fresh sample's mask as its seed, halving the size of
     fresh ciphertexts and keys; ``packing`` and ``domain`` are as
     `vfhe.arith.codec.rows_options` says. A subclass wraps the `Sample`
-    message in its own and adds its ciphertext type's state.
+    message in its own and adds its ciphertext type's state in `write` and
+    `read`.
     """
 
     cls: type[MLWE] = MLWE
-
     body: MessageBytesCodec[Any] = MessageBytesCodec(pb.Sample)
 
     def __init__(
@@ -88,18 +88,24 @@ class SampleCodec(Codec[MLWE]):
 
     def encode(self, obj: MLWE, stream: IO[bytes], /) -> None:
         self.schemes.encode(obj.scheme, stream)
-        self.write(obj, stream)
+        self.write(obj, obj.scheme, stream)
 
     def decode(self, stream: IO[bytes], /) -> MLWE:
         return self.read(self.schemes.decode(stream), stream)
 
-    def write(self, c: MLWE, stream: IO[bytes]) -> None:
-        """Writes ``c`` after its scheme, which a key's codec writes once for all its samples."""
+    def write(self, c: MLWE, scheme: Any, stream: IO[bytes]) -> None:
+        """Writes ``c``, a sample of ``scheme``, after the scheme, which a key's codec writes once for all its samples. Raises `ValueError` for a sample of another scheme."""
+        if c.scheme != scheme:
+            raise ValueError("a sample of another scheme than the one written")
         self.body.encode(self.to_message(c), stream)
 
     def read(self, scheme: Any, stream: IO[bytes]) -> Any:
         """The sample of ``scheme`` at the head of ``stream``."""
         return self.from_message(scheme, self.body.decode(stream))
+
+    def bound(self, scheme: Any) -> Codec[MLWE]:
+        """This codec for samples of ``scheme``, written without it: for a bundle that writes the scheme once."""
+        return _Bound(self, scheme)
 
     def to_message(self, c: MLWE) -> pb.Sample:
         if type(c) is not self.cls:
@@ -118,7 +124,6 @@ class SampleCodec(Codec[MLWE]):
                 view.to_coeff()
         rows = RowWriter(c.ring, self.packing)
         message = pb.Sample(
-            ring=self.schemes.rings.to_message(c.ring),
             lvl=c.lvl,
             rank=c.r,
             domain=DOMAINS[domain],
@@ -131,10 +136,26 @@ class SampleCodec(Codec[MLWE]):
             message.seed_expansion = pb.SEED_EXPANSION_AES128_CTR
         else:
             message.a.extend(rows.rows(view.obj_a_i(j)) for j in range(c.r))
+        scheme = c.scheme
+        if 0 <= c.lvl < len(scheme.rings) and c.ring == scheme.rings[c.lvl]:
+            pass
+        elif c.ring in scheme.special_rings:
+            message.special_ring = scheme.special_rings.index(c.ring)
+        else:
+            message.ring.CopyFrom(self.schemes.rings.to_message(c.ring))
         return message
 
     def from_message(self, scheme: Any, message: pb.Sample) -> Any:
-        ring = self.schemes.rings.from_message(message.ring)
+        if message.HasField("ring"):
+            ring = self.schemes.rings.from_message(message.ring)
+        elif message.HasField("special_ring"):
+            if message.special_ring >= len(scheme.special_rings):
+                raise ValueError("a sample names a special ring the scheme lacks")
+            ring = scheme.special_rings[message.special_ring]
+        elif 0 <= message.lvl < len(scheme.rings):
+            ring = scheme.rings[message.lvl]
+        else:
+            raise ValueError("a sample names a level the scheme lacks")
         domain = held_domain(message.domain)
         if domain == Repr.ntt or message.seed:
             self.schemes.rings.require_same_transform(ring)
@@ -164,16 +185,32 @@ class SampleCodec(Codec[MLWE]):
         return c
 
 
-def _shared_scheme(samples: Iterable[MLWE]) -> Any:
-    """The one scheme of ``samples``. Raises `ValueError` when they differ."""
-    schemes = {c.scheme for c in samples}
-    if len(schemes) > 1:
-        raise ValueError("the samples of one key share one scheme")
-    return next(iter(schemes), None)
+class _Bound(Codec[Any]):
+    """A sample, key or MGSW codec with its scheme fixed: `encode` and `decode` are its `write` and `read`."""
+
+    def __init__(self, codec: Any, scheme: Any) -> None:
+        self.codec = codec
+        self.scheme = scheme
+
+    def encode(self, obj: Any, stream: IO[bytes], /) -> None:
+        self.codec.write(obj, self.scheme, stream)
+
+    def decode(self, stream: IO[bytes], /) -> Any:
+        return self.codec.read(self.scheme, stream)
+
+
+def _samples(key: MLWE_Set) -> Iterator[MLWE]:
+    """Every sample of ``key``, nested sets included."""
+    if key.dim > 2:
+        for child in vars(key)["_children"]:
+            yield from _samples(child)
+        return
+    for component in key.mlwe:
+        yield from component or ()
 
 
 class KeySwitchKeyCodec(Codec[MLWE_Set]):
-    """An `MLWE_Set`: a header, the samples' scheme once, then the samples through ``samples``; or its nested sets."""
+    """An `MLWE_Set`: the scheme its samples share, through ``samples``'s scheme codec, then a header and the samples; a nested set's header counts its sets, which follow likewise."""
 
     header = MessageBytesCodec(pb.KeySwitchKey)
 
@@ -181,44 +218,53 @@ class KeySwitchKeyCodec(Codec[MLWE_Set]):
         self.samples = samples or SampleCodec()
 
     def encode(self, obj: MLWE_Set, stream: IO[bytes], /) -> None:
+        first = next(_samples(obj), None)
+        if first is None:
+            raise ValueError("a key without samples")
+        self.samples.schemes.encode(first.scheme, stream)
+        self.write(obj, first.scheme, stream)
+
+    def decode(self, stream: IO[bytes], /) -> MLWE_Set:
+        return self.read(self.samples.schemes.decode(stream), stream)
+
+    def write(self, key: MLWE_Set, scheme: Any, stream: IO[bytes]) -> None:
+        """Writes ``key``, of ``scheme``, after the scheme. Raises `ValueError` for a sample of another scheme."""
         header = pb.KeySwitchKey(
-            gadget=_gadget(obj.gadget_params), balanced=obj.balanced
+            gadget=_gadget(key.gadget_params), balanced=key.balanced
         )
-        if obj.dim > 2:
-            sets = vars(obj)["_children"]
+        if key.dim > 2:
+            sets = vars(key)["_children"]
             header.sets = len(sets)
             self.header.encode(header, stream)
             for s in sets:
-                self.encode(s, stream)
+                self.write(s, scheme, stream)
             return
-        header.lengths.extend(-1 if c is None else len(c) for c in obj.mlwe)
+        header.lengths.extend(-1 if c is None else len(c) for c in key.mlwe)
         self.header.encode(header, stream)
-        samples = [c for component in obj.mlwe for c in component or ()]
-        if samples:
-            self.samples.schemes.encode(_shared_scheme(samples), stream)
-        for c in samples:
-            self.samples.write(c, stream)
+        for component in key.mlwe:
+            for c in component or ():
+                self.samples.write(c, scheme, stream)
 
-    def decode(self, stream: IO[bytes], /) -> MLWE_Set:
+    def read(self, scheme: Any, stream: IO[bytes]) -> MLWE_Set:
+        """The key of ``scheme`` at the head of ``stream``."""
         header = self.header.decode(stream)
         if header.sets:
             return MLWE_Set.flatten_array(
-                [self.decode(stream) for _ in range(header.sets)]
+                [self.read(scheme, stream) for _ in range(header.sets)]
             )
-        scheme = (
-            self.samples.schemes.decode(stream)
-            if any(n > 0 for n in header.lengths)
-            else None
-        )
         components = [
             None if n < 0 else [self.samples.read(scheme, stream) for _ in range(n)]
             for n in header.lengths
         ]
         return MLWE_Set(components, _gadget_params(header.gadget), header.balanced)
 
+    def bound(self, scheme: Any) -> Codec[MLWE_Set]:
+        """This codec for keys of ``scheme``, written without it: for a bundle that writes the scheme once."""
+        return _Bound(self, scheme)
+
 
 class MGSWCodec(Codec[MGSW]):
-    """An MGSW ciphertext: its scheme through ``schemes`` and a count, then its samples through ``samples``, of the scheme's MLWE scheme."""
+    """An MGSW ciphertext: its scheme through ``schemes``, then a count and its samples through ``samples``, over the scheme's MLWE scheme."""
 
     header = MessageBytesCodec(pb.MGSW)
 
@@ -229,19 +275,30 @@ class MGSWCodec(Codec[MGSW]):
         self.samples = samples or SampleCodec(self.schemes.inner)
 
     def encode(self, obj: MGSW, stream: IO[bytes], /) -> None:
-        if _shared_scheme(obj.obj) not in (None, obj.scheme.mlwe_scheme):
-            raise ValueError("the samples of an MGSW ciphertext are of its MLWE scheme")
-        self.header.encode(
-            pb.MGSW(scheme=self.schemes.to_message(obj.scheme), samples=len(obj.obj)),
-            stream,
-        )
-        for c in obj.obj:
-            self.samples.write(c, stream)
+        self.schemes.encode(obj.scheme, stream)
+        self.write(obj, obj.scheme, stream)
 
     def decode(self, stream: IO[bytes], /) -> MGSW:
+        return self.read(self.schemes.decode(stream), stream)
+
+    def write(self, c: MGSW, scheme: MGSW_Scheme, stream: IO[bytes]) -> None:
+        """Writes ``c``, of ``scheme``, after the scheme. Raises `ValueError` for a ciphertext of another scheme."""
+        if c.scheme != scheme:
+            raise ValueError(
+                "an MGSW ciphertext of another scheme than the one written"
+            )
+        self.header.encode(pb.MGSW(samples=len(c.obj)), stream)
+        for sample in c.obj:
+            self.samples.write(sample, scheme.mlwe_scheme, stream)
+
+    def read(self, scheme: MGSW_Scheme, stream: IO[bytes]) -> MGSW:
+        """The ciphertext of ``scheme`` at the head of ``stream``."""
         header = self.header.decode(stream)
-        scheme = self.schemes.from_message(header.scheme)
         samples = [
             self.samples.read(scheme.mlwe_scheme, stream) for _ in range(header.samples)
         ]
         return MGSW(scheme, obj=samples)
+
+    def bound(self, scheme: MGSW_Scheme) -> Codec[MGSW]:
+        """This codec for ciphertexts of ``scheme``, written without it: for a key that writes the scheme once."""
+        return _Bound(self, scheme)
