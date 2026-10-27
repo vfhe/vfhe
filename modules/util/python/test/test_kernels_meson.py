@@ -29,6 +29,13 @@ def test_lto_is_always_on(tmp_path) -> None:
     assert "'b_lto=true'" in _written(tmp_path)
 
 
+def test_the_module_links_without_interposition(tmp_path) -> None:
+    """GCC decides interposition at the LTO link, so the flag must reach it."""
+    _, module = _written(tmp_path).split("shared_module")
+    assert "link_args: module_link_args" in module
+    assert "-fno-semantic-interposition" in _written(tmp_path)
+
+
 def test_only_vfhe_reads_the_concrete_vector_type(tmp_path) -> None:
     """VFHE_BUILDING_LIBRARY hands out the engine's real mp_vector_t. The
     caller's files are compiled against the public header and see the same
