@@ -71,7 +71,6 @@ rfc3986==2.0.0
 rich==15.0.0
 roman-numerals==4.1.0
 ruff==0.17.1
-setuptools-scm==10.3.4
 setuptools==84.1.0
 snowballstemmer==3.1.1
 soupsieve==2.10
@@ -89,7 +88,6 @@ tox==4.65.0
 twine==7.0.0
 typing_extensions==4.16.0
 urllib3==2.8.0
-vcs-versioning==2.6.0
 virtualenv==21.14.13
 wheel==0.48.0
 zizmor==1.30.1
