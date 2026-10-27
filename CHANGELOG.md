@@ -14,6 +14,8 @@ versions may contain breaking changes.
 
 ### Added
 
+- Python 3.15 support, tested in CI, built as wheels and declared in the
+  classifiers.
 - `RNSRing.crt_components(elements, index)`, `from_crt_components(vectors)`
   and `residue_field(index)`: the CRT components of ring elements at one RNS
   prime p -- their residues modulo the maximal ideals `P_s = (p, X^d - w_s)`
