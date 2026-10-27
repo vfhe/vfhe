@@ -5,9 +5,10 @@
 // ciphertexts, LWE samples and secret keys.
 //
 // Every message travels length-prefixed, as protobuf's own framing. A sample
-// is one message; a key or an MGSW ciphertext is a header message, the scheme
-// its samples share, then one message per sample, so a key of any size
-// streams one sample at a time.
+// is one message after its scheme; a key or an MGSW ciphertext is its scheme,
+// a header message, then one message per sample, so a key of any size
+// streams one sample at a time. A bundle of keys writes the scheme once and
+// its keys without it.
 syntax = "proto3";
 
 package vfhe.mlwe.io.v1;
@@ -71,11 +72,14 @@ enum SeedExpansion {
 // A fresh sample whose mask still matches its seed carries the 32-byte `seed`
 // and its `seed_expansion` in place of `a`, halving it; the mask is expanded
 // again on load. The sample's scheme precedes it in the stream, or precedes
-// the samples of the key it belongs to.
+// the samples of the key it belongs to, and names the sample's ring: level
+// `lvl`'s, or special ring `special_ring`, or `ring` itself when it is
+// neither.
 message Sample {
+  // The ring, when it is none of the scheme's; unset otherwise.
   vfhe.arith.io.v1.Ring ring = 1;
-  // The level of `ring` in the scheme, or -1 for a ring that is none of the
-  // scheme's levels, such as a special ring.
+  // The level of the sample's ring in the scheme, or -1 for a ring that is
+  // none of the scheme's levels, such as a special ring.
   sint32 lvl = 2;
   // The number of mask components, the scheme's rank, or the extended rank of
   // a product before relinearization.
@@ -93,13 +97,16 @@ message Sample {
   repeated bytes a = 9;
   // Set whenever `seed` is.
   SeedExpansion seed_expansion = 10;
+  // The index of the sample's ring among the scheme's special rings, when it
+  // is one.
+  optional uint32 special_ring = 11;
 }
 
-// A key-switch key (an MLWE_Set) as its header. A flat set lists in
-// `lengths` the samples of each component, -1 for an absent one; the scheme
-// the samples share follows the header, then the samples, component by
-// component. A nested set holds `sets` sets instead, each written as a
-// `KeySwitchKey` of its own, which follow.
+// A key-switch key (an MLWE_Set) as its header, after the scheme its samples
+// share. A flat set lists in `lengths` the samples of each component, -1 for
+// an absent one, and the samples follow, component by component. A nested
+// set holds `sets` sets instead, each written as a header and its samples,
+// which follow.
 message KeySwitchKey {
   // The gadget the samples were generated for.
   Gadget gadget = 1;
@@ -108,11 +115,10 @@ message KeySwitchKey {
   uint32 sets = 4;
 }
 
-// An MGSW ciphertext as its header; its `samples` samples follow, over the
-// scheme's MLWE scheme.
+// An MGSW ciphertext as its header, after its `MGSWScheme`; its `samples`
+// samples follow, over the scheme's MLWE scheme.
 message MGSW {
-  MGSWScheme scheme = 1;
-  uint32 samples = 2;
+  uint32 samples = 1;
 }
 
 // An LWE sample of dimension `n` over `ring`'s primes: per prime in ascending

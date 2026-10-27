@@ -33,7 +33,9 @@ class CKKSCiphertextCodec(SampleCodec):
     ) -> None:
         super().__init__(schemes or CKKSSchemeCodec(), seeded, packing, domain)
 
-    def write(self, c: Any, stream: IO[bytes]) -> None:
+    def write(self, c: Any, scheme: Any, stream: IO[bytes]) -> None:
+        if c.scheme != scheme:
+            raise ValueError("a ciphertext of another scheme than the one written")
         self.body.encode(
             pb.CKKSCiphertext(sample=self.to_message(c), delta=c.delta), stream
         )

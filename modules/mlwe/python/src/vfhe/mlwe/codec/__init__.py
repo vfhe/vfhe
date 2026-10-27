@@ -11,15 +11,17 @@ streams one sample at a time.
 
 A codec built with the caller's schemes hands them back where a stream's
 parameters match, so a loaded ciphertext refers to the scheme holding the
-keys; a scheme codec built with none rebuilds the scheme from the stream.
+keys; a scheme codec built with none rebuilds the scheme from the stream. A
+`BundleCodec` writes one scheme for a whole bundle of keys.
 """
 
 from .key import LWEKeyCodec, MLWEKeyCodec
 from .lwe import LWECodec
 from .sample import KeySwitchKeyCodec, MGSWCodec, SampleCodec, seed_still_holds
-from .scheme import MGSWSchemeCodec, MLWESchemeCodec, SchemeCodec
+from .scheme import BundleCodec, MGSWSchemeCodec, MLWESchemeCodec, SchemeCodec
 
 __all__ = [
+    "BundleCodec",
     "KeySwitchKeyCodec",
     "LWECodec",
     "LWEKeyCodec",

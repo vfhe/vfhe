@@ -27,6 +27,7 @@ from vfhe.mlwe import (
     MLWE_Scheme,
 )
 from vfhe.mlwe.codec import (
+    BundleCodec,
     KeySwitchKeyCodec,
     LWECodec,
     LWEKeyCodec,
@@ -212,11 +213,27 @@ def test_a_key_writes_its_scheme_once(ghs):
     key2 = scheme.key_gen_sparse(N // 8, 3.2)
     ksk = scheme.gen_ksk(key2, key, lvl=0)
     f = io.BytesIO(dumps(KeySwitchKeyCodec(SampleCodec(MLWESchemeCodec(scheme))), ksk))
-    header = proto.parse_length_prefixed(pb.KeySwitchKey, f)
     proto.parse_length_prefixed(pb.Scheme, f)
+    header = proto.parse_length_prefixed(pb.KeySwitchKey, f)
     for _ in range(sum(header.lengths)):
-        proto.parse_length_prefixed(pb.Sample, f)
+        sample = proto.parse_length_prefixed(pb.Sample, f)
+        assert not sample.HasField("ring")  # the scheme names it
     assert f.read() == b""
+
+
+def test_a_sample_over_a_ring_outside_its_scheme_carries_the_ring(ghs):
+    Rp, scheme, key = ghs
+    full = scheme.special_rings[0]
+    odd = full.quotient_ring(mask=full.mask & ~(1 << full.prime_indices[0]))
+    assert odd not in (*scheme.rings, *scheme.special_rings)
+    m = Polynomial(odd).from_bigint_array(Rp.random_element().get_polynomial())
+    c = scheme.sample(m, key.at_ring(odd), out=MLWE(scheme, ring=odd))
+    data = dumps(SampleCodec(MLWESchemeCodec(scheme)), c)
+    assert _sample(data).HasField("ring")
+    back = loads(SampleCodec(MLWESchemeCodec(scheme)), data)
+    assert back.ring == odd and back.ring is not odd and back.lvl == -1
+    assert back.get_b_poly() == c.get_b_poly()
+    assert back.get_a_poly(0) == c.get_a_poly(0)
 
 
 def test_key_switch_key_without_the_special_primes(ghs):
@@ -250,9 +267,15 @@ def test_relinearization_key_keeps_its_pass_through_slots(ghs):
     Rp, scheme, key = ghs
     s_0 = key.poly[0]
     rlk = scheme.gen_rlk(key, [-(s_0 * s_0)])  # one set per level
-    back = roundtrip(
-        ListCodec(KeySwitchKeyCodec(SampleCodec(MLWESchemeCodec(scheme)))), rlk
+    keys = KeySwitchKeyCodec(SampleCodec(MLWESchemeCodec(scheme)))
+    per_key = dumps(ListCodec(keys), rlk)
+    bundle = BundleCodec(
+        MLWESchemeCodec(scheme), scheme, lambda s: ListCodec(keys.bound(s))
     )
+    data = dumps(bundle, rlk)
+    assert len(data) < len(per_key)  # the scheme once, in place of once per set
+    assert loads(ListCodec(keys), per_key)[0].gadget_params == rlk[0].gadget_params
+    back = loads(bundle, data)
     assert len(back) == len(rlk)
     for got, orig in zip(back, rlk, strict=True):
         assert [c is None for c in got.mlwe] == [c is None for c in orig.mlwe]

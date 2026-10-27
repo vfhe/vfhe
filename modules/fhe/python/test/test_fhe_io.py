@@ -7,6 +7,9 @@ import io
 import random
 
 import pytest
+from _vfhe_proto.vfhe.fhe.io.v1 import io_pb2 as pb
+from _vfhe_proto.vfhe.mlwe.io.v1 import io_pb2 as mlwe_pb
+from google.protobuf import proto
 from vfhe.arith import Polynomial, Ring
 from vfhe.crypto import entropy
 from vfhe.fhe import (
@@ -28,6 +31,7 @@ from vfhe.fhe.codec import (
 )
 from vfhe.mlwe import MLWE_Scheme
 from vfhe.mlwe.codec import (
+    BundleCodec,
     KeySwitchKeyCodec,
     MGSWCodec,
     MGSWSchemeCodec,
@@ -131,13 +135,17 @@ def test_a_ckks_ciphertext_or_scheme_needs_its_own_codec():
 def test_ckks_rotation_keys_by_step():
     scheme, key = _ckks()
     keys = {k: scheme.gen_rotation_key(key, k) for k in (1, 3)}
-    codec = DictCodec(
-        IntCodec(),
-        ListCodec(
-            KeySwitchKeyCodec(SampleCodec(CKKSSchemeCodec(scheme), packing="tight"))
-        ),
+    ksk = KeySwitchKeyCodec(SampleCodec(CKKSSchemeCodec(scheme), packing="tight"))
+    codec = BundleCodec(
+        CKKSSchemeCodec(scheme),
+        scheme,
+        lambda s: DictCodec(IntCodec(), ListCodec(ksk.bound(s))),
     )
-    got = roundtrip(codec, keys)
+    data = dumps(codec, keys)
+    f = io.BytesIO(data)
+    proto.parse_length_prefixed(pb.CKKSScheme, f)  # the one scheme message
+    assert len(data) < len(dumps(DictCodec(IntCodec(), ListCodec(ksk)), keys))
+    got = loads(codec, data)
     assert sorted(got) == [1, 3]
     x = _values(N // 2)
     c = scheme.encrypt(scheme.encode(x), key)
@@ -230,6 +238,11 @@ def test_cggi16_bootstrap_key():
         )
     )
     data = dumps(codec, bk)
+    f = io.BytesIO(data)
+    header = proto.parse_length_prefixed(pb.CGGI16Key, f)
+    proto.parse_length_prefixed(mlwe_pb.MGSWScheme, f)  # once, for all ciphertexts
+    assert proto.parse_length_prefixed(mlwe_pb.MGSW, f).samples == len(bk.bk[0].obj)
+    assert header.keys == len(bk.bk)
     got = loads(codec, data)
     assert len(got.bk) == len(bk.bk)
     assert (got.n, got.unfolding) == (256, 1)
