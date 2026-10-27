@@ -22,8 +22,8 @@ run of your own on your hardware rather than against these numbers.
 | Memory placement | 6 NUMA nodes |
 | SMT, turbo | on, on |
 | System | Linux-7.0.0-1014-aws-x86_64-with-glibc2.39 |
-| Commit | e95ba4e |
-| Date | 2026-10-26 |
+| Commit | 4f83d28 |
+| Date | 2026-10-27 |
 | Verdict | trusted |
 | Engines | avx512ifma, portable |
 | Thread limits | 1, 8, 32 |
@@ -35,119 +35,119 @@ run of your own on your hardware rather than against these numbers.
 
 | Benchmark | Layer | Shape | Engine | 1 thread | 8 threads | 32 threads |
 |---|---|---|---|---|---|---|
-| `extension_field_product` | python | fp2-q49-l16 | avx512ifma | 104 µs ±9% | 104 µs ±0% | 104 µs ±1% |
-| `extension_field_product` | python | fp2-q49-l20 | avx512ifma | 1.7 ms ±0% | 1.7 ms ±0% | 1.7 ms ±0% |
-| `extension_field_product` | python | fp2-q49-l16 | portable | 962 µs ±2% | - | - |
-| `extension_field_product` | python | fp2-q49-l20 | portable | 15.2 ms ±1% | - | - |
-| `ntt_forward` | c | n16384-q30 | avx512ifma | 19.7 µs ±0% | 19.8 µs ±0% | 19.8 µs ±1% |
-| `ntt_forward` | c | n16384-q50 | avx512ifma | 31.1 µs ±0% | 31.1 µs ±0% | 31.1 µs ±0% |
-| `ntt_forward` | c | n16384-q61 | avx512ifma | 57.1 µs ±0% | 56.9 µs ±0% | 57.1 µs ±0% |
+| `extension_field_product` | python | fp2-q49-l16 | avx512ifma | 102 µs ±9% | 102 µs ±0% | 102 µs ±0% |
+| `extension_field_product` | python | fp2-q49-l20 | avx512ifma | 1.68 ms ±0% | 1.68 ms ±0% | 1.68 ms ±0% |
+| `extension_field_product` | python | fp2-q49-l16 | portable | 958 µs ±1% | - | - |
+| `extension_field_product` | python | fp2-q49-l20 | portable | 15.3 ms ±1% | - | - |
+| `ntt_forward` | c | n16384-q30 | avx512ifma | 19.7 µs ±0% | 19.7 µs ±0% | 19.7 µs ±0% |
+| `ntt_forward` | c | n16384-q50 | avx512ifma | 32.2 µs ±1% | 32.3 µs ±0% | 32.3 µs ±0% |
+| `ntt_forward` | c | n16384-q61 | avx512ifma | 55.9 µs ±1% | 56.1 µs ±0% | 56.2 µs ±0% |
 | `ntt_forward` | c | n16384-q30 | portable | 507 µs ±1% | - | - |
 | `ntt_forward` | c | n16384-q50 | portable | 503 µs ±0% | - | - |
-| `ntt_forward` | c | n16384-q61 | portable | 503 µs ±1% | - | - |
-| `ntt_round_trip` | python | ckks-n12-3p | avx512ifma | 47.2 µs ±0% | 47.4 µs ±0% | 47.4 µs ±0% |
-| `ntt_round_trip` | python | ckks-n13-7p | avx512ifma | 255 µs ±0% | 254 µs ±0% | 254 µs ±0% |
-| `ntt_round_trip` | python | ckks-n14-7p | avx512ifma | 569 µs ±0% | 569 µs ±0% | 569 µs ±0% |
-| `ntt_round_trip` | python | ckks-n12-3p | portable | 527 µs ±2% | - | - |
-| `ntt_round_trip` | python | ckks-n13-7p | portable | 2.68 ms ±2% | - | - |
-| `ntt_round_trip` | python | ckks-n14-7p | portable | 5.72 ms ±1% | - | - |
-| `polynomial_product` | python | ckks-n12-3p | avx512ifma | 5.42 µs ±0% | 5.43 µs ±0% | 5.43 µs ±0% |
-| `polynomial_product` | python | ckks-n13-7p | avx512ifma | 19.8 µs ±0% | 19.8 µs ±0% | 19.8 µs ±0% |
-| `polynomial_product` | python | ckks-n14-7p | avx512ifma | 42.8 µs ±1% | 42.9 µs ±0% | 42.9 µs ±0% |
-| `polynomial_product` | python | ckks-n12-3p | portable | 32.3 µs ±1% | - | - |
+| `ntt_forward` | c | n16384-q61 | portable | 504 µs ±0% | - | - |
+| `ntt_round_trip` | python | ckks-n12-3p | avx512ifma | 47.2 µs ±1% | 47.3 µs ±0% | 47.3 µs ±0% |
+| `ntt_round_trip` | python | ckks-n13-7p | avx512ifma | 245 µs ±0% | 245 µs ±0% | 245 µs ±0% |
+| `ntt_round_trip` | python | ckks-n14-7p | avx512ifma | 549 µs ±0% | 550 µs ±0% | 550 µs ±0% |
+| `ntt_round_trip` | python | ckks-n12-3p | portable | 526 µs ±1% | - | - |
+| `ntt_round_trip` | python | ckks-n13-7p | portable | 2.66 ms ±2% | - | - |
+| `ntt_round_trip` | python | ckks-n14-7p | portable | 5.71 ms ±1% | - | - |
+| `polynomial_product` | python | ckks-n12-3p | avx512ifma | 5.42 µs ±0% | 5.44 µs ±0% | 5.43 µs ±0% |
+| `polynomial_product` | python | ckks-n13-7p | avx512ifma | 19.8 µs ±0% | 19.7 µs ±1% | 19.8 µs ±0% |
+| `polynomial_product` | python | ckks-n14-7p | avx512ifma | 45 µs ±1% | 45.1 µs ±0% | 45 µs ±0% |
+| `polynomial_product` | python | ckks-n12-3p | portable | 32.3 µs ±0% | - | - |
 | `polynomial_product` | python | ckks-n13-7p | portable | 149 µs ±1% | - | - |
-| `polynomial_product` | python | ckks-n14-7p | portable | 297 µs ±0% | - | - |
-| `rescale` | python | ckks-n12-3p | avx512ifma | 54.5 µs ±0% | 54.5 µs ±1% | 54.5 µs ±0% |
-| `rescale` | python | ckks-n13-7p | avx512ifma | 308 µs ±0% | 308 µs ±1% | 308 µs ±1% |
-| `rescale` | python | ckks-n14-7p | avx512ifma | 671 µs ±0% | 672 µs ±0% | 672 µs ±0% |
-| `rescale` | python | ckks-n12-3p | portable | 495 µs ±2% | - | - |
-| `rescale` | python | ckks-n13-7p | portable | 2.74 ms ±2% | - | - |
-| `rescale` | python | ckks-n14-7p | portable | 5.79 ms ±1% | - | - |
+| `polynomial_product` | python | ckks-n14-7p | portable | 297 µs ±1% | - | - |
+| `rescale` | python | ckks-n12-3p | avx512ifma | 54.2 µs ±1% | 54.2 µs ±0% | 54.3 µs ±0% |
+| `rescale` | python | ckks-n13-7p | avx512ifma | 294 µs ±1% | 295 µs ±0% | 294 µs ±1% |
+| `rescale` | python | ckks-n14-7p | avx512ifma | 659 µs ±1% | 659 µs ±0% | 659 µs ±0% |
+| `rescale` | python | ckks-n12-3p | portable | 494 µs ±2% | - | - |
+| `rescale` | python | ckks-n13-7p | portable | 2.71 ms ±2% | - | - |
+| `rescale` | python | ckks-n14-7p | portable | 5.8 ms ±1% | - | - |
 
 ## crypto
 
 | Benchmark | Layer | Shape | Engine | 1 thread | 8 threads | 32 threads |
 |---|---|---|---|---|---|---|
-| `merkle_commit` | python | leaves65536, 65536 items | avx512ifma | 688 µs ±0% | 688 µs ±0% | 688 µs ±0% |
-| `merkle_commit` | python | leaves65536, 65536 items | portable | 4.72 ms ±0% | - | - |
+| `merkle_commit` | python | leaves65536, 65536 items | avx512ifma | 690 µs ±0% | 690 µs ±0% | 690 µs ±0% |
+| `merkle_commit` | python | leaves65536, 65536 items | portable | 4.72 ms ±1% | - | - |
 
 ## util
 
 | Benchmark | Layer | Shape | Engine | 1 thread | 8 threads | 32 threads |
 |---|---|---|---|---|---|---|
-| `parallel_for` | c | itemsT-work0 | avx512ifma | 5.86 ns ±1% | 650 ns ±7% | 1.42 µs ±2% |
+| `parallel_for` | c | itemsT-work0 | avx512ifma | 5.89 ns ±1% | 619 ns ±7% | 1.41 µs ±2% |
 | `parallel_for` | c | itemsT-work0 | portable | 5.42 ns ±1% | - | - |
 
 ## mlwe
 
 | Benchmark | Layer | Shape | Engine | 1 thread | 8 threads | 32 threads |
 |---|---|---|---|---|---|---|
-| `external_product` | python | ckks-n12-3p | avx512ifma | 540 µs ±0% | 513 µs ±4% | 510 µs ±2% |
-| `external_product` | python | ckks-n13-7p | avx512ifma | 3.74 ms ±0% | 1.97 ms ±11% | 1.62 ms ±6% |
-| `external_product` | python | ckks-n14-7p | avx512ifma | 7.83 ms ±0% | 3.11 ms ±7% | 2.67 ms ±8% |
+| `external_product` | python | ckks-n12-3p | avx512ifma | 538 µs ±0% | 504 µs ±3% | 501 µs ±2% |
+| `external_product` | python | ckks-n13-7p | avx512ifma | 3.73 ms ±0% | 2.04 ms ±7% | 1.63 ms ±3% |
+| `external_product` | python | ckks-n14-7p | avx512ifma | 7.96 ms ±0% | 3.31 ms ±5% | 2.79 ms ±7% |
 | `external_product` | python | ckks-n12-3p | portable | 4.22 ms ±1% | - | - |
-| `external_product` | python | ckks-n13-7p | portable | 34.8 ms ±1% | - | - |
-| `external_product` | python | ckks-n14-7p | portable | 73.3 ms ±1% | - | - |
-| `key_switch` | python | ckks-n12-3p | avx512ifma | 318 µs ±0% | 277 µs ±2% | 268 µs ±4% |
-| `key_switch` | python | ckks-n13-7p | avx512ifma | 2.05 ms ±1% | 1.05 ms ±9% | 920 µs ±5% |
-| `key_switch` | python | ckks-n14-7p | avx512ifma | 4.32 ms ±0% | 1.85 ms ±6% | 1.7 ms ±7% |
-| `key_switch` | python | ckks-n12-3p | portable | 2.3 ms ±1% | - | - |
-| `key_switch` | python | ckks-n13-7p | portable | 17.9 ms ±1% | - | - |
-| `key_switch` | python | ckks-n14-7p | portable | 37.6 ms ±2% | - | - |
+| `external_product` | python | ckks-n13-7p | portable | 34.6 ms ±1% | - | - |
+| `external_product` | python | ckks-n14-7p | portable | 73.7 ms ±1% | - | - |
+| `key_switch` | python | ckks-n12-3p | avx512ifma | 315 µs ±1% | 277 µs ±2% | 267 µs ±3% |
+| `key_switch` | python | ckks-n13-7p | avx512ifma | 2.03 ms ±1% | 1.06 ms ±9% | 831 µs ±6% |
+| `key_switch` | python | ckks-n14-7p | avx512ifma | 4.24 ms ±0% | 1.83 ms ±5% | 1.46 ms ±10% |
+| `key_switch` | python | ckks-n12-3p | portable | 2.35 ms ±1% | - | - |
+| `key_switch` | python | ckks-n13-7p | portable | 17.8 ms ±1% | - | - |
+| `key_switch` | python | ckks-n14-7p | portable | 37.8 ms ±1% | - | - |
 
 ## fhe
 
 | Benchmark | Layer | Shape | Engine | 1 thread | 8 threads | 32 threads |
 |---|---|---|---|---|---|---|
-| `cggi16_functional_bootstrap` | python | n256-r1-in128 | avx512ifma | 2.02 ms ±0% | 1.82 ms ±1% | 2.14 ms ±1% |
-| `cggi16_functional_bootstrap` | python | n1024-r7-in64 | avx512ifma | 114 ms ±1% | 18.7 ms ±0% | 10.4 ms ±1% |
-| `ckks_multiply_rescale` | python | ckks-n12-3p | avx512ifma | 566 µs ±1% | 503 µs ±2% | 512 µs ±2% |
-| `ckks_multiply_rescale` | python | ckks-n13-7p | avx512ifma | 3.16 ms ±0% | 1.56 ms ±7% | 1.63 ms ±4% |
-| `ckks_multiply_rescale` | python | ckks-n14-7p | avx512ifma | 6.58 ms ±0% | 2.85 ms ±7% | 2.35 ms ±15% |
-| `ckks_multiply_rescale` | python | ckks-n12-3p | portable | 4.43 ms ±1% | - | - |
+| `cggi16_functional_bootstrap` | python | n256-r1-in128 | avx512ifma | 2 ms ±0% | 1.84 ms ±1% | 2.13 ms ±0% |
+| `cggi16_functional_bootstrap` | python | n1024-r7-in64 | avx512ifma | 114 ms ±1% | 18.6 ms ±0% | 10.4 ms ±0% |
+| `ckks_multiply_rescale` | python | ckks-n12-3p | avx512ifma | 583 µs ±1% | 503 µs ±3% | 531 µs ±2% |
+| `ckks_multiply_rescale` | python | ckks-n13-7p | avx512ifma | 3.19 ms ±0% | 1.59 ms ±7% | 1.64 ms ±4% |
+| `ckks_multiply_rescale` | python | ckks-n14-7p | avx512ifma | 6.61 ms ±0% | 2.71 ms ±16% | 2.33 ms ±13% |
+| `ckks_multiply_rescale` | python | ckks-n12-3p | portable | 4.45 ms ±2% | - | - |
 | `ckks_multiply_rescale` | python | ckks-n13-7p | portable | 28.5 ms ±1% | - | - |
-| `ckks_multiply_rescale` | python | ckks-n14-7p | portable | 60.4 ms ±1% | - | - |
-| `ckks_rotate` | python | ckks-n12-3p | avx512ifma | 366 µs ±1% | 326 µs ±2% | 321 µs ±3% |
-| `ckks_rotate` | python | ckks-n13-7p | avx512ifma | 2.22 ms ±0% | 1.15 ms ±9% | 1 ms ±3% |
-| `ckks_rotate` | python | ckks-n14-7p | avx512ifma | 4.57 ms ±0% | 1.93 ms ±12% | 1.46 ms ±18% |
-| `ckks_rotate` | python | ckks-n12-3p | portable | 2.38 ms ±1% | - | - |
+| `ckks_multiply_rescale` | python | ckks-n14-7p | portable | 60.3 ms ±2% | - | - |
+| `ckks_rotate` | python | ckks-n12-3p | avx512ifma | 358 µs ±0% | 324 µs ±2% | 313 µs ±3% |
+| `ckks_rotate` | python | ckks-n13-7p | avx512ifma | 2.18 ms ±1% | 1.1 ms ±15% | 959 µs ±7% |
+| `ckks_rotate` | python | ckks-n14-7p | avx512ifma | 4.51 ms ±0% | 1.93 ms ±7% | 1.46 ms ±15% |
+| `ckks_rotate` | python | ckks-n12-3p | portable | 2.39 ms ±2% | - | - |
 | `ckks_rotate` | python | ckks-n13-7p | portable | 18.2 ms ±1% | - | - |
-| `ckks_rotate` | python | ckks-n14-7p | portable | 38.1 ms ±2% | - | - |
-| `gp25_rotate` | python | n64-x16-b4, 16 items | avx512ifma | 428 µs ±0% | 374 µs ±0% | 382 µs ±2% |
-| `gp25_rotate` | python | n2048-x1024-b1, 1024 items | avx512ifma | 349 ms ±4% | 69.7 ms ±1% | 36.2 ms ±3% |
-| `gp25_rotate` | python | n2048-x1024-b9, 1024 items | avx512ifma | 3.12 s ±1% | 413 ms ±0% | 137 ms ±2% |
-| `ship_bootstrap` | python | toy-n256 | avx512ifma | 3.36 ms ±1% | 2.75 ms ±9% | 2.89 ms ±6% |
-| `ship_bootstrap` | python | LL13 | avx512ifma | 1.74 s ±0% | 249 ms ±1% | 104 ms ±1% |
+| `ckks_rotate` | python | ckks-n14-7p | portable | 38.7 ms ±2% | - | - |
+| `gp25_rotate` | python | n64-x16-b4, 16 items | avx512ifma | 425 µs ±0% | 370 µs ±6% | 382 µs ±5% |
+| `gp25_rotate` | python | n2048-x1024-b1, 1024 items | avx512ifma | 349 ms ±3% | 69 ms ±0% | 36.4 ms ±2% |
+| `gp25_rotate` | python | n2048-x1024-b9, 1024 items | avx512ifma | 3.11 s ±1% | 412 ms ±0% | 137 ms ±2% |
+| `ship_bootstrap` | python | toy-n256 | avx512ifma | 3.38 ms ±0% | 2.89 ms ±7% | 2.94 ms ±6% |
+| `ship_bootstrap` | python | LL13 | avx512ifma | 1.74 s ±1% | 250 ms ±1% | 104 ms ±1% |
 
 ## piop
 
 | Benchmark | Layer | Shape | Engine | 1 thread | 8 threads | 32 threads |
 |---|---|---|---|---|---|---|
-| `sumcheck_prove_field` | python | fp2-q50-v16 | avx512ifma | 5.81 ms ±1% | 5.8 ms ±1% | 5.81 ms ±1% |
-| `sumcheck_prove_field` | python | fp2-q50-v20 | avx512ifma | 84.9 ms ±1% | 84.2 ms ±2% | 84.6 ms ±3% |
-| `sumcheck_prove_field` | python | fp2-q50-v16 | portable | 12 ms ±2% | - | - |
-| `sumcheck_prove_field` | python | fp2-q50-v20 | portable | 179 ms ±1% | - | - |
+| `sumcheck_prove_field` | python | fp2-q50-v16 | avx512ifma | 5.87 ms ±0% | 5.85 ms ±0% | 5.86 ms ±1% |
+| `sumcheck_prove_field` | python | fp2-q50-v20 | avx512ifma | 86.3 ms ±1% | 85 ms ±2% | 86.6 ms ±0% |
+| `sumcheck_prove_field` | python | fp2-q50-v16 | portable | 12 ms ±1% | - | - |
+| `sumcheck_prove_field` | python | fp2-q50-v20 | portable | 180 ms ±1% | - | - |
 
 ## polycom
 
 | Benchmark | Layer | Shape | Engine | 1 thread | 8 threads | 32 threads |
 |---|---|---|---|---|---|---|
-| `basefold_commit_field` | python | fp2-q50-v12 | avx512ifma | 1.45 ms ±0% | 1.46 ms ±0% | 1.45 ms ±0% |
-| `basefold_commit_field` | python | fp2-q50-v20 | avx512ifma | 462 ms ±0% | 462 ms ±0% | 462 ms ±1% |
+| `basefold_commit_field` | python | fp2-q50-v12 | avx512ifma | 1.43 ms ±0% | 1.43 ms ±0% | 1.43 ms ±1% |
+| `basefold_commit_field` | python | fp2-q50-v20 | avx512ifma | 464 ms ±1% | 463 ms ±1% | 463 ms ±0% |
 | `basefold_commit_field` | python | fp2-q50-v12 | portable | 3.42 ms ±1% | - | - |
-| `basefold_commit_field` | python | fp2-q50-v20 | portable | 1.2 s ±1% | - | - |
-| `basefold_commit_ring` | python | rq-n8-1p-v6 | avx512ifma | 4.13 ms ±1% | 4.13 ms ±1% | 4.15 ms ±1% |
-| `basefold_commit_ring` | python | rq-n10-3p-v6 | avx512ifma | 9.51 ms ±0% | 9.5 ms ±0% | 9.52 ms ±1% |
-| `basefold_commit_ring` | python | rq-n8-1p-v6 | portable | 5.25 ms ±1% | - | - |
-| `basefold_commit_ring` | python | rq-n10-3p-v6 | portable | 23.5 ms ±1% | - | - |
-| `basefold_prove_field` | python | fp2-q50-v12 | avx512ifma | 2.96 ms ±2% | 2.96 ms ±0% | 2.96 ms ±1% |
-| `basefold_prove_field` | python | fp2-q50-v20 | avx512ifma | 294 ms ±0% | 294 ms ±0% | 293 ms ±1% |
-| `basefold_prove_field` | python | fp2-q50-v12 | portable | 4.65 ms ±1% | - | - |
-| `basefold_prove_field` | python | fp2-q50-v20 | portable | 696 ms ±1% | - | - |
-| `basefold_prove_ring` | python | rq-n8-1p-v6 | avx512ifma | 4.58 ms ±1% | 4.57 ms ±1% | 4.57 ms ±0% |
-| `basefold_prove_ring` | python | rq-n10-3p-v6 | avx512ifma | 8.02 ms ±1% | 8.01 ms ±1% | 8.03 ms ±1% |
-| `basefold_prove_ring` | python | rq-n8-1p-v6 | portable | 5.57 ms ±1% | - | - |
-| `basefold_prove_ring` | python | rq-n10-3p-v6 | portable | 19.3 ms ±0% | - | - |
+| `basefold_commit_field` | python | fp2-q50-v20 | portable | 1.2 s ±0% | - | - |
+| `basefold_commit_ring` | python | rq-n8-1p-v6 | avx512ifma | 4.93 ms ±1% | 4.94 ms ±0% | 4.94 ms ±2% |
+| `basefold_commit_ring` | python | rq-n10-3p-v6 | avx512ifma | 9.99 ms ±0% | 9.97 ms ±1% | 9.99 ms ±1% |
+| `basefold_commit_ring` | python | rq-n8-1p-v6 | portable | 6.06 ms ±0% | - | - |
+| `basefold_commit_ring` | python | rq-n10-3p-v6 | portable | 24.4 ms ±1% | - | - |
+| `basefold_prove_field` | python | fp2-q50-v12 | avx512ifma | 2.94 ms ±3% | 2.94 ms ±1% | 2.93 ms ±0% |
+| `basefold_prove_field` | python | fp2-q50-v20 | avx512ifma | 288 ms ±1% | 289 ms ±0% | 288 ms ±1% |
+| `basefold_prove_field` | python | fp2-q50-v12 | portable | 4.64 ms ±1% | - | - |
+| `basefold_prove_field` | python | fp2-q50-v20 | portable | 703 ms ±1% | - | - |
+| `basefold_prove_ring` | python | rq-n8-1p-v6 | avx512ifma | 5.57 ms ±1% | 5.56 ms ±1% | 5.56 ms ±1% |
+| `basefold_prove_ring` | python | rq-n10-3p-v6 | avx512ifma | 8.99 ms ±0% | 8.99 ms ±1% | 8.99 ms ±0% |
+| `basefold_prove_ring` | python | rq-n8-1p-v6 | portable | 6.56 ms ±1% | - | - |
+| `basefold_prove_ring` | python | rq-n10-3p-v6 | portable | 20.4 ms ±0% | - | - |
 
 ## Shapes
 
