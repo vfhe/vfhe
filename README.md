@@ -90,7 +90,9 @@ these attestations at `https://pypi.org/project/vfhe/#files`.
 A walkthrough of encrypted computation with CKKS is in
 [`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md);
 [`test/smoke/ckks.py`](https://github.com/vfhe/vfhe/blob/main/test/smoke/ckks.py)
-is its runnable form.
+is its runnable form. Measured times of the main operations on a reference
+machine are in
+[`PERFORMANCE.md`](https://github.com/vfhe/vfhe/blob/main/docs/PERFORMANCE.md).
 
 ---
 
