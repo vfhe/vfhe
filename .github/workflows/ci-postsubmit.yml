@@ -97,7 +97,7 @@ jobs:
       matrix:
         engine: [portable]
         os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm]
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
         exclude:
           - { os: ubuntu-24.04, python: "3.14" }
         include:

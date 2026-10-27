@@ -10,7 +10,7 @@ example end to end; the module surfaces are listed in the
 
 ## Prerequisites
 
-- **Python 3.10 or later**
+- **Python 3.11 or later**
 - **vFHE installed** — `pip install vfhe`, covered in the
   [README](https://github.com/vfhe/vfhe/blob/main/README.md#installing)
 

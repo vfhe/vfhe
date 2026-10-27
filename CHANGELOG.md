@@ -877,6 +877,8 @@ versions may contain breaking changes.
 
 ### Removed
 
+- **BREAKING**: Python 3.10, past its end of life on 2026-10-04; the CI
+  toolchain pins `filelock` 4.2.1, whose advisories have no fix on 3.10.
 - **BREAKING**: `ImplicitOracle`, `ImplicitEval` and the `implicit` entry of
   the protocol registry. An oracle defined by a hypercube sum is a
   `Relation_SumDef` statement headed at that oracle inside a layered

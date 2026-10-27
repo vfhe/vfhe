@@ -23,9 +23,7 @@ from .rns_base import registry
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    # Type-checking only: `Self` is what an in-place operator returns.
-    from typing_extensions import Self
+    from typing import Self
 
 
 #: The fields `RNSRing.residue_field` returns, one per (N, split_degree, prime).

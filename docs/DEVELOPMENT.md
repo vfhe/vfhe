@@ -11,7 +11,7 @@ CI and releasing are in
 
 ## Prerequisites
 
-- **Python 3.10 or later**
+- **Python 3.11 or later**
 - **pip 25.1 or later**, which added `pip install --group` for PEP 735
   dependency groups
 - **A C compiler** — clang or gcc; on macOS,
