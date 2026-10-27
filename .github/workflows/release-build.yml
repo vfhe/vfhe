@@ -9,13 +9,13 @@ on:
       interpreters:
         description: JSON array of cibuildwheel interpreter tags to build.
         type: string
-        default: '["cp310", "cp311", "cp312", "cp313", "cp314"]'
+        default: '["cp311", "cp312", "cp313", "cp314"]'
   workflow_dispatch:
     inputs:
       interpreters:
         description: JSON array of cibuildwheel interpreter tags to build.
         type: string
-        default: '["cp310", "cp311", "cp312", "cp313", "cp314"]'
+        default: '["cp311", "cp312", "cp313", "cp314"]'
 
 permissions:
   contents: read # checkout
