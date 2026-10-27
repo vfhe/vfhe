@@ -2,18 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serialization of a CKKS ciphertext and a relinearization key, at the CKKS shapes.
 
-The codecs are this package's, run through `vfhe.util.io` with the default
-profile.
+Each benchmark writes to or reads from an in-memory byte stream with the
+codecs' default options: `CKKSCiphertextCodec` for the ciphertext, and a
+list of `KeySwitchKeyCodec` over `SampleCodec` for the relinearization key,
+which holds one key-switch key per level.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import io
+from typing import TYPE_CHECKING, Any
 
 from harness import Case, Shape, benchmark
 from vfhe.arith import Ring
 from vfhe.fhe import CKKS_Ciphertext, CKKS_Scheme
-from vfhe.util.io import Serializer
+from vfhe.fhe.codec import CKKSCiphertextCodec, CKKSSchemeCodec
+from vfhe.mlwe.codec import KeySwitchKeyCodec, SampleCodec
+from vfhe.util.io import ListCodec
+
+if TYPE_CHECKING:
+    from vfhe.util.io import Codec
 
 SHAPES = ["ckks-n12-3p", "ckks-n13-7p", "ckks-n14-7p"]
 
@@ -44,54 +52,74 @@ def same_ciphertext(a: CKKS_Ciphertext, b: CKKS_Ciphertext) -> bool:
     )
 
 
+def encode(codec: Codec[Any], obj: Any) -> bytes:
+    """Writes ``obj`` with ``codec`` into a new in-memory stream; returns its bytes."""
+    stream = io.BytesIO()
+    codec.encode(obj, stream)
+    return stream.getvalue()
+
+
+def decode(codec: Codec[Any], data: bytes) -> Any:
+    """Reads one object with ``codec`` from ``data``."""
+    return codec.decode(io.BytesIO(data))
+
+
+def ciphertext_codec(scheme: CKKS_Scheme) -> Codec[Any]:
+    return CKKSCiphertextCodec(CKKSSchemeCodec(scheme))
+
+
+def key_codec(scheme: CKKS_Scheme) -> Codec[Any]:
+    return ListCodec(KeySwitchKeyCodec(SampleCodec(CKKSSchemeCodec(scheme))))
+
+
 @benchmark(shapes=SHAPES)
 def serialize_ciphertext(shape: Shape) -> Case:
-    """``Serializer().dumps`` of one fresh CKKS ciphertext at the top level."""
+    """Writing one fresh CKKS ciphertext at the top level."""
     scheme, original = ciphertext(shape)
-    serializer = Serializer()
+    codec = ciphertext_codec(scheme)
 
-    def check(blob: bytes) -> None:
-        assert same_ciphertext(serializer.loads(blob, schemes=scheme), original)
+    def check(data: bytes) -> None:
+        assert same_ciphertext(decode(codec, data), original)
 
-    return Case(lambda: serializer.dumps(original), check=check)
+    return Case(lambda: encode(codec, original), check=check)
 
 
 @benchmark(shapes=SHAPES)
 def deserialize_ciphertext(shape: Shape) -> Case:
-    """``Serializer().loads`` of one fresh CKKS ciphertext at the top level."""
+    """Reading one fresh CKKS ciphertext at the top level."""
     scheme, original = ciphertext(shape)
-    serializer = Serializer()
-    blob = serializer.dumps(original)
+    codec = ciphertext_codec(scheme)
+    data = encode(codec, original)
 
     def check(result: CKKS_Ciphertext) -> None:
         assert same_ciphertext(result, original)
 
-    return Case(lambda: serializer.loads(blob, schemes=scheme), check=check)
+    return Case(lambda: decode(codec, data), check=check)
 
 
 @benchmark(shapes=SHAPES)
 def serialize_relinearization_key(shape: Shape) -> Case:
-    """``Serializer().dumps`` of the relinearization key."""
+    """Writing the relinearization key."""
     scheme, key = scheme_and_key(shape)
     rlk = scheme.gen_rlk(key, key)
-    serializer = Serializer()
-    expected = serializer.dumps(rlk)
+    codec = key_codec(scheme)
+    expected = encode(codec, rlk)
 
-    def check(blob: bytes) -> None:
-        assert blob == expected
+    def check(data: bytes) -> None:
+        assert data == expected
 
-    return Case(lambda: serializer.dumps(rlk), check=check)
+    return Case(lambda: encode(codec, rlk), check=check)
 
 
 @benchmark(shapes=SHAPES)
 def deserialize_relinearization_key(shape: Shape) -> Case:
-    """``Serializer().loads`` of the relinearization key."""
+    """Reading the relinearization key."""
     scheme, key = scheme_and_key(shape)
     rlk = scheme.gen_rlk(key, key)
-    serializer = Serializer()
-    blob = serializer.dumps(rlk)
+    codec = key_codec(scheme)
+    data = encode(codec, rlk)
 
     def check(result: Any) -> None:
-        assert serializer.dumps(result) == blob
+        assert encode(codec, result) == data
 
-    return Case(lambda: serializer.loads(blob, schemes=scheme), check=check)
+    return Case(lambda: decode(codec, data), check=check)
