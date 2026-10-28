@@ -234,6 +234,18 @@ class RNSRing(Ring):
         self.mask = sum(1 << idx for idx in self.prime_indices)
         self._pow2_consts: dict[int, tuple] = {}
 
+    @classmethod
+    def from_native(cls, N: int, mask: int, base: Any) -> RNSRing:
+        """The ring over the shared base ``base`` whose primes ``mask``
+        selects, for a value that came back from C with those parameters.
+        """
+        address = int(ffi.cast("uintptr_t", base))
+        for (n, split_degree), known in registry().bases.items():
+            if n == N and int(ffi.cast("uintptr_t", known)) == address:
+                primes = registry().primes[(n, split_degree)]
+                return Ring(N, mask=mask, split_degree=split_degree, primes=primes)
+        raise ValueError("the base is not one this process built")
+
     @property
     def arith_ring(self):
         """This ring's handle in the generic C interface.
@@ -710,11 +722,18 @@ class RNSPolynomial(Polynomial):
     obj: Any
 
     def __init__(
-        self, ring: RNSRing, repr: Representation = Representation.empty
+        self,
+        ring: RNSRing,
+        repr: Representation = Representation.empty,
+        obj: Any = None,
     ) -> None:
-        """Allocate an element of ``ring``, holding no value yet."""
+        """Allocate an element of ``ring``, holding no value yet.
+
+        ``obj`` adopts a native ``RNS_Polynomial`` over ``ring``'s primes
+        instead, in representation ``repr``; it is freed with this object.
+        """
         self.ring = ring
-        self.obj = ring.alloc_polynomial()
+        self.obj = ring.alloc_polynomial() if obj is None else obj
         #: Which representation `obj`'s rows hold right now.
         self.repr: Representation = repr
 
