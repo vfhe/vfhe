@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.arith public API re-exports.
 from .base import ArithParent, Field, FieldElement, FieldVector, Polynomial, Ring
+from .dispatch import generic_only, set_generic_only
 from .impl.complex.complex import ComplexPolynomial, ComplexRing
 from .impl.field.field import ExtensionField, ExtensionFieldElement
 from .impl.field.vector import ExtensionFieldVector
@@ -60,6 +61,7 @@ __all__ = [
     "crt",
     "domain_of",
     "gen_pseudo_mersenne_prime",
+    "generic_only",
     "implementations",
     "is_prime",
     "register_conversion",
@@ -67,4 +69,5 @@ __all__ = [
     "repr",
     "reset_state",
     "resolve",
+    "set_generic_only",
 ]

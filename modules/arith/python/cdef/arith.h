@@ -46,6 +46,11 @@ typedef struct
     int domain;
 } ArithElement;
 void arith_copy(ArithRing ring, ArithElement *out, ArithElement *in);
+int arith_round_division_approximate(void *ring, ArithElement *element, void *to);
+int arith_decompose_digit(void *ring, ArithElement *out, ArithElement *a, uint64_t primes,
+                          uint64_t log_base, uint64_t level, uint64_t dropped, int centered);
+void arith_set_generic_only(int enabled);
+int arith_generic_only(void);
 void *arith_rns_ring_get(uint64_t N, uint64_t rns_mask, void *base);
 void arith_rns_ring_cache_clear(void);
 
@@ -397,6 +402,8 @@ typedef enum
     ARITH_TRACE_FROM_INT_ARRAY,
     ARITH_TRACE_ROUND_DIVISION,
     ARITH_TRACE_MOD_REDUCE_LIFTED,
+    ARITH_TRACE_ROUND_DIVISION_APPROXIMATE,
+    ARITH_TRACE_DECOMPOSE_DIGIT,
     ARITH_TRACE_MARK,
 } ArithTraceKind;
 typedef struct
@@ -416,6 +423,11 @@ typedef struct
     double sigma;
     uint64_t *scalar;
     uint64_t scalar_len;
+    uint64_t primes;
+    uint64_t log_base;
+    uint64_t level;
+    uint64_t dropped;
+    int centered;
     char *label;
     int enter;
 } ArithTraceEvent;
