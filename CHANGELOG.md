@@ -14,6 +14,14 @@ versions may contain breaking changes.
 
 ### Added
 
+- The execution tape, `vfhe.util.trace`: while a trace is enabled, every
+  whole-element ring operation the native code makes over an RNS ring
+  leaves an event with its kind, the versions of its operands, its
+  parameters and a copy of its output, read back as `RNSPolynomial`
+  values; an operand no event wrote is recorded first as an input. In C,
+  `arith_trace.h`: the generic interface opens and closes an event around
+  each operation, which costs one load and one branch when no trace is
+  enabled.
 - Python 3.15 support, tested in CI, built as wheels and declared in the
   classifiers.
 - Add per-module benchmarks, `make bench`: Python benchmarks of a module's

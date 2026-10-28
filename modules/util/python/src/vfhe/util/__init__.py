@@ -8,6 +8,7 @@
 - `io` serializes vfhe objects.
 - `parallel` sets how many threads vfhe uses.
 - `memory_pool` controls the pool that keeps the buffers vfhe releases.
+- `trace` records the ring operations vfhe runs, the execution tape.
 
 Importing `vfhe.util` imports none of them; import the one you use:
 

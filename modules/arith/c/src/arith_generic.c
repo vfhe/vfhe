@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <arith_generic.h>
+#include <arith_trace.h>
 
 #include "arith_dispatch.h"
 
@@ -12,6 +13,21 @@
 // default arm. Both routes must compute the same thing: a ring reached
 // either way is the same ring. One dispatch per whole-element operation;
 // nothing here runs per coefficient.
+//
+// The execution tape (arith_trace.h) is told of each operation: opened before
+// it runs, so an operand an in-place operation overwrites is copied first, and
+// closed with the status after. Off, that is one load and one branch here.
+
+#define TRACE_BEGIN(kind, out, a, b, param, param2, sigma, scalar)                                 \
+    const uint64_t traced_ =                                                                       \
+        ARITH_TRACE_ON() ? arith_trace_begin(kind, ring, out, a, b, param, param2, sigma, scalar)  \
+                         : 0
+#define TRACE_END(status, out)                                                                     \
+    do                                                                                             \
+    {                                                                                              \
+        if (traced_ != 0)                                                                          \
+            arith_trace_end(traced_, out, status);                                                 \
+    } while (0)
 
 const char *arith_implementation(ArithRing ring) { return ring->vt->implementation; }
 
@@ -81,12 +97,18 @@ void arith_free(ArithRing ring, ArithElement *element)
 
 ArithStatus arith_copy(ArithRing ring, ArithElement *out, const ArithElement *in)
 {
-    return ARITH_DISPATCH(ring, copy, ring, out, in);
+    TRACE_BEGIN(ARITH_TRACE_COPY, out, in, NULL, 0, 0, 0.0, NULL);
+    ArithStatus status = ARITH_DISPATCH(ring, copy, ring, out, in);
+    TRACE_END(status, out);
+    return status;
 }
 
 ArithStatus arith_zero(ArithRing ring, ArithElement *out)
 {
-    return ARITH_DISPATCH(ring, zero, ring, out);
+    TRACE_BEGIN(ARITH_TRACE_ZERO, out, NULL, NULL, 0, 0, 0.0, NULL);
+    ArithStatus status = ARITH_DISPATCH(ring, zero, ring, out);
+    TRACE_END(status, out);
+    return status;
 }
 
 ArithStatus arith_zero_in(ArithRing ring, ArithElement *out, ArithDomain domain)
@@ -137,8 +159,10 @@ ArithStatus arith_add(ArithRing ring, ArithElement *out, const ArithElement *a,
     {
         return status;
     }
+    TRACE_BEGIN(ARITH_TRACE_ADD, out, a, b, 0, 0, 0.0, NULL);
     status = ARITH_DISPATCH(ring, add, ring, out, a, b);
     out->domain = a->domain;
+    TRACE_END(status, out);
     return status;
 }
 
@@ -150,8 +174,10 @@ ArithStatus arith_sub(ArithRing ring, ArithElement *out, const ArithElement *a,
     {
         return status;
     }
+    TRACE_BEGIN(ARITH_TRACE_SUB, out, a, b, 0, 0, 0.0, NULL);
     status = ARITH_DISPATCH(ring, sub, ring, out, a, b);
     out->domain = a->domain;
+    TRACE_END(status, out);
     return status;
 }
 
@@ -176,8 +202,10 @@ ArithStatus arith_mul(ArithRing ring, ArithElement *out, const ArithElement *a,
     {
         return status;
     }
+    TRACE_BEGIN(ARITH_TRACE_MUL, out, a, b, 0, 0, 0.0, NULL);
     status = ARITH_DISPATCH(ring, mul, ring, out, a, b);
     out->domain = arith_mul_domain(ring);
+    TRACE_END(status, out);
     return status;
 }
 
@@ -193,7 +221,10 @@ ArithStatus arith_mul_addto(ArithRing ring, ArithElement *out, const ArithElemen
     {
         return ARITH_BAD_DOMAIN;
     }
-    return ARITH_DISPATCH(ring, mul_addto, ring, out, a, b);
+    TRACE_BEGIN(ARITH_TRACE_MUL_ADDTO, out, a, b, 0, 0, 0.0, NULL);
+    status = ARITH_DISPATCH(ring, mul_addto, ring, out, a, b);
+    TRACE_END(status, out);
+    return status;
 }
 
 ArithStatus arith_scale_int(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -203,8 +234,10 @@ ArithStatus arith_scale_int(ArithRing ring, ArithElement *out, const ArithElemen
     {
         return ARITH_BAD_DOMAIN;
     }
+    TRACE_BEGIN(ARITH_TRACE_SCALE_INT, out, a, NULL, scale, 0, 0.0, NULL);
     ArithStatus status = ARITH_DISPATCH(ring, scale_int, ring, out, a, scale);
     out->domain = a->domain;
+    TRACE_END(status, out);
     return status;
 }
 
@@ -222,7 +255,10 @@ ArithStatus arith_mul_subto(ArithRing ring, ArithElement *out, const ArithElemen
     {
         return ARITH_BAD_DOMAIN;
     }
-    return ARITH_DISPATCH(ring, mul_subto, ring, out, a, b);
+    TRACE_BEGIN(ARITH_TRACE_MUL_SUBTO, out, a, b, 0, 0, 0.0, NULL);
+    status = ARITH_DISPATCH(ring, mul_subto, ring, out, a, b);
+    TRACE_END(status, out);
+    return status;
 }
 
 ArithStatus arith_scale_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -233,7 +269,10 @@ ArithStatus arith_scale_addto(ArithRing ring, ArithElement *out, const ArithElem
     {
         return status;
     }
-    return ARITH_DISPATCH(ring, scale_addto, ring, out, a, scale);
+    TRACE_BEGIN(ARITH_TRACE_SCALE_ADDTO, out, a, NULL, scale, 0, 0.0, NULL);
+    status = ARITH_DISPATCH(ring, scale_addto, ring, out, a, scale);
+    TRACE_END(status, out);
+    return status;
 }
 
 ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -243,8 +282,10 @@ ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement
     {
         return ARITH_BAD_DOMAIN;
     }
+    TRACE_BEGIN(ARITH_TRACE_SCALE_BY, out, a, NULL, 0, 0, 0.0, &scale);
     ArithStatus status = ARITH_DISPATCH(ring, scale_by, ring, out, a, scale);
     out->domain = a->domain;
+    TRACE_END(status, out);
     return status;
 }
 
@@ -257,8 +298,10 @@ ArithStatus arith_permute(ArithRing ring, ArithElement *out, const ArithElement 
     {
         return ARITH_BAD_DOMAIN;
     }
+    TRACE_BEGIN(ARITH_TRACE_PERMUTE, out, a, NULL, gen, 0, 0.0, NULL);
     ArithStatus status = ARITH_DISPATCH(ring, permute, ring, out, a, gen);
     out->domain = ARITH_DOMAIN_CANONICAL;
+    TRACE_END(status, out);
     return status;
 }
 
@@ -269,31 +312,39 @@ ArithStatus arith_mul_by_monomial(ArithRing ring, ArithElement *out, const Arith
     {
         return ARITH_BAD_DOMAIN;
     }
+    TRACE_BEGIN(ARITH_TRACE_MUL_BY_MONOMIAL, out, a, NULL, power, (uint64_t)minus_one, 0.0, NULL);
     ArithStatus status = ARITH_DISPATCH(ring, mul_by_monomial, ring, out, a, power, minus_one);
     out->domain = ARITH_DOMAIN_CANONICAL;
+    TRACE_END(status, out);
     return status;
 }
 
 ArithStatus arith_sample_uniform(ArithRing ring, ArithElement *out)
 {
+    TRACE_BEGIN(ARITH_TRACE_SAMPLE_UNIFORM, out, NULL, NULL, 0, 0, 0.0, NULL);
     ArithStatus status = ARITH_DISPATCH(ring, sample_uniform, ring, out);
     out->domain = ARITH_DOMAIN_CANONICAL;
+    TRACE_END(status, out);
     return status;
 }
 
 ArithStatus arith_sample_gaussian(ArithRing ring, ArithElement *out, double sigma)
 {
+    TRACE_BEGIN(ARITH_TRACE_SAMPLE_GAUSSIAN, out, NULL, NULL, 0, 0, sigma, NULL);
     ArithStatus status = ARITH_DISPATCH(ring, sample_gaussian, ring, out, sigma);
     out->domain = ARITH_DOMAIN_CANONICAL;
+    TRACE_END(status, out);
     return status;
 }
 
 ArithStatus arith_sample_uniform_seeded(ArithRing ring, ArithElement *out, const uint8_t *seed,
                                         uint64_t seed_len, uint64_t stream)
 {
+    TRACE_BEGIN(ARITH_TRACE_SAMPLE_UNIFORM_SEEDED, out, NULL, NULL, stream, 0, 0.0, NULL);
     ArithStatus status =
         ARITH_DISPATCH(ring, sample_uniform_seeded, ring, out, seed, seed_len, stream);
     out->domain = arith_mul_domain(ring);
+    TRACE_END(status, out);
     return status;
 }
 
@@ -302,7 +353,10 @@ ArithStatus arith_from_int_array(ArithRing ring, ArithElement *out, const uint64
 {
     // The implementation reports the domain it loaded into; overriding it here
     // would label the element with a representation it is not in.
-    return ARITH_DISPATCH(ring, from_int_array, ring, out, values, count);
+    TRACE_BEGIN(ARITH_TRACE_FROM_INT_ARRAY, out, NULL, NULL, count, 0, 0.0, NULL);
+    ArithStatus status = ARITH_DISPATCH(ring, from_int_array, ring, out, values, count);
+    TRACE_END(status, out);
+    return status;
 }
 
 // Tower moves are defined on the canonical form: they divide and round the
@@ -313,7 +367,10 @@ ArithStatus arith_round_division(ArithRing ring, ArithElement *element, ArithRin
     {
         return ARITH_BAD_DOMAIN;
     }
-    return ARITH_DISPATCH(ring, round_division, ring, element, to);
+    TRACE_BEGIN(ARITH_TRACE_ROUND_DIVISION, element, NULL, NULL, 0, 0, 0.0, NULL);
+    ArithStatus status = ARITH_DISPATCH(ring, round_division, ring, element, to);
+    TRACE_END(status, element);
+    return status;
 }
 
 ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -323,8 +380,10 @@ ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const Ari
     {
         return ARITH_BAD_DOMAIN;
     }
+    TRACE_BEGIN(ARITH_TRACE_MOD_REDUCE_LIFTED, out, a, NULL, 0, 0, 0.0, NULL);
     ArithStatus status = ARITH_DISPATCH(ring, mod_reduce_lifted, ring, out, a, from);
     out->domain = ARITH_DOMAIN_CANONICAL;
+    TRACE_END(status, out);
     return status;
 }
 

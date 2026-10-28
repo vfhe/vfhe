@@ -6,6 +6,7 @@ vfhe_c_sources += files(
     'c/src/arith_generic.c',
     'c/src/mle.c',
     'c/src/number_theory.c',
+    'c/src/trace.c',
     'c/src/util.c',
     # shared modular-arithmetic and transform kernels
     'c/src/kernels/fft.c',
@@ -48,10 +49,12 @@ vfhe_c_include_dirs += include_directories(
 vfhe_c_public_headers += files(
     'c/include/arith.h',
     'c/include/arith_generic.h',
+    'c/include/arith_trace.h',
     'c/include/mle.h',
 )
 vfhe_c_unit_tests += files(
     'c/test/unit/test_arith_generic.c',
+    'c/test/unit/test_arith_trace.c',
     'c/test/unit/test_fft.c',
     'c/test/unit/test_interleave.c',
     'c/test/unit/test_mod.c',

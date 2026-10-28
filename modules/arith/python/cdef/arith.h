@@ -374,3 +374,58 @@ PMFNTTPlan pmf_ntt_new_plan(uint64_t n, const uint64_t *root_of_unity, PMFParams
 void pmf_ntt_free_plan(PMFNTTPlan plan);
 void pmf_vec_ntt_forward(PMFVector a, PMFNTTPlan plan);
 void pmf_vec_ntt_inverse(PMFVector a, PMFNTTPlan plan);
+
+// --- the execution tape ---
+typedef enum
+{
+    ARITH_TRACE_INPUT = 1,
+    ARITH_TRACE_COPY,
+    ARITH_TRACE_ZERO,
+    ARITH_TRACE_ADD,
+    ARITH_TRACE_SUB,
+    ARITH_TRACE_MUL,
+    ARITH_TRACE_MUL_ADDTO,
+    ARITH_TRACE_MUL_SUBTO,
+    ARITH_TRACE_SCALE_INT,
+    ARITH_TRACE_SCALE_ADDTO,
+    ARITH_TRACE_SCALE_BY,
+    ARITH_TRACE_PERMUTE,
+    ARITH_TRACE_MUL_BY_MONOMIAL,
+    ARITH_TRACE_SAMPLE_UNIFORM,
+    ARITH_TRACE_SAMPLE_GAUSSIAN,
+    ARITH_TRACE_SAMPLE_UNIFORM_SEEDED,
+    ARITH_TRACE_FROM_INT_ARRAY,
+    ARITH_TRACE_ROUND_DIVISION,
+    ARITH_TRACE_MOD_REDUCE_LIFTED,
+    ARITH_TRACE_MARK,
+} ArithTraceKind;
+typedef struct
+{
+    uint64_t sequence;
+    int kind;
+    uint64_t inputs[3];
+    uint32_t n_inputs;
+    uint64_t N;
+    uint64_t mask;
+    void *base;
+    int domain;
+    int secret;
+    void *value;
+    uint64_t param;
+    uint64_t param2;
+    double sigma;
+    uint64_t *scalar;
+    uint64_t scalar_len;
+    char *label;
+    int enter;
+} ArithTraceEvent;
+void arith_trace_enable(void);
+void arith_trace_disable(void);
+int arith_trace_is_enabled(void);
+void arith_trace_clear(void);
+uint64_t arith_trace_length(void);
+int arith_trace_read(uint64_t index, ArithTraceEvent *out);
+void *arith_trace_take_value(uint64_t index);
+void arith_trace_release(uint64_t count);
+uint64_t arith_trace_next_sequence(void);
+void arith_trace_mark(const char *label, int enter);

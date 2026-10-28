@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
+#include <arith_trace.h>
 #include "alloc.h"
 #include "memory_pool.h"
 #include <crypto.h>
@@ -316,6 +317,10 @@ void polynomial_RNS_zero(RNS_Polynomial p)
 void free_RNS_polynomial(void *p)
 {
     RNS_Polynomial pp = (RNS_Polynomial)p;
+    // The tape keys values by this storage; an element allocated here later
+    // must start unknown to it.
+    if (arith_trace_tape != NULL)
+        arith_trace_forget(p);
     // One of the two is NULL for each row, and releasing NULL is a no-op, so
     // this needs no width test and cannot go wrong if the base grew meanwhile.
     for (size_t i = 0; i < pp->allocated_l; i++)
