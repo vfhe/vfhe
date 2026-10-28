@@ -223,7 +223,8 @@ __attribute__((noinline, cold)) uint64_t arith_trace_begin(
     uint64_t inputs[ARITH_TRACE_INPUTS] = {0, 0, 0};
     uint32_t n = 0;
     if (kind == ARITH_TRACE_MUL_ADDTO || kind == ARITH_TRACE_MUL_SUBTO ||
-        kind == ARITH_TRACE_SCALE_ADDTO || kind == ARITH_TRACE_ROUND_DIVISION)
+        kind == ARITH_TRACE_SCALE_ADDTO || kind == ARITH_TRACE_ROUND_DIVISION ||
+        kind == ARITH_TRACE_ROUND_DIVISION_APPROXIMATE)
         inputs[n++] = version_of(t, out);
     if (a != NULL)
         inputs[n++] = version_of(t, a);
@@ -248,6 +249,26 @@ __attribute__((noinline, cold)) uint64_t arith_trace_begin(
         e->scalar_len = rows;
     }
     const uint64_t sequence = e->sequence;
+    pthread_mutex_unlock(&t->lock);
+    return sequence;
+}
+
+__attribute__((noinline, cold)) uint64_t arith_trace_begin_digit(
+    ArithRing ring, const ArithElement *out, const ArithElement *a, uint64_t primes,
+    uint64_t log_base, uint64_t level, uint64_t dropped, int centered)
+{
+    const uint64_t sequence =
+        arith_trace_begin(ARITH_TRACE_DECOMPOSE_DIGIT, ring, out, a, NULL, 0, 0, 0.0, NULL);
+    if (sequence == 0)
+        return 0;
+    Tape *t = tape();
+    pthread_mutex_lock(&t->lock);
+    ArithTraceEvent *e = &t->events[sequence - t->events[0].sequence];
+    e->primes = primes;
+    e->log_base = log_base;
+    e->level = level;
+    e->dropped = dropped;
+    e->centered = centered;
     pthread_mutex_unlock(&t->lock);
     return sequence;
 }

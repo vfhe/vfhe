@@ -316,6 +316,37 @@ void test_marks_and_disabling(void)
     arith_free(ring, &z);
 }
 
+void test_digits_and_approximate_divisions_are_recorded(void)
+{
+    ArithRing to = arith_rns_ring_new(TEST_N, TEST_MASK >> 2, base);
+    ArithElement x, d;
+    filled(&x, 1);
+    arith_new(ring, &d);
+    arith_trace_enable();
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_decompose_digit(ring, &d, &x, 0x2, 8, 1, 0, 1));
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_round_division_approximate(ring, &x, to));
+    TEST_ASSERT_EQUAL_UINT64(3, arith_trace_length());
+    ArithTraceEvent e = event(1);
+    TEST_ASSERT_EQUAL_INT(ARITH_TRACE_DECOMPOSE_DIGIT, e.kind);
+    TEST_ASSERT_EQUAL_UINT32(1, e.n_inputs);
+    TEST_ASSERT_EQUAL_UINT64(1, e.inputs[0]);
+    TEST_ASSERT_EQUAL_UINT64(0x2, e.primes);
+    TEST_ASSERT_EQUAL_UINT64(8, e.log_base);
+    TEST_ASSERT_EQUAL_UINT64(1, e.level);
+    TEST_ASSERT_EQUAL_UINT64(0, e.dropped);
+    TEST_ASSERT_EQUAL_INT(1, e.centered);
+    assert_same(arith_rns_polynomial(&d), (RNS_Polynomial)e.value);
+    e = event(2);
+    TEST_ASSERT_EQUAL_INT(ARITH_TRACE_ROUND_DIVISION_APPROXIMATE, e.kind);
+    TEST_ASSERT_EQUAL_UINT32(1, e.n_inputs);
+    TEST_ASSERT_EQUAL_UINT64(1, e.inputs[0]);
+    TEST_ASSERT_EQUAL_UINT64(TEST_MASK >> 2, e.mask);
+    assert_same(arith_rns_polynomial(&x), (RNS_Polynomial)e.value);
+    arith_free(ring, &x);
+    arith_free(ring, &d);
+    arith_ring_free(to);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -328,5 +359,6 @@ int main(void)
     RUN_TEST(test_round_division_is_recorded_in_place);
     RUN_TEST(test_scale_by_records_the_scalar_and_samples_are_secret);
     RUN_TEST(test_marks_and_disabling);
+    RUN_TEST(test_digits_and_approximate_divisions_are_recorded);
     return UNITY_END();
 }

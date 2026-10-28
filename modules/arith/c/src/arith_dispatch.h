@@ -51,6 +51,11 @@ ArithStatus arith_rns_sample_uniform_seeded(ArithRing ring, ArithElement *out, c
 ArithStatus arith_rns_from_int_array(ArithRing ring, ArithElement *out, const uint64_t *values,
                                      uint64_t count);
 ArithStatus arith_rns_round_division(ArithRing ring, ArithElement *element, ArithRing to);
+ArithStatus arith_rns_round_division_approximate(ArithRing ring, ArithElement *element,
+                                                 ArithRing to);
+ArithStatus arith_rns_decompose_digit(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                      uint64_t primes, uint64_t log_base, uint64_t level,
+                                      uint64_t dropped, int centered);
 ArithStatus arith_rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
                                         ArithRing from);
 ArithStatus arith_rns_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out);

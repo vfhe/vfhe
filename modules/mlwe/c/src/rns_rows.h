@@ -10,6 +10,7 @@
 #define VFHE_MLWE_RNS_ROWS_H
 
 #include "mlwe.h"
+#include <arith_trace.h>
 #include <parallel.h>
 
 #include <stdbool.h>
@@ -52,6 +53,14 @@ static inline bool mlwe_tensor_slot_factors(uint64_t r, uint64_t k, uint64_t *i,
     *i = p;
     *j = p + (k - mlwe_quadratic_slot(r, p, p));
     return *i != *j;
+}
+
+// `n_threads` as a batch of samples may use them, or one thread when the
+// samples go through the generic interface (ARITH_GENERIC_PATH), so that
+// their operations are recorded in the order of the batch.
+static inline uint64_t one_thread_on_generic_path(uint64_t n_threads)
+{
+    return ARITH_GENERIC_PATH() ? 1 : n_threads;
 }
 
 // Below this ring dimension a row is too little work to hand to another

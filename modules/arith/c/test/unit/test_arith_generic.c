@@ -797,6 +797,137 @@ void test_the_shared_ring_is_shared(void)
  * default. A ring whose tag the switch does not know -- a backend loaded at
  * runtime -- must behave identically through the table, so run a real
  * computation both ways and compare. */
+void test_decompose_digit_is_the_lifted_residue(void)
+{
+    ArithElement a, d, expected;
+    arith_new(ring, &a);
+    arith_new(ring, &d);
+    arith_new(ring, &expected);
+    fill(arith_rns_polynomial(&a), 91);
+    a.domain = ARITH_DOMAIN_CANONICAL;
+    for (uint64_t j = 0; j < TEST_L; j++)
+    {
+        for (int centered = 0; centered < 2; centered++)
+        {
+            TEST_ASSERT_EQUAL_INT(
+                ARITH_OK, arith_decompose_digit(ring, &d, &a, 1ULL << j, 0, 0, 0, centered));
+            TEST_ASSERT_EQUAL_INT(ARITH_DOMAIN_CANONICAL, d.domain);
+            if (centered)
+                polynomial_RNSc_mod_reduce_lifted_centered(
+                    (RNSc_Polynomial)arith_rns_polynomial(&expected),
+                    (RNSc_Polynomial)arith_rns_polynomial(&a), j);
+            else
+                polynomial_RNSc_mod_reduce_lifted((RNSc_Polynomial)arith_rns_polynomial(&expected),
+                                                  (RNSc_Polynomial)arith_rns_polynomial(&a), j);
+            assert_same(arith_rns_polynomial(&expected), arith_rns_polynomial(&d));
+        }
+    }
+    a.domain = ARITH_DOMAIN_MUL;
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_decompose_digit(ring, &d, &a, 1, 0, 0, 0, 0));
+    arith_free(ring, &a);
+    arith_free(ring, &d);
+    arith_free(ring, &expected);
+}
+
+void test_decompose_digit_is_the_radix_digit(void)
+{
+    ArithElement a, d, expected;
+    arith_new(ring, &a);
+    arith_new(ring, &d);
+    arith_new(ring, &expected);
+    fill(arith_rns_polynomial(&a), 92);
+    a.domain = ARITH_DOMAIN_CANONICAL;
+    RNSc_Polynomial x = (RNSc_Polynomial)arith_rns_polynomial(&a);
+    RNSc_Polynomial e = (RNSc_Polynomial)arith_rns_polynomial(&expected);
+    for (uint64_t level = 1; level < 3; level++)
+    {
+        for (uint64_t dropped = 0; dropped < 2; dropped++)
+        {
+            TEST_ASSERT_EQUAL_INT(ARITH_OK,
+                                  arith_decompose_digit(ring, &d, &a, 2, 8, level, dropped, 0));
+            polynomial_RNSc_decompose_digit_rounded(e, x, 1, 8, level, dropped);
+            assert_same(arith_rns_polynomial(&expected), arith_rns_polynomial(&d));
+            TEST_ASSERT_EQUAL_INT(ARITH_OK,
+                                  arith_decompose_digit(ring, &d, &a, 2, 8, level, dropped, 1));
+            polynomial_RNSc_decompose_digit_balanced(e, x, 1, 8, level, dropped);
+            assert_same(arith_rns_polynomial(&expected), arith_rns_polynomial(&d));
+        }
+    }
+    /* Base 2 has no balanced digits: the unsigned ones are no larger. */
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_decompose_digit(ring, &d, &a, 2, 1, 3, 0, 1));
+    polynomial_RNSc_decompose_digit_rounded(e, x, 1, 1, 3, 0);
+    assert_same(arith_rns_polynomial(&expected), arith_rns_polynomial(&d));
+    /* A radix digit is of one prime's residue. */
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_decompose_digit(ring, &d, &a, 3, 8, 0, 0, 0));
+    arith_free(ring, &a);
+    arith_free(ring, &d);
+    arith_free(ring, &expected);
+}
+
+void test_decompose_digit_of_a_group_keeps_its_residues(void)
+{
+    /* The fast base conversion of x mod Q_J, lifted back to a prime of J, is
+     * x's residue there, Q_J being 0 modulo it. */
+    ArithElement a, d;
+    arith_new(ring, &a);
+    arith_new(ring, &d);
+    fill(arith_rns_polynomial(&a), 93);
+    a.domain = ARITH_DOMAIN_CANONICAL;
+    for (int centered = 0; centered < 2; centered++)
+    {
+        TEST_ASSERT_EQUAL_INT(ARITH_OK,
+                              arith_decompose_digit(ring, &d, &a, 0x5, 0, 0, 0, centered));
+        for (uint64_t i = 0; i < TEST_L; i++)
+        {
+            if (!(0x5 & (1ULL << i)))
+                continue;
+            for (uint64_t j = 0; j < TEST_N; j++)
+                TEST_ASSERT_EQUAL_UINT64(coeff(arith_rns_polynomial(&a), i, j),
+                                         coeff(arith_rns_polynomial(&d), i, j));
+        }
+    }
+    /* Primes the element does not hold are refused. */
+    arith_rns_polynomial(&a)->rns_mask = 0x3;
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_decompose_digit(ring, &d, &a, 0x4, 0, 0, 0, 0));
+    arith_rns_polynomial(&a)->rns_mask = TEST_MASK;
+    arith_free(ring, &a);
+    arith_free(ring, &d);
+}
+
+void test_round_division_approximate_matches_the_row_functions(void)
+{
+    ArithRing to = arith_rns_ring_new(TEST_N, 0x3, base);
+    ArithElement x, expected;
+    arith_new(ring, &x);
+    arith_new(ring, &expected);
+    fill(arith_rns_polynomial(&x), 94);
+    fill(arith_rns_polynomial(&expected), 94);
+    x.domain = ARITH_DOMAIN_CANONICAL;
+    RNSc_Polynomial e = (RNSc_Polynomial)arith_rns_polynomial(&expected);
+    polynomial_mod_down_RNSc_prepare(e, 0xC);
+    polynomial_mod_down_RNSc_rows(e, e, NULL, 0xC, 0x3);
+    polynomial_round_division_RNSc_finish(e, 0xC);
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_round_division_approximate(ring, &x, to));
+    TEST_ASSERT_EQUAL_UINT64(0x3, arith_rns_polynomial(&x)->rns_mask);
+    TEST_ASSERT_EQUAL_INT(ARITH_DOMAIN_CANONICAL, x.domain);
+    assert_same(arith_rns_polynomial(&expected), arith_rns_polynomial(&x));
+    x.domain = ARITH_DOMAIN_MUL;
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_round_division_approximate(ring, &x, to));
+    arith_free(ring, &x);
+    arith_free(ring, &expected);
+    arith_ring_free(to);
+}
+
+void test_generic_only_is_a_switch(void)
+{
+    TEST_ASSERT_FALSE(arith_generic_only());
+    arith_set_generic_only(1);
+    TEST_ASSERT_TRUE(arith_generic_only());
+    TEST_ASSERT_TRUE(ARITH_GENERIC_ONLY());
+    arith_set_generic_only(0);
+    TEST_ASSERT_FALSE(arith_generic_only());
+}
+
 void test_an_unknown_tag_dispatches_through_the_table(void)
 {
     ArithElement a, b, fast, fallback;
@@ -930,6 +1061,11 @@ int main(void)
     RUN_TEST(test_mod_down_is_round_division_up_to_half_the_primes);
     RUN_TEST(test_round_division_to_a_smaller_ring);
     RUN_TEST(test_the_shared_ring_is_shared);
+    RUN_TEST(test_decompose_digit_is_the_lifted_residue);
+    RUN_TEST(test_decompose_digit_is_the_radix_digit);
+    RUN_TEST(test_decompose_digit_of_a_group_keeps_its_residues);
+    RUN_TEST(test_round_division_approximate_matches_the_row_functions);
+    RUN_TEST(test_generic_only_is_a_switch);
     RUN_TEST(test_an_unknown_tag_dispatches_through_the_table);
     return UNITY_END();
 }

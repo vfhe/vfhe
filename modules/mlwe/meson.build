@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 vfhe_c_sources += files(
+    'c/src/gadget_generic.c',
     'c/src/gadget_rns.c',
     'c/src/keyswitch.c',
     'c/src/keyswitch_batch.c',

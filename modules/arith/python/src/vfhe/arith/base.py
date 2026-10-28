@@ -558,6 +558,34 @@ class Polynomial(metaclass=_ImplementationDispatch):
         """`round_division` truncating instead of rounding, in place."""
         raise NotImplementedError
 
+    def round_division_approximate(self, ring: Ring) -> Polynomial:
+        """`round_division` through the fast base conversion of the remainder,
+        in place: cheaper, and rounded with an error of up to half the number
+        of residues dropped. Returns ``self``.
+        """
+        raise NotImplementedError
+
+    def decompose_digit(
+        self,
+        ring: Ring,
+        primes: list[int],
+        log_base: int = 0,
+        level: int = 0,
+        dropped: int = 0,
+        centered: bool = False,
+    ) -> Polynomial:
+        """A digit of this value's residues, as a new element of ``ring``.
+
+        With ``log_base`` 0, the residue modulo the ``primes`` given: one of
+        this ring's primes, or several, whose residue modulo their product is
+        carried to ``ring`` by the fast base conversion; as stored, or
+        ``centered``. With a ``log_base``, ``primes`` is one prime and the
+        digit is digit ``level`` of its residue in base ``2**log_base``, the
+        ``dropped`` lowest digits rounded away, unsigned or, if ``centered``,
+        balanced. ``ring`` need not hold the primes of this one.
+        """
+        raise NotImplementedError
+
     def rescale_to_power_of_two(self, k: int):
         """``round(2^k * c / q)`` for each coefficient, as ``N`` machine words.
 

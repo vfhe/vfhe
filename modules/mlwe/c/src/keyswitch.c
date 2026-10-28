@@ -22,7 +22,7 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
 {
     (void)lvl;
     assert(in != out);
-    if (mlwe_is_rns_hybrid_keyswitch(out, ksk))
+    if (mlwe_is_rns_hybrid_keyswitch(out, ksk) && !ARITH_GENERIC_PATH())
     {
         KeySwitch ks = {out, in, ksk, NULL, false};
         mlwe_rns_hybrid_keyswitch_batch(&ks, 1, 0);
@@ -69,13 +69,13 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
 void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                 uint64_t lvl)
 {
-    if (mlwe_is_rns_hybrid_keyswitch(out, ksk))
+    if (mlwe_is_rns_hybrid_keyswitch(out, ksk) && !ARITH_GENERIC_PATH())
     {
         mlwe_rns_automorphism_batch(&out, &in, &gen, &ksk, 1, 0);
         return;
     }
     RNSc_MLWE tmp = mlwe_alloc_sample(out->ring, out->r);
-    if (out->ring->impl == ARITH_IMPL_RNS)
+    if (out->ring->impl == ARITH_IMPL_RNS && !ARITH_GENERIC_PATH())
         mlwe_rns_permute(tmp, in, gen);
     else
     {
@@ -214,7 +214,7 @@ int mlwe_automorphisms_RNSc_GHS_hoisted(RNSc_MLWE *out, MLWE_Hoisted h, const ui
             return -1;
     }
     AutomorphismJobs jobs = {out, h, NULL, gens, ksks};
-    vfhe_parallel_for(n, n_threads, hoisted_automorphism_job, &jobs);
+    vfhe_parallel_for(n, one_thread_on_generic_path(n_threads), hoisted_automorphism_job, &jobs);
     return 0;
 }
 
@@ -245,7 +245,7 @@ void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint6
     // Row by row over the whole batch when every sample is a hybrid key
     // switch over RNS rings; a generator 1 (a copy, with no key) or another
     // kind of key sends the batch through the sample-by-sample path instead.
-    bool batch = true;
+    bool batch = !ARITH_GENERIC_PATH();
     for (uint64_t i = 0; i < n && batch; i++)
         batch = gens[i] != 1 && mlwe_is_rns_hybrid_keyswitch(out[i], ksks[i]);
     if (batch)
@@ -254,7 +254,7 @@ void mlwe_automorphism_RNSc_GHS_batch(RNSc_MLWE *out, RNSc_MLWE *in, const uint6
         return;
     }
     AutomorphismJobs jobs = {out, NULL, in, gens, ksks};
-    vfhe_parallel_for(n, n_threads, automorphism_job, &jobs);
+    vfhe_parallel_for(n, one_thread_on_generic_path(n_threads), automorphism_job, &jobs);
 }
 
 // Each worker sums a contiguous range of terms: key-switch products in the
@@ -347,7 +347,8 @@ int mlwe_automorphism_sum_RNSc_GHS(RNSc_MLWE out, RNS_MLWE *in, const uint64_t *
         }
     }
 
-    const uint64_t n_ranges = n == 0 ? 1 : vfhe_threads_for(n_threads, n);
+    const uint64_t n_ranges =
+        n == 0 ? 1 : vfhe_threads_for(one_thread_on_generic_path(n_threads), n);
     AutomorphismSum sum = {in, gens, ksks, n, n_ranges, NULL, NULL, out->ring};
     sum.acc = (RNS_MLWE *)safe_malloc(n_ranges * sizeof(RNS_MLWE));
     sum.kept = (RNSc_MLWE *)safe_malloc(n_ranges * sizeof(RNSc_MLWE));

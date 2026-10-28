@@ -21,7 +21,20 @@ versions may contain breaking changes.
   values; an operand no event wrote is recorded first as an input. In C,
   `arith_trace.h`: the generic interface opens and closes an event around
   each operation, which costs one load and one branch when no trace is
-  enabled.
+  enabled. While a trace is enabled, a sample operation takes its generic
+  path, the same computation through the generic interface, instead of
+  its kernel, so the tape is complete: a product is its tensor products,
+  the digits of its key switch and their products with the key, and the
+  divisions. `vfhe.arith.set_generic_only` takes the generic paths
+  without a trace, for comparing them with the kernels.
+- Two operations of the ring tower in the generic interface and on
+  `Polynomial`: `decompose_digit`, a digit of an element's residues (a
+  residue lifted, the fast base conversion of a group's, or a radix digit
+  of one, unsigned or balanced), and `round_division_approximate`, the
+  round division through the fast base conversion of the remainder. They
+  are the two steps of a key switch that had no generic form; the gadget
+  products and the division by the special primes now have one, written
+  with them.
 - Python 3.15 support, tested in CI, built as wheels and declared in the
   classifiers.
 - Add per-module benchmarks, `make bench`: Python benchmarks of a module's

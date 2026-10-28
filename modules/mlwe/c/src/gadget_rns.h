@@ -62,6 +62,26 @@ void gadget_sum_free(GadgetSum *s);
 ElementDecomposition *gadget_decomposition_new(RNS_MLWE *ksk, const ArithElement *poly,
                                                const GadgetParams *gadget_params);
 uint64_t gadget_decomposition_digits(const ElementDecomposition *e);
+// The parameters of digit t, as arith_decompose_digit takes them: the digit
+// is of the residue modulo `primes` (one prime, or a group), unsigned or
+// `centered`, and with a `log_base` digit `level` of it in that radix, the
+// `dropped` lowest digits rounded away.
+void gadget_decomposition_parameters(const ElementDecomposition *e, uint64_t t, uint64_t *primes,
+                                     uint64_t *log_base, uint64_t *level, uint64_t *dropped,
+                                     int *centered);
+// Allocates `n` digits over the ring of `key`, in the domain gadget_decompose
+// leaves them in, holding no value yet.
+void gadget_digits_new(GadgetDigits *out, uint64_t n, RNS_Polynomial key);
+
+// The same products through the generic interface (gadget_generic.c), one
+// whole element at a time: what a ring without the row kernels would run,
+// and the path taken on ARITH_GENERIC_PATH().
+void gadget_mul_accumulate_generic(RNS_MLWE out, RNS_MLWE *ksk, const ArithElement *poly,
+                                   int subtract, const GadgetParams *gadget_params);
+void gadget_mul_automorphism_generic(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDigits *digits,
+                                     uint64_t gen, int subtract);
+void gadget_decompose_generic(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly,
+                              const GadgetParams *gadget_params);
 void gadget_decomposition_digit_row(RNS_Polynomial out, const ElementDecomposition *e, uint64_t t);
 void gadget_decomposition_free(ElementDecomposition *e);
 

@@ -983,6 +983,51 @@ class RNSPolynomial(Polynomial):
         self.ring = ring
         return self
 
+    def round_division_approximate(self, ring: RNSRing) -> RNSPolynomial:
+        if not ring.is_quotient_ring(self.ring):
+            raise ValueError("Not a quotient ring")
+        self.to_coeff()
+        status = self.ring.lib.arith_round_division_approximate(
+            self.ring.arith_ring, self.as_element(), ring.arith_ring
+        )
+        if status != 0:
+            raise ValueError(f"arith_round_division_approximate failed with {status}")
+        self.ring = ring
+        return self
+
+    def decompose_digit(
+        self,
+        ring: RNSRing,
+        primes: list[int],
+        log_base: int = 0,
+        level: int = 0,
+        dropped: int = 0,
+        centered: bool = False,
+    ) -> RNSPolynomial:
+        mask = 0
+        for p in primes:
+            if p not in self.ring.primes:
+                raise ValueError(f"{p} is not a prime of this ring")
+            mask |= 1 << self.ring.prime_indices[self.ring.primes.index(p)]
+        self.to_coeff()
+        out = Polynomial(ring)
+        status = self.ring.lib.arith_decompose_digit(
+            self.ring.arith_ring,
+            out.as_element(),
+            self.as_element(),
+            mask,
+            log_base,
+            level,
+            dropped,
+            int(centered),
+        )
+        if status != 0:
+            raise ValueError(
+                "a radix digit takes one prime; the primes must be this ring's"
+            )
+        out.repr = repr.coeff
+        return out
+
     def rescale_to_power_of_two(self, k: int):
         """``round(2^k * c / q)`` for each coefficient, as ``N`` machine words.
 

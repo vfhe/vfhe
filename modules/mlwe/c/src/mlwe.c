@@ -334,7 +334,7 @@ void mlwe_RNS_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const ArithElemen
                                   uint64_t n_out, uint64_t n_in, uint64_t n_threads)
 {
     LinearCombinations lc = {out, in, coeff, n_in};
-    vfhe_parallel_for(n_out, n_threads, linear_combination_job, &lc);
+    vfhe_parallel_for(n_out, one_thread_on_generic_path(n_threads), linear_combination_job, &lc);
 }
 
 RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key)
@@ -484,7 +484,8 @@ void mlwe_tensor_product(ArithElement *out, RNS_MLWE in1, RNS_MLWE in2)
     const uint64_t r = in1->r;
     assert(in2->r == r);
     const uint64_t R = mlwe_extended_rank(r);
-    if (in1->ring->impl == ARITH_IMPL_RNS && mlwe_rns_tensor_product(out, in1, in2) == 0)
+    if (in1->ring->impl == ARITH_IMPL_RNS && !ARITH_GENERIC_PATH() &&
+        mlwe_rns_tensor_product(out, in1, in2) == 0)
         return;
     for (uint64_t k = 0; k <= R; k++)
     {
@@ -546,7 +547,7 @@ void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk
         return;
     }
 
-    if (mlwe_is_rns_hybrid_keyswitch(out, ksk))
+    if (mlwe_is_rns_hybrid_keyswitch(out, ksk) && !ARITH_GENERIC_PATH())
     {
         mlwe_rns_multiply_batch(&out, &in1, &in2, ksk, NULL, true, 1, 0);
         return;
@@ -583,13 +584,13 @@ static void multiply_job(void *ctx, uint64_t i)
 void mlwe_multiply_batch(RNS_MLWE *out, RNS_MLWE *in1, RNS_MLWE *in2, RNS_MLWE_KS_Key ksk,
                          uint64_t n, uint64_t n_threads)
 {
-    if (n > 0 && ksk != NULL && mlwe_is_rns_hybrid_keyswitch(out[0], ksk))
+    if (n > 0 && ksk != NULL && mlwe_is_rns_hybrid_keyswitch(out[0], ksk) && !ARITH_GENERIC_PATH())
     {
         mlwe_rns_multiply_batch(out, in1, in2, ksk, NULL, true, n, n_threads);
         return;
     }
     SampleJobs jobs = {out, in1, in2, ksk, NULL};
-    vfhe_parallel_for(n, n_threads, multiply_job, &jobs);
+    vfhe_parallel_for(n, one_thread_on_generic_path(n_threads), multiply_job, &jobs);
 }
 
 static void multiply_round_division_job(void *ctx, uint64_t i)
@@ -604,13 +605,13 @@ void mlwe_multiply_round_division_batch(RNSc_MLWE *out, RNS_MLWE *in1, RNS_MLWE 
                                         RNS_MLWE_KS_Key ksk, ArithRing to, uint64_t n,
                                         uint64_t n_threads)
 {
-    if (n > 0 && mlwe_is_rns_hybrid_keyswitch(out[0], ksk))
+    if (n > 0 && mlwe_is_rns_hybrid_keyswitch(out[0], ksk) && !ARITH_GENERIC_PATH())
     {
         mlwe_rns_multiply_batch(out, in1, in2, ksk, to, false, n, n_threads);
         return;
     }
     SampleJobs jobs = {out, in1, in2, ksk, to};
-    vfhe_parallel_for(n, n_threads, multiply_round_division_job, &jobs);
+    vfhe_parallel_for(n, one_thread_on_generic_path(n_threads), multiply_round_division_job, &jobs);
 }
 
 static void round_division_job(void *ctx, uint64_t i)
@@ -650,7 +651,7 @@ void mlwe_round_division(RNSc_MLWE out, ArithRing to)
     {
         return;
     }
-    if (out->ring->impl == ARITH_IMPL_RNS)
+    if (out->ring->impl == ARITH_IMPL_RNS && !ARITH_GENERIC_PATH())
     {
         mlwe_rns_round_division(out, to);
         return;
@@ -665,12 +666,18 @@ void mlwe_round_division(RNSc_MLWE out, ArithRing to)
 
 void mlwe_mod_down(RNSc_MLWE out, RNSc_MLWE in, const ArithElement *const *addend)
 {
-    if (in->ring != out->ring && in->ring->impl == ARITH_IMPL_RNS)
+    if (in->ring != out->ring && in->ring->impl == ARITH_IMPL_RNS && !ARITH_GENERIC_PATH())
     {
         mlwe_rns_mod_down(out, in, addend);
         return;
     }
-    mlwe_round_division(in, out->ring);
+    if (in->ring != out->ring)
+    {
+        // The division by the primes `out` lacks, component by component.
+        for (size_t k = 0; k <= in->r; k++)
+            arith_round_division_approximate(in->ring, mlwe_component(in, k), out->ring);
+        in->ring = out->ring;
+    }
     mlwe_copy_RNSc_sample(out, in);
     for (size_t k = 0; addend && k <= out->r; k++)
     {

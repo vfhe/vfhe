@@ -114,7 +114,7 @@ void mgsw_CMUX_batch(RNSc_MLWE *out, RNSc_MLWE *in1, RNSc_MLWE *in2, uint64_t n,
                      uint64_t ell, const GadgetParams *gadget_params, uint64_t n_threads)
 {
     CMUXJobs jobs = {out, in1, in2, mgsw, ell, gadget_params};
-    vfhe_parallel_for(n, n_threads, cmux_job, &jobs);
+    vfhe_parallel_for(n, one_thread_on_generic_path(n_threads), cmux_job, &jobs);
 }
 
 void mgsw_NCMUX_to_coeff(RNS_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2, RNS_MLWE *mgsw,
@@ -176,7 +176,7 @@ void mgsw_internal_product(RNS_MLWE *out, RNS_MLWE *a, uint64_t ell, RNS_MLWE *b
                            const GadgetParams *gadget_params, uint64_t n_threads)
 {
     InternalProduct p = {out, a, b, ell, gadget_params};
-    vfhe_parallel_for(rows, n_threads, internal_product_row, &p);
+    vfhe_parallel_for(rows, one_thread_on_generic_path(n_threads), internal_product_row, &p);
 }
 
 typedef struct

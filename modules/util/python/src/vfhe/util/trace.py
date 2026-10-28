@@ -54,7 +54,9 @@ class Event:
     for an in-place operation. ``param`` is the generator of a permutation,
     the power of a monomial product (``param2`` whether one is subtracted),
     an integer factor, a count or a stream; ``scalar`` the per-row factors
-    of ``"scale_by"``; ``label`` and ``enter`` belong to a ``"mark"``.
+    of ``"scale_by"``; ``label`` and ``enter`` belong to a ``"mark"``. A
+    ``"decompose_digit"`` carries `Polynomial.decompose_digit`'s parameters,
+    ``primes`` as the prime values.
     """
 
     sequence: int
@@ -67,6 +69,11 @@ class Event:
     param2: int = 0
     sigma: float = 0.0
     scalar: tuple[int, ...] | None = None
+    primes: tuple[int, ...] = ()
+    log_base: int = 0
+    level: int = 0
+    dropped: int = 0
+    centered: bool = False
     label: str | None = None
     enter: bool | None = None
 
@@ -157,6 +164,15 @@ class Trace:
                 if native.scalar != ffi.NULL
                 else None
             ),
+            primes=(
+                tuple(self._ring(native.N, native.primes, native.base).primes)
+                if native.primes
+                else ()
+            ),
+            log_base=native.log_base,
+            level=native.level,
+            dropped=native.dropped,
+            centered=bool(native.centered),
             label=ffi.string(native.label).decode()
             if native.label != ffi.NULL
             else None,
