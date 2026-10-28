@@ -721,6 +721,13 @@ class RNSPolynomial(Polynomial):
     #: The native ``RNS_Polynomial`` handle, freed with this object.
     obj: Any
 
+    if TYPE_CHECKING:
+        # What a direct construction yields, with the native handle this
+        # class alone can adopt; the front declares the common keywords.
+        def __new__(
+            cls, ring: RNSRing, repr: Any = ..., obj: Any = None
+        ) -> RNSPolynomial: ...
+
     def __init__(
         self,
         ring: RNSRing,

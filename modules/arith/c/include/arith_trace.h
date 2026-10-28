@@ -64,18 +64,22 @@ extern "C"
      *
      * `sequence` numbers events from 1 in the order they were recorded and is
      * the version of the value the event wrote. `inputs` are the versions of
-     * the operands, in the operation's argument order; an in-place operation
-     * (MUL_ADDTO, MUL_SUBTO, SCALE_ADDTO) names the accumulator's previous
-     * version first. COPY names the value copied and carries no payload;
-     * ZERO carries none either. `value` is the output's copy, an
+     * the `n_inputs` operands, in the operation's argument order; an
+     * operation that accumulates into its output or works in place
+     * (MUL_ADDTO, MUL_SUBTO, SCALE_ADDTO, ROUND_DIVISION) names the output's
+     * previous version first. COPY names the value copied and carries no
+     * payload; ZERO carries none either. `value` is the output's copy, an
      * RNS_Polynomial over the output's primes (`mask`, `base`, `N`) in
-     * `domain`, until arith_trace_take_value() hands it over. `param` is the
-     * generator of PERMUTE, the power of MUL_BY_MONOMIAL (`param2` its
-     * minus_one), the factor of SCALE_INT and SCALE_ADDTO, the count of
-     * FROM_INT_ARRAY or the stream of SAMPLE_UNIFORM_SEEDED; `sigma` is the
-     * Gaussian width; `scalar` holds SCALE_BY's per-row factors. `secret`
-     * marks a sampler's output. A MARK carries `label` and whether it opens
+     * `domain`, until arith_trace_take_value() hands it over. `secret` marks
+     * a sampler's output. A MARK carries `label` and whether it opens
      * (`enter`) or closes a region.
+     *
+     * The parameters, by kind: PERMUTE's generator and MUL_BY_MONOMIAL's
+     * power in `param` (`param2` its minus_one); SCALE_INT's and
+     * SCALE_ADDTO's factor in `param`; SCALE_BY's per-row factors in
+     * `scalar`; SAMPLE_GAUSSIAN's width in `sigma`; FROM_INT_ARRAY's count
+     * and SAMPLE_UNIFORM_SEEDED's stream in `param`. ROUND_DIVISION's output
+     * is the input divided by the primes it no longer holds and rounded.
      */
     typedef struct
     {
