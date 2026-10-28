@@ -18,7 +18,8 @@
         "modules/mlwe/python/src",
         "modules/piop/python/src",
         "modules/polycom/python/src",
-        "modules/util/python/src"
+        "modules/util/python/src",
+        "modules/vfhe/python/src"
     ],
     "exclude": [
         "**/.*",

@@ -36,6 +36,7 @@ subdir('modules/mlwe')
 subdir('modules/piop')
 subdir('modules/polycom')
 subdir('modules/util')
+subdir('modules/vfhe')
 
 # --- External -----------------------------------------------------------------
 

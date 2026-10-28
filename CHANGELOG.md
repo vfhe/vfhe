@@ -39,6 +39,19 @@ versions may contain breaking changes.
   the products by an integer go through the generic interface, so they
   are on the tape; the row kernels they called are the ones the
   interface calls.
+- The `vfhe.vfhe` package, with what an arithmetization reads from the
+  tape: `computation` reads a trace's operations into its steps in vfhe's
+  terms (a multiplication's operands, tensor slots, digits, key
+  components, the division by the special primes, and rescales, with the
+  recorded values); `witness` applies an arithmetization to them, the
+  named values with their roles and bounds and the relations between
+  them, with `check` evaluating every bound and relation on the recorded
+  values; `cccfgs26` is the arithmetization of [CCCFGS26, App. A.5]
+  (`d0`, `d1`, `d2`, `w_ks`, `evk`, `w_quot`, `w_rmd`, Eqs. 18-20). Rank
+  1 only. The relinearized product converts its tensor product in place
+  instead of into a second sample, so the key switch's operands are the
+  tensor's slots on the tape (and one allocation and one copy fewer on
+  every path).
 - Two operations of the ring tower in the generic interface and on
   `Polynomial`: `decompose_digit`, a digit of an element's residues (a
   residue lifted, the fast base conversion of a group's, or a radix digit
