@@ -516,12 +516,9 @@ static void multiply_relinearized(RNSc_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS
     mlwe_tensor_product(tensor, in1, in2);
     free(tensor);
 
-    RNSc_MLWE ext_c = mlwe_alloc_sample(in1->ring, R);
-    mlwe_RNS_to_RNSc(ext_c, ext);
-    mlwe_RNSc_GHS_hybrid_keyswitch(out, ext_c, ksk, 0);
-
+    mlwe_RNS_to_RNSc((RNSc_MLWE)ext, ext);
+    mlwe_RNSc_GHS_hybrid_keyswitch(out, (RNSc_MLWE)ext, ksk, 0);
     free_mlwe_RNS_sample(ext);
-    free_mlwe_RNS_sample(ext_c);
 }
 
 void mlwe_multiply(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2, RNS_MLWE_KS_Key ksk)

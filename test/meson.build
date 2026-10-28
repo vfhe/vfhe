@@ -82,6 +82,7 @@ pythonpath = ':'.join(
         meson.project_source_root() / 'modules/piop/python/src',
         meson.project_source_root() / 'modules/polycom/python/src',
         meson.project_source_root() / 'modules/util/python/src',
+        meson.project_source_root() / 'modules/vfhe/python/src',
     ],
 )
 
