@@ -327,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import _vfhe_flags  # pyright: ignore[reportMissingImports]
 
-    started = datetime.datetime.now(datetime.timezone.utc)
+    started = datetime.datetime.now(datetime.UTC)
     head = _git("rev-parse", "--short", "HEAD")
     dirty = bool(_git("status", "--porcelain", "--untracked-files=no"))
     meta = {
@@ -429,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
     results.write(
         {
             "kind": "end",
-            "finished": datetime.datetime.now(datetime.timezone.utc).isoformat(
+            "finished": datetime.datetime.now(datetime.UTC).isoformat(
                 timespec="seconds"
             ),
             "verdict": verdict,
