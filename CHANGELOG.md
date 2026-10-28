@@ -27,6 +27,18 @@ versions may contain breaking changes.
   the digits of its key switch and their products with the key, and the
   divisions. `vfhe.arith.set_generic_only` takes the generic paths
   without a trace, for comparing them with the kernels.
+  Marks cut the tape into operations: while a trace is enabled, a
+  profile hook marks the entry and the exit of every public function and
+  method of the vfhe modules (`vfhe.util` aside), and `trace.mark` places
+  marks by hand; `Trace.operations` reads the tape as that tree, an
+  `Operation` with a name, a path and its events per marked call that
+  made a ring operation. `Trace.version_of` gives the event that last
+  wrote a polynomial or a sample component, for naming a tape value.
+  `Polynomial`'s `add`, `sub`, `multiply`, `copy`, `automorphism` (in the
+  coefficient domain), `sample_gaussian`, `round_division`, `__mod__` and
+  the products by an integer go through the generic interface, so they
+  are on the tape; the row kernels they called are the ones the
+  interface calls.
 - Two operations of the ring tower in the generic interface and on
   `Polynomial`: `decompose_digit`, a digit of an element's residues (a
   residue lifted, the fast base conversion of a group's, or a radix digit
