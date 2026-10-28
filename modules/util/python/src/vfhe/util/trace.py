@@ -25,12 +25,14 @@ or encryption holds the key and the noise; sampler outputs carry
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vfhe.util.bindings import ffi, lib
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 __all__ = ["Event", "Trace", "enable", "mark", "recording"]
 
@@ -155,7 +157,9 @@ class Trace:
                 if native.scalar != ffi.NULL
                 else None
             ),
-            label=ffi.string(native.label).decode() if native.label != ffi.NULL else None,
+            label=ffi.string(native.label).decode()
+            if native.label != ffi.NULL
+            else None,
             enter=bool(native.enter) if kind == "mark" else None,
         )
 
