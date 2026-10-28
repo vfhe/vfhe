@@ -8,25 +8,34 @@
 #include <stdlib.h>
 #include <string.h>
 
-// The tape: a growable array of events, and a table from an element's
-// storage to the version it holds. One lock covers both, taken for the whole
-// of a record, copy included: events are then numbered in the order the
-// operations finished, whichever threads ran them.
+// The tape is two things under one lock:
+//
+// - the events, a growable array in sequence order, each owning its copies
+//   (the value, the scalar, the label, the operand lists);
+// - the version table, a hash map from an element's storage (the
+//   RNS_Polynomial address) to the sequence number of the event that last
+//   wrote it. Open addressing with linear probing, grown at half full,
+//   entries removed by shifting the probe chain back so no tombstones are
+//   needed.
+//
+// The lock is held for the whole of an open and of a close, the copy
+// included, so events are numbered in the order operations finish,
+// whichever threads run them. Freeing a value runs the forget hook, which
+// takes the lock, so nothing is freed while it is held.
 
 typedef struct
 {
     const void *handle; // NULL marks an empty slot
     uint64_t version;
-} Version;
+} VersionEntry;
 
 typedef struct
 {
     ArithTraceEvent *events;
     uint64_t length, capacity;
     uint64_t next_sequence;
-    // Open addressing with linear probing; `used` counts the slots taken.
-    Version *table;
-    uint64_t slots, used;
+    VersionEntry *table;
+    uint64_t slots, used; // slots is a power of two; used counts the entries
     pthread_mutex_t lock;
 } Tape;
 
@@ -38,7 +47,8 @@ static Tape *tape(void) { return (Tape *)arith_trace_tape; }
 
 // ---- the version table ------------------------------------------------------
 
-static uint64_t slot_of(const Tape *t, const void *handle)
+// The slot a handle hashes to: the probe starts here.
+static uint64_t hash_slot(const Tape *t, const void *handle)
 {
     uint64_t h = (uint64_t)(uintptr_t)handle;
     h ^= h >> 33;
@@ -47,13 +57,14 @@ static uint64_t slot_of(const Tape *t, const void *handle)
     return h & (t->slots - 1);
 }
 
-static Version *find(const Tape *t, const void *handle)
+// The entry of `handle`, or NULL when the table does not know it.
+static VersionEntry *version_lookup(const Tape *t, const void *handle)
 {
     if (t->slots == 0)
         return NULL;
-    for (uint64_t i = slot_of(t, handle);; i = (i + 1) & (t->slots - 1))
+    for (uint64_t i = hash_slot(t, handle);; i = (i + 1) & (t->slots - 1))
     {
-        Version *v = &t->table[i];
+        VersionEntry *v = &t->table[i];
         if (v->handle == NULL)
             return NULL;
         if (v->handle == handle)
@@ -61,29 +72,32 @@ static Version *find(const Tape *t, const void *handle)
     }
 }
 
-static void insert(Tape *t, const void *handle, uint64_t version);
+static void version_store(Tape *t, const void *handle, uint64_t version);
 
-static void grow_table(Tape *t)
+// Doubles the table and re-inserts every entry, since the slots depend on
+// the table's size.
+static void version_table_grow(Tape *t)
 {
-    Version *old = t->table;
+    VersionEntry *old = t->table;
     const uint64_t old_slots = t->slots;
     t->slots = old_slots ? 2 * old_slots : 1024;
-    t->table = (Version *)safe_malloc(t->slots * sizeof(Version));
-    memset(t->table, 0, t->slots * sizeof(Version));
+    t->table = (VersionEntry *)safe_malloc(t->slots * sizeof(VersionEntry));
+    memset(t->table, 0, t->slots * sizeof(VersionEntry));
     t->used = 0;
     for (uint64_t i = 0; i < old_slots; i++)
         if (old[i].handle != NULL)
-            insert(t, old[i].handle, old[i].version);
+            version_store(t, old[i].handle, old[i].version);
     free(old);
 }
 
-static void insert(Tape *t, const void *handle, uint64_t version)
+// Records that `handle` now holds `version`, replacing what it held.
+static void version_store(Tape *t, const void *handle, uint64_t version)
 {
     if (2 * (t->used + 1) > t->slots)
-        grow_table(t);
-    for (uint64_t i = slot_of(t, handle);; i = (i + 1) & (t->slots - 1))
+        version_table_grow(t);
+    for (uint64_t i = hash_slot(t, handle);; i = (i + 1) & (t->slots - 1))
     {
-        Version *v = &t->table[i];
+        VersionEntry *v = &t->table[i];
         if (v->handle == NULL || v->handle == handle)
         {
             if (v->handle == NULL)
@@ -95,13 +109,14 @@ static void insert(Tape *t, const void *handle, uint64_t version)
     }
 }
 
-// Backward-shift deletion keeps every probe chain unbroken without
-// tombstones.
-static void erase(Tape *t, const void *handle)
+// Removes `handle` from the table. The entries after it in its probe chain
+// move back over the hole, unless an entry's own slot lies between the hole
+// and it, in which case it already sits as early as it may.
+static void version_forget(Tape *t, const void *handle)
 {
     if (t->slots == 0)
         return;
-    uint64_t i = slot_of(t, handle);
+    uint64_t i = hash_slot(t, handle);
     for (;; i = (i + 1) & (t->slots - 1))
     {
         if (t->table[i].handle == NULL)
@@ -115,8 +130,7 @@ static void erase(Tape *t, const void *handle)
     {
         if (t->table[j].handle == NULL)
             break;
-        const uint64_t home = slot_of(t, t->table[j].handle);
-        // Entry j may move into the hole if its home is not in (hole, j].
+        const uint64_t home = hash_slot(t, t->table[j].handle);
         const int between = hole < j ? (home > hole && home <= j) : (home > hole || home <= j);
         if (!between)
         {
@@ -130,12 +144,14 @@ static void erase(Tape *t, const void *handle)
 
 // ---- events -----------------------------------------------------------------
 
-static ArithTraceEvent *append(Tape *t)
+// Appends an empty event with the next sequence number.
+static ArithTraceEvent *event_append(Tape *t)
 {
     if (t->length == t->capacity)
     {
         t->capacity = t->capacity ? 2 * t->capacity : 256;
-        t->events = (ArithTraceEvent *)safe_realloc(t->events, t->capacity * sizeof(ArithTraceEvent));
+        t->events =
+            (ArithTraceEvent *)safe_realloc(t->events, t->capacity * sizeof(ArithTraceEvent));
     }
     ArithTraceEvent *e = &t->events[t->length++];
     memset(e, 0, sizeof(*e));
@@ -143,7 +159,8 @@ static ArithTraceEvent *append(Tape *t)
     return e;
 }
 
-static void describe(ArithTraceEvent *e, const ArithElement *element)
+// Fills in which primes `element` holds and which domain it is in.
+static void event_describe(ArithTraceEvent *e, const ArithElement *element)
 {
     RNS_Polynomial p = arith_rns_polynomial(element);
     e->N = p->base->N;
@@ -152,6 +169,7 @@ static void describe(ArithTraceEvent *e, const ArithElement *element)
     e->domain = element->domain;
 }
 
+// A fresh RNS_Polynomial holding a copy of `element`'s value.
 static void *copy_of(const ArithElement *element)
 {
     RNS_Polynomial p = arith_rns_polynomial(element);
@@ -160,24 +178,26 @@ static void *copy_of(const ArithElement *element)
     return c;
 }
 
-// The version of an operand, recording it as an INPUT first if no event
-// wrote it. An operand holding no value (empty domain) has no version.
+// The version of an operand. An operand no event wrote is recorded first
+// as an INPUT event carrying its copy, so it gets a version too. An operand
+// holding no value (empty domain) has no version.
 static uint64_t version_of(Tape *t, const ArithElement *element)
 {
     if (element == NULL || element->handle == NULL || element->domain == ARITH_DOMAIN_EMPTY)
         return 0;
-    Version *v = find(t, element->handle);
+    VersionEntry *v = version_lookup(t, element->handle);
     if (v != NULL)
         return v->version;
-    ArithTraceEvent *e = append(t);
+    ArithTraceEvent *e = event_append(t);
     e->kind = ARITH_TRACE_INPUT;
-    describe(e, element);
+    event_describe(e, element);
     e->value = copy_of(element);
-    insert(t, element->handle, e->sequence);
+    version_store(t, element->handle, e->sequence);
     return e->sequence;
 }
 
-static void free_event(ArithTraceEvent *e)
+// Releases everything an event owns.
+static void event_free(ArithTraceEvent *e)
 {
     if (e->value != NULL)
         free_RNS_polynomial(e->value);
@@ -188,20 +208,18 @@ static void free_event(ArithTraceEvent *e)
     e->label = NULL;
 }
 
-__attribute__((noinline, cold)) uint64_t arith_trace_begin(ArithTraceKind kind, ArithRing ring,
-                                                           const ArithElement *out,
-                                                           const ArithElement *a,
-                                                           const ArithElement *b, uint64_t param,
-                                                           uint64_t param2, double sigma,
-                                                           const ArithScalar *scalar)
+// Opens an event: the operands' versions are resolved (and unknown ones
+// copied) before the operation runs, since an accumulator, an element
+// divided in place, or an output that is also an operand is overwritten by
+// it; then the event is appended with everything but its output.
+__attribute__((noinline, cold)) uint64_t arith_trace_begin(
+    ArithTraceKind kind, ArithRing ring, const ArithElement *out, const ArithElement *a,
+    const ArithElement *b, uint64_t param, uint64_t param2, double sigma, const ArithScalar *scalar)
 {
     if (ring->impl != ARITH_IMPL_RNS)
         return 0;
     Tape *t = tape();
     pthread_mutex_lock(&t->lock);
-    // The operands' versions before the operation: an accumulator and the
-    // element of an in-place division are read before they are written, and
-    // an operand may be the output itself.
     uint64_t inputs[ARITH_TRACE_INPUTS] = {0, 0, 0};
     uint32_t n = 0;
     if (kind == ARITH_TRACE_MUL_ADDTO || kind == ARITH_TRACE_MUL_SUBTO ||
@@ -212,7 +230,7 @@ __attribute__((noinline, cold)) uint64_t arith_trace_begin(ArithTraceKind kind, 
     if (b != NULL)
         inputs[n++] = version_of(t, b);
 
-    ArithTraceEvent *e = append(t);
+    ArithTraceEvent *e = event_append(t);
     e->kind = kind;
     memcpy(e->inputs, inputs, sizeof(inputs));
     e->n_inputs = n;
@@ -234,6 +252,8 @@ __attribute__((noinline, cold)) uint64_t arith_trace_begin(ArithTraceKind kind, 
     return sequence;
 }
 
+// Closes an event: on success the output is copied in and becomes the
+// value its storage holds; on failure the event keeps no value.
 __attribute__((noinline, cold)) void arith_trace_end(uint64_t sequence, const ArithElement *out,
                                                      ArithStatus status)
 {
@@ -247,10 +267,10 @@ __attribute__((noinline, cold)) void arith_trace_end(uint64_t sequence, const Ar
         ArithTraceEvent *e = &t->events[sequence - t->events[0].sequence];
         if (status == ARITH_OK)
         {
-            describe(e, out);
+            event_describe(e, out);
             if (e->kind != ARITH_TRACE_COPY && e->kind != ARITH_TRACE_ZERO)
                 e->value = copy_of(out);
-            insert(t, out->handle, e->sequence);
+            version_store(t, out->handle, e->sequence);
         }
     }
     pthread_mutex_unlock(&t->lock);
@@ -262,7 +282,7 @@ void arith_trace_forget(const void *handle)
     if (t == NULL)
         return;
     pthread_mutex_lock(&t->lock);
-    erase(t, handle);
+    version_forget(t, handle);
     pthread_mutex_unlock(&t->lock);
 }
 
@@ -272,7 +292,7 @@ void arith_trace_mark(const char *label, int enter)
     if (t == NULL)
         return;
     pthread_mutex_lock(&t->lock);
-    ArithTraceEvent *e = append(t);
+    ArithTraceEvent *e = event_append(t);
     e->kind = ARITH_TRACE_MARK;
     const size_t len = strlen(label) + 1;
     e->label = (char *)safe_malloc(len);
@@ -314,7 +334,7 @@ void arith_trace_clear(void)
     // No tape is published any more, so the forget hook of each freed value
     // finds nothing to lock.
     for (uint64_t i = 0; i < t->length; i++)
-        free_event(&t->events[i]);
+        event_free(&t->events[i]);
     free(t->events);
     free(t->table);
     pthread_mutex_destroy(&t->lock);
@@ -371,13 +391,14 @@ void arith_trace_release(uint64_t count)
         count = t->length;
     // Freed after the lock is released: freeing a value runs the forget
     // hook, which takes the lock itself.
-    ArithTraceEvent *released = (ArithTraceEvent *)safe_malloc((count ? count : 1) * sizeof(ArithTraceEvent));
+    ArithTraceEvent *released =
+        (ArithTraceEvent *)safe_malloc((count ? count : 1) * sizeof(ArithTraceEvent));
     memcpy(released, t->events, count * sizeof(ArithTraceEvent));
     memmove(t->events, t->events + count, (t->length - count) * sizeof(ArithTraceEvent));
     t->length -= count;
     pthread_mutex_unlock(&t->lock);
     for (uint64_t i = 0; i < count; i++)
-        free_event(&released[i]);
+        event_free(&released[i]);
     free(released);
 }
 

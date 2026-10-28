@@ -61,10 +61,10 @@ static void filled(ArithElement *e, uint64_t seed)
     RNS_Polynomial p = arith_rns_polynomial(e);
     for (uint64_t i = 0; i < TEST_L; i++)
         for (uint64_t j = 0; j < TEST_N; j++)
-            set_coeff(p, i, j,
-                      (seed * 6364136223846793005ULL + j * 1442695040888963407ULL +
-                       i * 1013904223ULL) %
-                          PRIMES[i]);
+            set_coeff(
+                p, i, j,
+                (seed * 6364136223846793005ULL + j * 1442695040888963407ULL + i * 1013904223ULL) %
+                    PRIMES[i]);
     e->domain = ARITH_DOMAIN_CANONICAL;
 }
 

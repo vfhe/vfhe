@@ -59,7 +59,14 @@ def test_sample_addition_records_operands_then_sums_and_replays(scheme):
         c3 = c1 + c2
     c3 += c1  # a later change must not reach the recorded values
     events = t.events()
-    assert [e.kind for e in events] == ["input", "input", "add", "input", "input", "add"]
+    assert [e.kind for e in events] == [
+        "input",
+        "input",
+        "add",
+        "input",
+        "input",
+        "add",
+    ]
     assert [e.sequence for e in events] == [1, 2, 3, 4, 5, 6]
     assert events[2].inputs == (1, 2) and events[5].inputs == (4, 5)
     assert all(e.ring == c1.ring for e in events)
