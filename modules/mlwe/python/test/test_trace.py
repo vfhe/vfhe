@@ -107,7 +107,7 @@ def _replay(e, values):
 
 
 def _kinds(events):
-    return [e.kind for e in events if e.kind != "input"]
+    return [e.kind for e in events if e.kind not in ("input", "mark")]
 
 
 def _check(events):
@@ -147,7 +147,7 @@ def test_sample_addition_records_operands_then_sums_and_replays(bv):
     with trace.recording() as t:
         c3 = c1 + c2
     c3 += c1  # a later change must not reach the recorded values
-    events = t.events()
+    events = [e for e in t.events() if e.kind != "mark"]
     assert [e.kind for e in events] == [
         "input",
         "input",
@@ -156,7 +156,9 @@ def test_sample_addition_records_operands_then_sums_and_replays(bv):
         "input",
         "add",
     ]
-    assert events[2].inputs == (1, 2) and events[5].inputs == (4, 5)
+    sequences = [e.sequence for e in events]
+    assert events[2].inputs == (sequences[0], sequences[1])
+    assert events[5].inputs == (sequences[3], sequences[4])
     assert all(e.ring == c1.ring for e in events)
     assert _check(events) == 2
     assert events[2].value == c1.get_a_poly(0) + c2.get_a_poly(0)
@@ -206,7 +208,7 @@ def test_multiply_generic_path_matches_the_kernel_and_replays(request, setup):
     assert kinds.count("mul_subto") == 6  # three digits, two key components
     assert kinds.count("round_division_approximate") == (2 if setup == "ghs" else 0)
     assert _check(events) == sum(k in REPLAYED for k in kinds)
-    final = [e for e in events if e.kind != "input"][-2:]
+    final = [e for e in events if e.kind not in ("input", "mark")][-2:]
     assert [e.value for e in final] == _components(traced)
 
 
