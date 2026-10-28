@@ -145,6 +145,12 @@ extern "C"
     uint64_t arith_trace_next_sequence(void);
     /** @brief Appends a MARK event with a copy of `label`. */
     void arith_trace_mark(const char *label, int enter);
+    /**
+     * @brief The sequence number of the event that last wrote the value
+     *        held at `handle` (the storage of an element), or 0 when the
+     *        tape does not know it.
+     */
+    uint64_t arith_trace_version(const void *handle);
 
     /**
      * @brief Non-NULL while recording. The generic interface reads it

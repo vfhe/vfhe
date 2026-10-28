@@ -73,7 +73,7 @@ def test_the_two_operations_are_on_the_tape(ring):
             ring, [ring.primes[2]], log_base=8, level=1, centered=True
         )
         x.round_division_approximate(small)
-    events = t.events()
+    events = [e for e in t.events() if e.kind != "mark"]
     assert [e.kind for e in events] == [
         "input",
         "decompose_digit",
@@ -92,7 +92,7 @@ def test_the_two_operations_are_on_the_tape(ring):
         True,
     )
     assert events[1].value == d
-    assert events[2].inputs == (1,) and events[2].ring == small
+    assert events[2].inputs == (events[0].sequence,) and events[2].ring == small
     assert events[2].value == x
 
 

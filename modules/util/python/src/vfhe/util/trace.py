@@ -10,31 +10,43 @@ wrote is recorded first as an ``"input"`` event, so every operand of every
 event is on the tape. Values are copies: later changes to the live objects
 do not reach them.
 
+Marks cut the tape into operations. While a trace is enabled, a profile
+hook marks the entry and the exit of every public function and method of
+the vfhe modules (the runtime, `vfhe.util`, aside), and `mark` places marks
+by hand. `Trace.operations` reads the tape as that tree, an `Operation`
+per marked call that made a ring operation, named after the call:
+
 >>> from vfhe.util import trace
 >>> with trace.recording() as t:
-...     c = a + b
->>> [e.kind for e in t.events()]
-['input', 'input', 'add', 'input', 'input', 'add']
+...     d = (a * b) * (a * b)
+>>> [op.name for op in t.operations()]
+['CKKS_Ciphertext.__mul__', 'CKKS_Ciphertext.__mul__']
 
-`Trace.events` drains the tape: what it returns is gone from it, so a long
-computation can be read in pieces. A trace started before key generation
-or encryption holds the key and the noise; sampler outputs carry
-``secret``.
+`Trace.events` and `Trace.operations` drain the tape: what they return is
+gone from it, so a long computation can be read in pieces. A trace started
+before key generation or encryption holds the key and the noise; sampler
+outputs carry ``secret``. A value written other than through the generic
+interface, by a row function called by hand on storage the tape knows, is
+not seen, and the tape is wrong from there.
 """
 
 from __future__ import annotations
 
 import importlib
+import sys
+import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import FunctionType
 from typing import TYPE_CHECKING, Any
 
 from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from types import CodeType, FrameType
 
-__all__ = ["Event", "Trace", "enable", "mark", "recording"]
+__all__ = ["Event", "Operation", "Trace", "enable", "mark", "recording"]
 
 #: Event kinds by their native code, named after the operations.
 KINDS: dict[int, str] = {
@@ -42,6 +54,29 @@ KINDS: dict[int, str] = {
     for name in dir(lib)
     if name.startswith("ARITH_TRACE_")
 }
+
+#: The operator methods the hook marks along with the public ones.
+OPERATORS = frozenset(
+    {
+        "__add__",
+        "__radd__",
+        "__iadd__",
+        "__sub__",
+        "__rsub__",
+        "__isub__",
+        "__mul__",
+        "__rmul__",
+        "__imul__",
+        "__matmul__",
+        "__neg__",
+        "__truediv__",
+        "__itruediv__",
+        "__mod__",
+        "__pow__",
+        "__lshift__",
+        "__rshift__",
+    }
+)
 
 
 @dataclass
@@ -78,11 +113,114 @@ class Event:
     enter: bool | None = None
 
 
+@dataclass
+class Operation:
+    """A marked region of the tape: a call of a vfhe function, or the region
+    between a `mark` and its closing mark.
+
+    ``name`` is the mark's label, None for the events outside any marked
+    call; ``path`` joins the names from the outermost operation with ``/``;
+    ``sequence`` is the opening mark's. ``events`` are the operation's own,
+    ``children`` the operations made inside it, both in tape order.
+    """
+
+    name: str | None
+    path: str
+    sequence: int
+    events: list[Event] = field(default_factory=list)
+    children: list[Operation] = field(default_factory=list)
+
+    def walk(self) -> Iterator[Operation]:
+        """This operation, then every operation inside it, in tape order."""
+        yield self
+        for child in self.children:
+            yield from child.walk()
+
+    def find(self, name: str) -> list[Operation]:
+        """The operations named ``name`` here and inside, in tape order."""
+        return [op for op in self.walk() if op.name == name]
+
+    def all_events(self) -> list[Event]:
+        """The events here and inside, in tape order."""
+        events = [e for op in self.walk() for e in op.events]
+        events.sort(key=lambda e: e.sequence)
+        return events
+
+
+# ---- the hook ---------------------------------------------------------------
+
+
+def _marked() -> dict[CodeType, bytes]:
+    """The code objects the hook marks, with their labels: the public functions
+    and methods of the loaded vfhe modules, the runtime aside."""
+    labels: dict[CodeType, bytes] = {}
+    for name, module in list(sys.modules.items()):
+        if module is None or not (name == "vfhe" or name.startswith("vfhe.")):
+            continue
+        if name == "vfhe.util" or name.startswith("vfhe.util."):
+            continue
+        namespaces = [vars(module)] + [
+            vars(cls)
+            for cls in vars(module).values()
+            if isinstance(cls, type) and cls.__module__ == name
+        ]
+        for namespace in namespaces:
+            for attr, value in namespace.items():
+                if isinstance(value, (staticmethod, classmethod)):
+                    value = value.__func__
+                if not isinstance(value, FunctionType) or value.__module__ != name:
+                    continue
+                if not attr.startswith("_") or attr in OPERATORS:
+                    labels[value.__code__] = value.__code__.co_qualname.encode()
+    return labels
+
+
+class _Hook:
+    """The profile function installed while a trace is enabled: a mark at
+    the entry and at the exit of each marked call."""
+
+    def __init__(self) -> None:
+        self.labels = _marked()
+        self.previous = (sys.getprofile(), threading.getprofile())
+
+    def __call__(self, frame: FrameType, event: str, arg: object) -> None:
+        if event == "call" or event == "return":
+            label = self.labels.get(frame.f_code)
+            if label is not None:
+                lib.arith_trace_mark(label, 1 if event == "call" else 0)
+
+
+_hook: _Hook | None = None
+
+
+def _install_hook() -> None:
+    global _hook
+    if _hook is None:
+        _hook = _Hook()
+        sys.setprofile(_hook)
+        threading.setprofile(_hook)
+
+
+def _remove_hook() -> None:
+    global _hook
+    if _hook is not None:
+        sys.setprofile(_hook.previous[0])
+        threading.setprofile(_hook.previous[1])
+        _hook = None
+
+
+# ---- the tape as Python reads it -------------------------------------------
+
+
 class Trace:
     """The tape as Python reads it; `enable` returns one."""
 
     def __init__(self) -> None:
         self._rings: dict[tuple[int, int, int], Any] = {}
+        # Operations assembled by `operations`: the ones still open, outermost
+        # first, and the completed outermost ones not returned yet.
+        self._open: list[Operation] = []
+        self._done: list[Operation] = []
 
     @property
     def enabled(self) -> bool:
@@ -90,17 +228,23 @@ class Trace:
         return bool(lib.arith_trace_is_enabled())
 
     def enable(self) -> None:
-        """Resumes recording onto the same tape."""
+        """Resumes recording onto the same tape, marking the vfhe calls made
+        from now on."""
         lib.arith_trace_enable()
+        _install_hook()
 
     def disable(self) -> None:
         """Stops recording; what was recorded stays readable."""
+        _remove_hook()
         lib.arith_trace_disable()
 
     def clear(self) -> None:
         """Drops the tape: every event not yet read, and the versions."""
+        _remove_hook()
         lib.arith_trace_clear()
         self._rings.clear()
+        self._open.clear()
+        self._done.clear()
 
     def __enter__(self) -> Trace:
         return self
@@ -128,6 +272,55 @@ class Trace:
     def events(self, kind: str | None = None) -> list[Event]:
         """`drain` as a list, of one ``kind`` only when given."""
         return [e for e in self.drain() if kind is None or e.kind == kind]
+
+    def operations(self) -> list[Operation]:
+        """`drain` as outermost operations, cut by the marks.
+
+        An operation is returned once its closing mark is on the tape, or
+        once the trace is disabled; until then it waits here, whole. A
+        marked call with no ring operation in it or inside it is left out.
+        """
+        for event in self.drain():
+            self._place(event)
+        if not self.enabled:
+            while self._open:
+                self._close()
+        done, self._done = self._done, []
+        return done
+
+    def version_of(self, element: Any) -> int | None:
+        """The sequence number of the event that last wrote ``element``'s
+        value, or None when the tape has not seen it.
+
+        ``element`` is a polynomial or the native handle of one, such as a
+        sample's component.
+        """
+        version = lib.arith_trace_version(getattr(element, "obj", element))
+        return int(version) or None
+
+    def _place(self, event: Event) -> None:
+        if event.kind == "mark":
+            if event.enter:
+                parent = self._open[-1] if self._open else None
+                prefix = f"{parent.path}/" if parent is not None and parent.path else ""
+                self._open.append(
+                    Operation(event.label, prefix + str(event.label), event.sequence)
+                )
+            elif self._open:
+                self._close()
+            return
+        if self._open:
+            self._open[-1].events.append(event)
+            return
+        # Outside every marked call: one unnamed operation per run of them.
+        if not self._done or self._done[-1].name is not None:
+            self._done.append(Operation(None, "", event.sequence))
+        self._done[-1].events.append(event)
+
+    def _close(self) -> None:
+        operation = self._open.pop()
+        if operation.events or operation.children:
+            (self._open[-1].children if self._open else self._done).append(operation)
 
     def _ring(self, N: int, mask: int, base: Any) -> Any:
         key = (N, mask, int(ffi.cast("uintptr_t", base)))
@@ -185,8 +378,9 @@ def enable() -> Trace:
 
     A second call resumes the same tape; `Trace.clear` ends it.
     """
-    lib.arith_trace_enable()
-    return Trace()
+    trace = Trace()
+    trace.enable()
+    return trace
 
 
 @contextmanager

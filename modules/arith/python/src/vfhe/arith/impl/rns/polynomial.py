@@ -707,6 +707,12 @@ def domain_of(representation) -> int:
     return _DOMAIN[representation]
 
 
+def _check_status(status: int, operation: str) -> None:
+    """Raises when a call of the generic interface reports a failure."""
+    if status != 0:
+        raise ValueError(f"arith_{operation} failed with {status}")
+
+
 class RNSPolynomial(Polynomial):
     """An element of an `RNSRing`: one row of residues per prime.
 
@@ -796,7 +802,15 @@ class RNSPolynomial(Polynomial):
     def multiply(self, in1, in2):
         if not (in1.repr == in2.repr == repr.ntt):
             raise ValueError("failed: not (in1.repr == in2.repr == repr.ntt)")
-        self.ring.lib.polynomial_mul_RNS_polynomial(self.obj, in1.obj, in2.obj)
+        _check_status(
+            self.ring.lib.arith_mul(
+                self.ring.arith_ring,
+                self.as_element(),
+                in1.as_element(),
+                in2.as_element(),
+            ),
+            "mul",
+        )
         self.repr = in1.repr
 
     def negate(self, in1=None):
@@ -808,19 +822,29 @@ class RNSPolynomial(Polynomial):
     def sub(self, in1, in2):
         if in1.repr != in2.repr:
             raise ValueError("failed: in1.repr != in2.repr")
-        if in1.repr == repr.ntt:
-            self.ring.lib.polynomial_sub_RNS_polynomial(self.obj, in1.obj, in2.obj)
-        else:
-            self.ring.lib.polynomial_sub_RNSc_polynomial(self.obj, in1.obj, in2.obj)
+        _check_status(
+            self.ring.lib.arith_sub(
+                self.ring.arith_ring,
+                self.as_element(),
+                in1.as_element(),
+                in2.as_element(),
+            ),
+            "sub",
+        )
         self.repr = in1.repr
 
     def add(self, in1, in2):
         if in1.repr != in2.repr:
             raise ValueError("failed: in1.repr != in2.repr")
-        if in1.repr == repr.ntt:
-            self.ring.lib.polynomial_add_RNS_polynomial(self.obj, in1.obj, in2.obj)
-        else:
-            self.ring.lib.polynomial_add_RNSc_polynomial(self.obj, in1.obj, in2.obj)
+        _check_status(
+            self.ring.lib.arith_add(
+                self.ring.arith_ring,
+                self.as_element(),
+                in1.as_element(),
+                in2.as_element(),
+            ),
+            "add",
+        )
         self.repr = in1.repr
 
     def automorphism(self, gen):
@@ -839,7 +863,12 @@ class RNSPolynomial(Polynomial):
             res.repr = repr.ntt
             return res
         self.to_coeff()
-        self.ring.lib.polynomial_RNSc_permute(res.obj, self.obj, gen)
+        _check_status(
+            self.ring.lib.arith_permute(
+                self.ring.arith_ring, res.as_element(), self.as_element(), gen
+            ),
+            "permute",
+        )
         res.repr = repr.coeff
         return res
 
@@ -881,7 +910,12 @@ class RNSPolynomial(Polynomial):
         return self
 
     def sample_gaussian(self, sigma, ntt=True):
-        self.ring.lib.polynomial_gen_gaussian_RNSc_polynomial(self.obj, sigma)
+        _check_status(
+            self.ring.lib.arith_sample_gaussian(
+                self.ring.arith_ring, self.as_element(), sigma
+            ),
+            "sample_gaussian",
+        )
         self.repr = repr.coeff
         if ntt:
             self.to_NTT()
@@ -978,8 +1012,12 @@ class RNSPolynomial(Polynomial):
         if not (ring.is_quotient_ring(self.ring)):
             raise ValueError("Not a quotient ring or contiguous RNS-component subset")
         self.to_coeff()
-        divide_mask = self.rns_mask & ~ring.mask
-        self.ring.lib.polynomial_round_division_RNSc_wo_free(self.obj, divide_mask)
+        _check_status(
+            self.ring.lib.arith_round_division(
+                self.ring.arith_ring, self.as_element(), ring.arith_ring
+            ),
+            "round_division",
+        )
         self.ring = ring
         return self
 
@@ -1196,7 +1234,12 @@ class RNSPolynomial(Polynomial):
 
     def copy(self) -> RNSPolynomial:
         res = Polynomial(self.ring)
-        self.ring.lib.polynomial_copy_RNS_polynomial(res.obj, self.obj)
+        _check_status(
+            self.ring.lib.arith_copy(
+                self.ring.arith_ring, res.as_element(), self.as_element()
+            ),
+            "copy",
+        )
         res.repr = self.repr
         return res
 
@@ -1212,11 +1255,7 @@ class RNSPolynomial(Polynomial):
         return res
 
     def __mod__(self, value: int):
-        self.to_coeff()
-        res = Polynomial(self.ring)
-        value_idx = self.ring.primes.index(value)
-        self.ring.lib.polynomial_RNSc_mod_reduce_lifted(res.obj, self.obj, value_idx)
-        return res
+        return self.decompose_digit(self.ring, [value])
 
     def __copy__(self) -> RNSPolynomial:
         return self.copy()
@@ -1237,7 +1276,12 @@ class RNSPolynomial(Polynomial):
             if other == 1:
                 return self.copy()
             res = Polynomial(self.ring)
-            self.ring.lib.polynomial_scale_RNSc_polynomial(res.obj, self.obj, other)
+            _check_status(
+                self.ring.lib.arith_scale_int(
+                    self.ring.arith_ring, res.as_element(), self.as_element(), other
+                ),
+                "scale_int",
+            )
             res.repr = self.repr
         elif type(other) is list:
             res = Polynomial(self.ring)
@@ -1272,7 +1316,12 @@ class RNSPolynomial(Polynomial):
                 raise ValueError(
                     "failed: other >= 2**self.ring.smallest_prime"
                 )  # large scaling not implemented
-            self.ring.lib.polynomial_scale_RNSc_polynomial(self.obj, self.obj, other)
+            _check_status(
+                self.ring.lib.arith_scale_int(
+                    self.ring.arith_ring, self.as_element(), self.as_element(), other
+                ),
+                "scale_int",
+            )
         else:
             raise NotImplementedError(f"cannot scale by {type(other).__name__}")
         return self

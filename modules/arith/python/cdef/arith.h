@@ -45,7 +45,15 @@ typedef struct
     void *handle;
     int domain;
 } ArithElement;
-void arith_copy(ArithRing ring, ArithElement *out, ArithElement *in);
+int arith_copy(void *ring, ArithElement *out, const ArithElement *in);
+int arith_zero(void *ring, ArithElement *out);
+int arith_add(void *ring, ArithElement *out, const ArithElement *a, const ArithElement *b);
+int arith_sub(void *ring, ArithElement *out, const ArithElement *a, const ArithElement *b);
+int arith_mul(void *ring, ArithElement *out, const ArithElement *a, const ArithElement *b);
+int arith_scale_int(void *ring, ArithElement *out, const ArithElement *a, uint64_t scale);
+int arith_permute(void *ring, ArithElement *out, const ArithElement *a, uint64_t gen);
+int arith_sample_gaussian(void *ring, ArithElement *out, double sigma);
+int arith_round_division(void *ring, ArithElement *element, void *to);
 int arith_round_division_approximate(void *ring, ArithElement *element, void *to);
 int arith_decompose_digit(void *ring, ArithElement *out, ArithElement *a, uint64_t primes,
                           uint64_t log_base, uint64_t level, uint64_t dropped, int centered);
@@ -441,3 +449,4 @@ void *arith_trace_take_value(uint64_t index);
 void arith_trace_release(uint64_t count);
 uint64_t arith_trace_next_sequence(void);
 void arith_trace_mark(const char *label, int enter);
+uint64_t arith_trace_version(const void *handle);

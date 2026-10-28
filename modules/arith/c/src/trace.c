@@ -322,6 +322,18 @@ void arith_trace_mark(const char *label, int enter)
     pthread_mutex_unlock(&t->lock);
 }
 
+uint64_t arith_trace_version(const void *handle)
+{
+    Tape *t = tape();
+    if (t == NULL)
+        return 0;
+    pthread_mutex_lock(&t->lock);
+    const VersionEntry *v = version_lookup(t, handle);
+    const uint64_t version = v == NULL ? 0 : v->version;
+    pthread_mutex_unlock(&t->lock);
+    return version;
+}
+
 // ---- control and reading ----------------------------------------------------
 
 void arith_trace_enable(void)
