@@ -373,6 +373,37 @@ ArithStatus arith_round_division(ArithRing ring, ArithElement *element, ArithRin
     return status;
 }
 
+ArithStatus arith_round_division_approximate(ArithRing ring, ArithElement *element, ArithRing to)
+{
+    if (element->domain != ARITH_DOMAIN_CANONICAL)
+    {
+        return ARITH_BAD_DOMAIN;
+    }
+    TRACE_BEGIN(ARITH_TRACE_ROUND_DIVISION_APPROXIMATE, element, NULL, NULL, 0, 0, 0.0, NULL);
+    ArithStatus status = ARITH_DISPATCH(ring, round_division_approximate, ring, element, to);
+    TRACE_END(status, element);
+    return status;
+}
+
+ArithStatus arith_decompose_digit(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  uint64_t primes, uint64_t log_base, uint64_t level,
+                                  uint64_t dropped, int centered)
+{
+    if (a->domain != ARITH_DOMAIN_CANONICAL)
+    {
+        return ARITH_BAD_DOMAIN;
+    }
+    const uint64_t traced_ =
+        ARITH_TRACE_ON()
+            ? arith_trace_begin_digit(ring, out, a, primes, log_base, level, dropped, centered)
+            : 0;
+    ArithStatus status = ARITH_DISPATCH(ring, decompose_digit, ring, out, a, primes, log_base,
+                                        level, dropped, centered);
+    out->domain = ARITH_DOMAIN_CANONICAL;
+    TRACE_END(status, out);
+    return status;
+}
+
 ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
                                     ArithRing from)
 {
@@ -386,6 +417,12 @@ ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const Ari
     TRACE_END(status, out);
     return status;
 }
+
+int arith_generic_only_state = 0;
+
+void arith_set_generic_only(int enabled) { arith_generic_only_state = enabled != 0; }
+
+int arith_generic_only(void) { return arith_generic_only_state; }
 
 ArithStatus arith_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out)
 {

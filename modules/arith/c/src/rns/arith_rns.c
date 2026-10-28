@@ -244,6 +244,146 @@ ArithStatus arith_rns_round_division(ArithRing ring, ArithElement *element, Arit
     return ARITH_OK;
 }
 
+// The row functions of the key switch's ModDown: the rows that leave are
+// prepared in place, every row that stays divided, and the rows that left
+// zeroed and dropped from the mask, as the exact division drops them.
+ArithStatus arith_rns_round_division_approximate(ArithRing ring, ArithElement *element,
+                                                 ArithRing to)
+{
+    const uint64_t divide_mask = params_of(ring)->rns_mask & ~params_of(to)->rns_mask;
+    RNSc_Polynomial x = (RNSc_Polynomial)arith_rns_polynomial(element);
+    polynomial_mod_down_RNSc_prepare(x, divide_mask);
+    polynomial_mod_down_RNSc_rows(x, x, NULL, divide_mask, x->rns_mask & ~divide_mask);
+    polynomial_round_division_RNSc_finish(x, divide_mask);
+    return ARITH_OK;
+}
+
+// The constants of a group's digit: for the group J of primes `primes`,
+// (Q_J / p_k)^-1 mod p_k at k for k in J, and (Q_J / p_k) mod p_i at
+// k * l + i for every row i in `rows`, l the base's prime count. Kept per
+// (base, group, rows, l) for the life of the process, as the shared rings
+// are; a base that grew since has another l, and another entry.
+typedef struct
+{
+    RNS_Base base;
+    uint64_t primes, rows, l;
+    uint64_t *inverse, *factors;
+} GroupConstants;
+
+static GroupConstants *group_cache = NULL;
+static size_t group_cache_len = 0, group_cache_cap = 0;
+static pthread_mutex_t group_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void group_constants(RNS_Base base, uint64_t primes, uint64_t rows, const uint64_t **inverse,
+                            const uint64_t **factors)
+{
+    const uint64_t l = base->l;
+    pthread_mutex_lock(&group_cache_lock);
+    for (size_t c = 0; c < group_cache_len; c++)
+    {
+        const GroupConstants *g = &group_cache[c];
+        if (g->base == base && g->primes == primes && g->rows == rows && g->l == l)
+        {
+            *inverse = g->inverse;
+            *factors = g->factors;
+            pthread_mutex_unlock(&group_cache_lock);
+            return;
+        }
+    }
+    GroupConstants g = {base,
+                        primes,
+                        rows,
+                        l,
+                        (uint64_t *)safe_malloc(l * sizeof(uint64_t)),
+                        (uint64_t *)safe_malloc(l * l * sizeof(uint64_t))};
+    memset(g.inverse, 0, l * sizeof(uint64_t));
+    memset(g.factors, 0, l * l * sizeof(uint64_t));
+    for (uint64_t k = 0; k < l; k++)
+    {
+        if (!(primes & (1ULL << k)))
+            continue;
+        for (uint64_t i = 0; i < l; i++)
+        {
+            if (!((rows | (1ULL << k)) & (1ULL << i)))
+                continue;
+            uint64_t f = 1;
+            for (uint64_t m = 0; m < l; m++)
+                if (m != k && (primes & (1ULL << m)))
+                    f = mul_modq(f, modq(base->mods[m]->q, base->mods[i]), base->mods[i]);
+            if (i == k)
+                g.inverse[k] = inverse_mod(f, base->mods[k]->q);
+            if (rows & (1ULL << i))
+                g.factors[k * l + i] = f;
+        }
+    }
+    if (group_cache_len == group_cache_cap)
+    {
+        group_cache_cap = group_cache_cap ? 2 * group_cache_cap : 8;
+        group_cache =
+            (GroupConstants *)safe_realloc(group_cache, group_cache_cap * sizeof(GroupConstants));
+    }
+    group_cache[group_cache_len++] = g;
+    *inverse = g.inverse;
+    *factors = g.factors;
+    pthread_mutex_unlock(&group_cache_lock);
+}
+
+static void group_cache_clear(void)
+{
+    pthread_mutex_lock(&group_cache_lock);
+    for (size_t c = 0; c < group_cache_len; c++)
+    {
+        free(group_cache[c].inverse);
+        free(group_cache[c].factors);
+    }
+    free(group_cache);
+    group_cache = NULL;
+    group_cache_len = group_cache_cap = 0;
+    pthread_mutex_unlock(&group_cache_lock);
+}
+
+// A group of primes J: the residues modulo its members, scaled by the
+// inverses, combined on every row of the output with the factors -- the
+// fast base conversion of the residue modulo Q_J.
+static ArithStatus group_digit(RNSc_Polynomial out, RNSc_Polynomial in, uint64_t primes,
+                               int centered)
+{
+    RNS_Base base = in->base;
+    const uint64_t *inverse, *factors;
+    group_constants(base, primes, out->rns_mask, &inverse, &factors);
+    struct _RNS_Polynomial group_storage;
+    RNS_Polynomial group = polynomial_RNS_view(&group_storage, (RNS_Polynomial)in, primes);
+    RNS_Polynomial scaled = polynomial_new_RNS_polynomial(base->N, primes, base);
+    polynomial_scale_RNS_polynomial_RNS(scaled, group, (uint64_t *)inverse);
+    polynomial_RNSc_lifted_combination(out, (RNSc_Polynomial)scaled, primes, factors, centered);
+    free_RNS_polynomial(scaled);
+    return ARITH_OK;
+}
+
+ArithStatus arith_rns_decompose_digit(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                      uint64_t primes, uint64_t log_base, uint64_t level,
+                                      uint64_t dropped, int centered)
+{
+    (void)ring;
+    RNSc_Polynomial in = (RNSc_Polynomial)arith_rns_polynomial(a);
+    RNSc_Polynomial digit = (RNSc_Polynomial)arith_rns_polynomial(out);
+    const int grouped = primes & (primes - 1);
+    if (primes == 0 || (primes & ~in->rns_mask) || (log_base && grouped))
+        return ARITH_BAD_DOMAIN;
+    const uint64_t j = (uint64_t)__builtin_ctzll(primes);
+    if (log_base && centered && log_base > 1)
+        polynomial_RNSc_decompose_digit_balanced(digit, in, j, log_base, level, dropped);
+    else if (log_base)
+        polynomial_RNSc_decompose_digit_rounded(digit, in, j, log_base, level, dropped);
+    else if (grouped)
+        return group_digit(digit, in, primes, centered);
+    else if (centered)
+        polynomial_RNSc_mod_reduce_lifted_centered(digit, in, j);
+    else
+        polynomial_RNSc_mod_reduce_lifted(digit, in, j);
+    return ARITH_OK;
+}
+
 // `from` is a single-prime ring: its residue is lifted to every prime of this
 // one. rns_mask_get_active_index recovers which prime that is.
 ArithStatus arith_rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
@@ -309,7 +449,9 @@ static const ArithMethods RNS_NTT_METHODS = {
     .sample_uniform_seeded = arith_rns_sample_uniform_seeded,
     .from_int_array = arith_rns_from_int_array,
     .round_division = arith_rns_round_division,
+    .round_division_approximate = arith_rns_round_division_approximate,
     .mod_reduce_lifted = arith_rns_mod_reduce_lifted,
+    .decompose_digit = arith_rns_decompose_digit,
     .scalar_new = arith_rns_scalar_new,
     .scalar_free = arith_rns_scalar_free,
 };
@@ -361,6 +503,7 @@ uint64_t arith_rns_ring_mask(ArithRing ring) { return params_of(ring)->rns_mask;
 // point at a method table in the retired library.
 void arith_rns_ring_cache_clear(void)
 {
+    group_cache_clear();
     pthread_mutex_lock(&ring_cache_lock);
     for (size_t i = 0; i < ring_cache_len; i++)
     {

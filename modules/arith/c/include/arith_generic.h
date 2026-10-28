@@ -161,8 +161,17 @@ extern "C"
         // tower group (ARITH_CAP_TOWER); `to` is the destination ring, never a
         // set of primes: which primes leave is the implementation's business.
         ArithStatus (*round_division)(ArithRing ring, ArithElement *element, ArithRing to);
+        // The same division through the fast base conversion of the
+        // remainder: cheaper, and rounded with an error of up to half the
+        // number of primes divided by.
+        ArithStatus (*round_division_approximate)(ArithRing ring, ArithElement *element,
+                                                  ArithRing to);
         ArithStatus (*mod_reduce_lifted)(ArithRing ring, ArithElement *out, const ArithElement *a,
                                          ArithRing from);
+        // A digit of `a`'s residues, see arith_decompose_digit.
+        ArithStatus (*decompose_digit)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                       uint64_t primes, uint64_t log_base, uint64_t level,
+                                       uint64_t dropped, int centered);
 
         // scalars
         ArithStatus (*scalar_new)(ArithRing ring, const uint64_t *per_component, ArithScalar *out);
@@ -236,6 +245,37 @@ extern "C"
                                      uint64_t count);
 
     ArithStatus arith_round_division(ArithRing ring, ArithElement *element, ArithRing to);
+    // `element` divided by the primes `to` lacks, in place, through the fast
+    // base conversion of the remainder: the quotient is off by up to half
+    // the number of primes divided by, unlike arith_round_division's.
+    // Canonical domain, as the round division.
+    ArithStatus arith_round_division_approximate(ArithRing ring, ArithElement *element,
+                                                 ArithRing to);
+    // A digit of the residues of `a`, written to every row of `out`, which
+    // may be over other primes than `a`: with `log_base` 0, the residue of
+    // `a` modulo the primes `primes` selects -- a single prime, or the fast
+    // base conversion of the residue modulo a group's product -- as stored
+    // or, if `centered`, as the centered representative; with a `log_base`,
+    // `primes` is one prime and the digit is digit `level` of its residue in
+    // base 2^log_base, the `dropped` lowest digits rounded away, unsigned
+    // or, if `centered`, balanced (centered, and the top digit carrying what
+    // the others leave). `a` canonical and holding `primes`; `out` canonical.
+    ArithStatus arith_decompose_digit(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                      uint64_t primes, uint64_t log_base, uint64_t level,
+                                      uint64_t dropped, int centered);
+
+    // --- the generic interface as the only path -----------------------------
+    //
+    // A module may compute a whole sample's operation in a kernel of its own
+    // instead of through the operations above. With this set, it computes
+    // through them: slower, and every operation then passes one place.
+    // Benchmarks compare the two; the execution tape (arith_trace.h) needs
+    // the operations to pass that place too, and asks for it on its own.
+    void arith_set_generic_only(int enabled);
+    int arith_generic_only(void);
+    // Read by the modules' entry points; nothing else should.
+    extern int arith_generic_only_state;
+#define ARITH_GENERIC_ONLY() __builtin_expect(arith_generic_only_state != 0, 0)
     ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
                                         ArithRing from);
 

@@ -376,6 +376,11 @@ static void gadget_mul_accumulate(RNS_MLWE out, RNS_MLWE *ksk, const ArithElemen
     // are split into groups as well.
     if (arith_rns_polynomial(poly)->rns_mask == 0)
         return;
+    if (ARITH_GENERIC_PATH())
+    {
+        gadget_mul_accumulate_generic(out, ksk, poly, subtract, gadget_params);
+        return;
+    }
     GadgetSum sum;
     gadget_sum_init(&sum, &ksk, &poly, 1, gadget_params, subtract);
     const uint64_t N = mlwe_component_rows(out, 0)->base->N;
@@ -447,16 +452,15 @@ void gadget_decompose(GadgetDigits *out, RNS_MLWE *ksk, const ArithElement *poly
     RNS_Base base = key->base;
     const int mul_domain = base->split_degree == 1;
 
+    if (ARITH_GENERIC_PATH())
+    {
+        gadget_decompose_generic(out, ksk, poly, gadget_params);
+        return;
+    }
     check_dropped_digits(source, gadget_params);
     ElementDecomposition e;
     element_decomposition_init(&e, source, key, gadget_params);
-    out->n = e.n;
-    out->digit = (ArithElement *)safe_malloc(e.n * sizeof(ArithElement));
-    for (uint64_t i = 0; i < e.n; i++)
-    {
-        out->digit[i].handle = polynomial_new_RNS_polynomial(base->N, key->rns_mask, base);
-        out->digit[i].domain = mul_domain ? ARITH_DOMAIN_MUL : ARITH_DOMAIN_CANONICAL;
-    }
+    gadget_digits_new(out, e.n, key);
     // Each digit row is the residue lifted to that prime alone, so the rows
     // are independent tasks.
     element_decomposition_scale(&e, source->rns_mask);
@@ -498,6 +502,32 @@ ElementDecomposition *gadget_decomposition_new(RNS_MLWE *ksk, const ArithElement
 }
 
 uint64_t gadget_decomposition_digits(const ElementDecomposition *e) { return e->n; }
+
+void gadget_decomposition_parameters(const ElementDecomposition *e, uint64_t t, uint64_t *primes,
+                                     uint64_t *log_base, uint64_t *level, uint64_t *dropped,
+                                     int *centered)
+{
+    const GadgetParams *g = e->gadget_params;
+    const size_t j = (size_t)__builtin_ctzll(e->primes[t]);
+    *primes = e->primes[t];
+    *log_base = g->log_base;
+    *level = g->log_base ? e->level[t] : 0;
+    *dropped = g->log_base ? dropped_of(e->source->base, j, g) : 0;
+    *centered = g->balanced;
+}
+
+void gadget_digits_new(GadgetDigits *out, uint64_t n, RNS_Polynomial key)
+{
+    const int mul_domain = key->base->split_degree == 1;
+    out->n = n;
+    out->digit = (ArithElement *)safe_malloc((n ? n : 1) * sizeof(ArithElement));
+    for (uint64_t i = 0; i < n; i++)
+    {
+        out->digit[i].handle =
+            polynomial_new_RNS_polynomial(key->base->N, key->rns_mask, key->base);
+        out->digit[i].domain = mul_domain ? ARITH_DOMAIN_MUL : ARITH_DOMAIN_CANONICAL;
+    }
+}
 
 void gadget_decomposition_digit_row(RNS_Polynomial out, const ElementDecomposition *e, uint64_t t)
 {
@@ -578,6 +608,11 @@ static void gadget_mul_automorphism(RNS_MLWE out, RNS_MLWE *ksk, const GadgetDig
 {
     if (digits->n == 0)
         return;
+    if (ARITH_GENERIC_PATH())
+    {
+        gadget_mul_automorphism_generic(out, ksk, digits, gen, subtract);
+        return;
+    }
     RNS_Polynomial first = (RNS_Polynomial)digits->digit[0].handle;
     RNS_Base base = first->base;
     const uint64_t N = base->N;

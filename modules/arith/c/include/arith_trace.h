@@ -53,6 +53,8 @@ extern "C"
         ARITH_TRACE_FROM_INT_ARRAY,
         ARITH_TRACE_ROUND_DIVISION,
         ARITH_TRACE_MOD_REDUCE_LIFTED,
+        ARITH_TRACE_ROUND_DIVISION_APPROXIMATE,
+        ARITH_TRACE_DECOMPOSE_DIGIT,
         ARITH_TRACE_MARK,
     } ArithTraceKind;
 
@@ -79,7 +81,10 @@ extern "C"
      * SCALE_ADDTO's factor in `param`; SCALE_BY's per-row factors in
      * `scalar`; SAMPLE_GAUSSIAN's width in `sigma`; FROM_INT_ARRAY's count
      * and SAMPLE_UNIFORM_SEEDED's stream in `param`. ROUND_DIVISION's output
-     * is the input divided by the primes it no longer holds and rounded.
+     * is the input divided by the primes it no longer holds and rounded;
+     * ROUND_DIVISION_APPROXIMATE's the same through the fast base
+     * conversion. DECOMPOSE_DIGIT's parameters are arith_decompose_digit's:
+     * `primes`, `log_base`, `level`, `dropped`, `centered`.
      */
     typedef struct
     {
@@ -98,6 +103,11 @@ extern "C"
         double sigma;
         uint64_t *scalar;
         uint64_t scalar_len;
+        uint64_t primes;
+        uint64_t log_base;
+        uint64_t level;
+        uint64_t dropped;
+        int centered;
         char *label;
         int enter;
     } ArithTraceEvent;
@@ -158,6 +168,11 @@ extern "C"
     uint64_t arith_trace_begin(ArithTraceKind kind, ArithRing ring, const ArithElement *out,
                                const ArithElement *a, const ArithElement *b, uint64_t param,
                                uint64_t param2, double sigma, const ArithScalar *scalar);
+    /** @brief arith_trace_begin() for arith_decompose_digit, whose
+     *         parameters are its own. */
+    uint64_t arith_trace_begin_digit(ArithRing ring, const ArithElement *out, const ArithElement *a,
+                                     uint64_t primes, uint64_t log_base, uint64_t level,
+                                     uint64_t dropped, int centered);
     /**
      * @brief Closes the event `sequence` opened by arith_trace_begin() once
      *        the operation returned `status`: on success copies `out` into
@@ -173,6 +188,10 @@ extern "C"
 
 /** The test the interface makes before recording. */
 #define ARITH_TRACE_ON() __builtin_expect(arith_trace_active != NULL, 0)
+/** Whether a module's entry point computes through the generic interface
+ *  rather than its own kernel: while recording, or when asked to
+ *  (arith_set_generic_only). */
+#define ARITH_GENERIC_PATH() (ARITH_TRACE_ON() || ARITH_GENERIC_ONLY())
 
 #ifdef __cplusplus
 }
