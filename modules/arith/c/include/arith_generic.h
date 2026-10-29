@@ -232,12 +232,13 @@ extern "C"
     ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
                                ArithScalar scale);
 
-    // arith_add, arith_sub and arith_mul on bare handles, for a caller that
-    // keeps each element's domain itself and would otherwise build an
-    // ArithElement per operand on every call. `a` and `b` are in `domain`;
-    // the result is in `domain` for add and sub and in the mul domain for
-    // mul, which the caller records. Otherwise the same as the operation of
-    // the same name.
+    // arith_copy, arith_add, arith_sub and arith_mul on bare handles, for a
+    // caller that keeps each element's domain itself and would otherwise
+    // build an ArithElement per operand on every call. The operands are in
+    // `domain`; the result is in `domain` for copy, add and sub and in the
+    // mul domain for mul, which the caller records. Otherwise the same as
+    // the operation of the same name.
+    ArithStatus arith_copy_handles(ArithRing ring, void *out, void *in, ArithDomain domain);
     ArithStatus arith_add_handles(ArithRing ring, void *out, void *a, void *b, ArithDomain domain);
     ArithStatus arith_sub_handles(ArithRing ring, void *out, void *a, void *b, ArithDomain domain);
     ArithStatus arith_mul_handles(ArithRing ring, void *out, void *a, void *b, ArithDomain domain);
