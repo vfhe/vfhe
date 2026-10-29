@@ -32,12 +32,16 @@ typedef struct
     const void *handle; // NULL marks an empty slot
     uint64_t version;
     uint64_t digest; // of the value as written, kept while verifying
+    int digested;    // whether `digest` was taken (verify may start late)
 } VersionEntry;
 
 typedef struct
 {
     ArithTraceEvent *events;
+    uint8_t *open; // per event: appended by a begin whose end has not run
     uint64_t length, capacity;
+    uint64_t published; // the events a reader may see: every one before the first open
+    uint64_t waiters;   // producers waiting for room
     uint64_t next_sequence;
     VersionEntry *table;
     uint64_t slots, used; // slots is a power of two; used counts the entries
@@ -159,18 +163,35 @@ static void version_forget(Tape *t, const void *handle)
 static ArithTraceEvent *event_append(Tape *t)
 {
     while (t->limit != 0 && t->length >= t->limit && arith_trace_active != NULL)
+    {
+        t->waiters++;
         pthread_cond_wait(&t->changed, &t->lock);
+        t->waiters--;
+        pthread_cond_broadcast(&t->changed); // for a clear waiting on the waiters
+    }
     if (t->length == t->capacity)
     {
         t->capacity = t->capacity ? 2 * t->capacity : 256;
         t->events =
             (ArithTraceEvent *)safe_realloc(t->events, t->capacity * sizeof(ArithTraceEvent));
+        t->open = (uint8_t *)safe_realloc(t->open, t->capacity);
     }
     ArithTraceEvent *e = &t->events[t->length++];
     memset(e, 0, sizeof(*e));
     e->sequence = t->next_sequence++;
-    pthread_cond_broadcast(&t->changed);
+    t->open[t->length - 1] = 0;
     return e;
+}
+
+// Publishes every complete event up to the first still open one, and wakes
+// the readers when something new became visible.
+static void publish(Tape *t)
+{
+    const uint64_t before = t->published;
+    while (t->published < t->length && !t->open[t->published])
+        t->published++;
+    if (t->published != before)
+        pthread_cond_broadcast(&t->changed);
 }
 
 // A 64-bit digest of the words `element` holds, over its active rows. Not
@@ -215,7 +236,10 @@ static void version_digest(Tape *t, const ArithElement *element)
         return;
     VersionEntry *v = version_lookup(t, element->handle);
     if (v != NULL)
+    {
         v->digest = digest_of(element);
+        v->digested = 1;
+    }
 }
 
 // Fills in which primes `element` holds and which domain it is in.
@@ -250,7 +274,16 @@ static uint64_t version_of(Tape *t, const ArithElement *element)
     int untraced = 0;
     if (v != NULL)
     {
-        if (!verify_state || v->digest == digest_of(element))
+        if (!verify_state)
+            return v->version;
+        if (!v->digested)
+        {
+            // Verification started after this version was written: what the
+            // storage holds now is the only value known for it.
+            version_digest(t, element);
+            return v->version;
+        }
+        if (v->digest == digest_of(element))
             return v->version;
         untraced = 1;
         t->untraced++;
@@ -281,9 +314,15 @@ static void event_free(ArithTraceEvent *e)
 // copied) before the operation runs, since an accumulator, an element
 // divided in place, or an output that is also an operand is overwritten by
 // it; then the event is appended with everything but its output.
-__attribute__((noinline, cold)) uint64_t arith_trace_begin(
-    ArithTraceKind kind, ArithRing ring, const ArithElement *out, const ArithElement *a,
-    const ArithElement *b, uint64_t param, uint64_t param2, double sigma, const ArithScalar *scalar)
+typedef struct
+{
+    uint64_t primes, log_base, level, dropped;
+    int centered;
+} DigitParameters;
+
+static uint64_t begin(ArithTraceKind kind, ArithRing ring, const ArithElement *out,
+                      const ArithElement *a, const ArithElement *b, uint64_t param, uint64_t param2,
+                      double sigma, const ArithScalar *scalar, const DigitParameters *digit)
 {
     if (ring->impl != ARITH_IMPL_RNS)
         return 0;
@@ -300,13 +339,25 @@ __attribute__((noinline, cold)) uint64_t arith_trace_begin(
     if (b != NULL)
         inputs[n++] = version_of(t, b);
 
+    // INPUT events appended by version_of are complete; this one stays open
+    // until its end, and readers see nothing from it on.
+    publish(t);
     ArithTraceEvent *e = event_append(t);
+    t->open[t->length - 1] = 1;
     e->kind = kind;
     memcpy(e->inputs, inputs, sizeof(inputs));
     e->n_inputs = n;
     e->param = param;
     e->param2 = param2;
     e->sigma = sigma;
+    if (digit != NULL)
+    {
+        e->primes = digit->primes;
+        e->log_base = digit->log_base;
+        e->level = digit->level;
+        e->dropped = digit->dropped;
+        e->centered = digit->centered;
+    }
     e->secret = kind == ARITH_TRACE_SAMPLE_UNIFORM || kind == ARITH_TRACE_SAMPLE_GAUSSIAN ||
                 kind == ARITH_TRACE_SAMPLE_UNIFORM_SEEDED;
     if (scalar != NULL)
@@ -322,24 +373,19 @@ __attribute__((noinline, cold)) uint64_t arith_trace_begin(
     return sequence;
 }
 
+__attribute__((noinline, cold)) uint64_t arith_trace_begin(
+    ArithTraceKind kind, ArithRing ring, const ArithElement *out, const ArithElement *a,
+    const ArithElement *b, uint64_t param, uint64_t param2, double sigma, const ArithScalar *scalar)
+{
+    return begin(kind, ring, out, a, b, param, param2, sigma, scalar, NULL);
+}
+
 __attribute__((noinline, cold)) uint64_t arith_trace_begin_digit(
     ArithRing ring, const ArithElement *out, const ArithElement *a, uint64_t primes,
     uint64_t log_base, uint64_t level, uint64_t dropped, int centered)
 {
-    const uint64_t sequence =
-        arith_trace_begin(ARITH_TRACE_DECOMPOSE_DIGIT, ring, out, a, NULL, 0, 0, 0.0, NULL);
-    if (sequence == 0)
-        return 0;
-    Tape *t = tape();
-    pthread_mutex_lock(&t->lock);
-    ArithTraceEvent *e = &t->events[sequence - t->events[0].sequence];
-    e->primes = primes;
-    e->log_base = log_base;
-    e->level = level;
-    e->dropped = dropped;
-    e->centered = centered;
-    pthread_mutex_unlock(&t->lock);
-    return sequence;
+    const DigitParameters digit = {primes, log_base, level, dropped, centered};
+    return begin(ARITH_TRACE_DECOMPOSE_DIGIT, ring, out, a, NULL, 0, 0, 0.0, NULL, &digit);
 }
 
 // Closes an event: on success the output is copied in and becomes the
@@ -351,18 +397,39 @@ __attribute__((noinline, cold)) void arith_trace_end(uint64_t sequence, const Ar
     if (t == NULL)
         return;
     pthread_mutex_lock(&t->lock);
-    // The event is still on the tape unless a reader released it meanwhile.
+    // An open event cannot have been released, so it is still on the tape.
     if (t->length > 0 && sequence >= t->events[0].sequence)
     {
-        ArithTraceEvent *e = &t->events[sequence - t->events[0].sequence];
+        const uint64_t index = sequence - t->events[0].sequence;
+        ArithTraceEvent *e = &t->events[index];
+        event_describe(e, out);
         if (status == ARITH_OK)
         {
-            event_describe(e, out);
             if (e->kind != ARITH_TRACE_COPY && e->kind != ARITH_TRACE_ZERO)
                 e->value = copy_of(out);
             version_store(t, out->handle, e->sequence);
             version_digest(t, out);
         }
+        else
+            e->failed = 1;
+        t->open[index] = 0;
+    }
+    publish(t);
+    pthread_mutex_unlock(&t->lock);
+}
+
+__attribute__((noinline, cold)) void arith_trace_converting(const ArithElement *element)
+{
+    Tape *t = tape();
+    if (t == NULL || !verify_state)
+        return;
+    pthread_mutex_lock(&t->lock);
+    // A known storage is checked against its version before the conversion
+    // rewrites it; a changed one is recorded again, as before any operation.
+    if (version_lookup(t, element->handle) != NULL)
+    {
+        version_of(t, element);
+        publish(t);
     }
     pthread_mutex_unlock(&t->lock);
 }
@@ -399,6 +466,7 @@ void arith_trace_mark(const char *label, int enter)
     e->label = (char *)safe_malloc(len);
     memcpy(e->label, label, len);
     e->enter = enter;
+    publish(t);
     pthread_mutex_unlock(&t->lock);
 }
 
@@ -449,17 +517,29 @@ int arith_trace_is_enabled(void) { return arith_trace_active != NULL; }
 void arith_trace_clear(void)
 {
     pthread_mutex_lock(&creation_lock);
-    arith_trace_active = NULL;
     Tape *t = tape();
+    if (t == NULL)
+    {
+        pthread_mutex_unlock(&creation_lock);
+        return;
+    }
+    // Stopping the recording under the lock wakes a producer waiting for
+    // room, and the wait here lets it finish its append before the tape
+    // goes; an operation in flight otherwise is the caller's to avoid.
+    pthread_mutex_lock(&t->lock);
+    arith_trace_active = NULL;
+    pthread_cond_broadcast(&t->changed);
+    while (t->waiters > 0)
+        pthread_cond_wait(&t->changed, &t->lock);
+    pthread_mutex_unlock(&t->lock);
     arith_trace_tape = NULL;
     pthread_mutex_unlock(&creation_lock);
-    if (t == NULL)
-        return;
     // No tape is published any more, so the forget hook of each freed value
     // finds nothing to lock.
     for (uint64_t i = 0; i < t->length; i++)
         event_free(&t->events[i]);
     free(t->events);
+    free(t->open);
     free(t->table);
     pthread_cond_destroy(&t->changed);
     pthread_mutex_destroy(&t->lock);
@@ -502,14 +582,14 @@ int arith_trace_wait(uint64_t count, double seconds)
         }
     }
     pthread_mutex_lock(&t->lock);
-    while (t->length < count && arith_trace_active != NULL)
+    while (t->published < count && arith_trace_active != NULL)
     {
         if (seconds < 0)
             pthread_cond_wait(&t->changed, &t->lock);
         else if (pthread_cond_timedwait(&t->changed, &t->lock, &deadline) == ETIMEDOUT)
             break;
     }
-    const int filled = t->length >= count;
+    const int filled = t->published >= count;
     pthread_mutex_unlock(&t->lock);
     return filled;
 }
@@ -535,7 +615,7 @@ uint64_t arith_trace_length(void)
     if (t == NULL)
         return 0;
     pthread_mutex_lock(&t->lock);
-    const uint64_t n = t->length;
+    const uint64_t n = t->published;
     pthread_mutex_unlock(&t->lock);
     return n;
 }
@@ -546,7 +626,7 @@ int arith_trace_read(uint64_t index, ArithTraceEvent *out)
     if (t == NULL)
         return -1;
     pthread_mutex_lock(&t->lock);
-    const int found = index < t->length;
+    const int found = index < t->published;
     if (found)
         *out = t->events[index];
     pthread_mutex_unlock(&t->lock);
@@ -560,7 +640,7 @@ void *arith_trace_take_value(uint64_t index)
         return NULL;
     pthread_mutex_lock(&t->lock);
     void *value = NULL;
-    if (index < t->length)
+    if (index < t->published)
     {
         value = t->events[index].value;
         t->events[index].value = NULL;
@@ -575,15 +655,17 @@ void arith_trace_release(uint64_t count)
     if (t == NULL)
         return;
     pthread_mutex_lock(&t->lock);
-    if (count > t->length)
-        count = t->length;
+    if (count > t->published)
+        count = t->published;
     // Freed after the lock is released: freeing a value runs the forget
     // hook, which takes the lock itself.
     ArithTraceEvent *released =
         (ArithTraceEvent *)safe_malloc((count ? count : 1) * sizeof(ArithTraceEvent));
     memcpy(released, t->events, count * sizeof(ArithTraceEvent));
     memmove(t->events, t->events + count, (t->length - count) * sizeof(ArithTraceEvent));
+    memmove(t->open, t->open + count, t->length - count);
     t->length -= count;
+    t->published -= count;
     pthread_cond_broadcast(&t->changed);
     pthread_mutex_unlock(&t->lock);
     for (uint64_t i = 0; i < count; i++)

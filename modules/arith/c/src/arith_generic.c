@@ -129,6 +129,8 @@ ArithStatus arith_to_mul(ArithRing ring, ArithElement *element)
     {
         return ARITH_OK;
     }
+    if (ARITH_TRACE_ON())
+        arith_trace_converting(element);
     ArithStatus status = ARITH_DISPATCH(ring, to_mul, ring, element);
     if (ARITH_TRACE_ON() && status == ARITH_OK)
         arith_trace_converted(element);
@@ -141,6 +143,8 @@ ArithStatus arith_to_canonical(ArithRing ring, ArithElement *element)
     {
         return ARITH_OK;
     }
+    if (ARITH_TRACE_ON())
+        arith_trace_converting(element);
     ArithStatus status = ARITH_DISPATCH(ring, to_canonical, ring, element);
     if (ARITH_TRACE_ON() && status == ARITH_OK)
         arith_trace_converted(element);
