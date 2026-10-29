@@ -16,7 +16,8 @@
  * Disabled, the tape costs the operations one load and one branch. Enabled,
  * it costs a lock and a copy per operation, from whichever thread runs it.
  * Events are read and released in order; a reader that drains as the
- * computation runs bounds what the tape holds.
+ * computation runs bounds what the tape holds, and a limit makes the
+ * computation wait for that reader.
  */
 #ifndef VFHE_ARITH_TRACE_H
 #define VFHE_ARITH_TRACE_H
@@ -113,6 +114,8 @@ extern "C"
         /** An INPUT recorded because the storage no longer held the
          *  value of its version: a write the tape did not see (verify). */
         int untraced;
+        /** The operation reported a failure: no value, no new version. */
+        int failed;
     } ArithTraceEvent;
 
     /**
@@ -126,10 +129,13 @@ extern "C"
     void arith_trace_disable(void);
     /** @brief Whether operations are being recorded. */
     int arith_trace_is_enabled(void);
-    /** @brief Drops every event, the values not taken, and the versions. */
+    /** @brief Drops every event, the values not taken, and the versions. A
+     *         producer waiting for room is released first; an operation
+     *         otherwise in flight must not be. */
     void arith_trace_clear(void);
 
-    /** @brief How many events are on the tape. */
+    /** @brief How many events a reader may see: the complete ones, up to
+     *         the first whose operation is still running. */
     uint64_t arith_trace_length(void);
     /**
      * @brief Copies event `index` (0 the oldest) into `out`.
@@ -185,8 +191,15 @@ extern "C"
     /** @brief How many untraced writes verification found since the last clear. */
     uint64_t arith_trace_untraced(void);
     /**
-     * @brief Tells the tape that `element` was converted between domains in
-     *        place, which is not an event: its version's digest is refreshed.
+     * @brief Tells the tape that `element` is about to be converted between
+     *        domains in place, which is not an event: when verifying, its
+     *        storage is checked against its version first, as before an
+     *        operation.
+     */
+    void arith_trace_converting(const ArithElement *element);
+    /**
+     * @brief Tells the tape that `element` was converted: its version's
+     *        digest is refreshed.
      */
     void arith_trace_converted(const ArithElement *element);
 

@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from vfhe.vfhe.computation import Computation
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
     from vfhe.util.trace import Operation
 
@@ -134,7 +134,11 @@ class Witness:
 
 
 def of(
-    operations: Iterable[Operation], arithmetization: Arithmetization, view: Any = None
+    operations: Iterable[Operation],
+    arithmetization: Arithmetization,
+    view: Any = None,
+    known: Mapping[int, Any] | None = None,
 ) -> Witness:
-    """The witness of the computation ``operations`` recorded."""
-    return Witness(Computation(operations), arithmetization, view)
+    """The witness of the computation ``operations`` recorded; ``known`` are
+    the values of an earlier piece of the tape it refers back to."""
+    return Witness(Computation(operations, known), arithmetization, view)

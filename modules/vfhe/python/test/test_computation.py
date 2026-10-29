@@ -53,3 +53,16 @@ def test_a_product_without_a_key_is_left_out_and_rank_two_refused():
         scheme.multiply(ct, ct, rlk)
     with pytest.raises(ValueError, match="rank 1"):
         Computation(t.operations())
+
+
+def test_a_later_piece_of_the_tape_needs_the_earlier_values(use_case):
+    _, a, b, _, _, operations = use_case(0)
+    earlier = Computation(operations)
+    with trace.recording() as t:
+        _ = a * b  # the key's components were recorded in the first piece
+    later = t.operations()
+    with pytest.raises(ValueError, match="pass the earlier values as known"):
+        Computation(later)
+    [product] = Computation(later, known=earlier.values).multiplications
+    assert product.operands == earlier.multiplications[0].operands
+    assert product.key_switch.key == earlier.multiplications[0].key_switch.key

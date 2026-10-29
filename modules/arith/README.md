@@ -10,11 +10,23 @@ other module builds on.
   modulus tower, the CKKS complex FFT encoder, and multiprecision reconstruction.
 - `c/test/`, C unit tests for the modular arithmetic, the NTT, and number
   theory.
+- `c/include/arith_trace.h`, `c/src/trace.c`, the execution tape: while a
+  trace is enabled, each operation of the generic interface over an RNS ring
+  appends an event with its kind, the versions of its operands (the sequence
+  number of the event that last wrote each value), its parameters and a copy
+  of its output; an operand no event wrote is recorded first as an input.
+  Disabled, it costs each operation one load and one branch. The typed
+  wrappers in `arith_generic.c` open and close the events; the dispatch
+  itself is untouched. `arith_set_generic_only` makes the modules take their
+  generic paths without a trace, for comparing them with their kernels.
 - `python/src/vfhe/arith/`, the Python API over the cffi boundary:
   - `Ring` / `Polynomial` (`polynomial.py`): construct rings, sample, add /
     multiply, convert between coefficient and NTT domains, apply automorphisms,
-    lift / rescale across quotient rings, and re-express a value over a base
-    that is not one of them (`convert_base`, exactly on request).
+    lift / rescale across quotient rings, take a digit of a value's residues
+    (`decompose_digit`) or the approximate round division of a key switch
+    (`round_division_approximate`), and re-express a value over a base that
+    is not one of them (`convert_base`, exactly on request). The operations
+    with a slot in the generic interface call it, so they are on the tape.
   - `ComplexRing` / `ComplexPolynomial` (`complex.py`): CKKS encode/decode FFT.
   - `Multiprecision` (`multiprecision.py`): big-integer/RNS bridge.
   - `number_theory.py` / `residue_selection.py`: pure-Python primality, CRT,
