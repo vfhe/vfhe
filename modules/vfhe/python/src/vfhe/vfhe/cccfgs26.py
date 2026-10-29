@@ -13,9 +13,10 @@ For a multiplication (PreMult, Eq. 18; KeySwitch, Eq. 19; Rescale, Eq. 20):
   and ``ct''`` (the rescaled output);
 - witness: ``w_ks``, the digits, within ``p_t/2`` (vfhe's digits are
   centered, which is within the paper's ``< p_t``), and ``w_quot`` and
-  ``w_rmd`` of each rescale, ``w_rmd`` within ``p_l/2``; ``w_quot`` is an
-  element of the ring without ``p_l`` by construction, so no bound is
-  attached to it.
+  ``w_rmd`` of each rescale, ``w_rmd`` within ``p_l/2`` and ``w_quot``
+  within ``q_l/p_l``, the modulus of its ring, which an element of that
+  ring meets by construction and which the range check imposes on the
+  integers the proof works with.
 
 Two conventions of vfhe differ from the paper and are stated here rather
 than hidden: the products with the key are subtracted,
@@ -34,6 +35,7 @@ agreeing modulo the primes divided by.
 
 from __future__ import annotations
 
+from math import prod
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import Polynomial
@@ -60,7 +62,14 @@ def _division_entries(
 ) -> list[Entry]:
     k = 0 if division.exact else len(division.primes)
     return [
-        Entry("w_quot" + suffix, "witness", division.quotient, step, index),
+        Entry(
+            "w_quot" + suffix,
+            "witness",
+            division.quotient,
+            step,
+            index,
+            bound=prod(division.quotient.ring.primes),
+        ),
         Entry(
             "w_rmd" + suffix,
             "witness",

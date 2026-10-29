@@ -53,7 +53,18 @@ versions may contain breaking changes.
   `known`. The relinearized product converts its tensor product in place
   instead of into a second sample, so the key switch's operands are the
   tensor's slots on the tape (and one allocation and one copy fewer on
-  every path).
+  every path). `computation` also reads plaintext-linear steps
+  (`Linear`, sums of `Term`s): products by a plaintext, linear
+  combinations (with or without a `PlaintextMatrix`), and additions and
+  subtractions of ciphertexts, followed back so that a step's terms are
+  ciphertexts no such step wrote. Every step carries its `layer` (the
+  multiplications on the longest chain before it) and its `ell`;
+  `Computation.unread` names the operations it does not read, such as
+  rotations, and `Computation.written_by` and `inputs` tell where a value
+  came from. `witness.range_classes` groups the entries that carry a
+  bound by name and `ell`, and `witness.coefficients` gives a class's
+  values as signed coefficient vectors. `cccfgs26` bounds `w_quot` by
+  `q_l/p_l`.
 - The tape can be bounded and verified. `trace.enable(limit=n)` holds at
   most `n` events and makes the computation wait for room, so a consumer
   thread drains it while the computation runs, through `Trace.wait`; a

@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The witness of the use case under [CCCFGS26]: the entries by name and
 role, every relation holding on the recorded values and failing on a
-tampered one, and a quotient-ring view."""
+tampered one, a quotient-ring view, and the range classes."""
+
+import math
 
 import pytest
 from vfhe.arith import Ring
@@ -40,7 +42,7 @@ def test_the_entries_are_named_as_in_the_paper(use_case, special_primes):
         scheme.ring.primes[-2] / 2,
         scheme.ring.primes[-2] / 2,
     ]
-    assert w.query("w_quot")[0].bound is None
+    assert w.query("w_quot")[0].bound == math.prod(scheme.ring.primes[:-1])
     with pytest.raises(ValueError, match="no entry"):
         w.query("w_nope")
     names = [r.name for r in w.relations]
@@ -80,3 +82,23 @@ def test_a_quotient_ring_view_reduces_the_values(use_case):
     foreign = Ring(N, prime_size=[40, 40], split_degree=1)
     with pytest.raises(ValueError, match="quotient"):
         witness.of(operations, cccfgs26, view=foreign).query("d2")
+
+
+def test_the_range_classes_group_the_bounded_entries(use_case):
+    scheme, *_, operations = use_case(0)
+    w = witness.of(operations, cccfgs26)
+    primes = scheme.ring.primes
+    assert witness.range_classes(w) == [
+        witness.RangeClass("w_ks", 3, 3, int(max(primes) / 2)),
+        witness.RangeClass("w_quot", 3, 2, primes[0] * primes[1]),
+        witness.RangeClass("w_rmd", 3, 2, int(primes[2] / 2)),
+        witness.RangeClass("w_ks", 2, 2, int(max(primes[:2]) / 2)),
+        witness.RangeClass("w_quot", 2, 2, primes[0]),
+        witness.RangeClass("w_rmd", 2, 2, int(primes[1] / 2)),
+    ]
+    digits = witness.coefficients(w, "w_ks", ell=3)
+    assert len(digits) == 3 and all(len(v) == N for v in digits)
+    assert digits[1] == w.query("w_ks")[1].value.get_polynomial(signed=True)
+    assert len(witness.coefficients(w, "w_ks")) == 5
+    with pytest.raises(ValueError, match="no entry with a bound"):
+        witness.coefficients(w, "d2")
