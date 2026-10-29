@@ -5,6 +5,7 @@
  * @brief The execution tape over the generic interface: which events an
  *        operation leaves, how operands are versioned, and what a reader gets.
  */
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -347,6 +348,70 @@ void test_digits_and_approximate_divisions_are_recorded(void)
     arith_ring_free(to);
 }
 
+static int third_mark_done = 0;
+
+static void *three_marks(void *arg)
+{
+    (void)arg;
+    arith_trace_mark("one", 1);
+    arith_trace_mark("two", 1);
+    arith_trace_mark("three", 1);
+    third_mark_done = 1;
+    return NULL;
+}
+
+void test_an_append_over_the_limit_waits_for_a_release(void)
+{
+    third_mark_done = 0;
+    arith_trace_enable();
+    arith_trace_set_limit(2);
+    TEST_ASSERT_EQUAL_UINT64(2, arith_trace_limit());
+    pthread_t producer;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&producer, NULL, three_marks, NULL));
+    TEST_ASSERT_EQUAL_INT(1, arith_trace_wait(2, 5.0));
+    TEST_ASSERT_EQUAL_UINT64(2, arith_trace_length());
+    TEST_ASSERT_EQUAL_INT(0, third_mark_done);
+    arith_trace_release(1);
+    pthread_join(producer, NULL);
+    TEST_ASSERT_EQUAL_INT(1, third_mark_done);
+    TEST_ASSERT_EQUAL_UINT64(2, arith_trace_length());
+    TEST_ASSERT_EQUAL_STRING("three", event(1).label);
+    // Nothing more comes: the wait for a third event times out.
+    TEST_ASSERT_EQUAL_INT(0, arith_trace_wait(3, 0.05));
+    arith_trace_set_limit(0);
+}
+
+void test_verify_flags_a_write_the_tape_did_not_see(void)
+{
+    ArithElement x, y, z;
+    filled(&x, 1);
+    filled(&y, 2);
+    arith_new(ring, &z);
+    arith_trace_set_verify(1);
+    arith_trace_enable();
+    arith_add(ring, &z, &x, &y);
+    // Written by hand, not through the generic interface.
+    polynomial_RNSc_negate((RNSc_Polynomial)arith_rns_polynomial(&x),
+                           (RNSc_Polynomial)arith_rns_polynomial(&x));
+    arith_add(ring, &z, &x, &y);
+    TEST_ASSERT_EQUAL_UINT64(1, arith_trace_untraced());
+    TEST_ASSERT_EQUAL_UINT64(5, arith_trace_length());
+    TEST_ASSERT_EQUAL_INT(ARITH_TRACE_INPUT, event(3).kind);
+    TEST_ASSERT_EQUAL_INT(1, event(3).untraced);
+    TEST_ASSERT_EQUAL_INT(0, event(0).untraced);
+    assert_same(arith_rns_polynomial(&x), (RNS_Polynomial)event(3).value);
+    // A conversion rewrites the storage but is not a write the tape misses.
+    arith_to_mul(ring, &x);
+    arith_to_mul(ring, &y);
+    arith_add(ring, &z, &x, &y);
+    TEST_ASSERT_EQUAL_UINT64(6, arith_trace_length());
+    TEST_ASSERT_EQUAL_UINT64(1, arith_trace_untraced());
+    arith_trace_set_verify(0);
+    arith_free(ring, &x);
+    arith_free(ring, &y);
+    arith_free(ring, &z);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -360,5 +425,7 @@ int main(void)
     RUN_TEST(test_scale_by_records_the_scalar_and_samples_are_secret);
     RUN_TEST(test_marks_and_disabling);
     RUN_TEST(test_digits_and_approximate_divisions_are_recorded);
+    RUN_TEST(test_an_append_over_the_limit_waits_for_a_release);
+    RUN_TEST(test_verify_flags_a_write_the_tape_did_not_see);
     return UNITY_END();
 }

@@ -121,13 +121,18 @@ ArithStatus arith_zero_in(ArithRing ring, ArithElement *out, ArithDomain domain)
     return status;
 }
 
+// A conversion is not an event, but it rewrites the storage, which the
+// tape must know when it verifies values against their versions.
 ArithStatus arith_to_mul(ArithRing ring, ArithElement *element)
 {
     if (element->domain == arith_mul_domain(ring))
     {
         return ARITH_OK;
     }
-    return ARITH_DISPATCH(ring, to_mul, ring, element);
+    ArithStatus status = ARITH_DISPATCH(ring, to_mul, ring, element);
+    if (ARITH_TRACE_ON() && status == ARITH_OK)
+        arith_trace_converted(element);
+    return status;
 }
 
 ArithStatus arith_to_canonical(ArithRing ring, ArithElement *element)
@@ -136,7 +141,10 @@ ArithStatus arith_to_canonical(ArithRing ring, ArithElement *element)
     {
         return ARITH_OK;
     }
-    return ARITH_DISPATCH(ring, to_canonical, ring, element);
+    ArithStatus status = ARITH_DISPATCH(ring, to_canonical, ring, element);
+    if (ARITH_TRACE_ON() && status == ARITH_OK)
+        arith_trace_converted(element);
+    return status;
 }
 
 // Addition and subtraction are defined in either domain, but only between
