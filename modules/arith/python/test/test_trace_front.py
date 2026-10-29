@@ -17,8 +17,12 @@ def ring():
 
 @pytest.fixture(autouse=True)
 def a_clean_tape():
+    trace.set_verify(True)
     yield
-    trace.enable().clear()
+    t = trace.enable()
+    untraced = t.untraced
+    t.clear()
+    assert untraced == 0
 
 
 def test_each_front_operation_is_recorded_with_its_operands(ring):
@@ -54,10 +58,9 @@ def test_each_front_operation_is_recorded_with_its_operands(ring):
         "scale_int",
         "sample_gaussian",
     ]
-    add, sub, mul, scale, digit, copy, division, permute, _, in_place, gaussian = (
-        events
-    )
-    assert add.inputs == sub.inputs == mul.inputs == (inputs[0].sequence, inputs[1].sequence)
+    add, sub, mul, scale, digit, copy, division, permute, _, in_place, gaussian = events
+    operands = (inputs[0].sequence, inputs[1].sequence)
+    assert add.inputs == sub.inputs == mul.inputs == operands
     assert add.value == total
     assert sub.value == difference
     assert mul.value == product

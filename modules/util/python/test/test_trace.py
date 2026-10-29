@@ -3,6 +3,7 @@
 """The execution tape's controls: enabling, marks, draining, clearing."""
 
 import sys
+import threading
 
 import pytest
 from vfhe.arith import Ring
@@ -12,8 +13,12 @@ from vfhe.util.bindings import lib
 
 @pytest.fixture(autouse=True)
 def a_clean_tape():
+    trace.set_verify(True)
     yield
-    trace.enable().clear()
+    t = trace.enable()
+    untraced = t.untraced
+    t.clear()
+    assert untraced == 0
 
 
 def test_recording_is_off_until_enabled_and_off_again_after() -> None:
@@ -151,3 +156,51 @@ def test_version_of_is_the_event_that_last_wrote_the_value() -> None:
     assert t.version_of(y) == second.sequence
     assert t.version_of(y.obj) == second.sequence
     assert second.inputs == (first.sequence, x_in.sequence)
+
+
+def test_a_bounded_tape_waits_for_a_consumer() -> None:
+    x = _polynomial()
+    t = trace.enable(limit=4)
+    assert t.limit == 4
+    seen: list = []
+    lengths: list = []
+
+    def consume():
+        while t.wait():
+            lengths.append(len(t))
+            seen.extend(t.events())
+
+    consumer = threading.Thread(target=consume)
+    consumer.start()
+    y = x
+    for _ in range(20):
+        y = y + x
+    t.disable()
+    consumer.join(timeout=30)
+    assert not consumer.is_alive()
+    assert max(lengths) <= 4
+    assert [e.kind for e in seen if e.kind != "mark"] == ["input"] + ["add"] * 20
+    t.clear()
+
+
+def test_verify_flags_a_write_the_tape_did_not_see() -> None:
+    x = _polynomial()
+    t = trace.enable(verify=True)
+    y = x + x
+    x.negate()  # in place, not through the generic interface
+    z = x + y
+    x.to_coeff()  # a conversion rewrites the storage but is not a write
+    w = x + z
+    t.disable()
+    events = [e for e in t.events() if e.kind != "mark"]
+    assert [(e.kind, e.untraced) for e in events] == [
+        ("input", False),
+        ("add", False),
+        ("input", True),
+        ("add", False),
+        ("add", False),
+    ]
+    assert events[2].value == x and events[4].value == w
+    assert t.untraced == 1
+    t.clear()
+    assert t.untraced == 0

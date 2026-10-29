@@ -14,9 +14,13 @@ N = 256
 
 @pytest.fixture(autouse=True)
 def a_clean_tape():
+    trace.set_verify(True)
     yield
     arith.set_generic_only(False)
-    trace.enable().clear()
+    t = trace.enable()
+    untraced = t.untraced
+    t.clear()
+    assert untraced == 0
 
 
 def test_two_products_leave_two_d2_and_their_rescales():

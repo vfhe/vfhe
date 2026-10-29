@@ -23,18 +23,39 @@ per marked call that made a ring operation, named after the call:
 ['CKKS_Ciphertext.__mul__', 'CKKS_Ciphertext.__mul__']
 
 `Trace.events` and `Trace.operations` drain the tape: what they return is
-gone from it, so a long computation can be read in pieces. A trace started
-before key generation or encryption holds the key and the noise; sampler
-outputs carry ``secret``. A value written other than through the generic
-interface, by a row function called by hand on storage the tape knows, is
-not seen, and the tape is wrong from there.
+gone from it, so a long computation can be read in pieces. With a
+``limit``, the tape holds at most that many events and the computation
+waits for room, so a consumer thread must drain it while the computation
+runs (cffi releases the interpreter lock around native calls):
+
+>>> def consume(t):
+...     while t.wait():
+...         for op in t.operations():
+...             keep(op)
+>>> t = trace.enable(limit=1000)
+>>> consumer = threading.Thread(target=consume, args=(t,))
+>>> consumer.start()
+>>> d = (a * b) * (a * b)
+>>> t.disable()
+>>> consumer.join()
+
+One thread that drains between its own calls must not set a limit. A trace
+started before key generation or encryption holds the key and the noise;
+sampler outputs carry ``secret``.
+
+A value written other than through the generic interface, by a row
+function called by hand on storage the tape knows, is not seen, and the
+tape would be wrong from there. With ``verify`` on, the tape digests each
+value it records and checks each operand against its digest before an
+operation: a value that changed is recorded again as an ``"input"``
+flagged ``untraced``, and `Trace.untraced` counts them. Verification costs
+a pass over each operand and is meant for tests.
 """
 
 from __future__ import annotations
 
 import importlib
 import sys
-import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import FunctionType
@@ -46,7 +67,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from types import CodeType, FrameType
 
-__all__ = ["Event", "Operation", "Trace", "enable", "mark", "recording"]
+__all__ = ["Event", "Operation", "Trace", "enable", "mark", "recording", "set_verify"]
 
 #: Event kinds by their native code, named after the operations.
 KINDS: dict[int, str] = {
@@ -111,6 +132,7 @@ class Event:
     centered: bool = False
     label: str | None = None
     enter: bool | None = None
+    untraced: bool = False
 
 
 @dataclass
@@ -177,13 +199,15 @@ def _marked() -> dict[CodeType, bytes]:
 
 class _Hook:
     """The profile function installed while a trace is enabled: a mark at
-    the entry and at the exit of each marked call."""
+    the entry and at the exit of each marked call, on the thread that
+    enabled the trace. A consumer thread's own calls are not marked: on a
+    bounded tape they would wait for the room only that thread makes."""
 
     def __init__(self) -> None:
         self.labels = _marked()
-        self.previous = (sys.getprofile(), threading.getprofile())
+        self.previous = sys.getprofile()
 
-    def __call__(self, frame: FrameType, event: str, arg: object) -> None:
+    def __call__(self, frame: FrameType, event: str, _arg: object) -> None:
         if event == "call" or event == "return":
             label = self.labels.get(frame.f_code)
             if label is not None:
@@ -198,14 +222,12 @@ def _install_hook() -> None:
     if _hook is None:
         _hook = _Hook()
         sys.setprofile(_hook)
-        threading.setprofile(_hook)
 
 
 def _remove_hook() -> None:
     global _hook
     if _hook is not None:
-        sys.setprofile(_hook.previous[0])
-        threading.setprofile(_hook.previous[1])
+        sys.setprofile(_hook.previous)
         _hook = None
 
 
@@ -227,10 +249,15 @@ class Trace:
         """Whether operations are being recorded right now."""
         return bool(lib.arith_trace_is_enabled())
 
-    def enable(self) -> None:
+    def enable(self, limit: int | None = None, verify: bool | None = None) -> None:
         """Resumes recording onto the same tape, marking the vfhe calls made
-        from now on."""
+        from now on. ``limit`` bounds the tape (0: no bound) and ``verify``
+        turns verification on or off; None leaves each as it is."""
         lib.arith_trace_enable()
+        if limit is not None:
+            lib.arith_trace_set_limit(limit)
+        if verify is not None:
+            lib.arith_trace_set_verify(1 if verify else 0)
         _install_hook()
 
     def disable(self) -> None:
@@ -254,6 +281,21 @@ class Trace:
 
     def __len__(self) -> int:
         return int(lib.arith_trace_length())
+
+    @property
+    def limit(self) -> int:
+        """The bound on the tape's length, 0 for none."""
+        return int(lib.arith_trace_limit())
+
+    @property
+    def untraced(self) -> int:
+        """How many writes verification found since the tape was cleared."""
+        return int(lib.arith_trace_untraced())
+
+    def wait(self, count: int = 1, timeout: float | None = None) -> bool:
+        """Waits until the tape holds ``count`` events, recording stops, or
+        ``timeout`` seconds pass; True when it holds them."""
+        return bool(lib.arith_trace_wait(count, -1.0 if timeout is None else timeout))
 
     def drain(self) -> Iterator[Event]:
         """The events recorded so far, oldest first, removed from the tape."""
@@ -370,23 +412,30 @@ class Trace:
             if native.label != ffi.NULL
             else None,
             enter=bool(native.enter) if kind == "mark" else None,
+            untraced=bool(native.untraced),
         )
 
 
-def enable() -> Trace:
-    """Starts recording and returns the `Trace` to read it from.
+def enable(limit: int | None = None, verify: bool | None = None) -> Trace:
+    """Starts recording and returns the `Trace` to read it from; the
+    options are `Trace.enable`'s.
 
     A second call resumes the same tape; `Trace.clear` ends it.
     """
     trace = Trace()
-    trace.enable()
+    trace.enable(limit, verify)
     return trace
 
 
+def set_verify(enabled: bool) -> None:
+    """Turns verification on or off: a global switch, kept until changed."""
+    lib.arith_trace_set_verify(1 if enabled else 0)
+
+
 @contextmanager
-def recording() -> Iterator[Trace]:
+def recording(limit: int | None = None, verify: bool | None = None) -> Iterator[Trace]:
     """Records the operations made inside the ``with`` block."""
-    trace = enable()
+    trace = enable(limit, verify)
     try:
         yield trace
     finally:

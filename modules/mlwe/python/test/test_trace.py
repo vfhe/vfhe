@@ -40,9 +40,13 @@ def ghs():
 
 @pytest.fixture(autouse=True)
 def a_clean_tape():
+    trace.set_verify(True)
     yield
     arith.set_generic_only(False)
-    trace.enable().clear()
+    t = trace.enable()
+    untraced = t.untraced
+    t.clear()
+    assert untraced == 0
 
 
 def _message(scheme, coefficients):

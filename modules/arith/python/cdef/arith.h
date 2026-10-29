@@ -54,6 +54,8 @@ int arith_scale_int(void *ring, ArithElement *out, const ArithElement *a, uint64
 int arith_permute(void *ring, ArithElement *out, const ArithElement *a, uint64_t gen);
 int arith_sample_gaussian(void *ring, ArithElement *out, double sigma);
 int arith_round_division(void *ring, ArithElement *element, void *to);
+int arith_to_mul(void *ring, ArithElement *element);
+int arith_to_canonical(void *ring, ArithElement *element);
 int arith_round_division_approximate(void *ring, ArithElement *element, void *to);
 int arith_decompose_digit(void *ring, ArithElement *out, ArithElement *a, uint64_t primes,
                           uint64_t log_base, uint64_t level, uint64_t dropped, int centered);
@@ -438,6 +440,7 @@ typedef struct
     int centered;
     char *label;
     int enter;
+    int untraced;
 } ArithTraceEvent;
 void arith_trace_enable(void);
 void arith_trace_disable(void);
@@ -450,3 +453,9 @@ void arith_trace_release(uint64_t count);
 uint64_t arith_trace_next_sequence(void);
 void arith_trace_mark(const char *label, int enter);
 uint64_t arith_trace_version(const void *handle);
+void arith_trace_set_limit(uint64_t limit);
+uint64_t arith_trace_limit(void);
+int arith_trace_wait(uint64_t count, double seconds);
+void arith_trace_set_verify(int enabled);
+int arith_trace_verify(void);
+uint64_t arith_trace_untraced(void);
