@@ -68,6 +68,40 @@ The trailing digits differ per run, because CKKS carries encryption noise.
 A result wrong in the first decimals means the parameters are too small for
 the computation.
 
+## Record what ran
+
+For verifiable computation, vFHE can record every ring operation a
+computation makes, with a copy of each result, and name the values an
+arithmetization needs. With the example's scheme and ciphertexts:
+
+```python
+from vfhe.util import trace
+from vfhe.vfhe import cccfgs26, witness
+
+with trace.recording() as t:
+    product = ct_a * ct_b
+operations = t.operations()
+
+for op in operations:
+    print(op.name, [e.kind for e in op.all_events()][:6])
+
+w = witness.of(operations, cccfgs26)
+print([e.name for e in w.entries])
+w.check()
+```
+
+`trace.recording` records the operations made inside the block; while it
+records, the computation takes a slower path through the generic ring
+interface, so nothing is left out. `witness.of` reads the recorded product
+as the paper's witness (`d0`, `d1`, `d2`, the digits `w_ks`, the quotients
+and remainders of the rescale) and `check` evaluates the relations between
+them on the recorded values. The tape is one: a second `recording` resumes
+it, and a value it already holds, such as a key, is not recorded again, so
+a witness built from a later piece is given the earlier values
+(`witness.of(..., known=)`). A long computation is read in pieces that way,
+and with `trace.enable(limit=...)` a consumer thread drains the tape while
+the computation runs.
+
 ## Next steps
 
 - Raise `Ring`'s degree and modulus bit-count for deeper computations, at the

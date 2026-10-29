@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from vfhe.arith import Polynomial
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from vfhe.util.trace import Event, Operation
 
@@ -112,21 +112,29 @@ class Computation:
     """The multiplications and the rescales among ``operations``, the
     outermost operations of a trace. ``values`` holds every recorded value
     by sequence number, zeros and copies materialized; ``origin`` names, for
-    each event, the event whose value it holds (copies collapsed)."""
+    each event, the event whose value it holds (copies collapsed).
 
-    def __init__(self, operations: Iterable[Operation]) -> None:
+    A tape read in pieces refers back: a value recorded in an earlier piece
+    (a key, seen once) is not recorded again, so the reader of a later piece
+    is given the earlier values as ``known``, the ``values`` of the earlier
+    reader or the part of them it kept.
+    """
+
+    def __init__(
+        self, operations: Iterable[Operation], known: Mapping[int, Any] | None = None
+    ) -> None:
         self.operations = list(operations)
         events = sorted(
             (e for op in self.operations for e in op.all_events() if e.kind != "mark"),
             key=lambda e: e.sequence,
         )
-        self.values: dict[int, Any] = {}
-        self.origin: dict[int, int] = {}
+        self.values: dict[int, Any] = dict(known or {})
+        self.origin: dict[int, int] = {s: s for s in self.values}
         for e in events:
             self.origin[e.sequence] = e.sequence
             if e.kind == "copy":
                 self.origin[e.sequence] = self.origin[e.inputs[0]]
-                self.values[e.sequence] = self.values[e.inputs[0]]
+                self.values[e.sequence] = self.value(e.inputs[0])
             elif e.kind == "zero":
                 self.values[e.sequence] = Polynomial(e.ring).from_array([0])
             elif e.value is not None:
@@ -140,7 +148,7 @@ class Computation:
                         self.multiplications.append(multiplication)
         #: Every rescale on the tape, whether or not a multiplication owns it.
         self.rescales = [
-            Division.of(e, self.values[e.inputs[0]], exact=True)
+            Division.of(e, self.value(e.inputs[0]), exact=True)
             for e in events
             if e.kind == "round_division"
         ]
@@ -153,6 +161,16 @@ class Computation:
             owner = written_by.get(self.origin[rescale.event.inputs[0]])
             if owner is not None:
                 owner.rescales.append(rescale)
+
+    def value(self, sequence: int) -> Any:
+        """The value of version ``sequence``."""
+        try:
+            return self.values[sequence]
+        except KeyError:
+            raise ValueError(
+                f"version {sequence} was recorded before these operations; "
+                "pass the earlier values as known"
+            ) from None
 
     def _multiplication(self, operation: Operation) -> Multiplication | None:
         events = [e for e in operation.all_events() if e.kind != "mark"]
@@ -167,7 +185,7 @@ class Computation:
         products = by_kind.get("mul", [])
         if len(decomposed) != 1 or len(accumulators) != 2 or len(products) != 3:
             raise ValueError("only products of rank 1 are read")
-        values = self.values
+        values = self.value
         # The quadratic slot is the one the digits decompose, the linear slot
         # the accumulated cross products, the constant slot the remaining
         # product. The partial product of the linear slot pairs the first
@@ -183,7 +201,7 @@ class Computation:
         a1 = masks[1] if masks[0] == a0 else masks[0]
         b0 = bodies[1] if bodies[0] == b1 else bodies[0]
         slots = {
-            quadratic_sequence: values[quadratic_sequence],
+            quadratic_sequence: values(quadratic_sequence),
             linear_event.sequence: linear_event.value,
             constant_event.sequence: constant_event.value,
         }
@@ -199,19 +217,19 @@ class Computation:
         for e in by_kind.get("mul_subto", []):
             i = chain[e.inputs[0]]
             chain[e.sequence] = i
-            key[digit_index[self.origin[e.inputs[1]]]][i] = values[e.inputs[2]]
+            key[digit_index[self.origin[e.inputs[1]]]][i] = values(e.inputs[2])
             sums[i] = e.value
         for e in by_kind.get("round_division_approximate", []):
             i = chain[e.inputs[0]]
             chain[e.sequence] = i
-            mod_down[i] = Division.of(e, values[e.inputs[0]], exact=False)
+            mod_down[i] = Division.of(e, values(e.inputs[0]), exact=False)
         for e in by_kind.get("add", []):
             summed = [self.origin[s] for s in e.inputs]
             (i,) = [chain[s] for s in summed if s in chain]
             (added[i],) = [slots[s] for s in summed if s in slots]
             output[i] = e
         key_switch = KeySwitch(
-            quadratic=values[quadratic_sequence],
+            quadratic=values(quadratic_sequence),
             digits=[e.value for e in digits],
             primes=[e.primes[0] for e in digits],
             key=key,
@@ -223,9 +241,9 @@ class Computation:
         )
         return Multiplication(
             operation,
-            [[values[a0], values[b0]], [values[a1], values[b1]]],
+            [[values(a0), values(b0)], [values(a1), values(b1)]],
             constant_event.value,
             linear_event.value,
-            values[quadratic_sequence],
+            values(quadratic_sequence),
             key_switch,
         )

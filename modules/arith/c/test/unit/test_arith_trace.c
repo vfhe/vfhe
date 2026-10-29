@@ -412,6 +412,58 @@ void test_verify_flags_a_write_the_tape_did_not_see(void)
     arith_free(ring, &z);
 }
 
+void test_an_event_is_published_when_its_operation_ends(void)
+{
+    ArithElement x, y, z;
+    filled(&x, 1);
+    filled(&y, 2);
+    arith_new(ring, &z);
+    arith_trace_enable();
+    const uint64_t sequence = arith_trace_begin(ARITH_TRACE_ADD, ring, &z, &x, &y, 0, 0, 0.0, NULL);
+    // The two INPUT events are complete; the ADD is open, and a reader sees
+    // nothing from it on.
+    TEST_ASSERT_EQUAL_UINT64(3, sequence);
+    TEST_ASSERT_EQUAL_UINT64(2, arith_trace_length());
+    TEST_ASSERT_EQUAL_INT(0, arith_trace_wait(3, 0.02));
+    arith_trace_mark("after", 1);
+    TEST_ASSERT_EQUAL_UINT64(2, arith_trace_length());
+    arith_trace_end(sequence, &z, ARITH_BAD_DOMAIN);
+    TEST_ASSERT_EQUAL_UINT64(4, arith_trace_length());
+    ArithTraceEvent e = event(2);
+    TEST_ASSERT_EQUAL_INT(1, e.failed);
+    TEST_ASSERT_NULL(e.value);
+    TEST_ASSERT_EQUAL_UINT64(TEST_N, e.N); // described even so
+    TEST_ASSERT_EQUAL_UINT64(0, arith_trace_version(z.handle));
+    arith_free(ring, &x);
+    arith_free(ring, &y);
+    arith_free(ring, &z);
+}
+
+void test_verify_checks_before_a_conversion_and_starts_late(void)
+{
+    ArithElement x, y, z;
+    filled(&x, 1);
+    filled(&y, 2);
+    arith_new(ring, &z);
+    arith_trace_enable();
+    arith_add(ring, &z, &x, &y); // verify off: no digests yet
+    arith_trace_set_verify(1);
+    arith_add(ring, &z, &x, &y); // known versions are digested now, not flagged
+    TEST_ASSERT_EQUAL_UINT64(0, arith_trace_untraced());
+    // A write by hand, then a conversion: the conversion finds it.
+    polynomial_RNSc_negate((RNSc_Polynomial)arith_rns_polynomial(&x),
+                           (RNSc_Polynomial)arith_rns_polynomial(&x));
+    arith_to_mul(ring, &x);
+    TEST_ASSERT_EQUAL_UINT64(1, arith_trace_untraced());
+    arith_to_mul(ring, &y);
+    arith_add(ring, &z, &x, &y);
+    TEST_ASSERT_EQUAL_UINT64(1, arith_trace_untraced());
+    arith_trace_set_verify(0);
+    arith_free(ring, &x);
+    arith_free(ring, &y);
+    arith_free(ring, &z);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -427,5 +479,7 @@ int main(void)
     RUN_TEST(test_digits_and_approximate_divisions_are_recorded);
     RUN_TEST(test_an_append_over_the_limit_waits_for_a_release);
     RUN_TEST(test_verify_flags_a_write_the_tape_did_not_see);
+    RUN_TEST(test_an_event_is_published_when_its_operation_ends);
+    RUN_TEST(test_verify_checks_before_a_conversion_and_starts_late);
     return UNITY_END();
 }

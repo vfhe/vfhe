@@ -29,6 +29,18 @@ and the C substrate every kernel calls.
   library-wide one, and a local one per thread for a `with` block.
 - `python/src/vfhe/util/memory_pool.py`: the memory pool's capacity, wiping and
   accounting from Python.
+- `python/src/vfhe/util/trace.py`: the execution tape from Python. `enable`,
+  `recording` and `Trace.disable` control the recording; `Trace.events` and
+  `Trace.operations` drain what was recorded, the latter as a tree of
+  operations cut by marks, which a profile hook places at the entry and exit
+  of every public function and method of the vfhe modules while a trace is
+  enabled (on the thread that enabled it; `mark` places one by hand);
+  `Trace.version_of` names the event that last wrote a value; `limit` bounds
+  the tape for a consumer thread draining through `Trace.wait`; `verify`
+  flags writes the tape did not see. The tape itself is `arith`'s
+  (`arith_trace.h`): it copies ring elements, and `util` may not depend on
+  `arith`, so this module reaches it through `lib` and adopts the copies by
+  name at drain time.
 - `python/cdef/parallel.h`, `python/cdef/memory_pool.h`: what Python may call
   of the C below: the thread limits, and the memory pool's controls and its
   allocator for the buffers Python owns.

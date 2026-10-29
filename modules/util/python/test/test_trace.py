@@ -204,3 +204,22 @@ def test_verify_flags_a_write_the_tape_did_not_see() -> None:
     assert t.untraced == 1
     t.clear()
     assert t.untraced == 0
+
+
+def test_a_trace_disabled_from_another_thread_marks_nothing_more() -> None:
+    x = _polynomial()
+    t = trace.enable()
+    hook = sys.getprofile()
+    stopper = threading.Thread(target=t.disable)
+    stopper.start()
+    stopper.join()
+    assert not t.enabled
+    assert sys.getprofile() is hook  # another thread cannot uninstall it here
+    y = x + x
+    assert len(t) == 0
+    t.enable()  # a fresh hook replaces the inert one
+    assert sys.getprofile() is not hook
+    y = y + x
+    t.disable()
+    kinds = [e.kind for e in t.events()]
+    assert kinds[0] == "mark" and "input" in kinds and "add" in kinds

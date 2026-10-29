@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import FunctionType
@@ -112,7 +113,9 @@ class Event:
     an integer factor, a count or a stream; ``scalar`` the per-row factors
     of ``"scale_by"``; ``label`` and ``enter`` belong to a ``"mark"``. A
     ``"decompose_digit"`` carries `Polynomial.decompose_digit`'s parameters,
-    ``primes`` as the prime values.
+    ``primes`` as the prime values. ``untraced`` marks an ``"input"``
+    recorded because its storage no longer held its version's value;
+    ``failed`` an operation that reported a failure, which left no value.
     """
 
     sequence: int
@@ -133,6 +136,7 @@ class Event:
     label: str | None = None
     enter: bool | None = None
     untraced: bool = False
+    failed: bool = False
 
 
 @dataclass
@@ -201,14 +205,20 @@ class _Hook:
     """The profile function installed while a trace is enabled: a mark at
     the entry and at the exit of each marked call, on the thread that
     enabled the trace. A consumer thread's own calls are not marked: on a
-    bounded tape they would wait for the room only that thread makes."""
+    bounded tape they would wait for the room only that thread makes.
+
+    A profile function belongs to one thread, so a trace disabled from
+    another thread cannot uninstall it there: it is left in place, marking
+    nothing (``active`` off), until that thread enables a trace again."""
 
     def __init__(self) -> None:
         self.labels = _marked()
         self.previous = sys.getprofile()
+        self.thread = threading.get_ident()
+        self.active = True
 
     def __call__(self, frame: FrameType, event: str, _arg: object) -> None:
-        if event == "call" or event == "return":
+        if self.active and (event == "call" or event == "return"):
             label = self.labels.get(frame.f_code)
             if label is not None:
                 lib.arith_trace_mark(label, 1 if event == "call" else 0)
@@ -227,7 +237,9 @@ def _install_hook() -> None:
 def _remove_hook() -> None:
     global _hook
     if _hook is not None:
-        sys.setprofile(_hook.previous)
+        _hook.active = False
+        if threading.get_ident() == _hook.thread:
+            sys.setprofile(_hook.previous)
         _hook = None
 
 
@@ -301,14 +313,23 @@ class Trace:
         """The events recorded so far, oldest first, removed from the tape."""
         count = len(self)
         events = []
-        for index in range(count):
-            native = ffi.new("ArithTraceEvent *")
-            if lib.arith_trace_read(index, native) != 0:
-                break
-            # Converted before the release frees the label and the scalar;
-            # the value is taken over and outlives it.
-            events.append(self._event(native, lib.arith_trace_take_value(index)))
-        lib.arith_trace_release(len(events))
+        try:
+            for index in range(count):
+                native = ffi.new("ArithTraceEvent *")
+                if lib.arith_trace_read(index, native) != 0:
+                    break
+                # Converted before the release frees the label and the scalar;
+                # the value is taken over and outlives it, or is freed here
+                # when the conversion fails.
+                value = lib.arith_trace_take_value(index)
+                try:
+                    events.append(self._event(native, value))
+                except BaseException:
+                    if value != ffi.NULL:
+                        lib.free_RNS_polynomial(value)
+                    raise
+        finally:
+            lib.arith_trace_release(len(events))
         yield from events
 
     def events(self, kind: str | None = None) -> list[Event]:
@@ -413,6 +434,7 @@ class Trace:
             else None,
             enter=bool(native.enter) if kind == "mark" else None,
             untraced=bool(native.untraced),
+            failed=bool(native.failed),
         )
 
 

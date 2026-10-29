@@ -441,6 +441,7 @@ typedef struct
     char *label;
     int enter;
     int untraced;
+    int failed;
 } ArithTraceEvent;
 void arith_trace_enable(void);
 void arith_trace_disable(void);

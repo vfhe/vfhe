@@ -48,7 +48,9 @@ versions may contain breaking changes.
   them, with `check` evaluating every bound and relation on the recorded
   values; `cccfgs26` is the arithmetization of [CCCFGS26, App. A.5]
   (`d0`, `d1`, `d2`, `w_ks`, `evk`, `w_quot`, `w_rmd`, Eqs. 18-20). Rank
-  1 only. The relinearized product converts its tensor product in place
+  1 only. A tape read in pieces refers back to values an earlier piece
+  recorded, such as a key, which the reader of a later piece is given as
+  `known`. The relinearized product converts its tensor product in place
   instead of into a second sample, so the key switch's operands are the
   tensor's slots on the tape (and one allocation and one copy fewer on
   every path).
@@ -60,7 +62,9 @@ versions may contain breaking changes.
   tape digests each value it records and checks each operand against its
   digest before an operation: a value written other than through the
   generic interface is recorded again as an input flagged `untraced`, and
-  `Trace.untraced` counts them; the trace tests run with it on. In C,
+  `Trace.untraced` counts them; the trace tests run with it on. An event
+  becomes readable once its operation has ended, and one whose operation
+  failed is flagged `failed` and holds no value. In C,
   `arith_trace_set_limit`, `arith_trace_wait`, `arith_trace_set_verify`,
   `arith_trace_untraced` and `arith_trace_converted`, which the domain
   conversions of the generic interface call so that an in-place
