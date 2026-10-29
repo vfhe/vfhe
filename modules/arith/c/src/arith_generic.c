@@ -301,6 +301,26 @@ ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement
     return status;
 }
 
+// The handle forms build the elements here. The output holds no value the
+// operation reads, so it starts empty and the operation sets its domain.
+ArithStatus arith_add_handles(ArithRing ring, void *out, void *a, void *b, ArithDomain domain)
+{
+    ArithElement o = {out, ARITH_DOMAIN_EMPTY}, x = {a, domain}, y = {b, domain};
+    return arith_add(ring, &o, &x, &y);
+}
+
+ArithStatus arith_sub_handles(ArithRing ring, void *out, void *a, void *b, ArithDomain domain)
+{
+    ArithElement o = {out, ARITH_DOMAIN_EMPTY}, x = {a, domain}, y = {b, domain};
+    return arith_sub(ring, &o, &x, &y);
+}
+
+ArithStatus arith_mul_handles(ArithRing ring, void *out, void *a, void *b, ArithDomain domain)
+{
+    ArithElement o = {out, ARITH_DOMAIN_EMPTY}, x = {a, domain}, y = {b, domain};
+    return arith_mul(ring, &o, &x, &y);
+}
+
 // A Galois automorphism permutes coefficients, so it is defined on the
 // canonical form; in the mul domain the same map is a permutation of a
 // different index set and is not this operation.

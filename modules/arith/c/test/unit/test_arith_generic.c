@@ -205,6 +205,47 @@ void test_scale_matches_the_kernel(void)
     arith_free(ring, &out);
 }
 
+void test_handle_forms_match_the_element_forms(void)
+{
+    ArithElement a, b, out;
+    arith_new(ring, &a);
+    arith_new(ring, &b);
+    arith_new(ring, &out);
+    fill(arith_rns_polynomial(&a), 66);
+    fill(arith_rns_polynomial(&b), 77);
+    RNS_Polynomial expected = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    a.domain = b.domain = ARITH_DOMAIN_MUL;
+
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_add(ring, &out, &a, &b));
+    polynomial_copy_RNS_polynomial(expected, arith_rns_polynomial(&out));
+    TEST_ASSERT_EQUAL_INT(
+        ARITH_OK, arith_add_handles(ring, out.handle, a.handle, b.handle, ARITH_DOMAIN_MUL));
+    assert_same(expected, arith_rns_polynomial(&out));
+
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_sub(ring, &out, &a, &b));
+    polynomial_copy_RNS_polynomial(expected, arith_rns_polynomial(&out));
+    TEST_ASSERT_EQUAL_INT(
+        ARITH_OK, arith_sub_handles(ring, out.handle, a.handle, b.handle, ARITH_DOMAIN_MUL));
+    assert_same(expected, arith_rns_polynomial(&out));
+
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_mul(ring, &out, &a, &b));
+    polynomial_copy_RNS_polynomial(expected, arith_rns_polynomial(&out));
+    TEST_ASSERT_EQUAL_INT(
+        ARITH_OK, arith_mul_handles(ring, out.handle, a.handle, b.handle, ARITH_DOMAIN_MUL));
+    assert_same(expected, arith_rns_polynomial(&out));
+
+    /* the domain rules are the element forms' */
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_mul_handles(ring, out.handle, a.handle, b.handle,
+                                                              ARITH_DOMAIN_CANONICAL));
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_add_handles(ring, out.handle, a.handle, b.handle,
+                                                              ARITH_DOMAIN_EMPTY));
+
+    free_RNS_polynomial(expected);
+    arith_free(ring, &a);
+    arith_free(ring, &b);
+    arith_free(ring, &out);
+}
+
 void test_domain_roundtrip_restores_the_value(void)
 {
     ArithElement e;
@@ -1042,6 +1083,7 @@ int main(void)
     RUN_TEST(test_add_matches_the_kernel_in_both_domains);
     RUN_TEST(test_mul_matches_the_kernel);
     RUN_TEST(test_scale_matches_the_kernel);
+    RUN_TEST(test_handle_forms_match_the_element_forms);
     RUN_TEST(test_domain_roundtrip_restores_the_value);
     RUN_TEST(test_converting_to_the_domain_already_held_is_a_no_op);
     RUN_TEST(test_mismatched_domains_are_refused);
