@@ -470,7 +470,16 @@ class MLE:
         else:
             raise TypeError("point must be a list or a dict")
 
-        target = self if in_place else self.copy()
+        if in_place:
+            target = self
+        elif any(var in self.variables for var in bindings):
+            # Every bind writes its result into a new table. It reads the
+            # entries it folds and at most puts them in NTT form, which keeps
+            # their values, so the first bind already separates the result
+            # from self and a new MLE over the same entries is enough.
+            target = MLE._like(self, self.table)
+        else:
+            target = self.copy()
         for var, val in bindings.items():
             if var in target.variables:
                 target._bind(var, val)

@@ -16,7 +16,7 @@ import asyncio
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
-from vfhe.arith.mle import vector_table
+from vfhe.arith.mle import native_table, vector_table
 from vfhe.crypto import chain_digest
 
 from .digest import element_digest
@@ -42,32 +42,42 @@ def hypercube(variables: list):
 
 
 def aligned_tables(oracles) -> list | None:
-    """The oracles' tables when the hypercube sum is whole-vector work, else
+    """The oracles' tables when the hypercube sum is one pass over them, else
     None.
 
-    Every oracle has to be a `TableOracle` to a field-backed table in the
-    evaluation basis over the same variables in the same order. Then entry
-    `i` of each table is the value at the point `hypercube` yields `i`-th
-    -- both are LSB-first over the variable list -- so the tables line up
-    index for index and a sum over the hypercube is a `sum()`, a sum of
-    products one elementwise product and a `sum()`. Anything else (a ring
-    table, the monomial basis, a virtual or committed oracle, oracles over
-    different variables) returns None and is walked.
+    Every oracle has to be a `TableOracle` to a table in the evaluation
+    basis over the same variables in the same order, all field-backed or all
+    ring-backed. Then entry `i` of each table is the value at the point
+    `hypercube` yields `i`-th -- both are LSB-first over the variable list
+    -- so the tables line up index for index. Over a field a sum over the
+    hypercube is a `sum()`, a sum of products one elementwise product and a
+    `sum()`; over a ring the tables are lists of ring elements and the sum
+    is `ring_sum_of_products`. Anything else (the monomial basis, a virtual
+    or committed oracle, oracles over different variables) returns None and
+    is walked.
     """
     polynomials = [
         o.polynomial if isinstance(o, TableOracle) else None for o in oracles
     ]
     first = polynomials[0]
-    if first is None or not vector_table(first):
+    if first is None:
+        return None
+    if vector_table(first):
+        backed = vector_table
+    elif native_table(first):
+        backed = native_table
+    else:
         return None
     tables = []
     for f in polynomials:
-        # `is not` on the field is deliberately strict: two equal fields that
-        # are separate objects only cost the walk, which is always correct.
+        # `is not` on the field and the ring is deliberately strict: two equal
+        # domains that are separate objects only cost the walk, which is
+        # always correct.
         if (
             f is None
-            or not vector_table(f)
+            or not backed(f)
             or f.field is not first.field
+            or f.ring is not first.ring
             or f.variables != first.variables
         ):
             return None
@@ -75,11 +85,25 @@ def aligned_tables(oracles) -> list | None:
     return tables
 
 
+def ring_sum_of_products(tables: list):
+    """sum_i prod_j tables[j][i] over ring tables that `aligned_tables`
+    returned: lists of ring elements, one product and one sum per entry."""
+    total = None
+    for entries in zip(*tables, strict=True):
+        product = entries[0]
+        for entry in entries[1:]:
+            product = product * entry
+        total = product if total is None else total + product
+    return total
+
+
 def hypercube_sum(f: Oracle):
     """sum_{b in {0,1}^n} f(b), as a plain coefficient value: one query per
-    point, or one vector sum when the table allows (`aligned_tables`)."""
+    point, or one pass over the table when it allows (`aligned_tables`)."""
     tables = aligned_tables([f])
     if tables is not None:
+        if isinstance(tables[0], list):
+            return ring_sum_of_products(tables)
         return tables[0].sum()
     total = None
     for b in hypercube(f.variables):
