@@ -216,6 +216,10 @@ void test_handle_forms_match_the_element_forms(void)
     RNS_Polynomial expected = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
     a.domain = b.domain = ARITH_DOMAIN_MUL;
 
+    TEST_ASSERT_EQUAL_INT(ARITH_OK,
+                          arith_copy_handles(ring, out.handle, a.handle, ARITH_DOMAIN_MUL));
+    assert_same(arith_rns_polynomial(&a), arith_rns_polynomial(&out));
+
     TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_add(ring, &out, &a, &b));
     polynomial_copy_RNS_polynomial(expected, arith_rns_polynomial(&out));
     TEST_ASSERT_EQUAL_INT(

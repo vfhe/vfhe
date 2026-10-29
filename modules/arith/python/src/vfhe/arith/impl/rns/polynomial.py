@@ -1248,8 +1248,8 @@ class RNSPolynomial(Polynomial):
     def copy(self) -> RNSPolynomial:
         res = Polynomial(self.ring)
         _check_status(
-            self.ring.lib.arith_copy(
-                self.ring.arith_ring, res.as_element(), self.as_element()
+            self.ring.lib.arith_copy_handles(
+                self.ring.arith_ring, res.obj, self.obj, _DOMAIN[self.repr]
             ),
             "copy",
         )

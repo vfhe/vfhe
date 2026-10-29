@@ -303,6 +303,12 @@ ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement
 
 // The handle forms build the elements here. The output holds no value the
 // operation reads, so it starts empty and the operation sets its domain.
+ArithStatus arith_copy_handles(ArithRing ring, void *out, void *in, ArithDomain domain)
+{
+    ArithElement o = {out, ARITH_DOMAIN_EMPTY}, x = {in, domain};
+    return arith_copy(ring, &o, &x);
+}
+
 ArithStatus arith_add_handles(ArithRing ring, void *out, void *a, void *b, ArithDomain domain)
 {
     ArithElement o = {out, ARITH_DOMAIN_EMPTY}, x = {a, domain}, y = {b, domain};

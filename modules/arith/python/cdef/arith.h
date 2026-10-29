@@ -50,6 +50,7 @@ int arith_zero(void *ring, ArithElement *out);
 int arith_add(void *ring, ArithElement *out, const ArithElement *a, const ArithElement *b);
 int arith_sub(void *ring, ArithElement *out, const ArithElement *a, const ArithElement *b);
 int arith_mul(void *ring, ArithElement *out, const ArithElement *a, const ArithElement *b);
+int arith_copy_handles(void *ring, void *out, void *in, int domain);
 int arith_add_handles(void *ring, void *out, void *a, void *b, int domain);
 int arith_sub_handles(void *ring, void *out, void *a, void *b, int domain);
 int arith_mul_handles(void *ring, void *out, void *a, void *b, int domain);
