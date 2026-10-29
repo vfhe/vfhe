@@ -38,7 +38,12 @@ versions may contain breaking changes.
   coefficient domain), `sample_gaussian`, `round_division`, `__mod__` and
   the products by an integer go through the generic interface, so they
   are on the tape; the row kernels they called are the ones the
-  interface calls.
+  interface calls. A ring keeps its generic-interface handle and a
+  polynomial its `ArithElement` (`as_element` returns the same struct,
+  with the current domain), so a call does not look them up or allocate
+  them each time. `arith_add_handles`, `arith_sub_handles` and
+  `arith_mul_handles` take bare element handles and one domain, so the
+  polynomial's sum, difference and product build no `ArithElement` at all.
 - The `vfhe.vfhe` package, with what an arithmetization reads from the
   tape: `computation` reads a trace's operations into its steps in vfhe's
   terms (a multiplication's operands, tensor slots, digits, key
