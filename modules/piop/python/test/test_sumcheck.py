@@ -19,6 +19,7 @@ from vfhe.piop.protocols.sumcheck.rounds import (
     round_evals,
     round_evals_native,
 )
+from vfhe.piop.relation import aligned_tables
 from vfhe.piop.relations import Relation_Sum, Relation_SumProd
 
 
@@ -228,6 +229,52 @@ def test_sumcheckprod_mle_dense():
         Statement(
             Relation_SumProd(), oracles=[TableOracle(f), TableOracle(g)], value=28
         )
+    )
+
+
+def test_ring_sumprod_check_in_one_pass():
+    """Ring tables over the same variables in the same order are checked
+    entry by entry (`aligned_tables`), not walked point by point; tables
+    over the variables in another order are walked. Both agree with the sum
+    computed from the entries, and no oracle's entries change."""
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    v = [MLE_Variable(f"x{i}") for i in range(3)]
+    f, g, h = (
+        MLE(
+            ring=ring,
+            variables=v,
+            evaluations=[ring.random_element() for _ in range(8)],
+        )
+        for _ in range(3)
+    )
+    before = [[e.copy() for e in t.table] for t in (f, g, h)]
+
+    products = [a * b * c for a, b, c in zip(f.table, g.table, h.table, strict=True)]
+    total = sum(products[1:], products[0])
+    relation = Relation_SumProd()
+    oracles = [TableOracle(f), TableOracle(g), TableOracle(h)]
+    assert aligned_tables(oracles) is not None
+    assert relation.check(Statement(relation, oracles=oracles, value=total))
+    assert not relation.check(Statement(relation, oracles=oracles, value=total + 1))
+    one = Statement(
+        Relation_Sum(), oracles=[TableOracle(f)], value=sum(f.table[1:], f.table[0])
+    )
+    assert Relation_Sum().check(one)
+
+    # g read over its variables reversed is another polynomial: entry i of f
+    # meets entry reverse(i) of g, so the one-pass path has to decline.
+    g_reversed = MLE(ring=ring, variables=v[::-1], evaluations=list(g.table))
+    walked = f.table[0] * g.table[0]
+    for i in range(1, 8):
+        walked = walked + f.table[i] * g.table[int(f"{i:03b}"[::-1], 2)]
+    reversed_oracles = [TableOracle(f), TableOracle(g_reversed)]
+    assert aligned_tables(reversed_oracles) is None
+    assert relation.check(Statement(relation, oracles=reversed_oracles, value=walked))
+
+    assert all(
+        entry == old
+        for t, olds in zip((f, g, h), before, strict=True)
+        for entry, old in zip(t.table, olds, strict=True)
     )
 
 

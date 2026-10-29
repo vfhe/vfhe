@@ -11,6 +11,7 @@ from vfhe.piop.relation import (
     aligned_tables,
     hypercube,
     hypercube_sum,
+    ring_sum_of_products,
     value_of,
 )
 
@@ -39,6 +40,8 @@ class Relation_SumProd(Relation):
         if any(set(f.variables) != set(first.variables) for f in statement.oracles):
             return False
         tables = aligned_tables(statement.oracles)
+        if tables is not None and isinstance(tables[0], list):
+            return ring_sum_of_products(tables) == value_of(statement.value)
         if tables is not None:
             # One product vector, then folded in place: the first multiply
             # allocates it, the rest write through it. Never into `tables[0]`,
