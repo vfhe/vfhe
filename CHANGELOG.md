@@ -41,9 +41,10 @@ versions may contain breaking changes.
   interface calls. A ring keeps its generic-interface handle and a
   polynomial its `ArithElement` (`as_element` returns the same struct,
   with the current domain), so a call does not look them up or allocate
-  them each time. `arith_add_handles`, `arith_sub_handles` and
-  `arith_mul_handles` take bare element handles and one domain, so the
-  polynomial's sum, difference and product build no `ArithElement` at all.
+  them each time. `arith_copy_handles`, `arith_add_handles`,
+  `arith_sub_handles` and `arith_mul_handles` take bare element handles
+  and one domain, so the polynomial's copy, sum, difference and product
+  build no `ArithElement` at all.
 - The `vfhe.vfhe` package, with what an arithmetization reads from the
   tape: `computation` reads a trace's operations into its steps in vfhe's
   terms (a multiplication's operands, tensor slots, digits, key
