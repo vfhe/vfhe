@@ -23,6 +23,11 @@ on the recorded values with ring arithmetic and raises `ValueError` naming
 the first that fails. ``view`` is the arith parent the values are given
 in; the only view today is the ring each value was recorded in, or a
 quotient ring of it.
+
+`range_classes` groups the witness entries that carry a bound by name
+and by the number of primes of their step's ring, and `coefficients`
+gives one class's values as signed coefficient vectors, which is what a
+range check reads.
 """
 
 from __future__ import annotations
@@ -37,7 +42,16 @@ if TYPE_CHECKING:
 
     from vfhe.util.trace import Operation
 
-__all__ = ["Arithmetization", "Entry", "Relation", "Witness", "of"]
+__all__ = [
+    "Arithmetization",
+    "Entry",
+    "RangeClass",
+    "Relation",
+    "Witness",
+    "coefficients",
+    "of",
+    "range_classes",
+]
 
 Role = Literal["instance", "witness", "intermediate"]
 
@@ -142,3 +156,48 @@ def of(
     """The witness of the computation ``operations`` recorded; ``known`` are
     the values of an earlier piece of the tape it refers back to."""
     return Witness(Computation(operations, known), arithmetization, view)
+
+
+@dataclass
+class RangeClass:
+    """The entries named ``name`` with a bound, of the steps over ``ell``
+    primes: ``count`` values, each within ``bound``, the largest of their
+    bounds."""
+
+    name: str
+    ell: int
+    count: int
+    bound: int
+
+
+def range_classes(witness: Witness) -> list[RangeClass]:
+    """The entries of ``witness`` that carry a bound, one class per name
+    and ``ell``, in the order the classes first appear."""
+    found: dict[tuple[str, int], RangeClass] = {}
+    for e in witness.entries:
+        if e.bound is None:
+            continue
+        key = (e.name, e.step.ell)
+        c = found.get(key)
+        if c is None:
+            c = found[key] = RangeClass(e.name, e.step.ell, 0, 0)
+        c.count += 1
+        c.bound = max(c.bound, int(e.bound))
+    return list(found.values())
+
+
+def coefficients(
+    witness: Witness, name: str, ell: int | None = None
+) -> list[list[int]]:
+    """The signed coefficients of each value of the range class ``name``
+    over ``ell`` primes (or over any number), in tape order and, within a
+    step, by index: the values a range check of the class reads, before
+    any shift into ``[0, B)`` and any padding to a power of two."""
+    found = [
+        e.value.get_polynomial(signed=True)
+        for e in witness.entries
+        if e.name == name and e.bound is not None and (ell is None or e.step.ell == ell)
+    ]
+    if not found:
+        raise ValueError(f"no entry with a bound is named {name!r}")
+    return found

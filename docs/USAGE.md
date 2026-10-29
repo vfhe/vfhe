@@ -95,7 +95,10 @@ records, the computation takes a slower path through the generic ring
 interface, so nothing is left out. `witness.of` reads the recorded product
 as the paper's witness (`d0`, `d1`, `d2`, the digits `w_ks`, the quotients
 and remainders of the rescale) and `check` evaluates the relations between
-them on the recorded values. The tape is one: a second `recording` resumes
+them on the recorded values. `witness.range_classes(w)` groups the values
+that carry a bound, and `witness.coefficients(w, "w_ks")` gives one
+class's values as signed coefficient vectors, the input of a range check.
+The tape is one: a second `recording` resumes
 it, and a value it already holds, such as a key, is not recorded again, so
 a witness built from a later piece is given the earlier values
 (`witness.of(..., known=)`). A long computation is read in pieces that way,
