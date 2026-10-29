@@ -19,9 +19,13 @@ def ring():
 
 @pytest.fixture(autouse=True)
 def defaults_restored():
+    trace.set_verify(True)
     yield
     arith.set_generic_only(False)
-    trace.enable().clear()
+    t = trace.enable()
+    untraced = t.untraced
+    t.clear()
+    assert untraced == 0
 
 
 def test_radix_digits_sum_to_the_residue(ring):

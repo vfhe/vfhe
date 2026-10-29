@@ -13,8 +13,12 @@ N = 256
 
 @pytest.fixture(autouse=True)
 def a_clean_tape():
+    trace.set_verify(True)
     yield
-    trace.enable().clear()
+    t = trace.enable()
+    untraced = t.untraced
+    t.clear()
+    assert untraced == 0
 
 
 def _use_case(special_primes):

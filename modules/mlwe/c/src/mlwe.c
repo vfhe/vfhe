@@ -430,33 +430,37 @@ void mlwe_addto_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in) { mlwe_add_RNSc_sample(
 
 void mlwe_RNSc_to_RNS(RNS_MLWE out, RNSc_MLWE in)
 {
-    if (out->ring->impl == ARITH_IMPL_RNS)
+    if (out->ring->impl == ARITH_IMPL_RNS && !ARITH_GENERIC_PATH())
     {
         mlwe_rns_convert(out, in, arith_mul_domain(out->ring));
         return;
     }
     for (size_t i = 0; i < out->r; i++)
     {
-        arith_copy(out->ring, &out->a[i], &in->a[i]);
+        if (out != in)
+            arith_copy(out->ring, &out->a[i], &in->a[i]);
         arith_to_mul(out->ring, &out->a[i]);
     }
-    arith_copy(out->ring, &out->b, &in->b);
+    if (out != in)
+        arith_copy(out->ring, &out->b, &in->b);
     arith_to_mul(out->ring, &out->b);
 }
 
 void mlwe_RNS_to_RNSc(RNSc_MLWE out, RNS_MLWE in)
 {
-    if (out->ring->impl == ARITH_IMPL_RNS)
+    if (out->ring->impl == ARITH_IMPL_RNS && !ARITH_GENERIC_PATH())
     {
         mlwe_rns_convert(out, in, ARITH_DOMAIN_CANONICAL);
         return;
     }
     for (size_t i = 0; i < out->r; i++)
     {
-        arith_copy(out->ring, &out->a[i], &in->a[i]);
+        if (out != in)
+            arith_copy(out->ring, &out->a[i], &in->a[i]);
         arith_to_canonical(out->ring, &out->a[i]);
     }
-    arith_copy(out->ring, &out->b, &in->b);
+    if (out != in)
+        arith_copy(out->ring, &out->b, &in->b);
     arith_to_canonical(out->ring, &out->b);
 }
 

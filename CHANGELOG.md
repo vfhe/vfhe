@@ -52,6 +52,21 @@ versions may contain breaking changes.
   instead of into a second sample, so the key switch's operands are the
   tensor's slots on the tape (and one allocation and one copy fewer on
   every path).
+- The tape can be bounded and verified. `trace.enable(limit=n)` holds at
+  most `n` events and makes the computation wait for room, so a consumer
+  thread drains it while the computation runs, through `Trace.wait`; a
+  thread that drains between its own calls must not set a limit. With
+  `verify` on (`trace.enable(verify=True)` or `trace.set_verify`), the
+  tape digests each value it records and checks each operand against its
+  digest before an operation: a value written other than through the
+  generic interface is recorded again as an input flagged `untraced`, and
+  `Trace.untraced` counts them; the trace tests run with it on. In C,
+  `arith_trace_set_limit`, `arith_trace_wait`, `arith_trace_set_verify`,
+  `arith_trace_untraced` and `arith_trace_converted`, which the domain
+  conversions of the generic interface call so that an in-place
+  conversion is not taken for a write. `Polynomial.to_NTT`/`to_coeff` and
+  the sample conversions on the generic path go through those
+  conversions.
 - Two operations of the ring tower in the generic interface and on
   `Polynomial`: `decompose_digit`, a digit of an element's residues (a
   residue lifted, the fast base conversion of a group's, or a radix digit

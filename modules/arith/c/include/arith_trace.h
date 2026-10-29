@@ -110,6 +110,9 @@ extern "C"
         int centered;
         char *label;
         int enter;
+        /** An INPUT recorded because the storage no longer held the
+         *  value of its version: a write the tape did not see (verify). */
+        int untraced;
     } ArithTraceEvent;
 
     /**
@@ -151,6 +154,41 @@ extern "C"
      *        tape does not know it.
      */
     uint64_t arith_trace_version(const void *handle);
+
+    /**
+     * @brief Bounds the tape to `limit` events; 0 (the default) is no
+     *        bound. With a bound, an append that would exceed it waits
+     *        until arith_trace_release() makes room, so a consumer thread
+     *        must drain; one thread that drains between its own calls
+     *        must not set a bound. Raising the bound, releasing, or
+     *        disabling wakes a waiting producer.
+     */
+    void arith_trace_set_limit(uint64_t limit);
+    uint64_t arith_trace_limit(void);
+    /**
+     * @brief Waits until the tape holds at least `count` events, recording
+     *        stops, or `seconds` pass (negative: no time limit).
+     * @return 1 when the tape holds `count` events, 0 otherwise.
+     */
+    int arith_trace_wait(uint64_t count, double seconds);
+
+    /**
+     * @brief Turns verification on or off: a global switch, kept until
+     *        changed. On, the tape digests each
+     *        version's value as written and checks each operand's storage
+     *        against its version's digest before an operation: a mismatch
+     *        is a write the tape did not see. The operand is then recorded
+     *        again as an INPUT, flagged `untraced`, and counted.
+     */
+    void arith_trace_set_verify(int enabled);
+    int arith_trace_verify(void);
+    /** @brief How many untraced writes verification found since the last clear. */
+    uint64_t arith_trace_untraced(void);
+    /**
+     * @brief Tells the tape that `element` was converted between domains in
+     *        place, which is not an event: its version's digest is refreshed.
+     */
+    void arith_trace_converted(const ArithElement *element);
 
     /**
      * @brief Non-NULL while recording. The generic interface reads it

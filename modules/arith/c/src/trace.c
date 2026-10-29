@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <arith_trace.h>
 
+#include "arith_internal.h"
+
 #include <alloc.h>
 #include <arith.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // The tape is two things under one lock:
 //
@@ -27,6 +31,7 @@ typedef struct
 {
     const void *handle; // NULL marks an empty slot
     uint64_t version;
+    uint64_t digest; // of the value as written, kept while verifying
 } VersionEntry;
 
 typedef struct
@@ -37,11 +42,15 @@ typedef struct
     VersionEntry *table;
     uint64_t slots, used; // slots is a power of two; used counts the entries
     pthread_mutex_t lock;
+    uint64_t limit;         // the bound on the length, 0 for none
+    pthread_cond_t changed; // signalled when the length or the bound changes
+    uint64_t untraced;      // the writes verification found
 } Tape;
 
 void *arith_trace_active = NULL;
 void *arith_trace_tape = NULL;
 static pthread_mutex_t creation_lock = PTHREAD_MUTEX_INITIALIZER;
+static int verify_state = 0;
 
 static Tape *tape(void) { return (Tape *)arith_trace_tape; }
 
@@ -144,9 +153,13 @@ static void version_forget(Tape *t, const void *handle)
 
 // ---- events -----------------------------------------------------------------
 
-// Appends an empty event with the next sequence number.
+// Appends an empty event with the next sequence number, once the tape has
+// room under its bound; waiting releases the lock, and stopping the
+// recording ends the wait.
 static ArithTraceEvent *event_append(Tape *t)
 {
+    while (t->limit != 0 && t->length >= t->limit && arith_trace_active != NULL)
+        pthread_cond_wait(&t->changed, &t->lock);
     if (t->length == t->capacity)
     {
         t->capacity = t->capacity ? 2 * t->capacity : 256;
@@ -156,7 +169,53 @@ static ArithTraceEvent *event_append(Tape *t)
     ArithTraceEvent *e = &t->events[t->length++];
     memset(e, 0, sizeof(*e));
     e->sequence = t->next_sequence++;
+    pthread_cond_broadcast(&t->changed);
     return e;
+}
+
+// A 64-bit digest of the words `element` holds, over its active rows. Not
+// cryptographic: it tells a value from what a later write left in its
+// place, which is all verification asks. The domain is not part of it: a
+// change of domain label is not a write, and a conversion refreshes it.
+static uint64_t digest_of(const ArithElement *element)
+{
+    RNS_Polynomial p = arith_rns_polynomial(element);
+    const uint64_t N = p->base->N;
+    uint64_t h = p->rns_mask;
+    for (size_t i = 0; i < p->base->l; i++)
+    {
+        if (!(p->rns_mask & (1ULL << i)))
+            continue;
+        if (rns_row_is_narrow(p->base, i))
+        {
+            const uint32_t *row = rns_row32(p, i);
+            for (uint64_t j = 0; j < N; j++)
+            {
+                h = (h ^ row[j]) * 0xff51afd7ed558ccdULL;
+                h ^= h >> 33;
+            }
+        }
+        else
+        {
+            const uint64_t *row = rns_row64(p, i);
+            for (uint64_t j = 0; j < N; j++)
+            {
+                h = (h ^ row[j]) * 0xff51afd7ed558ccdULL;
+                h ^= h >> 33;
+            }
+        }
+    }
+    return h;
+}
+
+// Keeps the digest of what `element`'s storage holds now, when verifying.
+static void version_digest(Tape *t, const ArithElement *element)
+{
+    if (!verify_state)
+        return;
+    VersionEntry *v = version_lookup(t, element->handle);
+    if (v != NULL)
+        v->digest = digest_of(element);
 }
 
 // Fills in which primes `element` holds and which domain it is in.
@@ -179,20 +238,30 @@ static void *copy_of(const ArithElement *element)
 }
 
 // The version of an operand. An operand no event wrote is recorded first
-// as an INPUT event carrying its copy, so it gets a version too. An operand
-// holding no value (empty domain) has no version.
+// as an INPUT event carrying its copy, so it gets a version too; so is one
+// whose storage no longer holds its version's value, when verifying, and
+// that INPUT is flagged. An operand holding no value (empty domain) has no
+// version.
 static uint64_t version_of(Tape *t, const ArithElement *element)
 {
     if (element == NULL || element->handle == NULL || element->domain == ARITH_DOMAIN_EMPTY)
         return 0;
     VersionEntry *v = version_lookup(t, element->handle);
+    int untraced = 0;
     if (v != NULL)
-        return v->version;
+    {
+        if (!verify_state || v->digest == digest_of(element))
+            return v->version;
+        untraced = 1;
+        t->untraced++;
+    }
     ArithTraceEvent *e = event_append(t);
     e->kind = ARITH_TRACE_INPUT;
+    e->untraced = untraced;
     event_describe(e, element);
     e->value = copy_of(element);
     version_store(t, element->handle, e->sequence);
+    version_digest(t, element);
     return e->sequence;
 }
 
@@ -292,8 +361,19 @@ __attribute__((noinline, cold)) void arith_trace_end(uint64_t sequence, const Ar
             if (e->kind != ARITH_TRACE_COPY && e->kind != ARITH_TRACE_ZERO)
                 e->value = copy_of(out);
             version_store(t, out->handle, e->sequence);
+            version_digest(t, out);
         }
     }
+    pthread_mutex_unlock(&t->lock);
+}
+
+__attribute__((noinline, cold)) void arith_trace_converted(const ArithElement *element)
+{
+    Tape *t = tape();
+    if (t == NULL || !verify_state)
+        return;
+    pthread_mutex_lock(&t->lock);
+    version_digest(t, element);
     pthread_mutex_unlock(&t->lock);
 }
 
@@ -345,13 +425,24 @@ void arith_trace_enable(void)
         memset(t, 0, sizeof(*t));
         t->next_sequence = 1;
         pthread_mutex_init(&t->lock, NULL);
+        pthread_cond_init(&t->changed, NULL);
         arith_trace_tape = t;
     }
     arith_trace_active = arith_trace_tape;
     pthread_mutex_unlock(&creation_lock);
 }
 
-void arith_trace_disable(void) { arith_trace_active = NULL; }
+void arith_trace_disable(void)
+{
+    Tape *t = tape();
+    if (t == NULL)
+        return;
+    // Under the lock, so a producer waiting for room sees the change.
+    pthread_mutex_lock(&t->lock);
+    arith_trace_active = NULL;
+    pthread_cond_broadcast(&t->changed);
+    pthread_mutex_unlock(&t->lock);
+}
 
 int arith_trace_is_enabled(void) { return arith_trace_active != NULL; }
 
@@ -370,8 +461,72 @@ void arith_trace_clear(void)
         event_free(&t->events[i]);
     free(t->events);
     free(t->table);
+    pthread_cond_destroy(&t->changed);
     pthread_mutex_destroy(&t->lock);
     free(t);
+}
+
+void arith_trace_set_limit(uint64_t limit)
+{
+    Tape *t = tape();
+    if (t == NULL)
+        return;
+    pthread_mutex_lock(&t->lock);
+    t->limit = limit;
+    pthread_cond_broadcast(&t->changed);
+    pthread_mutex_unlock(&t->lock);
+}
+
+uint64_t arith_trace_limit(void)
+{
+    Tape *t = tape();
+    return t == NULL ? 0 : t->limit;
+}
+
+int arith_trace_wait(uint64_t count, double seconds)
+{
+    Tape *t = tape();
+    if (t == NULL)
+        return 0;
+    struct timespec deadline;
+    if (seconds >= 0)
+    {
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        const time_t whole = (time_t)seconds;
+        deadline.tv_sec += whole;
+        deadline.tv_nsec += (long)((seconds - (double)whole) * 1e9);
+        if (deadline.tv_nsec >= 1000000000L)
+        {
+            deadline.tv_sec += 1;
+            deadline.tv_nsec -= 1000000000L;
+        }
+    }
+    pthread_mutex_lock(&t->lock);
+    while (t->length < count && arith_trace_active != NULL)
+    {
+        if (seconds < 0)
+            pthread_cond_wait(&t->changed, &t->lock);
+        else if (pthread_cond_timedwait(&t->changed, &t->lock, &deadline) == ETIMEDOUT)
+            break;
+    }
+    const int filled = t->length >= count;
+    pthread_mutex_unlock(&t->lock);
+    return filled;
+}
+
+void arith_trace_set_verify(int enabled) { verify_state = enabled != 0; }
+
+int arith_trace_verify(void) { return verify_state; }
+
+uint64_t arith_trace_untraced(void)
+{
+    Tape *t = tape();
+    if (t == NULL)
+        return 0;
+    pthread_mutex_lock(&t->lock);
+    const uint64_t n = t->untraced;
+    pthread_mutex_unlock(&t->lock);
+    return n;
 }
 
 uint64_t arith_trace_length(void)
@@ -429,6 +584,7 @@ void arith_trace_release(uint64_t count)
     memcpy(released, t->events, count * sizeof(ArithTraceEvent));
     memmove(t->events, t->events + count, (t->length - count) * sizeof(ArithTraceEvent));
     t->length -= count;
+    pthread_cond_broadcast(&t->changed);
     pthread_mutex_unlock(&t->lock);
     for (uint64_t i = 0; i < count; i++)
         event_free(&released[i]);

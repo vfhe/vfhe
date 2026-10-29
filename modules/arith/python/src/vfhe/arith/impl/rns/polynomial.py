@@ -875,13 +875,19 @@ class RNSPolynomial(Polynomial):
     def to_NTT(self):
         if self.repr == repr.ntt:
             return
-        self.ring.lib.polynomial_RNSc_to_RNS(self.obj, self.obj)
+        _check_status(
+            self.ring.lib.arith_to_mul(self.ring.arith_ring, self.as_element()),
+            "to_mul",
+        )
         self.repr = repr.ntt
 
     def to_coeff(self):
         if self.repr == repr.coeff:
             return
-        self.ring.lib.polynomial_RNS_to_RNSc(self.obj, self.obj)
+        _check_status(
+            self.ring.lib.arith_to_canonical(self.ring.arith_ring, self.as_element()),
+            "to_canonical",
+        )
         self.repr = repr.coeff
 
     def to_repr(self, target) -> None:
