@@ -114,6 +114,9 @@ class RNSRing(Ring):
     #: Per-`k` constants for `RNSPolynomial.rescale_to_power_of_two`, built on
     #: first use and held for the ring's lifetime.
     _pow2_consts: dict[int, tuple]
+    #: The handle `arith_ring` returns, looked up on first use: the native
+    #: rings are shared and never freed, and N, mask and base do not change.
+    _arith_ring: Any = None
 
     def __init__(
         self,
@@ -253,7 +256,12 @@ class RNSRing(Ring):
         Shared and never freed, so it is safe to hold: a structure built over
         a ring may point at it, and nothing can prove the last one is gone.
         """
-        return self.lib.arith_rns_ring_get(self.N, self.mask, self.base)
+        handle = self._arith_ring
+        if handle is None:
+            handle = self._arith_ring = self.lib.arith_rns_ring_get(
+                self.N, self.mask, self.base
+            )
+        return handle
 
     def _pow2_rescale_consts(self, k: int) -> tuple:
         """Everything `rescale_to_power_of_two` needs for this ``k``.
@@ -700,6 +708,7 @@ repr = Representation
 #: This implementation's representation flag as a generic arithmetic domain:
 #: the two say the same thing about an element, in the two vocabularies.
 _DOMAIN = {repr.empty: 0, repr.coeff: 1, repr.ntt: 2}
+_MUL_DOMAIN = _DOMAIN[repr.ntt]
 
 
 def domain_of(representation) -> int:
@@ -726,6 +735,8 @@ class RNSPolynomial(Polynomial):
     ring: RNSRing
     #: The native ``RNS_Polynomial`` handle, freed with this object.
     obj: Any
+    #: The ``ArithElement`` `as_element` returns, built on first use.
+    _element: Any = None
 
     if TYPE_CHECKING:
         # What a direct construction yields, with the native handle this
@@ -803,11 +814,8 @@ class RNSPolynomial(Polynomial):
         if not (in1.repr == in2.repr == repr.ntt):
             raise ValueError("failed: not (in1.repr == in2.repr == repr.ntt)")
         _check_status(
-            self.ring.lib.arith_mul(
-                self.ring.arith_ring,
-                self.as_element(),
-                in1.as_element(),
-                in2.as_element(),
+            self.ring.lib.arith_mul_handles(
+                self.ring.arith_ring, self.obj, in1.obj, in2.obj, _MUL_DOMAIN
             ),
             "mul",
         )
@@ -823,11 +831,8 @@ class RNSPolynomial(Polynomial):
         if in1.repr != in2.repr:
             raise ValueError("failed: in1.repr != in2.repr")
         _check_status(
-            self.ring.lib.arith_sub(
-                self.ring.arith_ring,
-                self.as_element(),
-                in1.as_element(),
-                in2.as_element(),
+            self.ring.lib.arith_sub_handles(
+                self.ring.arith_ring, self.obj, in1.obj, in2.obj, _DOMAIN[in1.repr]
             ),
             "sub",
         )
@@ -837,11 +842,8 @@ class RNSPolynomial(Polynomial):
         if in1.repr != in2.repr:
             raise ValueError("failed: in1.repr != in2.repr")
         _check_status(
-            self.ring.lib.arith_add(
-                self.ring.arith_ring,
-                self.as_element(),
-                in1.as_element(),
-                in2.as_element(),
+            self.ring.lib.arith_add_handles(
+                self.ring.arith_ring, self.obj, in1.obj, in2.obj, _DOMAIN[in1.repr]
             ),
             "add",
         )
@@ -1232,11 +1234,16 @@ class RNSPolynomial(Polynomial):
         """This polynomial as an `ArithElement` for the generic C interface.
 
         A view, not a copy: the returned struct points at the same storage, so
-        it must not outlive this polynomial.
+        it must not outlive this polynomial. The struct is this polynomial's
+        own, built on first use and returned again by later calls with the
+        current representation as its domain, so one call's struct is valid
+        until the next.
         """
-        return ffi.new(
-            "ArithElement *", {"handle": self.obj, "domain": _DOMAIN[self.repr]}
-        )
+        element = self._element
+        if element is None:
+            element = self._element = ffi.new("ArithElement *", {"handle": self.obj})
+        element.domain = _DOMAIN[self.repr]
+        return element
 
     def copy(self) -> RNSPolynomial:
         res = Polynomial(self.ring)

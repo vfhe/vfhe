@@ -463,7 +463,8 @@ class Polynomial(metaclass=_ImplementationDispatch):
         """This element as an ``ArithElement`` for the generic C interface.
 
         A view, not a copy: the returned struct points at the same storage, so
-        it must not outlive this element.
+        it must not outlive this element. Pass it straight into the call that
+        uses it; an implementation may return the same struct each time.
         """
         raise NotImplementedError
 
