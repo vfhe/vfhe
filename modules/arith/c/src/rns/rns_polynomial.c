@@ -2470,8 +2470,8 @@ void polynomial_RNS_crt_linear_combination(FieldVector out, RNS_Polynomial *cons
     const uint64_t row = maps->row;
     const uint64_t d = base->split_degree, k = base->N / d, n = base->N;
     const Modulus mod = base->mods[row];
-    const uint64_t q = mod->q, w = base->w[row][0];
-    assert(out->d == d && out->n == count && out->mod->q == q && out->w == w);
+    const uint64_t w = base->w[row][0];
+    assert(out->d == d && out->n == count && out->mod->q == mod->q && out->w == w);
     assert(coefficients->d == d && coefficients->n == part_count * k);
     if (count == 0)
         return;

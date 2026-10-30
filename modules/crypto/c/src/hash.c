@@ -22,7 +22,15 @@
 // so its digest is the chunk compressed with CHUNK_START on the first block,
 // CHUNK_END on the last, and ROOT with it; hash_many applies flags_start and
 // flags_end exactly there and writes the first 32 bytes of the final state,
-// which is the definition of the digest. Hence both limits in hash_batch_fits.
+// which is the definition of the digest. Hence the chunk limit in
+// hash_batch_fits.
+//
+// hash_many compresses whole 64-byte blocks only: it has no argument for a
+// final block's true length. An input that ends in a partial block is
+// therefore split. Its whole blocks go through hash_many without CHUNK_END or
+// ROOT, which leaves each input's chaining value, and the last block is one
+// blake3_compress_in_place per input from that value, with the block's true
+// length, CHUNK_END and ROOT (and CHUNK_START when it is the only block).
 
 // Pointers per call into the lane-parallel core. It wants an array, and the
 // inputs here are at a fixed stride, so this is the one thing that has to be
@@ -76,9 +84,31 @@ void hash_chain(uint8_t state[32], const uint8_t *in, uint64_t count, uint64_t l
     }
 }
 
-bool hash_batch_fits(uint64_t len)
+bool hash_batch_fits(uint64_t len) { return len > 0 && len <= BLAKE3_CHUNK_LEN; }
+
+// The inputs of one run, at most HASH_BATCH_POINTERS of them, whose length ends
+// in a partial block.
+static void hash_batch_split(uint8_t *out, const uint8_t *const *inputs, uint64_t run, uint64_t len)
 {
-    return len > 0 && len % BLAKE3_BLOCK_LEN == 0 && len <= BLAKE3_CHUNK_LEN;
+    const uint64_t whole = (len - 1) / BLAKE3_BLOCK_LEN;
+    const uint64_t last = len - whole * BLAKE3_BLOCK_LEN;
+    uint8_t cvs[HASH_BATCH_POINTERS * BLAKE3_OUT_LEN];
+
+    if (whole)
+        blake3_hash_many(inputs, run, whole, IV, 0, false, 0, CHUNK_START, 0, cvs);
+    for (uint64_t k = 0; k < run; k++)
+    {
+        uint32_t cv[8];
+        uint8_t block[BLAKE3_BLOCK_LEN] = {0};
+        if (whole)
+            load_key_words(&cvs[k * BLAKE3_OUT_LEN], cv);
+        else
+            memcpy(cv, IV, sizeof(cv));
+        memcpy(block, inputs[k] + whole * BLAKE3_BLOCK_LEN, last);
+        blake3_compress_in_place(cv, block, (uint8_t)last, 0,
+                                 (whole ? 0 : CHUNK_START) | CHUNK_END | ROOT);
+        store_cv_words(&out[k * BLAKE3_OUT_LEN], cv);
+    }
 }
 
 void hash_batch(uint8_t *out, const uint8_t *in, uint64_t count, uint64_t len)
@@ -106,8 +136,11 @@ void hash_batch(uint8_t *out, const uint8_t *in, uint64_t count, uint64_t len)
         // One call takes any count: the core walks its own lane widths down to
         // singles, so a run that is not a multiple of the width needs no tail
         // loop here.
-        blake3_hash_many(inputs, run, len / BLAKE3_BLOCK_LEN, IV, 0, false, 0, CHUNK_START,
-                         CHUNK_END | ROOT, &out[done * BLAKE3_OUT_LEN]);
+        if (len % BLAKE3_BLOCK_LEN)
+            hash_batch_split(&out[done * BLAKE3_OUT_LEN], inputs, run, len);
+        else
+            blake3_hash_many(inputs, run, len / BLAKE3_BLOCK_LEN, IV, 0, false, 0, CHUNK_START,
+                             CHUNK_END | ROOT, &out[done * BLAKE3_OUT_LEN]);
         done += run;
     }
 }

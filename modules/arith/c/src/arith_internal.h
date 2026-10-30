@@ -512,6 +512,11 @@ void pmf_ref_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams 
 // T is limbs+1 words, each below 2^60, and is clobbered. Requires limbs >= 3.
 void pmf_ref_reduce_wide(uint64_t *out, uint64_t *T, PMFParams params);
 
+// The largest fold constant e (exclusive) for which a field with s == 0 takes
+// the vector kernels' shorter reduction (PMFParams.aligned). The bounds that
+// reduction keeps hold up to here; see pmf_vec_reduce_aligned.
+#define PMF_ALIGNED_FOLD_BOUND (1ULL << 44)
+
 // a^exp, with the exponent as `exp_limbs` little-endian 52-bit limbs (the form
 // PMFParams holds p in). Square-and-multiply over pmf_ref_mul.
 void pmf_ref_pow(uint64_t *out, const uint64_t *a, const uint64_t *exp, uint64_t exp_limbs,

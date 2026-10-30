@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 _LIMB_BITS = 52
 _LIMB_MASK = (1 << _LIMB_BITS) - 1
 _LANES = 8
-_SUPPORTED_LIMBS = (5, 6)
+_SUPPORTED_LIMBS = (3, 4, 5, 6)
 
 
 def _layout(bits: int) -> tuple[int, int]:
@@ -186,8 +186,8 @@ class PseudoMersenneField(Field):
 
         The achievable 2-adicity falls off sharply as ``bits`` moves below
         ``52 * limbs``, because the budget for ``c`` is only
-        ``bits - 52 * (limbs - 1)`` bits wide. ``bits`` of 260 (5 limbs) and 312
-        (6 limbs) are the roomiest choices.
+        ``bits - 52 * (limbs - 1)`` bits wide. ``bits`` of 156, 208, 260 and 312
+        (3 to 6 limbs) are the roomiest choices.
         """
         _, shift = _layout(bits)
         prime = gen_pseudo_mersenne_prime(

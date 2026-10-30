@@ -31,7 +31,6 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
     // Scratch of its own: the key is shared across threads, so nothing
     // hanging off it may be written.
     RNSc_MLWE acc = mlwe_alloc_sample(ksk->ring, out->r);
-    ArithRing target = in->ring;
 
     // compute -a_i^T * ksk_i. A NULL ksk->s[i] marks a component that keeps
     // the target key (e.g. the linear part during relinearization); it is
@@ -60,7 +59,7 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
     addend[out->r] = &in->b;
 
     // convert to RNSc and rescale into out, in in's ring
-    assert(out->ring == target);
+    assert(out->ring == in->ring);
     mlwe_RNS_to_RNSc(acc, acc);
     mlwe_mod_down(out, acc, addend);
     free_mlwe_RNS_sample(acc);

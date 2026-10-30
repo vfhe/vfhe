@@ -380,6 +380,9 @@ void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count);
 void pmf_vec_clear_padding(PMFVector a);
 bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
 void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r);
+void pmf_vec_lift_twisted(PMFVector out, const PMFVector a, const PMFVector b, const PMFVector t);
+void pmf_vec_fold_twisted(PMFVector out, const PMFVector word, const PMFVector untwist,
+                          const uint64_t *r);
 int pmf_vec_is_equal(const PMFVector a, const PMFVector b);
 void pmf_vec_sample_random(PMFVector out, const uint8_t *seed, uint64_t seed_len);
 void pmf_vec_hash(uint8_t *out, const PMFVector a);
@@ -393,6 +396,12 @@ PMFNTTPlan pmf_ntt_new_plan(uint64_t n, const uint64_t *root_of_unity, PMFParams
 void pmf_ntt_free_plan(PMFNTTPlan plan);
 void pmf_vec_ntt_forward(PMFVector a, PMFNTTPlan plan);
 void pmf_vec_ntt_inverse(PMFVector a, PMFNTTPlan plan);
+void pmf_vec_ntt_forward_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan);
+void pmf_vec_ntt_inverse_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan);
+void pmf_ntt_to_interleaved(PMFVector out, const PMFVector in, uint64_t blocks);
+void pmf_ntt_to_blocks(PMFVector out, const PMFVector in, uint64_t blocks);
+void pmf_vec_ntt_encode_blocks(PMFVector out, const PMFVector msg, uint64_t blocks,
+                               PMFNTTPlan plan);
 
 // --- the execution tape ---
 typedef enum

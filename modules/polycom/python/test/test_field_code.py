@@ -16,7 +16,7 @@ agreement with naive evaluation at the bit-reversed negacyclic points, the
 Every case runs over four fields, one per transform kernel a codeword can go
 through: extension fields over a prime below 2^50 and one above it, which
 arith's NTT transforms with different kernels, and pseudo-Mersenne fields of
-five and six limbs, transformed by arith's `PseudoMersenneNTT`."""
+three to six limbs, transformed by arith's `PseudoMersenneNTT`."""
 
 import math
 
@@ -30,9 +30,9 @@ from vfhe.polycom import (
 )
 
 # Extension fields over primes with 2-adicity 20 and 22 (x^2 - w irreducible
-# for the given w), and pseudo-Mersenne fields of five and six limbs.
+# for the given w), and pseudo-Mersenne fields of three to six limbs.
 _EXTENSION = {"p50": (562949948178433, 5), "p61": (1152921504577486849, 11)}
-_PSEUDO_MERSENNE = {"pmf260": 260, "pmf312": 312}
+_PSEUDO_MERSENNE = {"pmf156": 156, "pmf208": 208, "pmf260": 260, "pmf312": 312}
 # 2^61 - 1 has 2-adicity 1: no transform of any length.
 _MERSENNE = ((1 << 61) - 1, 3)
 

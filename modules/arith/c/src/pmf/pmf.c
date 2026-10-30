@@ -32,11 +32,11 @@ PMFParams pmf_new_params(uint64_t n, uint64_t c)
 {
     const uint64_t limbs = (n + PMF_LIMB_BITS - 1) / PMF_LIMB_BITS;
 
-    if (limbs < 5 || limbs > PMF_MAX_LIMBS)
+    if (limbs < 3 || limbs > PMF_MAX_LIMBS)
     {
         fprintf(stderr,
                 "pmf_new_params: n=%" PRIu64 " needs %" PRIu64
-                " limbs; only 5 (n in 209..260) and 6 (n in 261..312) have kernels\n",
+                " limbs; only 3 to 6 (n in 105..312) have kernels\n",
                 n, limbs);
         return NULL;
     }
@@ -74,6 +74,7 @@ PMFParams pmf_new_params(uint64_t n, uint64_t c)
     params->top_bits = PMF_LIMB_BITS - shift;
     params->top_mask = (1ULL << params->top_bits) - 1;
     params->nbytes = (n + 7) / 8;
+    params->aligned = shift == 0 && params->fold < PMF_ALIGNED_FOLD_BOUND;
 
     // p = 2^n - c, as limbs: start from 2^n - 1 (every bit below n set) and
     // subtract c - 1, so nothing ever needs an extra limb.

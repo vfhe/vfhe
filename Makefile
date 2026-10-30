@@ -7,6 +7,9 @@ PYTHON ?= python3
 VFHE_COVERAGE ?= false
 # meson's b_sanitize: none, address, address,undefined, ...
 VFHE_SANITIZE ?= none
+# meson's b_ndebug: if-release compiles the C asserts out of a release build,
+# as a wheel is built; false keeps them. `make test` always keeps them.
+VFHE_NDEBUG ?= if-release
 # One engine's name, to compile its kernels alone.
 KERNELS ?=
 # Groups from pyproject's [dependency-groups], space separated.
@@ -47,7 +50,8 @@ bench: build  ## time benchmarks into results/bench (MODULE=arith ENGINE=<name> 
 
 build:    ## compile everything into build/ (KERNELS=<engine> alone, VFHE_SANITIZE=address)
 	meson setup build
-	meson configure build -Db_coverage=$(VFHE_COVERAGE) -Db_sanitize=$(VFHE_SANITIZE)
+	meson configure build -Db_coverage=$(VFHE_COVERAGE) -Db_sanitize=$(VFHE_SANITIZE) \
+		-Db_ndebug=$(VFHE_NDEBUG)
 	meson compile -C build $(if $(KERNELS),vfhe_$(KERNELS))
 
 clean:    ## remove all generated/build artifacts and caches
@@ -99,6 +103,9 @@ smoke: $(if $(DIST)$(REQUIREMENT),,sdist)  ## run test/smoke against PACKAGE in 
 spellcheck:  ## codespell over the tree; manual-only, so no gate blocks on prose
 	$(PYTHON) -m pre_commit run --hook-stage manual codespell --all-files
 
+# The tests run with the C asserts compiled in; the build they depend on
+# inherits this.
+test: VFHE_NDEBUG = false
 test: build  ## SUITES on ENGINE (ENGINE=all|<name> SUITES=c,fast EMULATE=1 VFHE_COVERAGE=true)
 	tools/test/unit/run.sh build
 

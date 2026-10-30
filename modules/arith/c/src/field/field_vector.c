@@ -1081,8 +1081,8 @@ static void hash_windows(uint8_t *out, const FieldVector a, uint64_t count, uint
 
     if (!hash_batch_fits(leaf))
     {
-        // A window the lanes cannot take (not whole 64-byte blocks, or past a
-        // BLAKE3 chunk): one hasher per window, fed element by element.
+        // A window past a BLAKE3 chunk, which hash_batch cannot take: one
+        // hasher per window, fed element by element.
         uint64_t *element = (uint64_t *)safe_malloc(d * sizeof(uint64_t));
         for (uint64_t k = 0; k < count; k++)
         {
