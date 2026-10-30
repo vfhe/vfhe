@@ -67,6 +67,7 @@ from vfhe.arith.mle import native_table, vector_table
 from vfhe.crypto import DIGEST_LEN, Merkle, hash_bytes
 from vfhe.piop import (
     CommittedOracle,
+    OracleMessages,
     Protocol,
     Prover,
     Rejection,
@@ -85,6 +86,8 @@ from vfhe.piop.protocols.sumcheck.rounds import (
 )
 from vfhe.piop.relations import Relation_SumProd
 
+from .code import FoldableRS
+
 # `pair_digest` is re-exported here: the aliased form is what marks it
 # as a public name of this module rather than an unused import.
 from .code import pair_digest as pair_digest
@@ -93,7 +96,6 @@ from .queries import query_positions
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from .code import FoldableRS
     from .field_code import FieldFoldableRS
 
 #: A coefficient table or a codeword, in whichever form the domain's code
@@ -319,6 +321,50 @@ class Basefold:
         )
 
 
+class BasefoldMessages(OracleMessages):
+    """Oracle messages compiled with basefold: a table a protocol sends is
+    committed, and the message is the commitment's Merkle root.
+
+    Built from one `Basefold` scheme per table size, since a scheme's code
+    has one dimension; `send` commits under the scheme whose `k_d` is the
+    table's size and installs the opening on the prover (`Basefold.commit`),
+    and `receive` reads the root and names the `CommittedOracle`. The
+    evaluation claims on those oracles are discharged by each scheme's
+    `BasefoldEval`, which the caller registers for `Relation_Eval`.
+    """
+
+    def __init__(self, schemes: list[Basefold]) -> None:
+        self.schemes: dict[int, Basefold] = {}
+        for scheme in schemes:
+            num_vars = scheme.code.k_d.bit_length() - 1
+            if num_vars in self.schemes:
+                raise ValueError(f"two schemes for tables of 2^{num_vars} entries")
+            self.schemes[num_vars] = scheme
+
+    def _scheme(self, num_vars: int) -> Basefold:
+        scheme = self.schemes.get(num_vars)
+        if scheme is None:
+            raise ValueError(
+                f"no scheme for tables of 2^{num_vars} entries; there are "
+                f"schemes for 2^n entries with n in {sorted(self.schemes)}"
+            )
+        return scheme
+
+    def send(self, prover: Prover, label: str, table: MLE) -> CommittedOracle:
+        oracle, _ = self._scheme(table.num_vars).commit(table, prover=prover)
+        prover.iop.transcript.write(label, oracle.commitment.root)
+        return oracle
+
+    async def receive(
+        self, verifier: Verifier, label: str, variables: list, field: Any
+    ) -> CommittedOracle:
+        scheme = self._scheme(len(variables))
+        root = await verifier.iop.transcript.read(label)
+        if not isinstance(root, bytes) or len(root) != DIGEST_LEN:
+            raise Rejection(f"{label}: expected a {DIGEST_LEN}-byte commitment root")
+        return CommittedOracle(variables, BasefoldCommitment(variables, root), scheme)
+
+
 class BasefoldEval(Protocol):
     """Basefold's Eval protocol: discharges `Relation_Eval` statements
     against the scheme's code, replacing the terminal oracle query.
@@ -364,6 +410,11 @@ class BasefoldEval(Protocol):
         self.scheme = scheme
         self.code = scheme.code
         self.rep = rep
+        #: The ring or field of the committed tables' coefficients, where
+        #: every challenge of this protocol is drawn, whatever the IOP's
+        #: domain is.
+        code = scheme.code
+        self.domain = code.ring if isinstance(code, FoldableRS) else code.field
 
     def soundness_error(
         self,
@@ -588,9 +639,7 @@ class BasefoldEval(Protocol):
         iop = verifier.iop
         if iop is None:
             raise RuntimeError("this party is not bound to an IOP")
-        domain = iop.domain
-        if domain is None:
-            raise RuntimeError("this IOP has no domain")
+        domain = self.domain
         label = f"basefold{statement.path}"
         zs = [statement.point[v] for v in commitment.variables]
         size = 1 << self.scheme.schedule[0]
@@ -647,7 +696,7 @@ class BasefoldEval(Protocol):
             point = points[0]
             values = [statements[owners.index(c)].value for c in range(len(fs))]
         else:
-            s = await iop.verifier.challenge(f"{label}/point/s")
+            s = await iop.verifier.challenge(f"{label}/point/s", domain)
             powers = _powers(s, len(statements), one)
             # h = sum_c f_c * E_c, with E_c the sum of s^m eq~(z_m, .) over
             # the claims on f_c, so a round is one product per polynomial.
@@ -674,7 +723,7 @@ class BasefoldEval(Protocol):
                         else tuple(a + b for a, b in zip(evals, term, strict=True))
                     )
                 iop.transcript.write(f"{label}/point/g{t}", evals)
-                r = await iop.verifier.challenge(f"{label}/point/r{t}")
+                r = await iop.verifier.challenge(f"{label}/point/r{t}", domain)
                 point.append(r)
                 tables = [
                     f.evaluate({f.variables[0]: r}, in_place=f is not fs[c])
@@ -696,7 +745,7 @@ class BasefoldEval(Protocol):
                 )
         else:
             alphas = _powers(
-                await iop.verifier.challenge(f"{label}/alpha"), len(fs), one
+                await iop.verifier.challenge(f"{label}/alpha", domain), len(fs), one
             )
             u = fs[0].scale(alphas[0])
             for f, alpha in zip(fs[1:], alphas[1:], strict=True):
@@ -728,9 +777,7 @@ class BasefoldEval(Protocol):
         iop = verifier.iop
         if iop is None:
             raise RuntimeError("this party is not bound to an IOP")
-        domain = iop.domain
-        if domain is None:
-            raise RuntimeError("this IOP has no domain")
+        domain = self.domain
         label = f"basefold{statements[0].path}"
         one = _one(domain)
 
@@ -745,7 +792,7 @@ class BasefoldEval(Protocol):
                         f"{label}: two values claimed for one polynomial at one point"
                     )
         else:
-            s = await verifier.challenge(f"{label}/point/s")
+            s = await verifier.challenge(f"{label}/point/s", domain)
             powers = _powers(s, len(statements), one)
             claim = None
             for power, statement in zip(powers, statements, strict=True):
@@ -758,7 +805,7 @@ class BasefoldEval(Protocol):
                     raise Rejection(f"{label} point round {t}: malformed message")
                 if not (evals[0] + evals[1] == claim):
                     raise Rejection(f"{label} point round {t}: g(0) + g(1) != claim")
-                r = await verifier.challenge(f"{label}/point/r{t}")
+                r = await verifier.challenge(f"{label}/point/r{t}", domain)
                 point.append(r)
                 claim = interpolate_evals(evals, r)
             values = await iop.transcript.read(f"{label}/point/q")
@@ -787,7 +834,9 @@ class BasefoldEval(Protocol):
                 )
         else:
             alphas = _powers(
-                await verifier.challenge(f"{label}/alpha"), len(commitments), one
+                await verifier.challenge(f"{label}/alpha", domain),
+                len(commitments),
+                one,
             )
             value = None
             for alpha, v in zip(alphas, values, strict=True):

@@ -14,10 +14,11 @@ The C side states the layout contract at the `PMFVector` declaration in
 
 from __future__ import annotations
 
+from array import array
 from typing import TYPE_CHECKING, cast
 
 from vfhe.arith._alloc import aligned64, aligned64_unset
-from vfhe.arith.base import FieldVector, index_buffer
+from vfhe.arith.base import FieldVector, _check_bit_field, index_buffer
 from vfhe.util.bindings import ffi, lib
 
 from .pseudo_mersenne import _LANES, PseudoMersenneElement
@@ -168,6 +169,31 @@ class PseudoMersenneVector(FieldVector):
         result = self._like()
         lib.pmf_vec_copy(result._struct, self._struct)
         return result
+
+    def set_uint64(
+        self, values, start: int = 0, shift: int = 0, width: int = 64, high=None
+    ) -> None:
+        """See `FieldVector.set_uint64`; one call for all the values."""
+        count = _check_bit_field(self._n, values, start, shift, width, high)
+        if count:
+            lib.pmf_vec_set_uint64(
+                self._struct,
+                start,
+                ffi.from_buffer("uint64_t[]", values),
+                ffi.NULL if high is None else ffi.from_buffer("uint64_t[]", high),
+                count,
+                shift,
+                width,
+            )
+
+    def to_uint64(self) -> array | None:
+        """See `FieldVector.to_uint64`; one call for the whole vector."""
+        out = array("Q", bytes(8 * self._n))
+        if self._n and not lib.pmf_vec_get_uint64(
+            ffi.from_buffer("uint64_t[]", out), self._struct
+        ):
+            return None
+        return out
 
     def _destinations(
         self, out, n: int

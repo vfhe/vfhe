@@ -24,18 +24,20 @@ in `modules/piop/range.md`.
 
 from __future__ import annotations
 
+from array import array
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from vfhe.arith import MLE, MLE_Variable
+from vfhe.arith import MLE, FieldVector, MLE_Variable
 from vfhe.arith.mle import native_table
 from vfhe.piop.evaluation import Relation_Eval
-from vfhe.piop.oracle import TableOracle
+from vfhe.piop.messages import OracleMessages
 from vfhe.piop.protocol import Protocol, Rejection
 from vfhe.piop.relations import Relation_Lookup, Relation_Range
 from vfhe.piop.virtual import resolve_table
 
 if TYPE_CHECKING:
+    from vfhe.piop.oracle import Oracle
     from vfhe.piop.party import Prover, Verifier
     from vfhe.piop.relation import Relation, Statement
 
@@ -157,7 +159,13 @@ class RangeDecomposition(Protocol):
     reduces_to: tuple[type[Relation], ...] = (Relation_Lookup, Relation_Eval)
 
     def __init__(
-        self, field: Any, m: int, alphabet: int, kappa: int, ring: Any
+        self,
+        field: Any,
+        m: int,
+        alphabet: int,
+        kappa: int,
+        ring: Any,
+        messages: OracleMessages | None = None,
     ) -> None:
         if alphabet <= 1 or alphabet & (alphabet - 1):
             raise ValueError(
@@ -174,6 +182,8 @@ class RangeDecomposition(Protocol):
         # The ring the claims are about: an oracle does not expose its
         # domain (a committed one has no table on the verifier's side).
         self.ring = ring
+        # How mu' is sent: its entries (the ideal model) by default.
+        self.messages = OracleMessages() if messages is None else messages
 
     # --- shape and parameter conditions -----------------------------------
 
@@ -212,10 +222,10 @@ class RangeDecomposition(Protocol):
         wraps `iota` and makes the recomposition check meaningless.
         """
         prime = self.field.prime
-        if self.m > shape.ell:
+        if self.m > shape.ell + shape.nu:
             raise ValueError(
-                f"m must not exceed the number of variables of v: "
-                f"m = {self.m}, ell = {shape.ell}"
+                f"m must not exceed the variables of the X|Z block: "
+                f"m = {self.m}, ell + nu = {shape.ell + shape.nu}"
             )
         bound = 2 * shape.beta * (2 * self.alphabet) ** self.m
         if prime <= bound:
@@ -260,14 +270,11 @@ class RangeDecomposition(Protocol):
         shape = self._shape(statement)
         label = f"{self.name}{statement.path}"
 
-        mu = TableOracle(
-            MLE(
-                field=self.field,
-                variables=shape.variables,
-                evaluations=[self.field(d) for d in self._digit_table(v_table, shape)],
-            )
-        )
-        iop.transcript.write(f"{label}/mu", tuple(mu.polynomial.table))
+        digits = self._digit_vector(v_table, shape)
+        if digits is None:
+            digits = [self.field(d) for d in self._digit_table(v_table, shape)]
+        mu_table = MLE(field=self.field, variables=shape.variables, evaluations=digits)
+        mu = self.messages.send(prover, f"{label}/mu", mu_table)
 
         points = [
             await self._draw_point(iop, label, shape, eta) for eta in range(self.kappa)
@@ -275,7 +282,7 @@ class RangeDecomposition(Protocol):
 
         psis, values = [], []
         for eta, r in enumerate(points):
-            psi = mu.polynomial.evaluate(self._bind_prefix(shape, r), in_place=False)
+            psi = mu_table.evaluate(self._bind_prefix(shape, r), in_place=False)
             iop.transcript.write(f"{label}/psi{eta}", tuple(psi.table))
             psis.append(psi)
             w = v_table.evaluate(
@@ -295,10 +302,8 @@ class RangeDecomposition(Protocol):
         shape = self._shape(statement)
         label = f"{self.name}{statement.path}"
 
-        table = await iop.transcript.read(f"{label}/mu")
-        self._expect(len(table), 1 << shape.ell_star, f"{label}/mu")
-        mu = TableOracle(
-            MLE(field=self.field, variables=shape.variables, evaluations=list(table))
+        mu = await self.messages.receive(
+            verifier, f"{label}/mu", shape.variables, self.field
         )
 
         points = [
@@ -354,8 +359,43 @@ class RangeDecomposition(Protocol):
                     table[i + stride_k * k + stride_j * j] = digit
         return table
 
+    def _digit_vector(self, v: MLE, shape: _Shape) -> FieldVector | None:
+        """`_digit_table`, lifted into `F_p`, built with whole-array steps
+        from the coefficients of `v` as integers modulo ``2^128``
+        (`lift_mod_2_128`): `beta` is a power of two, so digit `j` of every
+        coefficient is one bit field, written into block `j` in one call.
+
+        None when a digit is wider than 64 bits, or when the digits reach past
+        bit 128 while `q` exceeds ``2^128`` (a coefficient's bits there are
+        then unknown); `_digit_table` is the way then.
+        """
+        if not native_table(v):
+            raise TypeError(
+                "the prover needs v as a dense ring table in the evaluation basis"
+            )
+        width = shape.beta.bit_length() - 1
+        if width > 64 or (
+            width * shape.chunks > 128 and shape.ring.q_l.bit_length() > 128
+        ):
+            return None
+        rows, columns = 1 << shape.ell, shape.ring.N
+        words = shape.ring.lift_mod_2_128(v.table)  # k fastest within each v(i)
+        low, high = (array("Q", bytes(8 * rows * columns)) for _ in range(2))
+        for k in range(columns):  # to i fastest
+            low[k * rows : (k + 1) * rows] = words[0][k::columns]
+            high[k * rows : (k + 1) * rows] = words[1][k::columns]
+        block = rows * columns
+        table = FieldVector(self.field, block * shape.chunks)
+        for j in range(shape.chunks):
+            if width * j < 128:  # past bit 128 every coefficient's bits are zero
+                table.set_uint64(
+                    low, start=j * block, shift=width * j, width=width, high=high
+                )
+        return table
+
     def _bind_prefix(self, shape: _Shape, r: list[int]) -> dict:
-        """`{X_1: r_1, ..., X_m: r_m}` as field elements, in variable order.
+        """The first `m` variables of the `X|Z` block bound to `r_1, ..., r_m`
+        as field elements, in variable order.
 
         In order because `MLE.evaluate` binds the entries of the dict one at a
         time: taking them front to back keeps every bind at position 0, which
@@ -421,7 +461,7 @@ class RangeDecomposition(Protocol):
         self,
         statement: Statement,
         shape: _Shape,
-        mu: TableOracle,
+        mu: Oracle,
         points: list[list[int]],
         psis: list[MLE],
         values: list,

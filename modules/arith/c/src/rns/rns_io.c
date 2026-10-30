@@ -286,3 +286,116 @@ int64_t polynomial_RNS_read_rows(RNS_Polynomial p, const uint8_t *in, const uint
     vfhe_parallel_for(count, threads, read_row, &job);
     return bad;
 }
+
+// Garner's mixed radix: c = a_0 + a_1 Q_1 + ... + a_(L-1) Q_(L-1), with
+// Q_r = q_0 ... q_(r-1) and 0 <= a_r < q_r, is the c in [0, q) with the given
+// residues, and a_r = (c_r - (a_0 Q_0 + ... + a_(r-1) Q_(r-1))) Q_r^-1 mod q_r.
+// Each a_r is one row computed from the rows before it: the sum is a lifted
+// combination of those rows with the constants Q_k mod q_r, then a subtract
+// and a scale by Q_r^-1, all modulo q_r through the element-wise kernels. The
+// sum of the a_r Q_r is then a combination of the rows modulo 2^128, where it
+// wraps.
+typedef struct
+{
+    RNS_Polynomial *in;
+    uint64_t *low, *high;
+    const uint64_t *rows;                     // the base indices of the active primes
+    const uint64_t *q;                        // their values
+    const uint64_t *prefix;                   // prefix[r * L + k] = Q_k mod q_r, k < r
+    const uint64_t *inverse;                  // inverse[r] = Q_r^-1 mod q_r
+    const uint64_t *weight_low, *weight_high; // Q_r mod 2^128, as two words
+    uint64_t L;
+} LiftJob;
+
+// Row `i` of `p` into `out` in natural coefficient order: coefficient u + s t
+// sits at u * block + t, s the splitting degree and block = N / s.
+static void natural_row(uint64_t *out, RNS_Polynomial p, uint64_t i)
+{
+    const uint64_t N = p->base->N, s = p->base->split_degree, block = N / s;
+    if (rns_row_is_narrow(p->base, i))
+    {
+        const uint32_t *row = rns_row32(p, i);
+        for (uint64_t u = 0; u < s; u++)
+            for (uint64_t t = 0; t < block; t++)
+                out[u + s * t] = row[u * block + t];
+    }
+    else if (s == 1)
+        memcpy(out, rns_row64(p, i), N * sizeof(uint64_t));
+    else
+    {
+        const uint64_t *row = rns_row64(p, i);
+        for (uint64_t u = 0; u < s; u++)
+            for (uint64_t t = 0; t < block; t++)
+                out[u + s * t] = row[u * block + t];
+    }
+}
+
+static void lift_polynomial(void *ctx, uint64_t e)
+{
+    const LiftJob *job = (const LiftJob *)ctx;
+    const RNS_Polynomial p = job->in[e];
+    const uint64_t N = p->base->N, L = job->L;
+    // Aligned: the element-wise kernels load whole 64-byte vectors.
+    uint64_t *a = (uint64_t *)safe_aligned_malloc(L * N * sizeof(uint64_t));
+    uint64_t *residues = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    const uint64_t *terms[MOD_COMBINATION_MAX_TERMS];
+    natural_row(a, p, job->rows[0]);
+    for (uint64_t r = 1; r < L; r++)
+    {
+        const Modulus mod = p->base->mods[job->rows[r]];
+        uint64_t *a_r = a + r * N;
+        for (uint64_t k = 0; k < r; k++)
+            terms[k] = a + k * N;
+        const uint64_t *scale = job->prefix + r * L;
+        if (!mod_eltwise_lifted_combination(a_r, terms, job->q, scale, r, false, N, mod))
+            mod_eltwise_lifted_combination_gen(a_r, terms, job->q, scale, r, false, N, mod);
+        natural_row(residues, p, job->rows[r]);
+        mod_eltwise_sub(a_r, residues, a_r, N, mod);
+        mod_eltwise_scale(a_r, a_r, job->inverse[r], N, mod);
+    }
+    for (uint64_t r = 0; r < L; r++)
+        terms[r] = a + r * N;
+    vec_combination_mod_2_128(job->low + e * N, job->high + e * N, terms, job->weight_low,
+                              job->weight_high, L, N);
+    free(residues);
+    free(a);
+}
+
+void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial *in,
+                                   uint64_t count)
+{
+    if (count == 0)
+        return;
+    const RNS_Base base = in[0]->base;
+    for (uint64_t e = 0; e < count; e++)
+        assert(in[e]->base == base && in[e]->rns_mask == in[0]->rns_mask);
+    uint64_t rows[64], q[64];
+    const uint64_t L = active_rows(rows, in[0]);
+    assert(L <= MOD_COMBINATION_MAX_TERMS);
+    for (uint64_t r = 0; r < L; r++)
+        q[r] = base->mods[rows[r]]->q;
+    uint64_t prefix[64 * 64], inverse[64], weight_low[64], weight_high[64];
+    // Q_r mod 2^128 as two words: one 64 x 64 -> 128 product per prime.
+    weight_low[0] = 1;
+    weight_high[0] = 0;
+    for (uint64_t k = 1; k < L; k++)
+    {
+        const unsigned __int128 low_product = (unsigned __int128)weight_low[k - 1] * q[k - 1];
+        weight_low[k] = (uint64_t)low_product;
+        weight_high[k] = (uint64_t)(low_product >> 64) + weight_high[k - 1] * q[k - 1];
+    }
+    for (uint64_t r = 0; r < L; r++)
+    {
+        const Modulus mod = base->mods[rows[r]];
+        uint64_t product = modq(1, mod);
+        for (uint64_t k = 0; k < r; k++)
+        {
+            prefix[r * L + k] = product;
+            product = mul_modq(product, modq(q[k], mod), mod);
+        }
+        inverse[r] = r ? inverse_mod(product, q[r]) : 1;
+    }
+    LiftJob job = {in, low, high, rows, q, prefix, inverse, weight_low, weight_high, L};
+    const bool wide = count * L * base->N * sizeof(uint64_t) >= EXPAND_PARALLEL_BYTES;
+    vfhe_parallel_for(count, wide ? 0 : 1, lift_polynomial, &job);
+}

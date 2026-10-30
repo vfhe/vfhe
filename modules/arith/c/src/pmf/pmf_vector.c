@@ -677,6 +677,50 @@ void pmf_vec_get_range(uint64_t *out, const PMFVector a, uint64_t start, uint64_
     }
 }
 
+static inline void pmf_vec_set_limbs(uint64_t *limb0, uint64_t *limb1, uint64_t i, uint64_t value)
+{
+    limb0[i] = value & PMF_LIMB_MASK;
+    limb1[i] = value >> PMF_LIMB_BITS;
+}
+
+void pmf_vec_set_uint64(PMFVector out, uint64_t start, const uint64_t *low, const uint64_t *high,
+                        uint64_t count, uint32_t shift, uint32_t width)
+{
+    assert(start + count <= out->n && shift < (high ? 128u : 64u) && width >= 1 && width <= 64);
+    const uint64_t mask = width == 64 ? ~0ULL : (1ULL << width) - 1;
+    uint64_t *limb0 = out->limbs[0] + start, *limb1 = out->limbs[1] + start;
+    // One loop per case, so none of them branches per element.
+    if (!high || shift == 0)
+        for (uint64_t i = 0; i < count; i++)
+            pmf_vec_set_limbs(limb0, limb1, i, (low[i] >> shift) & mask);
+    else if (shift >= 64)
+        for (uint64_t i = 0; i < count; i++)
+            pmf_vec_set_limbs(limb0, limb1, i, (high[i] >> (shift - 64)) & mask);
+    else
+        for (uint64_t i = 0; i < count; i++)
+            pmf_vec_set_limbs(limb0, limb1, i,
+                              ((low[i] >> shift) | (high[i] << (64 - shift))) & mask);
+    for (uint64_t k = 2; k < out->params->limbs; k++)
+        memset(out->limbs[k] + start, 0, count * sizeof(uint64_t));
+}
+
+bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a)
+{
+    // Limbs are 52 bits, so a canonical element is below 2^64 exactly when its
+    // limbs from the third on are zero and the second is below 2^12.
+    const uint64_t *low = a->limbs[0], *high = a->limbs[1];
+    for (uint64_t i = 0; i < a->n; i++)
+    {
+        uint64_t above = high[i] >> (64 - PMF_LIMB_BITS);
+        for (uint64_t k = 2; k < a->params->limbs; k++)
+            above |= a->limbs[k][i];
+        if (above)
+            return false;
+        out[i] = low[i] | high[i] << PMF_LIMB_BITS;
+    }
+    return true;
+}
+
 void pmf_vec_copy(PMFVector out, const PMFVector a)
 {
     for (uint64_t k = 0; k < a->params->limbs; k++)

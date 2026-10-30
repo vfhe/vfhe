@@ -99,7 +99,7 @@ Paper notation, all of it used below:
 | `µ̃` | the integer digit polynomial, `µ̃(i,k,j) = dig_j^{(β)}(ṽ(i)[k])`, the `j`-th base-`β` digit of the `k`-th coefficient of `ṽ(i)` |
 | `µ̃' = π_p(µ̃)` | its reduction into `F_p` — the prime marks "over `F_p`", not a derivative |
 | `ι` | the balanced lift `F_p → I_p = {−⌊p/2⌋,…,⌊p/2⌋} ⊂ Z` |
-| `Σ = {0,…,σ−1} ⊂ Z`, `m ≤ ℓ`, `κ` | the small-integer challenge alphabet, the split point, the repetition count (Fig. 13). `σ ≤ p_min` is required, so that `π_q(Σ)` lands in the exceptional set `Ŝ_0 ⊂ Z_q` and the query to `ṽ` is sound |
+| `Σ = {0,…,σ−1} ⊂ Z`, `m ≤ ℓ+ν`, `κ` | the small-integer challenge alphabet, the split point, the repetition count (Fig. 13). With `m > ℓ` the bound prefix reaches into the `Z` block and `ψ̃'_η` has fewer than `c·N` entries. `σ ≤ p_min` is required, so that `π_q(Σ)` lands in the exceptional set `Ŝ_0 ⊂ Z_q` and the query to `ṽ` is sound |
 | `r_η ∈ Σ^{ℓ+ν}` | repetition `η`'s challenge. Split as `x_η = (r_{η,1..ℓ})` (the `X` block, for `ṽ`) and `z_η = (r_{η,ℓ+1..ℓ+ν})` (the `Z` block); and separately as `r'_η = (r_{η,1..m})` (bound into `ψ̃'`) and `r_η^{>m} = (r_{η,m+1..ℓ+ν})` (used as `eq̃` weights) |
 | `ψ̃'_η = µ̃'(r'_η, ·)` | the partial evaluation the prover sends, over `ℓ*−m` variables; `δ ∈ {0,1}^{ℓ+ν−m}` and `k ∈ {0,1}^γ` index it |
 | `s' ∈ F_p^{ℓ*−m}` | the spot-check point for `ψ̃'_η` |
@@ -431,6 +431,11 @@ loudly there rather than producing a proof that is quietly unsound.
 
 ## Sending an oracle (both protocols)
 
+Both protocols send their oracles through an `OracleMessages` object
+(`vfhe.piop.messages`), passed as `messages=` and the ideal model when
+omitted: `send(prover, label, table)` returns the prover's oracle, and
+`receive(verifier, label, variables, field)` the verifier's.
+
 In the ideal model a prover message *is* an oracle, so `µ̃'`, `read_ts`,
 `final_cts` and the four `f^{(1)}_α` are written to the transcript and read
 back by the verifier.
@@ -441,11 +446,26 @@ variable identity: `MLE_Variable`s compare by identity, and each party should
 build its own table, with its own variable objects, from a message that is
 plain data. Each party then names its table through a plain `TableOracle`.
 
-The compiled variant is a contained change, not a rewrite: the prover commits
-with `vfhe.polycom` and the statements name the `CommittedOracle` that
-`commit` returns instead of a table oracle; the PCS protocol, registered for
-`Relation_Eval`, discharges those claims. The relations, the protocols and
-the DAG are unchanged.
+The compiled variant is `vfhe.polycom.BasefoldMessages`, built from one
+field `Basefold` scheme per table size (`2^{ℓ*}` for `µ̃'`, `read_ts`,
+`f^{(1)}_WSµ`, `f^{(1)}_RS`; `2^{b*}` for `final_cts`, `f^{(1)}_WSt`,
+`f^{(1)}_S`): the prover commits and the message is the Merkle root; both
+parties name a `CommittedOracle`. Each scheme's `BasefoldEval`, registered
+for `Relation_Eval`, opens every claim on its oracles in one batched
+opening. Once a scheme is registered, claims on plain oracles are refused,
+so `ṽ` must be committed too (ring Basefold, say, with its own
+`BasefoldEval`):
+
+```python
+messages = BasefoldMessages([main_scheme, table_scheme])
+iop.register(Relation_Range, RangeDecomposition(field, m, alphabet, kappa, ring,
+                                                messages=messages))
+iop.register(Relation_Lookup, Lookup(field, messages=messages))
+for scheme in (main_scheme, table_scheme, ring_scheme):
+    iop.register(Relation_Eval, BasefoldEval(scheme))
+```
+
+The relations, the reductions and the DAG are the same in both models.
 
 ## Bibliography
 

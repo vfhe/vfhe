@@ -409,6 +409,15 @@ soundness error is `2d/(gamma^3·|A|) + (1 - delta + gamma·d)^rep` for
 admissible `(gamma, delta)` [ZCF24], with `|A|` the per-prime residue field
 size (`BasefoldEval.soundness_error`).
 
+Every challenge of `BasefoldEval` is drawn in its scheme's ring or field
+(`BasefoldEval.domain`), not in the IOP's domain, so an IOP over a field
+can open claims committed with ring Basefold, and the other way round.
+
+`BasefoldMessages` is the `piop.OracleMessages` of the compiled model: a
+protocol that sends a table commits it, under the scheme of the table's
+size among those it was built with, and sends the root; the verifier names
+the `CommittedOracle`. The caller registers each scheme's `BasefoldEval`.
+
 **The batched opening** [CCCFGS26, §7, Figs. 3-4] opens `M > 1` claims
 `f_{c(m)}(z_m) = y_m` on `C` distinct polynomials committed under the scheme:
 

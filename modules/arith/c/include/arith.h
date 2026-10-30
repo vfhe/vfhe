@@ -738,6 +738,17 @@ extern "C"
     void pmf_vec_set_element(PMFVector out, uint64_t index, const uint64_t *value);
     void pmf_vec_set_range(PMFVector out, uint64_t start, const uint64_t *values, uint64_t count);
     void pmf_vec_get_range(uint64_t *out, const PMFVector a, uint64_t start, uint64_t count);
+    // out[start + i] = (v_i >> shift) mod 2^width for i < count, with
+    // v_i = low[i] + 2^64 high[i] (high may be NULL, for zero): the plain
+    // lift of 64-bit integers (shift 0, width 64) or one bit field of each,
+    // such as a digit. Needs start + count <= out->n, shift < 128 (< 64
+    // without high) and 1 <= width <= 64; every result is below 2^64 < p, so
+    // it is canonical as written.
+    void pmf_vec_set_uint64(PMFVector out, uint64_t start, const uint64_t *low,
+                            const uint64_t *high, uint64_t count, uint32_t shift, uint32_t width);
+    // out[i] = a[i] for i < a->n when every element is below 2^64; false, with
+    // out partly written, when one is not.
+    bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a);
     void pmf_vec_copy(PMFVector out, const PMFVector a);
     // Deinterleave: even gets elements 0, 2, 4, ... and odd gets 1, 3, 5, ....
     // `a->n` must be even and each output must hold a->n / 2 elements.
@@ -1117,6 +1128,13 @@ extern "C"
     int64_t polynomial_RNS_read_rows(RNS_Polynomial p, const uint8_t *in, const uint64_t *rows,
                                      uint64_t count, bool tight, bool validate);
     uint64_t *polynomial_RNS_get_hash_p(RNS_Polynomial p);
+    /* The integer lift of every coefficient of `count` polynomials, modulo
+       2^128. in[0..count) are in the coefficient domain, on one base with one
+       mask. Coefficient k of in[e] (natural order) is the integer c in [0, q)
+       with those residues, q the product of the primes the mask selects, and
+       c mod 2^128 is written as low[e * N + k] + 2^64 high[e * N + k]. */
+    void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial *in,
+                                       uint64_t count);
     RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N,
                                                         uint64_t rns_mask, RNS_Base base);
     void free_RNS_polynomial_array(uint64_t size, RNS_Polynomial *p);

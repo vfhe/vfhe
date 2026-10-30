@@ -45,6 +45,11 @@ void vec_interleave_k_u32(uint32_t *out, const uint32_t *const *in, uint64_t k, 
 // k * n zero. `out` does not alias `in`.
 void vec_spread_u64(uint64_t *out, const uint64_t *in, uint64_t k, uint64_t n);
 void vec_spread_u32(uint32_t *out, const uint32_t *in, uint64_t k, uint64_t n);
+// low[j] + 2^64 high[j] = sum_t a[t][j] w_t mod 2^128 for j < n, with
+// w_t = w_low[t] + 2^64 w_high[t] and at most MOD_COMBINATION_MAX_TERMS terms.
+void vec_combination_mod_2_128(uint64_t *low, uint64_t *high, const uint64_t *const *a,
+                               const uint64_t *w_low, const uint64_t *w_high, uint64_t m,
+                               uint64_t n);
 
 // As int_array_to_RNS, for coefficients given in `count` signed limbs:
 // coefficient k is the sum over j of limbs[j][k] 2^(j limb_bits), reduced

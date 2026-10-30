@@ -8,16 +8,20 @@ which becomes a zerocheck over a virtual oracle. See
 
 from __future__ import annotations
 
+from array import array
 from typing import TYPE_CHECKING, Any, cast
 
-from vfhe.arith import MLE, MLE_Variable
+from vfhe.arith import MLE, FieldVector, MLE_Variable
+from vfhe.arith.mle import vector_table
 from vfhe.piop.evaluation import Relation_Eval
+from vfhe.piop.messages import OracleMessages
 from vfhe.piop.oracle import TableOracle
 from vfhe.piop.protocol import Protocol, Rejection
 from vfhe.piop.relations import Relation_Lookup, Relation_Sum
 from vfhe.piop.virtual import VirtualOracle, resolve_table
 
 if TYPE_CHECKING:
+    from vfhe.piop.oracle import Oracle
     from vfhe.piop.party import Prover, Verifier
     from vfhe.piop.relation import Relation, Statement
 
@@ -57,9 +61,9 @@ def counters(values: list[int], beta: int) -> tuple[list[int], list[int]]:
     return read_ts, final_cts
 
 
-def grand_product(leaves: list, zero: Any) -> list:
-    """The layered polynomial of Lemma I.4 over `2^n` leaves, as one flat
-    table of `2^(n+1)` entries read LSB-first.
+def product_tree(leaves: list, zero: Any) -> list:
+    """The product tree of `2^n` leaves: the table of the layered polynomial
+    `f` of Lemma I.4, `2^(n+1)` entries read LSB-first.
 
     `f[k] = leaves[k]` below `2^n`, `f[2^n + k] = f[2k] * f[2k+1]` above it,
     and the very last entry pinned to zero. The pin is not decoration: the
@@ -73,6 +77,20 @@ def grand_product(leaves: list, zero: Any) -> list:
     for k in range(size - 1):
         table[size + k] = table[2 * k] * table[2 * k + 1]
     return table
+
+
+def product_tree_vector(leaves: FieldVector) -> FieldVector:
+    """`product_tree` over a field vector of `2^n` leaves, in `n`
+    whole-vector passes: layer `t` is the elementwise product of the even and
+    odd entries of layer `t - 1`, and the table is the leaves, then layers
+    `1..n`, then the pinned zero."""
+    layers, layer = [leaves], leaves
+    while len(layer) > 1:
+        even, odd = layer.split_even_odd()
+        layer = even * odd
+        layers.append(layer)
+    layers.append(FieldVector(leaves.field, 1))
+    return FieldVector.concat(layers)
 
 
 class Lookup(Protocol):
@@ -107,8 +125,11 @@ class Lookup(Protocol):
     reduces_from: type[Relation] = Relation_Lookup
     reduces_to: tuple[type[Relation], ...] = (Relation_Sum, Relation_Eval)
 
-    def __init__(self, field: Any) -> None:
+    def __init__(self, field: Any, messages: OracleMessages | None = None) -> None:
         self.field = field
+        # How the counters and the f^(1)_a are sent: their entries (the ideal
+        # model) by default.
+        self.messages = OracleMessages() if messages is None else messages
 
     def soundness_error(self, statement: Statement, domain: Any = None) -> float:
         """`(2^ell* + 2^b*) / p` (Theorem I.5).
@@ -137,7 +158,7 @@ class Lookup(Protocol):
             public=True,
         )
 
-    def _layered(self, W: list, f1: TableOracle, parts: list) -> VirtualOracle:
+    def _layered(self, W: list, f1: Oracle, parts: list) -> VirtualOracle:
         """`f_a = (1 - W_n) * sum(parts) + W_n * f^(1)_a`, as a virtual
         oracle over `W`.
 
@@ -203,7 +224,7 @@ class Lookup(Protocol):
         return VirtualOracle(X, constituents, terms, maps)
 
     def _scaffold(
-        self, statement: Statement, read_ts: TableOracle, final_cts: TableOracle
+        self, statement: Statement, read_ts: Oracle, final_cts: Oracle
     ) -> dict:
         """Everything downstream of the round-1 messages that does not depend
         on a challenge: the public table, and the variable lists the two
@@ -222,27 +243,25 @@ class Lookup(Protocol):
             "W": {"mu": self._names("w", n + 1), "t": self._names("u", b + 1)},
         }
 
-    def _leaves(self, mu_table: MLE, parts: dict, zeta: Any, tau: Any) -> dict:
+    def _leaves(self, tables: dict, parts: dict, zeta: Any, tau: Any) -> dict:
         """The four fingerprint leaf tables, equations (41)-(43), from the
-        prover's table of `mu` and the tables of the scaffold's oracles."""
-        mu, table = mu_table.table, parts["table"].polynomial.table
-        read_ts = parts["read_ts"].polynomial.table
-        final_cts = parts["final_cts"].polynomial.table
+        prover's tables of `mu`, `read_ts` and `final_cts` and the public
+        table."""
+        mu, table = tables["mu"].table, parts["table"].polynomial.table
+        read_ts, final_cts = tables["read_ts"].table, tables["final_cts"].table
+        read = mu.fma(read_ts, zeta)  # mu + zeta * read_ts
         return {
-            "WSmu": [
-                mu[i] + zeta * (read_ts[i] + self.field.one) - tau
-                for i in range(1 << parts["sizes"]["WSmu"])
-            ],
-            "RS": [
-                mu[i] + zeta * read_ts[i] - tau
-                for i in range(1 << parts["sizes"]["RS"])
-            ],
-            "WSt": [table[j] - tau for j in range(1 << parts["sizes"]["WSt"])],
-            "S": [
-                table[j] + zeta * final_cts[j] - tau
-                for j in range(1 << parts["sizes"]["S"])
-            ],
+            "WSmu": read + (zeta - tau),
+            "RS": read - tau,
+            "WSt": table - tau,
+            "S": table.fma(final_cts, zeta) - tau,
         }
+
+    def _counter_table(self, variables: list, counts: list[int]) -> MLE:
+        """`counts`, small non-negative integers, as a field table."""
+        vector = FieldVector(self.field, len(counts))
+        vector.set_uint64(array("Q", counts))
+        return MLE(field=self.field, variables=variables, evaluations=vector)
 
     def _virtuals(self, parts: dict, f1: dict, zeta: Any, tau: Any) -> dict:
         """The four layered oracles, each over its side's `W`."""
@@ -319,42 +338,43 @@ class Lookup(Protocol):
         field = self.field
 
         mu_table = resolve_table(mu, prover.witnesses)
-        read_counts, final_counts = counters([int(e) for e in mu_table.table], beta)
-        read_ts = TableOracle(
-            MLE(
-                field=field,
-                variables=self._names("r", mu.num_vars),
-                evaluations=[field(c) for c in read_counts],
-            )
+        # `to_uint64` is None when an entry is 2^64 or more: such an entry is
+        # outside the table, and `counters` still counts it.
+        values = mu_table.table.to_uint64() if vector_table(mu_table) else None
+        if values is None:
+            values = [int(e) for e in mu_table.table]
+        read_counts, final_counts = counters(values, beta)
+        tables = {
+            "mu": mu_table,
+            "read_ts": self._counter_table(self._names("r", mu.num_vars), read_counts),
+            "final_cts": self._counter_table(
+                self._names("c", beta.bit_length() - 1), final_counts
+            ),
+        }
+        read_ts = self.messages.send(prover, f"{label}/read_ts", tables["read_ts"])
+        final_cts = self.messages.send(
+            prover, f"{label}/final_cts", tables["final_cts"]
         )
-        final_cts = TableOracle(
-            MLE(
-                field=field,
-                variables=self._names("c", beta.bit_length() - 1),
-                evaluations=[field(c) for c in final_counts],
-            )
-        )
-        iop.transcript.write(f"{label}/read_ts", tuple(read_ts.polynomial.table))
-        iop.transcript.write(f"{label}/final_cts", tuple(final_cts.polynomial.table))
         zeta = await iop.verifier.challenge(f"{label}/zeta")
         tau = await iop.verifier.challenge(f"{label}/tau")
 
         parts = self._scaffold(statement, read_ts, final_cts)
         trees = {
-            a: grand_product(leaves, field.zero)
-            for a, leaves in self._leaves(mu_table, parts, zeta, tau).items()
+            a: product_tree_vector(leaves)
+            for a, leaves in self._leaves(tables, parts, zeta, tau).items()
         }
         f1 = {}
         for a in FINGERPRINTS:
             half = 1 << parts["sizes"][a]
-            f1[a] = TableOracle(
+            f1[a] = self.messages.send(
+                prover,
+                f"{label}/f1_{a}",
                 MLE(
                     field=field,
                     variables=self._names(f"f{a}", parts["sizes"][a]),
-                    evaluations=trees[a][half:],
-                )
+                    evaluations=trees[a].view(half).copy(),
+                ),
             )
-            iop.transcript.write(f"{label}/f1_{a}", tuple(f1[a].polynomial.table))
         products = tuple(trees[a][-2] for a in FINGERPRINTS)
         iop.transcript.write(f"{label}/products", products)
 
@@ -377,19 +397,25 @@ class Lookup(Protocol):
         beta = cast("Relation_Lookup", statement.relation).beta
         label = f"{self.name}{statement.path}"
 
-        read_ts = await self._read_table(
-            iop, f"{label}/read_ts", self._names("r", mu.num_vars)
+        read_ts = await self.messages.receive(
+            verifier, f"{label}/read_ts", self._names("r", mu.num_vars), self.field
         )
-        final_cts = await self._read_table(
-            iop, f"{label}/final_cts", self._names("c", beta.bit_length() - 1)
+        final_cts = await self.messages.receive(
+            verifier,
+            f"{label}/final_cts",
+            self._names("c", beta.bit_length() - 1),
+            self.field,
         )
         zeta = await iop.verifier.challenge(f"{label}/zeta")
         tau = await iop.verifier.challenge(f"{label}/tau")
 
         parts = self._scaffold(statement, read_ts, final_cts)
         f1 = {
-            a: await self._read_table(
-                iop, f"{label}/f1_{a}", self._names(f"f{a}", parts["sizes"][a])
+            a: await self.messages.receive(
+                verifier,
+                f"{label}/f1_{a}",
+                self._names(f"f{a}", parts["sizes"][a]),
+                self.field,
             )
             for a in FINGERPRINTS
         }
@@ -429,15 +455,3 @@ class Lookup(Protocol):
             ],
         }
         return chi, points
-
-    async def _read_table(self, iop: Any, label: str, variables: list) -> TableOracle:
-        """One oracle message read back as an oracle to a table over
-        `variables`."""
-        entries = await iop.transcript.read(label)
-        if len(entries) != 1 << len(variables):
-            raise Rejection(
-                f"{label}: expected {1 << len(variables)} entries, got {len(entries)}"
-            )
-        return TableOracle(
-            MLE(field=self.field, variables=variables, evaluations=list(entries))
-        )

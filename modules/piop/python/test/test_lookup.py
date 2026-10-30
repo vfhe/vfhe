@@ -13,7 +13,7 @@ import random
 from collections import Counter
 
 import pytest
-from vfhe.arith import MLE, MLE_Variable, PseudoMersenneField
+from vfhe.arith import MLE, FieldVector, MLE_Variable, PseudoMersenneField
 from vfhe.piop import (
     IOP,
     OracleKind,
@@ -24,7 +24,12 @@ from vfhe.piop import (
     element_digest,
 )
 from vfhe.piop.protocols import Lookup, Sumcheck, VirtualEval
-from vfhe.piop.protocols.lookup import FINGERPRINTS, counters, grand_product
+from vfhe.piop.protocols.lookup import (
+    FINGERPRINTS,
+    counters,
+    product_tree,
+    product_tree_vector,
+)
 from vfhe.piop.relations import Relation_Lookup, Relation_Sum
 
 # beta = 8 (b* = 3) and a 64-entry oracle (ell* = 6): the two sides of the
@@ -102,13 +107,13 @@ def test_counters_cannot_balance_an_out_of_range_value():
 # --- Lemma I.4: the grand-product layering ----------------------------------
 
 
-def test_grand_product_layering():
+def test_product_tree_layering():
     """`f(X,1) = f(0,X) * f(1,X)` for every X, the product at `f[-2]`, and
     the last entry pinned so the identity holds at the all-ones point too."""
     for n in (1, 2, 3, 4):
         size = 1 << n
         leaves = [random.Random(n).randrange(2, 50) for _ in range(size)]
-        f = grand_product(leaves, 0)
+        f = product_tree(leaves, 0)
 
         assert len(f) == 2 * size
         assert f[:size] == leaves  # the bottom half is the leaves
@@ -121,6 +126,16 @@ def test_grand_product_layering():
             product *= value
         assert f[-2] == product
         assert f[size + (size - 2)] == product  # i.e. f^(1) at (0, 1, ..., 1)
+
+
+def test_product_tree_vector_is_the_same_table(field):
+    """The whole-vector passes build exactly the reference table, from a
+    single leaf up."""
+    for n in (0, 1, 3, 5):
+        rng = random.Random(n)
+        leaves = [field(rng.randrange(1, 1 << 40)) for _ in range(1 << n)]
+        table = product_tree_vector(FieldVector(field, leaves))
+        assert table.to_list() == product_tree(leaves, field.zero)
 
 
 # --- the relation's ideal decider -------------------------------------------

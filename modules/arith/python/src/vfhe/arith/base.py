@@ -31,6 +31,7 @@ is the same answer `require` gives from the capability flags, one level later.
 from __future__ import annotations
 
 from abc import ABC, ABCMeta, abstractmethod
+from array import array
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from vfhe.crypto import entropy, hash_bytes, seeded
@@ -1115,6 +1116,28 @@ def index_buffer(indices):
     return view
 
 
+def _check_bit_field(
+    n: int, values, start: int, shift: int, width: int, high=None
+) -> int:
+    """The preconditions of `FieldVector.set_uint64` on a vector of `n`
+    elements; returns the number of values."""
+    words = 64 if high is None else 128
+    if not 0 <= shift < words or not 1 <= width <= 64:
+        raise ValueError(
+            f"need 0 <= shift < {words} and 1 <= width <= 64, got {shift}, {width}"
+        )
+    for buffer in (values,) if high is None else (values, high):
+        view = memoryview(buffer)
+        if view.itemsize != 8 or view.format not in ("Q", "L"):
+            raise TypeError("values must be buffers of 64-bit unsigned integers")
+    count = len(memoryview(values))
+    if high is not None and len(memoryview(high)) != count:
+        raise ValueError("values and high differ in length")
+    if not 0 <= start <= start + count <= n:
+        raise ValueError(f"{count} values from {start} into {n} elements")
+    return count
+
+
 class FieldVector(metaclass=_ImplementationDispatch):
     """Many elements of one `Field`, held together in one buffer.
 
@@ -1235,6 +1258,37 @@ class FieldVector(metaclass=_ImplementationDispatch):
     def copy(self) -> FieldVector:
         """A fresh vector with the same contents."""
         raise NotImplementedError
+
+    def set_uint64(
+        self, values, start: int = 0, shift: int = 0, width: int = 64, high=None
+    ) -> None:
+        """Element ``start + i`` becomes ``(v_i >> shift) mod 2^width``, for
+        every ``i < len(values)``, in place, where ``v_i = values[i] +
+        2^64 high[i]`` (``values[i]`` without `high`).
+
+        `values` and `high` are ``array('Q')``s (or any buffers of 64-bit
+        unsigned integers) of one length that fits from `start`. With the
+        defaults this loads the integers themselves; with a `shift` and a
+        `width` it loads one bit field of each, such as one base-``2^width``
+        digit. Needs ``1 <= width <= 64`` and ``0 <= shift < 64``, or
+        ``< 128`` with `high`.
+        """
+        count = _check_bit_field(len(self), values, start, shift, width, high)
+        mask = (1 << width) - 1
+        for i in range(count):
+            value = values[i] if high is None else values[i] | high[i] << 64
+            self[start + i] = (value >> shift) & mask
+
+    def to_uint64(self) -> array | None:
+        """The elements as an ``array('Q')``, or None when one of them is not
+        an integer below ``2^64``."""
+        out = array("Q")
+        for element in self:
+            value = int(element)
+            if value >> 64:
+                return None
+            out.append(value)
+        return out
 
     # --- arithmetic ---
 

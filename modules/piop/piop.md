@@ -998,6 +998,16 @@ bundled, parked and stored on the object. The prover works on tables:
 side — a table oracle's own, `witnesses[oracle]` for a committed or an
 implicit one, a slice for a restriction.
 
+### `OracleMessages` (`messages.py`)
+
+A protocol that sends a table as an oracle sends it through an
+`OracleMessages`: `send(prover, label, table)` returns the prover's oracle
+and `receive(verifier, label, variables, field)` the verifier's, each party
+naming its own. The base class is the ideal model (the entries are the
+message, each party gets a `TableOracle`); a commitment scheme overrides the
+two to send a commitment and name a `CommittedOracle`. The range and
+lookup protocols take one as `messages=`.
+
 ### `VirtualOracle`, `Relation_SumDef` / `SumDefStart` (`virtual.py`, `relations/sumdef.py`, `protocols/virtual.py`, `protocols/sumcheck/prover_view.py`)
 
 The virtual oracle of §4 is an object with the oracle surface the rest of
