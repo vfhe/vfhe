@@ -1966,7 +1966,9 @@ static void rns_mixed_radix_digits(uint64_t *a, const uint64_t *x, const uint64_
     }
 }
 
-void polynomial_RNSc_to_centered_doubles(double *out, RNSc_Polynomial in, double scale)
+// out[k] = scale * the centered value at row position k, which is coefficient
+// k only when split_degree is 1.
+static void centered_doubles_in_row_order(double *out, RNSc_Polynomial in, double scale)
 {
     const uint64_t N = in->base->N;
     uint64_t L = 0, idx[64];
@@ -2064,6 +2066,24 @@ void polynomial_RNSc_to_centered_doubles(double *out, RNSc_Polynomial in, double
     free(x);
     free(a);
     free(half);
+}
+
+void polynomial_RNSc_to_centered_doubles(double *out, RNSc_Polynomial in, double scale)
+{
+    const uint64_t N = in->base->N, split_degree = in->base->split_degree;
+    if (split_degree == 1)
+    {
+        centered_doubles_in_row_order(out, in, scale);
+        return;
+    }
+    // A split row holds coefficient j at (j % split_degree) * poly_size +
+    // j / split_degree.
+    const uint64_t poly_size = N / split_degree, mod_mask = split_degree - 1;
+    double *by_position = (double *)safe_aligned_malloc(N * sizeof(double));
+    centered_doubles_in_row_order(by_position, in, scale);
+    for (uint64_t j = 0; j < N; j++)
+        out[j] = by_position[(j & mod_mask) * poly_size + j / split_degree];
+    free(by_position);
 }
 
 void polynomial_int_permute_mod_Q(IntPolynomial out, IntPolynomial in, uint64_t gen)
