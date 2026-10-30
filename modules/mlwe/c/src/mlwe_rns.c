@@ -21,7 +21,8 @@
 
 LWE mlwe_extract_LWE(RNSc_MLWE in, uint64_t idx)
 {
-    const uint64_t N = arith_rns_polynomial(&in->a[0])->base->N;
+    const RNS_Base base = arith_rns_polynomial(&in->a[0])->base;
+    const uint64_t N = base->N;
     const uint64_t mask = arith_rns_polynomial(&in->a[0])->rns_mask;
     const uint64_t l = rns_mask_to_l(mask);
     const uint64_t r = in->r;
@@ -43,23 +44,26 @@ LWE mlwe_extract_LWE(RNSc_MLWE in, uint64_t idx)
             {
                 const uint32_t *row = ak->rows32[g_idx];
                 for (size_t i = 0; i <= idx; i++)
-                    res->a[j][k * N + i] = row[idx - i];
+                    res->a[j][k * N + i] = row[rns_row_position(base, idx - i)];
                 for (size_t i = idx + 1; i < N; i++)
-                    res->a[j][k * N + i] = negate_modq(row[N + idx - i], mod->q);
+                    res->a[j][k * N + i] =
+                        negate_modq(row[rns_row_position(base, N + idx - i)], mod->q);
             }
             else
             {
                 const uint64_t *row = ak->rows64[g_idx];
                 for (size_t i = 0; i <= idx; i++)
-                    res->a[j][k * N + i] = row[idx - i];
+                    res->a[j][k * N + i] = row[rns_row_position(base, idx - i)];
                 for (size_t i = idx + 1; i < N; i++)
-                    res->a[j][k * N + i] = negate_modq(row[N + idx - i], mod->q);
+                    res->a[j][k * N + i] =
+                        negate_modq(row[rns_row_position(base, N + idx - i)], mod->q);
             }
         }
         {
             RNS_Polynomial bp = arith_rns_polynomial(&in->b);
-            res->b[j] = rns_row_is_narrow(bp->base, g_idx) ? (uint64_t)bp->rows32[g_idx][idx]
-                                                           : bp->rows64[g_idx][idx];
+            const uint64_t position = rns_row_position(bp->base, idx);
+            res->b[j] = rns_row_is_narrow(bp->base, g_idx) ? (uint64_t)bp->rows32[g_idx][position]
+                                                           : bp->rows64[g_idx][position];
         }
     }
     return res;
