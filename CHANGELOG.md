@@ -583,7 +583,35 @@ versions may contain breaking changes.
   trick, which is how `FoldableRS` now builds its fold tables (one
   exponentiation per level and prime rather than one per entry).
 
+- Oracles sent through an object: `vfhe.piop.OracleMessages` writes a
+  table to the transcript (the ideal model), and
+  `vfhe.polycom.BasefoldMessages` commits it under the field Basefold
+  scheme of its size and sends the Merkle root. `RangeDecomposition` and
+  `Lookup` take it as `messages=`, which compiles the range proof with
+  Basefold; `modules/piop/range.md`, "Sending an oracle".
+- `RangeDecomposition` takes a split point `m` up to `ell + nu`, the
+  variables of the `X|Z` block (was `ell`), so the partial evaluations it
+  sends can have fewer than `c N` entries.
+- `FieldVector.set_uint64(values, start, shift, width, high)` and
+  `FieldVector.to_uint64()`: 64-bit integers (128-bit with `high`), or one
+  bit field of each, into and out of a vector in one call, with C kernels
+  over pseudo-Mersenne fields (`pmf_vec_set_uint64`, `pmf_vec_get_uint64`).
+- `RNSRing.lift_mod_2_128(elements)`: every coefficient as the integer in
+  `[0, q)` its residues define, modulo `2^128`, by Garner's mixed radix in C
+  (`polynomial_RNS_lift_mod_2_128`): one row per prime through the
+  element-wise kernels (IFMA for primes up to 50 bits), then the rows'
+  combination modulo `2^128` in 52-bit limbs with IFMA products
+  (`vec_combination_mod_2_128`), the elements on several threads.
+
 ### Changed
+
+- The range and lookup provers build their tables with whole-vector
+  operations: the digit table from `lift_mod_2_128` of `v` (unless its
+  digits reach past bit 128 and `q` exceeds `2^128`), the counters with
+  `set_uint64`, the fingerprints with `fma`, and each grand product's
+  product tree in `log n` passes of `split_even_odd` and a product.
+  `lookup.grand_product` is `lookup.product_tree`: it returns the whole
+  table of partial products, not the grand product.
 
 - **BREAKING**: `Verifier.challenge` and `Verifier.challenge_bits` are
   coroutines: write `await iop.verifier.challenge(label)`. Inside an
@@ -1152,6 +1180,11 @@ versions may contain breaking changes.
 - Fix `CKKS_Scheme.multiply` (inherited from `MLWE_Scheme`) returning the
   first operand's `delta` instead of the product of both, so a product taken
   with it decoded at the wrong scale; `*` was right.
+
+- `BasefoldEval` draws every challenge in its scheme's ring or field. The
+  batching and the verifier's challenges were drawn in the IOP's domain, so
+  a scheme over another domain (ring Basefold in an IOP over a field) could
+  not open its claims.
 
 ## [0.0.3] - 2026-09-10
 

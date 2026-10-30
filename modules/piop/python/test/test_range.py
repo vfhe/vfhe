@@ -12,6 +12,7 @@ import pytest
 from vfhe.arith import MLE, MLE_Variable, Polynomial, PseudoMersenneField, Ring
 from vfhe.piop import (
     IOP,
+    CommittedOracle,
     Protocol,
     Relation_Eval,
     Statement,
@@ -27,6 +28,7 @@ from vfhe.piop.relations import Relation_Lookup, Relation_Range
 BOUND = 1 << 6
 CHUNKS = 2
 ELL = 2
+NU = 3
 M = 2
 ALPHABET = 1 << 8
 KAPPA = 2
@@ -34,7 +36,7 @@ KAPPA = 2
 
 @pytest.fixture
 def ring():
-    return Ring(8, prime_size=[30, 30], split_degree=1)
+    return Ring(1 << NU, prime_size=[30, 30], split_degree=1)
 
 
 @pytest.fixture
@@ -62,8 +64,10 @@ def _witness(ring, seed=0, bound=BOUND, tweak=None):
 
 
 def _protocol(field, ring, **kw):
-    params = {"m": M, "alphabet": ALPHABET, "kappa": KAPPA} | kw
-    return RangeDecomposition(field, ring=ring, **params)
+    kw.setdefault("m", M)
+    kw.setdefault("alphabet", ALPHABET)
+    kw.setdefault("kappa", KAPPA)
+    return RangeDecomposition(field, ring=ring, **kw)
 
 
 def _iop(ring, field, protocol=None, **kw):
@@ -157,8 +161,11 @@ def _exact_uEval(v, r, ell, nu):
     )
 
 
-def test_recomposition_identity(ring, field):
-    """Figure 13's step-2 check, computed directly from an honest witness.
+@pytest.mark.parametrize("m", [M, ELL + 1, ELL + NU])
+def test_recomposition_identity(ring, field, m):
+    """Figure 13's step-2 check, computed directly from an honest witness,
+    with the bound prefix inside the X block, reaching into the Z block, and
+    covering all of X|Z.
 
     Three separate facts, in increasing strength:
 
@@ -172,27 +179,27 @@ def test_recomposition_identity(ring, field):
        only form available once v(x) is read out of R_q.
     """
     v = _witness(ring, seed=3)
-    protocol = _protocol(field, ring)
+    protocol = _protocol(field, ring, m=m)
     statement = _statement(v)
     shape = protocol._shape(statement)
     digits = protocol._digit_table(v, shape)
     mu = MLE(
         field=field, variables=shape.variables, evaluations=[field(d) for d in digits]
     )
-    claim_bound = (1 << M) * shape.beta * ALPHABET**M
+    claim_bound = (1 << m) * shape.beta * ALPHABET**m
     assert 2 * claim_bound < field.prime  # equation (38)
 
     rng = random.Random(11)
     for _ in range(4):
         r = [rng.randrange(ALPHABET) for _ in range(shape.ell + shape.nu)]
         psi = mu.evaluate(protocol._bind_prefix(shape, r), in_place=False)
-        width = shape.ell + shape.nu - M
+        width = shape.ell + shape.nu - m
         left = 0
         for index, value in enumerate(psi.table):
             lifted = balanced(value, field.prime)
             assert abs(lifted) < claim_bound  # (1)
             delta = [(index >> t) & 1 for t in range(width)]
-            left += lifted * eq_int(delta, r[M:]) * shape.beta ** (index >> width)
+            left += lifted * eq_int(delta, r[m:]) * shape.beta ** (index >> width)
 
         assert left == _exact_uEval(v, r, shape.ell, shape.nu)  # (2)
 
@@ -211,6 +218,61 @@ def test_digits_round_trip():
     # Above the bound the high bits are dropped -- what a cheating prover
     # would have to submit, and what the recomposition check then catches.
     assert base_digits(BOUND, width, CHUNKS) == [0, 0]
+
+
+@pytest.mark.parametrize(
+    ("bound", "chunks"),
+    [(BOUND, CHUNKS), (1 << 8, 4), (1 << 8, 1), (1 << 128, 2)],
+    ids=["default", "gamma-2", "c-1", "64-bit-digits"],
+)
+def test_bulk_digit_table_is_the_per_coefficient_one(ring, field, bound, chunks):
+    """The digit table built in whole-array steps holds exactly the digits
+    of the per-coefficient table, including digits that start past bit 64."""
+    v = _witness(ring, seed=7, bound=min(bound, 1 << 20))
+    statement = Statement(Relation_Range(bound, chunks), oracles=[TableOracle(v)])
+    protocol = _protocol(field, ring)
+    shape = protocol._shape(statement)
+    bulk = protocol._digit_vector(v, shape)
+    assert bulk is not None
+    assert [int(e) for e in bulk] == protocol._digit_table(v, shape)
+
+
+@pytest.mark.parametrize(
+    "prime_size", [[30, 30], [45, 45, 45]], ids=["q-60-bits", "q-135-bits"]
+)
+def test_bulk_digits_of_coefficients_past_the_smallest_prime(field, prime_size):
+    """A coefficient anywhere in [0, q) -- past the smallest prime, or past
+    2^64 -- gets the digits of its integer value; the false claim it makes
+    is still rejected."""
+    ring = Ring(1 << NU, prime_size=prime_size, split_degree=1)
+
+    def tweak(c):
+        c[1] = min(ring.primes)
+        c[2] = ring.q_l - 1
+        c[3] = (1 << 70) + 5 if ring.q_l >> 70 else ring.q_l // 3
+
+    v = _witness(ring, tweak=tweak)
+    statement = _statement(v)
+    protocol = _protocol(field, ring)
+    shape = protocol._shape(statement)
+    bulk = protocol._digit_vector(v, shape)
+    assert bulk is not None
+    assert [int(e) for e in bulk] == protocol._digit_table(v, shape)
+    _assert_rarely_accepted(
+        lambda: _iop(ring, field, _protocol(field, ring)),
+        statement,
+        protocol.soundness_error(statement),
+    )
+
+
+def test_digits_past_bit_128_of_a_q_above_2_128_are_digitized_one_by_one(field):
+    """Digits that reach past bit 128 need the coefficients' bits there, which
+    the lift modulo 2^128 does not have when q exceeds 2^128."""
+    ring = Ring(1 << NU, prime_size=[45, 45, 45], split_degree=1)
+    v = _witness(ring)
+    statement = Statement(Relation_Range(1 << 132, 4), oracles=[TableOracle(v)])
+    protocol = _protocol(field, ring)
+    assert protocol._digit_vector(v, protocol._shape(statement)) is None
 
 
 # --- the protocol, end to end ----------------------------------------------
@@ -238,6 +300,8 @@ def test_decomposition_accepts_an_honest_witness(ring, field):
         (BOUND, CHUNKS, 0, 1),  # m = 0: psi is all of mu', and one repetition
         (BOUND, CHUNKS, 1, 3),  # a prefix strictly inside the X block
         (BOUND, CHUNKS, ELL, 2),  # m = ell: the whole X block bound
+        (BOUND, CHUNKS, ELL + 1, 2),  # a prefix reaching into the Z block
+        (BOUND, CHUNKS, ELL + NU, 2),  # all of X|Z bound: psi has c entries
         (1 << 8, 4, 2, 2),  # gamma = 2: two digit variables, beta = 4
         (1 << 8, 1, 2, 2),  # c = 1: no digit block at all, beta = B
     ],
@@ -332,6 +396,9 @@ class _Tampered(RangeDecomposition):
     def __init__(self, *args, corrupt, **kw):
         super().__init__(*args, **kw)
         self._corrupt = corrupt
+
+    def _digit_vector(self, v, shape):
+        return None  # build the integer table, which `_digit_table` corrupts
 
     def _digit_table(self, v, shape):
         table = super()._digit_table(v, shape)
@@ -537,9 +604,9 @@ def test_parameters_are_validated(ring, field):
 
     # These three are conditions on the claim as well as on the constructor,
     # so they surface on first use rather than at construction.
-    with pytest.raises(ValueError, match="must not exceed the number of variables"):
+    with pytest.raises(ValueError, match="must not exceed the variables of the X"):
         RangeDecomposition(
-            field, ring=ring, m=ELL + 1, alphabet=ALPHABET, kappa=KAPPA
+            field, ring=ring, m=ELL + NU + 1, alphabet=ALPHABET, kappa=KAPPA
         )._shape(statement)
     # sigma so large that 2*beta*(2*sigma)^m overruns a 260-bit prime.
     with pytest.raises(ValueError, match="equation 38"):
@@ -562,3 +629,37 @@ def test_soundness_error_is_the_theorem_bound(ring, field):
     assert reported == max(
         ((ELL + nu) / ALPHABET) ** KAPPA, (ELL + nu + 1 - M) / field.prime
     )
+
+
+@pytest.mark.parametrize("bits", [208, 156])
+def test_decomposition_at_the_paper_prime_sizes(ring, bits):
+    """The prime sizes the paper's parameter sets are stated for, with every
+    variable of the X|Z block bound: an honest run accepts and a coefficient
+    above the bound is rejected (to within the soundness error)."""
+    field = PseudoMersenneField.generate(bits, two_adicity=8)
+    protocol = _protocol(field, ring, m=ELL + NU)
+    assert _iop(ring, field, protocol).run(_statement(_witness(ring, seed=5)))
+
+    bad = _statement(_witness(ring, tweak=lambda c: c.__setitem__(1, BOUND + 1)))
+    _assert_rarely_accepted(
+        lambda: _iop(ring, field, _protocol(field, ring, m=ELL + NU)),
+        bad,
+        protocol.soundness_error(bad),
+    )
+
+
+@pytest.mark.parametrize(
+    ("bits", "alphabet", "m", "kappa"),
+    [(208, 1 << 11, 15, 20), (208, 1 << 7, 22, 51), (156, 1 << 7, 17, 51)],
+)
+def test_the_paper_parameter_sets_are_accepted(bits, alphabet, m, kappa):
+    """The paper's parameter sets for its largest model (ell = 9, N = 2^13,
+    c = 4, beta = 2^11) pass the side conditions and reach 128 bits. Only the
+    shape is derived, so `v` is named by a committed oracle with no table."""
+    field = PseudoMersenneField.generate(bits, two_adicity=8)
+    ring = Ring(1 << 13, prime_size=[30, 30], split_degree=1)
+    v = CommittedOracle([MLE_Variable(f"x{i}") for i in range(9)], None, None)
+    statement = Statement(Relation_Range(1 << 44, 4), oracles=[v])
+    protocol = RangeDecomposition(field, m, alphabet, kappa, ring)
+    assert protocol._shape(statement).ell_star == 24
+    assert protocol.soundness_error(statement) <= 2.0**-128
