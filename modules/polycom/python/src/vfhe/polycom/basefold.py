@@ -78,7 +78,11 @@ from vfhe.piop import (
     element_digest,
     exceptional_set_size,
 )
-from vfhe.piop.protocols.sumcheck.rounds import interpolate_evals, prod_round_evals
+from vfhe.piop.protocols.sumcheck.rounds import (
+    interpolate_evals,
+    prod_round_evals,
+    prod_update_tables,
+)
 from vfhe.piop.relations import Relation_SumProd
 
 # `pair_digest` is re-exported here: the aliased form is what marks it
@@ -937,13 +941,16 @@ class _ProverRun:
         cur_f = f
         domain = _domain_of(f)
         cur_eq = MLE.eq(domain, self.zs, variables=f.variables)
+        evals = None
         for s in range(d):
             var = cur_f.variables[0]
-            evals = prod_round_evals([cur_f, cur_eq])
+            if evals is None:
+                evals = prod_round_evals([cur_f, cur_eq])
             iop.transcript.write(f"{label}/g{s}", evals)
             r = await iop.verifier.challenge(f"{label}/r{s}", domain)
-            cur_f = cur_f.evaluate({var: r}, in_place=cur_f is not f)
-            cur_eq = cur_eq.evaluate({var: r}, in_place=True)
+            (cur_f, cur_eq), evals = prod_update_tables(
+                [cur_f, cur_eq], var, r, [cur_f is not f, True]
+            )
             word = code.fold(word, r, level=d - s)
             # Level 0 is the one the verifier re-encodes itself.
             if d - s - 1 in levels[1:-1]:
