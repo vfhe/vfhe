@@ -16,10 +16,13 @@
 #include "arith_internal.h"
 #include "unity.h"
 
-/* p = 2^260 - 22527: 5 limbs, shift 0, 2-adicity 11 -- what
-   PseudoMersenneField.generate(260, two_adicity=8) picks. */
-#define BITS 260
-#define C 22527
+/* The fields every test runs over: 3, 4 and 5 limbs, shift 0, 2-adicity at
+   least 11. The 260-bit one is what PseudoMersenneField.generate(260,
+   two_adicity=8) picks. */
+static const struct
+{
+    uint64_t bits, c;
+} FIELDS[] = {{156, 331775}, {208, 311295}, {260, 22527}};
 #define MAX_LOG_N 10
 
 static PMFParams params;
@@ -200,12 +203,15 @@ void test_plan_rejects_a_bad_root_or_length(void)
 
 int main(void)
 {
-    params = pmf_new_params(BITS, C);
-    L = pmf_limbs(params);
     UNITY_BEGIN();
-    RUN_TEST(test_vector_matches_scalar_oracle_and_round_trips);
-    RUN_TEST(test_negacyclic_convolution);
-    RUN_TEST(test_plan_rejects_a_bad_root_or_length);
-    pmf_free_params(params);
+    for (uint64_t f = 0; f < sizeof(FIELDS) / sizeof(FIELDS[0]); f++)
+    {
+        params = pmf_new_params(FIELDS[f].bits, FIELDS[f].c);
+        L = pmf_limbs(params);
+        RUN_TEST(test_vector_matches_scalar_oracle_and_round_trips);
+        RUN_TEST(test_negacyclic_convolution);
+        RUN_TEST(test_plan_rejects_a_bad_root_or_length);
+        pmf_free_params(params);
+    }
     return UNITY_END();
 }

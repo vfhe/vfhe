@@ -56,19 +56,30 @@ void test_batch_matches_one_at_a_time(void)
     }
 }
 
-/* A length the lanes cannot take is still hashed, just one at a time -- the
- * caller is not asked to branch, so this must be the same digest too. */
+/* Lengths that end in a partial block: the last block is compressed apart
+ * from the whole ones, and a length under one block is that block alone.
+ * 32, 40, 52 and 66 are pair leaves of F_(p^2) and of 156-, 208- and 260-bit
+ * pseudo-Mersenne fields. */
+void test_partial_last_blocks_match_one_at_a_time(void)
+{
+    const uint64_t counts[] = {1, 7, 16, 17, 300};
+    const uint64_t lengths[] = {1, 8, 32, 40, 52, 63, 65, 66, 96, 127, 1000, 1023};
+    for (uint64_t c = 0; c < 5; c++)
+        for (uint64_t l = 0; l < 12; l++)
+            assert_batch_matches(counts[c], lengths[l]);
+}
+
+/* A length past one chunk is still hashed, just one at a time -- the caller
+ * is not asked to branch, so this must be the same digest too. */
 void test_lengths_outside_the_batch_still_hash(void)
 {
     TEST_ASSERT_FALSE(hash_batch_fits(0));
-    TEST_ASSERT_FALSE(hash_batch_fits(8));    /* not a whole block */
-    TEST_ASSERT_FALSE(hash_batch_fits(96));   /* a block and a half */
-    TEST_ASSERT_FALSE(hash_batch_fits(1088)); /* past one chunk */
-    TEST_ASSERT_TRUE(hash_batch_fits(64));
+    TEST_ASSERT_FALSE(hash_batch_fits(1025)); /* past one chunk */
+    TEST_ASSERT_TRUE(hash_batch_fits(1));
+    TEST_ASSERT_TRUE(hash_batch_fits(96));
     TEST_ASSERT_TRUE(hash_batch_fits(1024));
 
-    assert_batch_matches(9, 8);
-    assert_batch_matches(9, 96);
+    assert_batch_matches(9, 1025);
     assert_batch_matches(9, 1088);
 }
 
@@ -113,6 +124,7 @@ int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_batch_matches_one_at_a_time);
+    RUN_TEST(test_partial_last_blocks_match_one_at_a_time);
     RUN_TEST(test_lengths_outside_the_batch_still_hash);
     RUN_TEST(test_an_empty_batch_writes_nothing);
     RUN_TEST(test_chain_matches_link_by_link);

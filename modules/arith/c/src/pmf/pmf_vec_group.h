@@ -13,6 +13,11 @@
 // A core takes its operands as L words each and writes T[0..L-1] canonical; T
 // must have room for L+1 words, the extra one being the overflow limb the
 // reduction tail consumes. Operands may alias T.
+//
+// The cores read L, and which reduction to run, from the params. A kernel
+// calls them from a body that PMF_WITH_LIMBS (below) hands a copy of the params
+// with both fields set to literals, so every loop over the limbs unrolls and
+// every limb array stays in registers.
 #ifndef VFHE_PMF_VEC_GROUP_H
 #define VFHE_PMF_VEC_GROUP_H
 
@@ -20,6 +25,39 @@
 #include <assert.h>
 
 #include "pmf_vec_ops.h"
+
+// --- dispatch on the limb count --------------------------------------------
+
+// Run CALL with P_ naming a copy of *params whose limbs and aligned fields are
+// literals: one instance of CALL per limb count and reduction. CALL is an
+// expression that names P_.
+#define PMF_LIMBS_CASE(l, CALL)                                                                    \
+    case 2 * (l):                                                                                  \
+        P_.limbs = (l);                                                                            \
+        P_.aligned = 0;                                                                            \
+        CALL;                                                                                      \
+        break;                                                                                     \
+    case 2 * (l) + 1:                                                                              \
+        P_.limbs = (l);                                                                            \
+        P_.aligned = 1;                                                                            \
+        CALL;                                                                                      \
+        break;
+#define PMF_WITH_LIMBS(params, CALL)                                                               \
+    do                                                                                             \
+    {                                                                                              \
+        struct _PMFParams P_ = *(params);                                                          \
+        switch (2 * P_.limbs + P_.aligned)                                                         \
+        {                                                                                          \
+            PMF_LIMBS_CASE(3, CALL)                                                                \
+            PMF_LIMBS_CASE(4, CALL)                                                                \
+            PMF_LIMBS_CASE(5, CALL)                                                                \
+        default:                                                                                   \
+            P_.limbs = 6;                                                                          \
+            P_.aligned = 0;                                                                        \
+            CALL;                                                                                  \
+            break;                                                                                 \
+        }                                                                                          \
+    } while (0)
 
 // --- the reduction tail, in registers -------------------------------------
 
@@ -29,7 +67,7 @@
 // carry * 2^(52L) with carry * e, so the value strictly decreases; the second
 // pass leaves a carry of at most one and the third clears it. Lanes are
 // independent, so per lane this is exactly the scalar argument.
-static inline void pmf_vec_carry_down(pv_t *T, uint64_t L, pv_t fold, pv_t mask)
+PMF_INLINE void pmf_vec_carry_down(pv_t *T, uint64_t L, pv_t fold, pv_t mask)
 {
     for (int pass = 0; pass < 3; pass++)
     {
@@ -54,7 +92,7 @@ static inline void pmf_vec_carry_down(pv_t *T, uint64_t L, pv_t fold, pv_t mask)
 
 // Subtract the modulus once where that leaves a non-negative result. Input must
 // satisfy V < 2^n = p + c, so one conditional subtract lands in [0, p).
-static inline void pmf_vec_cond_sub_p(pv_t *T, uint64_t L, const uint64_t *p, pv_t mask)
+PMF_INLINE void pmf_vec_cond_sub_p(pv_t *T, uint64_t L, const uint64_t *p, pv_t mask)
 {
     pv_t t[PMF_MAX_LIMBS];
     pv_t borrow = pv_zero();
@@ -74,7 +112,7 @@ static inline void pmf_vec_cond_sub_p(pv_t *T, uint64_t L, const uint64_t *p, pv
 
 // The shared tail: T is L+1 limbs, each below 2^60, and is reduced in place to
 // L canonical limbs. Mirrors pmf_ref_reduce_wide.
-static inline void pmf_vec_reduce_wide(pv_t *T, PMFParams params)
+PMF_INLINE void pmf_vec_reduce_wide(pv_t *T, PMFParams params)
 {
     const uint64_t L = params->limbs;
     const pv_t mask = pv_mask52();
@@ -124,22 +162,103 @@ static inline void pmf_vec_reduce_wide(pv_t *T, PMFParams params)
     pmf_vec_cond_sub_p(T, L, params->p, mask);
 }
 
+// --- the aligned reduction ------------------------------------------------
+//
+// For s == 0 and e = c < 2^44 (PMFParams.aligned): p = 2^(52L) - c, and the
+// value bounds below hold for every L the kernels take.
+
+// X to canonical, given X < 2p, X[0] < 2^53 and every other limb below 2^57:
+// the carry chains of X and of X + c, side by side. Since p + c = 2^(52L) and
+// X + c < 2^(52L + 1), the second carries out of the top limb exactly when
+// X >= p, and its limbs are then X - p, which is below p; otherwise X < p and
+// the first chain's limbs are X itself. A sum of two canonical elements is
+// below 2p, and so is a reduced product, below 2^(52L) + 2^89 with p above
+// 2^155.
+PMF_INLINE void pmf_vec_finish_aligned(pv_t *T, const pv_t *X, PMFParams params)
+{
+    const uint64_t L = params->limbs;
+    const pv_t mask = pv_mask52();
+    pv_t below[PMF_MAX_LIMBS], above[PMF_MAX_LIMBS];
+    pv_t carry_below = pv_zero(), carry_above = pv_bcast(params->c);
+
+    for (uint64_t k = 0; k < L; k++)
+    {
+        const pv_t acc_below = pv_add(X[k], carry_below);
+        const pv_t acc_above = pv_add(X[k], carry_above);
+        below[k] = pv_and(acc_below, mask);
+        above[k] = pv_and(acc_above, mask);
+        carry_below = pv_srl(acc_below, PMF_LIMB_BITS);
+        carry_above = pv_srl(acc_above, PMF_LIMB_BITS);
+    }
+    for (uint64_t k = 0; k < L; k++)
+        T[k] = pv_select_flag(carry_above, above[k], below[k]);
+}
+
+// The 2L product columns to canonical, each column below 2L * 2^52. The value
+// is sum col[k] 2^(52k) whatever the low columns hold, so only the high half
+// is carried, into limbs h_0..h_(L-1): nothing carries out of it, since the
+// product is below 2^(104L) and the low half is not negative. With
+// 2^(52L) == e the high half becomes e h: the products e h_k go into the low
+// columns as they are (each column stays below 2^57), and the high half of
+// e h_(L-1), which lands at 2^(52L), is kept apart as `top`, below e. One
+// carry of the low half adds at most 2^5 to it, so Z = top + carry is below
+// 2^45, and e Z, below 2^89, goes into limbs 0 and 1. The finish then gets X
+// below 2^(52L) + 2^89 with the limb bounds it needs.
+PMF_INLINE void pmf_vec_reduce_aligned(pv_t *T, pv_t *col, PMFParams params)
+{
+    const uint64_t L = params->limbs;
+    const pv_t mask = pv_mask52();
+    const pv_t e = pv_bcast(params->fold);
+    pv_t h[PMF_MAX_LIMBS];
+
+    pv_t carry = pv_zero();
+    for (uint64_t k = 0; k < L; k++)
+    {
+        const pv_t acc = pv_add(col[L + k], carry);
+        h[k] = pv_and(acc, mask);
+        carry = pv_srl(acc, PMF_LIMB_BITS);
+    }
+    assert(pv_is_zero(carry));
+    pv_t top = pv_zero();
+    for (uint64_t k = 0; k < L; k++)
+    {
+        col[k] = pv_madd52lo(col[k], e, h[k]);
+        if (k + 1 < L)
+            col[k + 1] = pv_madd52hi(col[k + 1], e, h[k]);
+        else
+            top = pv_madd52hi(top, e, h[k]);
+    }
+
+    carry = pv_zero();
+    for (uint64_t k = 0; k < L; k++)
+    {
+        const pv_t acc = pv_add(col[k], carry);
+        col[k] = pv_and(acc, mask);
+        carry = pv_srl(acc, PMF_LIMB_BITS);
+    }
+    const pv_t Z = pv_add(top, carry);
+    col[0] = pv_madd52lo(col[0], e, Z);
+    col[1] = pv_madd52hi(col[1], e, Z);
+
+    pmf_vec_finish_aligned(T, col, params);
+}
+
 // --- group load and store -------------------------------------------------
 
-static inline void pmf_vec_load_group(pv_t *T, const PMFVector v, uint64_t i, uint64_t L)
+PMF_INLINE void pmf_vec_load_group(pv_t *T, const PMFVector v, uint64_t i, uint64_t L)
 {
     for (uint64_t k = 0; k < L; k++)
         T[k] = pv_load(v->limbs[k] + i);
 }
 
-static inline void pmf_vec_store_group(PMFVector v, uint64_t i, const pv_t *T, uint64_t L)
+PMF_INLINE void pmf_vec_store_group(PMFVector v, uint64_t i, const pv_t *T, uint64_t L)
 {
     for (uint64_t k = 0; k < L; k++)
         pv_store(v->limbs[k] + i, T[k]);
 }
 
 // One element broadcast into every lane of each limb plane.
-static inline void pmf_vec_load_scalar(pv_t *S, const uint64_t *s, uint64_t L)
+PMF_INLINE void pmf_vec_load_scalar(pv_t *S, const uint64_t *s, uint64_t L)
 {
     for (uint64_t k = 0; k < L; k++)
         S[k] = pv_bcast(s[k]);
@@ -149,9 +268,18 @@ static inline void pmf_vec_load_scalar(pv_t *S, const uint64_t *s, uint64_t L)
 
 // a + b for one group. Canonical limbs sum below 2^53, so the tail's input
 // contract holds with nothing above the top limb.
-static inline void pmf_vec_add_group(pv_t *T, const pv_t *a, const pv_t *b, PMFParams params)
+PMF_INLINE void pmf_vec_add_group(pv_t *T, const pv_t *a, const pv_t *b, PMFParams params)
 {
     const uint64_t L = params->limbs;
+    if (params->aligned)
+    {
+        // a + b < 2p, so the finish's single subtraction of p is enough.
+        pv_t S[PMF_MAX_LIMBS];
+        for (uint64_t k = 0; k < L; k++)
+            S[k] = pv_add(a[k], b[k]);
+        pmf_vec_finish_aligned(T, S, params);
+        return;
+    }
     for (uint64_t k = 0; k < L; k++)
         T[k] = pv_add(a[k], b[k]);
     T[L] = pv_zero();
@@ -162,7 +290,7 @@ static inline void pmf_vec_add_group(pv_t *T, const pv_t *a, const pv_t *b, PMFP
 // negative; adding p back corrects it, and the carry that addition produces is
 // the 2^(52L) the borrow took away, so it is dropped. Mirrors pmf_ref_sub, and
 // like it needs no reduction tail.
-static inline void pmf_vec_sub_group(pv_t *T, const pv_t *a, const pv_t *b, PMFParams params)
+PMF_INLINE void pmf_vec_sub_group(pv_t *T, const pv_t *a, const pv_t *b, PMFParams params)
 {
     const uint64_t L = params->limbs;
     const pv_t mask = pv_mask52();
@@ -191,7 +319,7 @@ static inline void pmf_vec_sub_group(pv_t *T, const pv_t *a, const pv_t *b, PMFP
 // high halves of those one limb below. At most 2L addends, each below 2^52, so a
 // column stays under 2^56 and the whole double loop runs with no intermediate
 // normalization -- which is the payoff of doing this a group at a time.
-static inline void pmf_vec_mul_group(pv_t *T, const pv_t *a, const pv_t *b, PMFParams params)
+PMF_INLINE void pmf_vec_mul_group(pv_t *T, const pv_t *a, const pv_t *b, PMFParams params)
 {
     const uint64_t L = params->limbs;
     const pv_t mask = pv_mask52();
@@ -207,6 +335,12 @@ static inline void pmf_vec_mul_group(pv_t *T, const pv_t *a, const pv_t *b, PMFP
             col[i + j] = pv_madd52lo(col[i + j], a[i], b[j]);
             col[i + j + 1] = pv_madd52hi(col[i + j + 1], a[i], b[j]);
         }
+    }
+
+    if (params->aligned)
+    {
+        pmf_vec_reduce_aligned(T, col, params);
+        return;
     }
 
     // Carry the 2L columns down to proper limbs.

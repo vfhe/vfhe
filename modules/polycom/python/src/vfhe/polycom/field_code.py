@@ -15,15 +15,15 @@ field beyond a base code, so any field serves at any codeword length: level
 `l` is `FieldVector.fma_interleave` of the two half-messages' level-(l-1)
 codewords with `T` and `-T`, bottoming out in a
 Reed-Solomon code on `n0` points. The base encoder is a negacyclic NTT where
-the field has a `2 n0`-th root of unity -- over an extension field arith's
-batched `ExtensionFieldNTT` (`_BatchedTransforms`), which transforms every
-base message of a level-`l` message in one call, with its root in `F_p` (or,
-when asked with `root_field="field"`, in the extension where `F_p` has none);
-over a pseudo-Mersenne field arith's own
-`PseudoMersenneNTT` on one message at a time (`_PseudoMersenneTransforms`)
--- and a Vandermonde product on seeded distinct points otherwise; the two
-are encoders of one code, so a codeword does not depend on which one
-produced it. Above the base there is no transform.
+the field has a `2 n0`-th root of unity, which transforms every base
+message of a level-`l` message in one call -- over an extension field
+arith's `ExtensionFieldNTT` (`_BatchedTransforms`), with its root in `F_p`
+(or, when asked with `root_field="field"`, in the extension where `F_p` has
+none); over a pseudo-Mersenne field arith's own `PseudoMersenneNTT`
+(`_PseudoMersenneBatchedTransforms`) -- and a Vandermonde product on seeded
+distinct points otherwise; the two are encoders of one code, so a codeword
+does not depend on which one produced it. Above the base there is no
+transform.
 
 The ``"rs"`` instantiation makes every level a Reed-Solomon code on roots of
 unity: one transform per level -- the `rs_field_*` kernels
@@ -86,6 +86,25 @@ def _pmf_vector(vector: FieldVector) -> PseudoMersenneVector:
     them is one. Stated here rather than at each call.
     """
     return cast("PseudoMersenneVector", vector)
+
+
+def _pmf_points(field: PseudoMersenneField, root: int, n: int) -> FieldVector:
+    """The `n` evaluation points of a pseudo-Mersenne transform at `root`, in
+    its output order: position `j` holds `root^(2 brv(j) + 1)`.
+
+    The same running product as `ExtensionField.ntt_points`, written here in
+    Python: this field has no kernel for it, and its codes are short -- the
+    2-adicity that bounds a codeword bounds this table with it.
+    """
+    prime = field.prime
+    reversed_index = bit_reverse_permutation(n.bit_length() - 1)
+    row = [0] * n
+    step = root * root % prime
+    power = root % prime
+    for j in range(n):
+        row[reversed_index[j]] = power
+        power = power * step % prime
+    return FieldVector(field, row)
 
 
 class _ExtensionTransforms:
@@ -157,21 +176,8 @@ class _PseudoMersenneTransforms:
 
     def points(self, root: int, n: int) -> FieldVector:
         """The `n` evaluation points of a transform at `root`, in its output
-        order.
-
-        The same running product as the extension provider's, written here in
-        Python: this field has no kernel for it, and its codes are short --
-        the 2-adicity that bounds a codeword bounds this table with it.
-        """
-        prime = self.field.prime
-        reversed_index = bit_reverse_permutation(n.bit_length() - 1)
-        row = [0] * n
-        step = root * root % prime
-        power = root % prime
-        for j in range(n):
-            row[reversed_index[j]] = power
-            power = power * step % prime
-        return FieldVector(self.field, row)
+        order."""
+        return _pmf_points(self.field, root, n)
 
     def encode(self, message: FieldVector, level: int) -> FieldVector:
         """The forward transform of `message` zero-padded to the level's
@@ -214,11 +220,13 @@ class _BatchedTransforms:
         # ValueError when the domain asked for has no root
         self.plan = field.ntt_plan(n, domain)
         self.root = self.plan.root_of_unity
+        #: Where the root lives: ``'base'`` (`F_p`) or ``'extension'``.
+        self.domain: str = self.plan.domain
 
     def points(self) -> FieldVector:
         """The `n` evaluation points, in the transform's output order: position
         `j` holds `psi^(2 brv(j) + 1)`."""
-        if self.plan.domain == "base":
+        if self.domain == "base":
             return self.field.ntt_points(int(self.root), self.n)
         # An extension root: the same running product, as elements, once.
         reversed_index = bit_reverse_permutation(self.n.bit_length() - 1)
@@ -237,7 +245,7 @@ class _BatchedTransforms:
         padding = FieldVector(self.field, blocks * self.n - len(message))
         padded = FieldVector.concat([message, padding])
         work = self.plan.pack(padded, blocks, layout="interleaved")
-        self.plan.forward(work, blocks)
+        self._forward(work, blocks)
         return self.plan.unpack(work, blocks)
 
     def decode_all(
@@ -249,10 +257,48 @@ class _BatchedTransforms:
         # Into a destination of its own: `pack` hands back `words` itself
         # where nothing needs converting, and the inverse runs in place.
         work = self.plan.pack(words, blocks, out=FieldVector(self.field, len(words)))
-        self.plan.inverse(work, blocks)
+        self._inverse(work, blocks)
         padded = self.plan.unpack(work, blocks, layout="interleaved")
         tail = _window(padded, degree, len(padded) - degree)
         return tail == FieldVector(self.field, len(tail)), _window(padded, 0, degree)
+
+    def _forward(self, work: FieldVector, blocks: int) -> None:
+        self.plan.forward(work, blocks)
+
+    def _inverse(self, work: FieldVector, blocks: int) -> None:
+        self.plan.inverse(work, blocks)
+
+
+class _PseudoMersenneBatchedTransforms(_BatchedTransforms):
+    """The base transform of the general code over a pseudo-Mersenne field:
+    the field's own `PseudoMersenneNTT` of length `n0`, run over all the base
+    messages of a level-`l` message in one call.
+
+    `encode_all` is the plan's `encode_blocks`, which takes the interleaved
+    message as it is and pads each base message itself; `decode_all`
+    transposes the coefficients out, as `_BatchedTransforms` describes for a
+    plan that takes its batch by blocks. The root is in the field, which is
+    prime.
+    """
+
+    def __init__(self, field: PseudoMersenneField, n: int):
+        self.field = field
+        self.n = n
+        self.plan = field.ntt_plan(n)
+        self.root = self.plan.root_of_unity
+        self.domain = "base"
+
+    def points(self) -> FieldVector:
+        return _pmf_points(self.field, int(self.root), self.n)
+
+    def encode_all(self, message: FieldVector, level: int) -> FieldVector:
+        return self.plan.encode_blocks(_pmf_vector(message), 1 << level)
+
+    def _forward(self, work: FieldVector, blocks: int) -> None:
+        self.plan.forward(_pmf_vector(work), in_place=True, blocks=blocks)
+
+    def _inverse(self, work: FieldVector, blocks: int) -> None:
+        self.plan.inverse(_pmf_vector(work), in_place=True, blocks=blocks)
 
 
 def _transforms(field: Field, lengths: list[int]):
@@ -538,30 +584,28 @@ class FieldFoldableRS:
         return self._transforms
 
     def _init_general(self) -> None:
-        """A base code, encoded by a transform when the field has one of
-        length `n0`, and seeded twists above it.
+        """A base code, encoded by a batched transform when the field has one
+        of length `n0`, and seeded twists above it.
 
         Over an extension field the transform is arith's batched one, in the
         base domain (root in `F_p`) where `2 n0 | p - 1`, and with
         ``root_field="field"`` in the extension otherwise; over a
-        pseudo-Mersenne field it is the field's own, for one message at a
-        time. With no transform the base is a Vandermonde product on seeded
-        points.
+        pseudo-Mersenne field it is the field's own, where `2 n0 | p - 1`.
+        With no transform the base is a Vandermonde product on seeded points.
         """
         if isinstance(self.field, ExtensionField):
             domain = "auto" if self.root_field == "field" else "base"
             with contextlib.suppress(ValueError):
                 self._batched = _BatchedTransforms(self.field, self.n0, domain)
-        elif self.n0.bit_length() <= self.field.two_adicity:
-            with contextlib.suppress(NotImplementedError):
-                self._transforms = _transforms(self.field, [self.n0])
+        elif (
+            isinstance(self.field, PseudoMersenneField)
+            and self.n0.bit_length() <= self.field.two_adicity
+        ):
+            self._batched = _PseudoMersenneBatchedTransforms(self.field, self.n0)
         if self._batched is not None:
-            if self._batched.plan.domain == "base":
+            if self._batched.domain == "base":
                 self.roots = [int(self._batched.root)]
             self.base_points = self._batched.points()
-        elif self._transforms is not None:
-            self.roots = [self._transforms.root(0)]
-            self.base_points = self._transforms.points(self.roots[0], self.n0)
         else:
             self.base_points = self._sample_points()
         for level in range(self.d):
@@ -752,8 +796,6 @@ class FieldFoldableRS:
         lifts = level if lifts is None else lifts
         if self._batched is not None:
             word = self._batched.encode_all(message, level)
-        elif level == 0 and self._transforms is not None:
-            return self._transforms.encode(message, 0)
         else:
             word = self._base_encode_all(message, level)
         spare = FieldVector(self.field, len(word)) if lifts else None
@@ -803,8 +845,6 @@ class FieldFoldableRS:
         """`_encode_general` inverted: per level, the pair `(lo, hi)` gives
         `b = (lo - hi) / (2 T)` and `a = lo - b T`, the codewords of the odd
         and even half-messages, until only base codewords are left."""
-        if self._batched is None and level == 0 and self._transforms is not None:
-            return self._transforms.decode(word, 0, self.k0)
         for depth in range(level):
             tables = level - depth - 1
             copies = 1 << depth

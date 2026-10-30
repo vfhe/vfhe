@@ -239,6 +239,12 @@ selects `meson test --setup <engine>_emulated`, whose `exe_wrapper` launches
 each test under SDE with the engine's flags. Configure itself downloads
 nothing, and without the launcher the setup does not exist.
 
+`make test` builds with the C `assert`s compiled in (meson's
+`-Db_ndebug=false`). Every other build compiles them out, as a wheel does
+(`b_ndebug=if-release` on a release build); `make build VFHE_NDEBUG=false`
+keeps them in a plain build. Switching between the two recompiles the C
+sources.
+
 A smoke case asserts what only an installed distribution can answer: the
 version is real, every declared engine shipped, a runtime-compiled extension
 links. tox gives it a venv holding only the distribution and runs it from a

@@ -634,7 +634,7 @@ extern "C"
     // Nothing here is constant-time: exponents and seeds are public values.
 #define PMF_LIMB_BITS 52
 #define PMF_LIMB_MASK ((1ULL << PMF_LIMB_BITS) - 1)
-#define PMF_MAX_LIMBS 6 // L in {5, 6}; raise only alongside the kernels
+#define PMF_MAX_LIMBS 6 // L in 3..6; raise only alongside the kernels
 #define PMF_LANES 8     // one zmm: L limbs plus zero padding
 
     // Immutable after construction, and so shareable across threads: no operation
@@ -649,11 +649,13 @@ extern "C"
         uint64_t top_bits; // 52 - s: live bits of limb L-1
         uint64_t top_mask; // (1 << top_bits) - 1
         uint64_t nbytes;   // (n + 7) / 8: length of the canonical encoding
+        uint64_t aligned;  // 1 when s == 0 and e < 2^44: the vector kernels then
+                           // take a shorter reduction (pmf_vec_group.h)
 
         uint64_t p[PMF_MAX_LIMBS]; // the modulus, as limbs
     } *PMFParams;
 
-    // Returns NULL, explaining on stderr, unless L is 5 or 6, c is odd and
+    // Returns NULL, explaining on stderr, unless L is 3 to 6, c is odd and
     // nonzero, and e = c << s fits a 52-bit limb. Does NOT require p to be prime:
     // the arithmetic is correct for any modulus 2^n - c, and primality is the
     // caller's business.
@@ -757,6 +759,20 @@ extern "C"
     // multilinear table. `r` is one element. `a->n` must be even, out must hold
     // a->n / 2 elements with canonical padding, and may not alias a.
     void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r);
+    // Two vectors combined through a table, into adjacent pairs:
+    //     out[2i] = a[i] + b[i] * t[i mod t->n],  out[2i+1] = a[i] - b[i] * t[i mod t->n]
+    // for i < a->n, with one product per pair. b->n == a->n, t->n divides a->n,
+    // and out holds 2 * a->n elements and may not alias an input.
+    void pmf_vec_lift_twisted(PMFVector out, const PMFVector a, const PMFVector b,
+                              const PMFVector t);
+    // The fold that undoes pmf_vec_lift_twisted. With (u_i, v_i) = (word[2i],
+    // word[2i+1]) for i < out->n = word->n / 2 = untwist->n:
+    //     out[i] = (u_i + v_i) / 2 + (u_i - v_i) * untwist[i] * r
+    // If the pairs came from pmf_vec_lift_twisted with a table t and untwist[i]
+    // = 1 / (2 t[i]), the result is a[i] + r * b[i]. `r` is one element; out
+    // may not alias an input.
+    void pmf_vec_fold_twisted(PMFVector out, const PMFVector word, const PMFVector untwist,
+                              const uint64_t *r);
     int pmf_vec_is_equal(const PMFVector a, const PMFVector b);
     // Uniform elements from a seed. One draw stream covers the whole vector.
     void pmf_vec_sample_random(PMFVector out, const uint8_t *seed, uint64_t seed_len);
@@ -800,6 +816,11 @@ extern "C"
         uint64_t inv_n[PMF_LANES];             // n^-1, applied by the inverse
         uint64_t **ws_fwd;                     // L planes of n words: limb k of
         uint64_t **ws_inv;                     // psi^i (psi^-i) at ws[k][brv(i)]
+        uint64_t **tail_fwd;                   // the same twiddles of the last
+        uint64_t **tail_inv;                   // three stages, in the order the
+                                               // tuned engine reads them; NULL
+                                               // there below n = 64 and always
+                                               // on the portable engine
     } *PMFNTTPlan;
 
     // `root_of_unity` is one element (PMF_LANES words) that must be a primitive
@@ -813,6 +834,26 @@ extern "C"
     // is canonical afterwards.
     void pmf_vec_ntt_forward(PMFVector a, PMFNTTPlan plan);
     void pmf_vec_ntt_inverse(PMFVector a, PMFNTTPlan plan);
+    // `blocks` transforms in one call: block b is the plan->n consecutive
+    // elements at b * plan->n, and `a->n` must be blocks * plan->n.
+    void pmf_vec_ntt_forward_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan);
+    void pmf_vec_ntt_inverse_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan);
+    // Between the batch layout above and the interleaved one: `to_interleaved`
+    // moves element i of block b from b*n + i to i*blocks + b, `to_blocks` moves
+    // it back, and n is in->n / blocks. The two vectors have the same length and
+    // `out` may not alias `in`.
+    void pmf_ntt_to_interleaved(PMFVector out, const PMFVector in, uint64_t blocks);
+    void pmf_ntt_to_blocks(PMFVector out, const PMFVector in, uint64_t blocks);
+    // The forward transforms of `blocks` messages zero-padded to plan->n: `msg`
+    // holds them interleaved, coefficient i of message b at i * blocks + b, each
+    // k = msg->n / blocks long (a power of two dividing plan->n), and `out` gets
+    // the transforms in the batch layout above, out->n = blocks * plan->n.
+    // The words are those that zero-padding, pmf_ntt_to_blocks and
+    // pmf_vec_ntt_forward_blocks give; the first log2(plan->n / k) stages,
+    // which only copy a zero-padded input, are not run. `out` may not alias
+    // `msg`.
+    void pmf_vec_ntt_encode_blocks(PMFVector out, const PMFVector msg, uint64_t blocks,
+                                   PMFNTTPlan plan);
 
     /* The negacyclic FFT over R[X]/(X^n + 1), n a power of two in [2, 2^20].
        With m = n/2 and zeta = exp(i pi / n), the forward transform evaluates
