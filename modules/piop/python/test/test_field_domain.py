@@ -26,6 +26,7 @@ from vfhe.piop.protocols.sumcheck.rounds import (
     interpolate_evals,
     prod2_round_evals_vector,
     prod_round_evals,
+    prod_update_tables,
     round_evals,
     round_evals_vector,
 )
@@ -191,6 +192,33 @@ def test_vector_round_messages_match_python(field):
     assert round_evals(f, v[2]) == _round_evals_python(f, v[2])
     assert prod_round_evals([f, g], v[3]) == (_prod_round_evals_python([f, g], v[3]))
     assert f.num_vars == g.num_vars == 4  # the messages leave the tables alone
+
+
+@pytest.mark.parametrize("num_vars", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("bits", [156, 208, 260], ids=["3-limb", "4-limb", "5-limb"])
+def test_fused_round_messages_match_python_every_round(bits, num_vars):
+    # The fused pmf kernels against the pure-Python path and the whole-vector
+    # defaults, at every round of a product sumcheck: tables shorter than a
+    # lane group, and ones with whole groups. The same table as both factors
+    # is the shape of a square. The message a table update brings along
+    # must be the one the updated tables give on their own.
+    field = PseudoMersenneField.generate(bits, two_adicity=8)
+    v, f, _ = _tables(field, num_vars, seed=10 + num_vars)
+    _, g, _ = _tables(field, num_vars, seed=20 + num_vars, variables=v)
+    carried = None
+    for var in v:
+        for a, b in ((f, g), (f, f)):
+            message = prod_round_evals([a, b])
+            assert message == _prod_round_evals_python([a, b])
+            assert message == FieldVector.fold_inner_products(a._vector, b._vector)
+        if carried is not None:
+            assert carried == prod_round_evals([f, g])
+        r = field.random_exceptional()
+        separate = [f.evaluate({var: r}, in_place=False) for f in (f, g)]
+        (f, g), carried = prod_update_tables([f, g], var, r, [False, False])
+        assert f.variables == g.variables == separate[0].variables
+        assert f.table == separate[0].table and g.table == separate[1].table
+        assert (carried is None) == (f.num_vars == 0)
 
 
 def test_interpolation_over_a_field(field):

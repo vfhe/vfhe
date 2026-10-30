@@ -628,6 +628,90 @@ class TestNativeMovementAndFold:
         # ...and against the generic default, which is the formula itself.
         assert FieldVector.fold(vector, field(r)) == folded
 
+    @pytest.mark.parametrize("n", [0, 2, 6, 16, 18, 50, 4102])
+    def test_fold_inner_products_match_big_ints(self, field, n):
+        """The three sums against big ints and against the front's
+        whole-vector body, around the group width (pairs in whole groups,
+        past them, or both) and past the 255 groups the lazy sums hold
+        between reductions."""
+        p = field.prime
+        xs, ys = random_values(field, n, 90 + n), random_values(field, n, 91 + n)
+        a, b = FieldVector(field, xs), FieldVector(field, ys)
+        expected = [
+            sum(
+                (xs[2 * i] + t * (xs[2 * i + 1] - xs[2 * i]))
+                * (ys[2 * i] + t * (ys[2 * i + 1] - ys[2 * i]))
+                for i in range(n // 2)
+            )
+            % p
+            for t in (0, 1, 2)
+        ]
+        sums = a.fold_inner_products(b)
+        assert [int(e) for e in sums] == expected
+        for e in sums:
+            assert_canonical(e, field)
+        assert sums == FieldVector.fold_inner_products(a, b)
+
+    def test_fold_inner_products_of_a_vector_with_itself(self, field):
+        p = field.prime
+        xs = random_values(field, 50, 92)
+        a = FieldVector(field, xs)
+        expected = [
+            sum((xs[2 * i] + t * (xs[2 * i + 1] - xs[2 * i])) ** 2 for i in range(25))
+            % p
+            for t in (0, 1, 2)
+        ]
+        assert [int(e) for e in a.fold_inner_products(a)] == expected
+
+    def test_fold_inner_products_reject_mismatches(self, field):
+        with pytest.raises(ValueError, match="odd"):
+            FieldVector(field, 5).fold_inner_products(FieldVector(field, 5))
+        with pytest.raises(ValueError, match="length mismatch"):
+            FieldVector(field, 4).fold_inner_products(FieldVector(field, 6))
+        other = PseudoMersenneField.generate(312 if field.bits != 312 else 260)
+        with pytest.raises(ValueError, match="different fields"):
+            FieldVector(field, 4).fold_inner_products(FieldVector(other, 4))
+
+    @pytest.mark.parametrize("n", [4, 8, 12, 32, 36, 100, 4104])
+    def test_fold_and_inner_products_match_the_separate_calls(self, field, n):
+        """The folds, their padding, and the sums of the folds, against the
+        three calls they stand for and big ints: folded lengths below a
+        group, in whole groups of pairs, and with pairs past them."""
+        p = field.prime
+        xs, ys = random_values(field, n, 93 + n), random_values(field, n, 94 + n)
+        r = rng.randrange(p)
+        a, b = FieldVector(field, xs), FieldVector(field, ys)
+        a_bound, b_bound, sums = a.fold_and_inner_products(b, field(r))
+        assert a_bound == a.fold(r) and b_bound == b.fold(r)
+        assert sums == a_bound.fold_inner_products(b_bound)
+        assert (a_bound, b_bound, sums) == FieldVector.fold_and_inner_products(
+            a, b, field(r)
+        )
+        fa = [(xs[2 * i] + r * (xs[2 * i + 1] - xs[2 * i])) % p for i in range(n // 2)]
+        fb = [(ys[2 * i] + r * (ys[2 * i + 1] - ys[2 * i])) % p for i in range(n // 2)]
+        assert [int(e) for e in sums] == [
+            sum(
+                (fa[2 * i] + t * (fa[2 * i + 1] - fa[2 * i]))
+                * (fb[2 * i] + t * (fb[2 * i + 1] - fb[2 * i]))
+                for i in range(n // 4)
+            )
+            % p
+            for t in (0, 1, 2)
+        ]
+        for folded in (a_bound, b_bound):
+            for index in range(len(folded), folded._allocated_n):
+                value = sum(
+                    int(folded._planes[k][index]) << (LIMB_BITS * k)
+                    for k in range(field.limbs)
+                )
+                assert value < field.prime
+
+    def test_fold_and_inner_products_reject_mismatches(self, field):
+        with pytest.raises(ValueError, match="multiple of 4"):
+            FieldVector(field, 6).fold_and_inner_products(FieldVector(field, 6), 3)
+        with pytest.raises(ValueError, match="length mismatch"):
+            FieldVector(field, 4).fold_and_inner_products(FieldVector(field, 8), 3)
+
     def test_fold_accepts_an_int_and_needs_an_even_length(self, field):
         vector = FieldVector(field, random_values(field, 8, 80))
         assert vector.fold(5) == vector.fold(field(5))
@@ -908,6 +992,50 @@ class TestReductionEdges:
         assert [int(e) for e in -a] == [(-x) % p for x in xs]
         for e in a * b:
             assert_canonical(e, f)
+
+    def test_fold_inner_products(self, edge_field):
+        """The lazy sums at their bound: pairs (p - 1, p - 2) against (1, 2)
+        make the three products p - 1, p - 4 and p - 1, whose limbs are all
+        close to 2^52, over more groups than a 64-bit limb sum holds without
+        the reductions between batches; then the edge mix."""
+        f, p = edge_field, edge_field.prime
+        pairs = 8 * 4200 + 5
+        for xs, ys in (
+            ([p - 1, p - 2] * pairs, [1, 2] * pairs),
+            (self.edge_values(f, 2002, 7), self.edge_values(f, 2002, 8)),
+        ):
+            n = len(xs)
+            a, b = FieldVector(f, xs), FieldVector(f, ys)
+            expected = [
+                sum(
+                    (xs[2 * i] + t * (xs[2 * i + 1] - xs[2 * i]))
+                    * (ys[2 * i] + t * (ys[2 * i + 1] - ys[2 * i]))
+                    for i in range(n // 2)
+                )
+                % p
+                for t in (0, 1, 2)
+            ]
+            assert [int(e) for e in a.fold_inner_products(b)] == expected
+
+    def test_fold_and_inner_products(self, edge_field):
+        """As test_fold_inner_products, through the folds: at r = 0 a fold
+        keeps the first member of each pair, so the folded vectors carry the
+        pairs that hold the lazy sums at their bound."""
+        f, p = edge_field, edge_field.prime
+        pairs = 8 * 4200 + 5
+        local = random.Random(9)  # noqa: S311 - test data, not a key
+        xs, ys = [], []
+        for _ in range(pairs):
+            for kept_x, kept_y in ((p - 1, 1), (p - 2, 2)):
+                xs += [kept_x, local.randrange(p)]
+                ys += [kept_y, local.randrange(p)]
+        a, b = FieldVector(f, xs), FieldVector(f, ys)
+        _, _, sums = a.fold_and_inner_products(b, 0)
+        assert [int(e) for e in sums] == [
+            pairs * (p - 1) % p,
+            pairs * (p - 4) % p,
+            pairs * -9 % p,  # 2 (-4) - (-1) + 2 (-1) a pair
+        ]
 
     def test_folds_and_lift(self, edge_field):
         f, p = edge_field, edge_field.prime

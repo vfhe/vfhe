@@ -759,6 +759,20 @@ extern "C"
     // multilinear table. `r` is one element. `a->n` must be even, out must hold
     // a->n / 2 elements with canonical padding, and may not alias a.
     void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r);
+    // With (u_i, v_i) and (x_i, y_i) the adjacent pairs of a and b, for i <
+    // a->n / 2, the quadratic q(t) = sum_i (u_i + t (v_i - u_i)) (x_i + t (y_i -
+    // x_i)) -- the inner product of the two vectors folded at t -- at t = 0, 1
+    // and 2, into the elements q0, q1 and q2. `a->n` must be even and b->n ==
+    // a->n; a and b may be the same vector.
+    void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const PMFVector a,
+                                     const PMFVector b);
+    // a_out = fold(a, r) and b_out = fold(b, r), as pmf_vec_fold, and q0, q1, q2
+    // = pmf_vec_fold_inner_products(a_out, b_out), in one pass over a and b.
+    // `a->n` must be a multiple of 4, b->n == a->n, and the outputs hold a->n / 2
+    // elements with canonical padding and may not alias an input.
+    void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t *q0,
+                                         uint64_t *q1, uint64_t *q2, const PMFVector a,
+                                         const PMFVector b, const uint64_t *r);
     // Two vectors combined through a table, into adjacent pairs:
     //     out[2i] = a[i] + b[i] * t[i mod t->n],  out[2i+1] = a[i] - b[i] * t[i mod t->n]
     // for i < a->n, with one product per pair. b->n == a->n, t->n divides a->n,
