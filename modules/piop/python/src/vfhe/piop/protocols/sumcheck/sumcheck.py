@@ -25,6 +25,7 @@ from .prover_view import prover_view
 from .rounds import (
     interpolate_evals,
     prod_round_evals,
+    prod_update_tables,
     round_evals,
 )
 
@@ -37,17 +38,17 @@ class _SumcheckRounds(Protocol):
     """The round machinery shared by the sumcheck family.
 
     Per round i, over the first remaining variable: the prover writes the
-    round polynomial's evaluations (`_round_message`) and folds every table
-    by the challenge (out of place on round 0 to keep the shared oracles
-    intact, in place afterwards); the verifier checks g_i(0) + g_i(1)
-    against the running claim and interpolates g_i(r_i) as the next one.
-    One verifier serves the native and pure-Python provers — the wire
-    format is shared, and its per-round work is O(1) coefficient
-    operations.
+    round polynomial's evaluations (`_round_message`) and updates every
+    bookkeeping table with the challenge (`_update_tables`; out of place on
+    round 0 to keep the shared oracles intact, in place afterwards); the
+    verifier checks g_i(0) + g_i(1) against the running claim and
+    interpolates g_i(r_i) as the next one. One verifier serves the native
+    and pure-Python provers — the wire format is shared, and its per-round
+    work is O(1) coefficient operations.
 
     Subclasses provide `name` (the transcript label prefix), the round
     message, and the closing step of each half (`_prove_tail` /
-    `_verify_tail`).
+    `_verify_tail`), and may override the table update.
     """
 
     name: str = "abstract"
@@ -62,6 +63,24 @@ class _SumcheckRounds(Protocol):
     def _round_message(self, factors: list, var) -> tuple:
         """The evaluations of this round's polynomial at 0..deg."""
         raise NotImplementedError
+
+    def _update_tables(
+        self, factors: list, var, r, in_place: list
+    ) -> tuple[list, tuple | None]:
+        """The factors' bookkeeping tables after the round over `var`, with
+        `var` bound to the challenge `r` [XZZPS19, Alg. 1, step 5], each in
+        place where `in_place` says; and the next round's message, or None.
+
+        An update that also forms the next round's message returns it, and
+        `prove` sends it instead of calling `_round_message`, so it must be
+        the message `_round_message` gives for the updated tables. This one
+        updates each factor with `MLE.evaluate` and returns None.
+        """
+        tables = [
+            f.evaluate({var: r}, in_place=own)
+            for f, own in zip(factors, in_place, strict=True)
+        ]
+        return tables, None
 
     def _prove_tail(
         self, iop: IOP, statement: Statement, label: str, factors: list, point: dict
@@ -88,19 +107,21 @@ class _SumcheckRounds(Protocol):
         originals = tuple(factors)
         label = self._label(statement)
         point = {}
+        message = None
         for i, var in enumerate(list(factors[0].variables)):
-            iop.transcript.write(f"{label}/g{i}", self._round_message(factors, var))
+            if message is None:
+                message = self._round_message(factors, var)
+            iop.transcript.write(f"{label}/g{i}", message)
             r = await iop.verifier.challenge(f"{label}/r{i}")
             point[var] = r
             # Out of place while a factor is still the table of the
             # statement's own oracle; a prover view (`owned`) brings fresh
             # tables of its own.
-            factors = [
-                f.evaluate(
-                    {var: r}, in_place=f is not orig or getattr(f, "owned", False)
-                )
+            in_place = [
+                f is not orig or getattr(f, "owned", False)
                 for f, orig in zip(factors, originals, strict=True)
             ]
+            factors, message = self._update_tables(factors, var, r, in_place)
         return self._prove_tail(iop, statement, label, factors, point)
 
     async def verify(
@@ -203,6 +224,13 @@ class SumcheckProd(_SumcheckRounds):
 
     def _round_message(self, factors: list, var) -> tuple:
         return prod_round_evals(factors, var)
+
+    def _update_tables(
+        self, factors: list, var, r, in_place: list
+    ) -> tuple[list, tuple | None]:
+        """`prod_update_tables`: two field-backed tables also form the next
+        round's message, in the same pass."""
+        return prod_update_tables(factors, var, r, in_place)
 
     def _outputs(self, statement: Statement, point: dict, values: tuple):
         """One Relation_Eval claim per factor, all at the same point."""

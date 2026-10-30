@@ -1832,6 +1832,49 @@ class FieldVector(metaclass=_ImplementationDispatch):
         even, odd = self.split_even_odd(block)
         return even + (odd - even).scale(r)
 
+    def fold_inner_products(self, other: FieldVector) -> tuple:
+        """The inner product of the two vectors folded at ``t``, for ``t`` =
+        0, 1 and 2, as three elements.
+
+        With ``(u_i, v_i)`` the adjacent pairs of this vector and ``(x_i,
+        y_i)`` those of `other`, this is the quadratic::
+
+            q(t) = sum_i (u_i + t (v_i - u_i)) (x_i + t (y_i - x_i))
+
+        at those three points: ``q(t)`` is the inner product of
+        ``self.fold(t)`` and ``other.fold(t)``. Both vectors have the same
+        even length; they may be the same vector.
+
+        An implementation with a kernel reads each vector once and allocates
+        nothing; the body here splits both vectors and runs the products and
+        sums as whole-vector operations.
+        """
+        if len(other) != len(self):
+            raise ValueError(f"length mismatch: {len(self)} and {len(other)}")
+        u, v = self.split_even_odd()
+        x, y = other.split_even_odd()
+        return (
+            (u * x).sum(),
+            (v * y).sum(),
+            ((v * 2 - u) * (y * 2 - x)).sum(),
+        )
+
+    def fold_and_inner_products(self, other: FieldVector, r) -> tuple:
+        """``(a, b, sums)`` with ``a = self.fold(r)``, ``b = other.fold(r)``
+        and ``sums = a.fold_inner_products(b)``.
+
+        Both vectors have the same length, a multiple of 4, so that the
+        folds have an even length. An implementation with a kernel reads
+        each vector once, writing the folds and summing their pairs in the
+        same pass; the body here makes the three calls.
+        """
+        if len(other) != len(self):
+            raise ValueError(f"length mismatch: {len(self)} and {len(other)}")
+        if len(self) % 4:
+            raise ValueError(f"length {len(self)} is not a multiple of 4")
+        a, b = self.fold(r), other.fold(r)
+        return a, b, a.fold_inner_products(b)
+
     # --- sampling and digests ---
 
     def sample_random(self, seed: bytes, start: int = 0) -> None:

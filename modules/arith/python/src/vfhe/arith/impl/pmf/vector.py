@@ -405,6 +405,41 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_fold(result._struct, self._struct, element._buf)
         return result
 
+    def fold_inner_products(self, other) -> tuple:
+        """`FieldVector.fold_inner_products`, which documents the operation,
+        computed by the native kernel `pmf_vec_fold_inner_products` in one
+        pass over both vectors, three products a pair."""
+        if not isinstance(other, PseudoMersenneVector):
+            raise TypeError("fold_inner_products takes a PseudoMersenneVector")
+        if other.field.prime != self.field.prime:
+            raise ValueError("vectors belong to different fields")
+        if len(other) != self._n:
+            raise ValueError(f"length mismatch: {self._n} and {len(other)}")
+        self._checked_block(1)
+        evals = tuple(self.field._new_buffer() for _ in range(3))
+        lib.pmf_vec_fold_inner_products(*evals, self._struct, other._struct)
+        return tuple(self.field._wrap(buf) for buf in evals)
+
+    def fold_and_inner_products(self, other, r) -> tuple:
+        """`FieldVector.fold_and_inner_products`, which documents the
+        operation, computed by the native kernel
+        `pmf_vec_fold_and_inner_products` in one pass over both vectors."""
+        if not isinstance(other, PseudoMersenneVector):
+            raise TypeError("fold_and_inner_products takes a PseudoMersenneVector")
+        if other.field.prime != self.field.prime:
+            raise ValueError("vectors belong to different fields")
+        if len(other) != self._n:
+            raise ValueError(f"length mismatch: {self._n} and {len(other)}")
+        if self._n % 4:
+            raise ValueError(f"length {self._n} is not a multiple of 4")
+        element = self._coerce_element(r)
+        a, b = self._like(self._n // 2), self._like(self._n // 2)
+        evals = tuple(self.field._new_buffer() for _ in range(3))
+        lib.pmf_vec_fold_and_inner_products(
+            a._struct, b._struct, *evals, self._struct, other._struct, element._buf
+        )
+        return a, b, tuple(self.field._wrap(buf) for buf in evals)
+
     def fold_twisted(self, untwist, r, out=None) -> PseudoMersenneVector:
         """`FieldVector.fold_twisted`, which documents the operation, computed
         by the native kernel `pmf_vec_fold_twisted` in one pass, two products

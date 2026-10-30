@@ -250,26 +250,252 @@ PMF_INLINE void pmf_vec_load_pairs(pv_t *E, pv_t *O, const PMFVector a, uint64_t
 #endif
 }
 
+// The fold of the pairs from 2i on, for the output group at i: E + r (O - E).
+PMF_INLINE void pmf_vec_fold_group(pv_t *T, const PMFVector a, uint64_t i, const pv_t *R,
+                                   PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t E[PMF_MAX_LIMBS], O[PMF_MAX_LIMBS], D[PMF_MAX_LIMBS + 1];
+
+    pmf_vec_load_pairs(E, O, a, i, L);
+    pmf_vec_sub_group(D, O, E, P);
+    pmf_vec_mul_group(T, D, R, P);
+    pmf_vec_add_group(T, E, T, P);
+}
+
 PMF_INLINE void pmf_vec_fold_body(PMFVector out, const PMFVector a, const uint64_t *r, PMFParams P)
 {
     const uint64_t L = P->limbs;
-    pv_t E[PMF_MAX_LIMBS], O[PMF_MAX_LIMBS], R[PMF_MAX_LIMBS];
-    pv_t D[PMF_MAX_LIMBS + 1], T[PMF_MAX_LIMBS + 1];
+    pv_t R[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];
 
     pmf_vec_load_scalar(R, r, L);
     for (uint64_t i = 0; i < out->allocated_n; i += PMF_VEC_GROUP)
     {
-        pmf_vec_load_pairs(E, O, a, i, L);
-        pmf_vec_sub_group(D, O, E, P);
-        pmf_vec_mul_group(T, D, R, P);
-        pmf_vec_add_group(D, E, T, P);
-        pmf_vec_store_group(out, i, D, L);
+        pmf_vec_fold_group(T, a, i, R, P);
+        pmf_vec_store_group(out, i, T, L);
     }
 }
 
 void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r)
 {
     PMF_WITH_LIMBS(a->params, pmf_vec_fold_body(out, a, r, &P_));
+}
+
+// --- inner products of folds ----------------------------------------------
+//
+// Over the pairs (u, v) of one vector and (x, y) of another, the sums of u x,
+// v y and (v - u)(y - x). The first two are q(0) and q(1) for the quadratic
+// q(t) = sum (u + t (v - u)) (x + t (y - x)), the third is its leading
+// coefficient, so q(2) = 2 q(1) - q(0) + 2 sum (v - u)(y - x).
+
+// The three sums, lane by lane, with limbs added unreduced in between.
+typedef struct
+{
+    pv_t acc[3][PMF_MAX_LIMBS + 1];
+    uint64_t since_reduce;
+} PMFInnerSums;
+
+PMF_INLINE void pmf_vec_inner_sums_init(PMFInnerSums *S, uint64_t L)
+{
+    for (uint64_t s = 0; s < 3; s++)
+        for (uint64_t k = 0; k <= L; k++)
+            S->acc[s][k] = pv_zero();
+    S->since_reduce = 0;
+}
+
+// acc += T over the first L limbs.
+PMF_INLINE void pmf_vec_accumulate_group(pv_t *acc, const pv_t *T, uint64_t L)
+{
+    for (uint64_t k = 0; k < L; k++)
+        acc[k] = pv_add(acc[k], T[k]);
+}
+
+// One group of pairs into the sums; V and Y are overwritten. Canonical limbs
+// are below 2^52, so 255 groups add to less than 2^60, the most
+// pmf_vec_reduce_wide accepts; the sums are reduced that often.
+PMF_INLINE void pmf_vec_inner_sums_add(PMFInnerSums *S, const pv_t *U, pv_t *V, const pv_t *X,
+                                       pv_t *Y, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t T[PMF_MAX_LIMBS + 1];
+
+    pmf_vec_mul_group(T, U, X, P);
+    pmf_vec_accumulate_group(S->acc[0], T, L);
+    pmf_vec_mul_group(T, V, Y, P);
+    pmf_vec_accumulate_group(S->acc[1], T, L);
+    pmf_vec_sub_group(V, V, U, P);
+    pmf_vec_sub_group(Y, Y, X, P);
+    pmf_vec_mul_group(T, V, Y, P);
+    pmf_vec_accumulate_group(S->acc[2], T, L);
+    if (++S->since_reduce == 255)
+    {
+        for (uint64_t s = 0; s < 3; s++)
+        {
+            S->acc[s][L] = pv_zero();
+            pmf_vec_reduce_wide(S->acc[s], P);
+        }
+        S->since_reduce = 0;
+    }
+}
+
+// The lanes of the sums added up into the elements sums[0..2], and then the
+// pairs `from` .. a->n / 2 - 1 of a and b, which no whole group covers, added
+// one element at a time.
+PMF_INLINE void pmf_vec_inner_sums_finish(uint64_t *const *sums, PMFInnerSums *S, const PMFVector a,
+                                          const PMFVector b, uint64_t from, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    _Alignas(64) uint64_t partial[PMF_LANES * PMF_MAX_LIMBS];
+    uint64_t element[PMF_LANES] = {0};
+
+    for (uint64_t s = 0; s < 3; s++)
+    {
+        for (uint64_t k = 0; k < PMF_LANES; k++)
+            sums[s][k] = 0;
+        S->acc[s][L] = pv_zero();
+        pmf_vec_reduce_wide(S->acc[s], P);
+        for (uint64_t k = 0; k < L; k++)
+            pv_store(partial + k * PMF_LANES, S->acc[s][k]);
+        for (uint64_t lane = 0; lane < PMF_VEC_GROUP; lane++)
+        {
+            for (uint64_t k = 0; k < L; k++)
+                element[k] = partial[k * PMF_LANES + lane];
+            pmf_add(sums[s], sums[s], element, P);
+        }
+    }
+
+    uint64_t u[PMF_LANES], v[PMF_LANES], x[PMF_LANES], y[PMF_LANES], t[PMF_LANES];
+    for (uint64_t i = from; i < a->n / 2; i++)
+    {
+        pmf_vec_get_element(u, a, 2 * i);
+        pmf_vec_get_element(v, a, 2 * i + 1);
+        pmf_vec_get_element(x, b, 2 * i);
+        pmf_vec_get_element(y, b, 2 * i + 1);
+        pmf_mul(t, u, x, P);
+        pmf_add(sums[0], sums[0], t, P);
+        pmf_mul(t, v, y, P);
+        pmf_add(sums[1], sums[1], t, P);
+        pmf_sub(v, v, u, P);
+        pmf_sub(y, y, x, P);
+        pmf_mul(t, v, y, P);
+        pmf_add(sums[2], sums[2], t, P);
+    }
+}
+
+// q2 = 2 q1 - q0 + 2 q2: the leading coefficient in q2 becomes q(2).
+static void pmf_vec_inner_sums_extrapolate(uint64_t *q0, uint64_t *q1, uint64_t *q2,
+                                           PMFParams params)
+{
+    pmf_add(q2, q2, q2, params);
+    pmf_add(q2, q2, q1, params);
+    pmf_add(q2, q2, q1, params);
+    pmf_sub(q2, q2, q0, params);
+}
+
+// The pairs in whole groups go through the lanes; the rest, whose lanes would
+// reach the padding, through the element kernels.
+PMF_INLINE void pmf_vec_fold_inner_products_body(uint64_t *const *sums, const PMFVector a,
+                                                 const PMFVector b, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS], X[PMF_MAX_LIMBS], Y[PMF_MAX_LIMBS];
+    PMFInnerSums S;
+
+    pmf_vec_inner_sums_init(&S, L);
+    const uint64_t whole = (a->n / 2 / PMF_VEC_GROUP) * PMF_VEC_GROUP;
+    for (uint64_t i = 0; i < whole; i += PMF_VEC_GROUP)
+    {
+        pmf_vec_load_pairs(U, V, a, i, L);
+        pmf_vec_load_pairs(X, Y, b, i, L);
+        pmf_vec_inner_sums_add(&S, U, V, X, Y, P);
+    }
+    pmf_vec_inner_sums_finish(sums, &S, a, b, whole, P);
+}
+
+void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const PMFVector a,
+                                 const PMFVector b)
+{
+    assert(a->n % 2 == 0 && b->n == a->n);
+    uint64_t *const sums[3] = {q0, q1, q2};
+    PMF_WITH_LIMBS(a->params, pmf_vec_fold_inner_products_body(sums, a, b, &P_));
+    pmf_vec_inner_sums_extrapolate(q0, q1, q2, a->params);
+}
+
+// The pairs of the 2 * PMF_VEC_GROUP consecutive elements held in F0 and F1, as
+// one group each of first (E) and second (O) members: the lanes of
+// pmf_vec_load_pairs, from registers.
+PMF_INLINE void pmf_vec_pairs_of(pv_t *E, pv_t *O, const pv_t *F0, const pv_t *F1, uint64_t L)
+{
+#if VFHE_HAVE_AVX512IFMA
+    const __m512i evens = _mm512_set_epi64(14, 12, 10, 8, 6, 4, 2, 0);
+    const __m512i odds = _mm512_set_epi64(15, 13, 11, 9, 7, 5, 3, 1);
+    for (uint64_t k = 0; k < L; k++)
+    {
+        E[k] = _mm512_permutex2var_epi64(F0[k], evens, F1[k]);
+        O[k] = _mm512_permutex2var_epi64(F0[k], odds, F1[k]);
+    }
+#else
+    for (uint64_t k = 0; k < L; k++)
+    {
+        E[k] = F0[k];
+        O[k] = F1[k];
+    }
+#endif
+}
+
+// Each pass of the main loop folds two output groups of each vector, stores
+// them, and takes the pairs of the next fold from the registers it has just
+// stored: the 2 * PMF_VEC_GROUP output elements from 2j are the pairs j .. j +
+// PMF_VEC_GROUP - 1 of the folded vector. The remaining output groups, padding
+// included, are folded alone, and the pairs among them summed one at a time.
+PMF_INLINE void pmf_vec_fold_and_inner_products_body(PMFVector a_out, PMFVector b_out,
+                                                     uint64_t *const *sums, const PMFVector a,
+                                                     const PMFVector b, const uint64_t *r,
+                                                     PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t R[PMF_MAX_LIMBS];
+    pv_t A0[PMF_MAX_LIMBS + 1], A1[PMF_MAX_LIMBS + 1], B0[PMF_MAX_LIMBS + 1], B1[PMF_MAX_LIMBS + 1];
+    pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS], X[PMF_MAX_LIMBS], Y[PMF_MAX_LIMBS];
+    PMFInnerSums S;
+
+    pmf_vec_load_scalar(R, r, L);
+    pmf_vec_inner_sums_init(&S, L);
+    const uint64_t whole = (a_out->n / 2 / PMF_VEC_GROUP) * PMF_VEC_GROUP;
+    for (uint64_t j = 0; j < whole; j += PMF_VEC_GROUP)
+    {
+        const uint64_t i = 2 * j;
+        pmf_vec_fold_group(A0, a, i, R, P);
+        pmf_vec_fold_group(A1, a, i + PMF_VEC_GROUP, R, P);
+        pmf_vec_fold_group(B0, b, i, R, P);
+        pmf_vec_fold_group(B1, b, i + PMF_VEC_GROUP, R, P);
+        pmf_vec_store_group(a_out, i, A0, L);
+        pmf_vec_store_group(a_out, i + PMF_VEC_GROUP, A1, L);
+        pmf_vec_store_group(b_out, i, B0, L);
+        pmf_vec_store_group(b_out, i + PMF_VEC_GROUP, B1, L);
+        pmf_vec_pairs_of(U, V, A0, A1, L);
+        pmf_vec_pairs_of(X, Y, B0, B1, L);
+        pmf_vec_inner_sums_add(&S, U, V, X, Y, P);
+    }
+    for (uint64_t i = 2 * whole; i < a_out->allocated_n; i += PMF_VEC_GROUP)
+    {
+        pmf_vec_fold_group(A0, a, i, R, P);
+        pmf_vec_fold_group(B0, b, i, R, P);
+        pmf_vec_store_group(a_out, i, A0, L);
+        pmf_vec_store_group(b_out, i, B0, L);
+    }
+    pmf_vec_inner_sums_finish(sums, &S, a_out, b_out, whole, P);
+}
+
+void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t *q0, uint64_t *q1,
+                                     uint64_t *q2, const PMFVector a, const PMFVector b,
+                                     const uint64_t *r)
+{
+    assert(a->n % 4 == 0 && b->n == a->n && 2 * a_out->n == a->n && 2 * b_out->n == a->n);
+    uint64_t *const sums[3] = {q0, q1, q2};
+    PMF_WITH_LIMBS(a->params,
+                   pmf_vec_fold_and_inner_products_body(a_out, b_out, sums, a, b, r, &P_));
+    pmf_vec_inner_sums_extrapolate(q0, q1, q2, a->params);
 }
 
 // One element, 1/2 = (p + 1) / 2: p is odd. PMF_LANES words.

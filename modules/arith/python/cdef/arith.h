@@ -380,6 +380,11 @@ void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count);
 void pmf_vec_clear_padding(PMFVector a);
 bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
 void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r);
+void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const PMFVector a,
+                                 const PMFVector b);
+void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t *q0, uint64_t *q1,
+                                     uint64_t *q2, const PMFVector a, const PMFVector b,
+                                     const uint64_t *r);
 void pmf_vec_lift_twisted(PMFVector out, const PMFVector a, const PMFVector b, const PMFVector t);
 void pmf_vec_fold_twisted(PMFVector out, const PMFVector word, const PMFVector untwist,
                           const uint64_t *r);

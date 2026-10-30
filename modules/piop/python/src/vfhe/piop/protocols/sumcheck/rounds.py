@@ -14,7 +14,9 @@ The native/pure-Python decision is made here, per call: native tables
 (`mle.native_table`) go to the C kernels of sumcheck.c, field-backed tables
 over their first variable to whole-vector operations, anything else to the
 pure-Python path -- identical messages, so identical transcripts, either
-way. These are the building blocks of the sumcheck protocols
+way. `prod_update_tables` is the prover's other per-round step, the
+update of its bookkeeping tables with the challenge [XZZPS19, Alg. 1].
+These are the building blocks of the sumcheck protocols
 (`sumcheck.py`), of the prover's round messages over a virtual oracle
 (`prover_view.py`), and of protocols that interleave sumcheck rounds with
 other messages (basefold in `vfhe.polycom`).
@@ -191,16 +193,51 @@ def prod_round_evals(factors: list, var=None) -> tuple:
 
 def prod2_round_evals_vector(f: MLE, g: MLE) -> tuple:
     """The whole-vector path of prod_round_evals over the first variable
-    of two field-backed tables: with (lo, hi) the even and odd halves,
-    g(0) = sum lo_f lo_g, g(1) = sum hi_f hi_g and g(2) =
-    sum (2 hi_f - lo_f)(2 hi_g - lo_g), the t = 2 extrapolation."""
-    f_lo, f_hi = f._vector.split_even_odd()
-    g_lo, g_hi = g._vector.split_even_odd()
-    return (
-        (f_lo * g_lo).sum(),
-        (f_hi * g_hi).sum(),
-        ((f_hi * 2 - f_lo) * (g_hi * 2 - g_lo)).sum(),
-    )
+    of two field-backed tables: g(t) = sum_b f(t, b) g(t, b) at t = 0, 1,
+    2 is the inner product of the two tables folded at t
+    (`FieldVector.fold_inner_products`)."""
+    return f._vector.fold_inner_products(g._vector)
+
+
+def prod_update_tables(
+    factors: list, var, r, in_place: list
+) -> tuple[list, tuple | None]:
+    """The prover's bookkeeping tables after a product-sumcheck round: every
+    factor's table with the round variable `var` bound to the challenge
+    `r` [XZZPS19, Alg. 1, step 5], and the next round's message when the
+    update forms it too.
+
+    Returns ``(tables, message)``. The caller goes on with `tables`, not
+    with the factors it passed. `message` is what `prod_round_evals` gives
+    for `tables` over their first variable, or None when it is left to
+    that call.
+
+    Two field-backed tables with the same variables, `var` the first of
+    them and at least one more after it, are updated by
+    `FieldVector.fold_and_inner_products`, which sums the products of the
+    updated pairs in the same pass; the updated tables are new MLEs, so
+    `in_place` does not apply. Any other factors are updated one by one by
+    `MLE.evaluate`, in place where `in_place` says, and `message` is None.
+    """
+    if (
+        len(factors) == 2
+        and all(vector_table(f) for f in factors)
+        and factors[0].variables == factors[1].variables
+        and factors[0].variables[0] is var
+        and factors[0].num_vars >= 2
+    ):
+        f, g = factors
+        f_table, g_table, message = f._vector.fold_and_inner_products(g._vector, r)
+        rest = f.variables[1:]
+        return [
+            MLE(field=f.field, variables=rest, evaluations=f_table),
+            MLE(field=g.field, variables=rest, evaluations=g_table),
+        ], message
+    tables = [
+        f.evaluate({var: r}, in_place=own)
+        for f, own in zip(factors, in_place, strict=True)
+    ]
+    return tables, None
 
 
 def _prod_round_evals_python(factors: list, var=None) -> tuple:
