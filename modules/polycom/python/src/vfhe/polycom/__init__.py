@@ -5,6 +5,7 @@ from .basefold import (
     Basefold,
     BasefoldCommitment,
     BasefoldEval,
+    BasefoldMessages,
     BasefoldOpening,
     pair_digest,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "Basefold",
     "BasefoldCommitment",
     "BasefoldEval",
+    "BasefoldMessages",
     "BasefoldOpening",
     "BatchFoldEval",
     "FieldFoldableRS",

@@ -139,6 +139,8 @@ void polynomial_RNS_write_rows(uint8_t *out, void *p, const uint64_t *rows, uint
 int64_t polynomial_RNS_read_rows(void *p, const uint8_t *in, const uint64_t *rows, uint64_t count,
                                  bool tight, bool validate);
 uint64_t *polynomial_RNS_get_hash_p(void *p);
+void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial *in,
+                                   uint64_t count);
 
 // --- negacyclic FFT ---
 typedef struct _FFT_Plan *FFT_Plan;
@@ -373,6 +375,9 @@ void pmf_vec_get_element(uint64_t *out, const PMFVector a, uint64_t index);
 void pmf_vec_set_element(PMFVector out, uint64_t index, const uint64_t *value);
 void pmf_vec_set_range(PMFVector out, uint64_t start, const uint64_t *values, uint64_t count);
 void pmf_vec_get_range(uint64_t *out, const PMFVector a, uint64_t start, uint64_t count);
+void pmf_vec_set_uint64(PMFVector out, uint64_t start, const uint64_t *low, const uint64_t *high,
+                        uint64_t count, uint32_t shift, uint32_t width);
+bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a);
 void pmf_vec_copy(PMFVector out, const PMFVector a);
 void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a);
 void pmf_vec_interleave(PMFVector out, const PMFVector even, const PMFVector odd);

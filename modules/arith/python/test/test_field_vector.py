@@ -1712,3 +1712,21 @@ class TestDigestsReachATreeUntouched:
         objects = Merkle(digest_list(digests), hash=lambda leaf: leaf)
         assert packed.root == objects.root
         assert len(packed) == len(vector) // stride
+
+
+def test_uint64_transfer_has_a_generic_default():
+    """`set_uint64` / `to_uint64` on an implementation without kernels for
+    them: the defaults on `FieldVector`, element by element."""
+    field = ExtensionField(PRIME, 1)
+    values = array("Q", [0, 1, 5 << 11, PRIME - 1, (PRIME - 1) << 2])
+    vector = FieldVector(field, len(values))
+    vector.set_uint64(values, shift=2, width=61)
+    expected = [((v >> 2) & ((1 << 61) - 1)) % PRIME for v in values]
+    assert [int(e) for e in vector] == expected
+    assert vector.to_uint64() == array("Q", expected)
+    vector.set_uint64(array("Q", [9, 8]), start=1)
+    assert [int(e) for e in vector] == [expected[0], 9, 8, *expected[3:]]
+    with pytest.raises(ValueError, match="width"):
+        vector.set_uint64(values, width=65)
+    vector.set_uint64(array("Q", [0, 0]), shift=64, width=61, high=array("Q", [7, 9]))
+    assert [int(e) for e in vector][:2] == [7, 9]

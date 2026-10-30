@@ -415,6 +415,35 @@ class RNSRing(Ring):
         )
         return out
 
+    def lift_mod_2_128(
+        self, elements: Sequence[RNSPolynomial]
+    ) -> tuple[array.array, array.array]:
+        """Every coefficient of `elements` as the integer in ``[0, q)`` its
+        residues define, modulo ``2^128``, as two ``array('Q')``s: entry
+        ``e * N + k`` of ``(low, high)`` is coefficient ``k`` of
+        ``elements[e]`` as ``low + 2^64 high``.
+
+        The elements must be of this ring. They are read in the coefficient
+        domain, through a converted copy when they are not in it.
+        """
+        if any(element.ring != self for element in elements):
+            raise ValueError("the elements must be of this ring")
+        views = [element._viewed_as(repr.coeff) for element in elements]
+        size = len(views) * self.N
+        low = array.array("Q", bytes(8 * size))
+        high = array.array("Q", bytes(8 * size))
+        if views:
+            handles = ffi.new(
+                "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", v.obj) for v in views]
+            )
+            self.lib.polynomial_RNS_lift_mod_2_128(
+                ffi.from_buffer("uint64_t[]", low),
+                ffi.from_buffer("uint64_t[]", high),
+                handles,
+                len(views),
+            )
+        return low, high
+
     def crt_linear_combination(
         self,
         parts: Sequence[Sequence[RNSPolynomial]],

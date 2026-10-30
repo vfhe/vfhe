@@ -1059,3 +1059,62 @@ class TestReductionEdges:
         lifted = [int(e) for e in FieldVector.lift_twisted(a, b, table)]
         assert lifted[0::2] == [(xs[i] + ws[i] * ws[i]) % p for i in range(167)]
         assert lifted[1::2] == [(xs[i] - ws[i] * ws[i]) % p for i in range(167)]
+
+
+class TestUint64Transfer:
+    """`set_uint64` and `to_uint64`: 64-bit integers in and out in one call."""
+
+    @pytest.mark.parametrize("n", LENGTHS)
+    def test_round_trip(self, field, n):
+        rng = random.Random(n)  # noqa: S311 - test data, not a key
+        values = array("Q", [rng.getrandbits(64) for _ in range(n)])
+        vector = FieldVector(field, n)
+        vector.set_uint64(values)
+        assert [int(e) for e in vector] == list(values)
+        assert vector.to_uint64() == values
+
+    def test_a_bit_field_is_a_shift_and_a_mask(self, field):
+        rng = random.Random(1)  # noqa: S311 - test data, not a key
+        values = array("Q", [rng.getrandbits(64) for _ in range(13)])
+        for shift, width in ((0, 11), (11, 11), (60, 4), (63, 1), (0, 64), (5, 64)):
+            vector = FieldVector(field, len(values))
+            vector.set_uint64(values, shift=shift, width=width)
+            mask = (1 << width) - 1
+            assert [int(e) for e in vector] == [(v >> shift) & mask for v in values]
+
+    def test_a_bit_field_of_128_bit_values(self, field):
+        rng = random.Random(2)  # noqa: S311 - test data, not a key
+        wide = [rng.getrandbits(128) for _ in range(13)]
+        low = array("Q", [v & ((1 << 64) - 1) for v in wide])
+        high = array("Q", [v >> 64 for v in wide])
+        for shift, width in ((0, 64), (60, 11), (64, 11), (100, 28), (127, 1)):
+            vector = FieldVector(field, len(wide))
+            vector.set_uint64(low, shift=shift, width=width, high=high)
+            mask = (1 << width) - 1
+            assert [int(e) for e in vector] == [(v >> shift) & mask for v in wide]
+        with pytest.raises(ValueError, match="shift < 128"):
+            vector.set_uint64(low, shift=128, high=high)
+        with pytest.raises(ValueError, match="differ in length"):
+            vector.set_uint64(low, high=high[:3])
+
+    def test_a_range_from_start_leaves_the_rest(self, field):
+        vector = FieldVector(field, [7] * 16)
+        vector.set_uint64(array("Q", range(5)), start=3)
+        assert [int(e) for e in vector] == [7] * 3 + list(range(5)) + [7] * 8
+
+    def test_an_element_from_2_64_up_has_no_uint64(self, field):
+        for big in (1 << 64, field.prime - 1):
+            assert FieldVector(field, [1, big, 2]).to_uint64() is None
+        top = (1 << 64) - 1
+        assert FieldVector(field, [top]).to_uint64() == array("Q", [top])
+
+    def test_the_preconditions_are_checked(self, field):
+        vector = FieldVector(field, 4)
+        with pytest.raises(ValueError, match="3 values from 2 into 4"):
+            vector.set_uint64(array("Q", [1, 2, 3]), start=2)
+        with pytest.raises(ValueError, match="shift"):
+            vector.set_uint64(array("Q", [0] * 4), shift=64)
+        with pytest.raises(ValueError, match="width"):
+            vector.set_uint64(array("Q", [0] * 4), width=0)
+        with pytest.raises(TypeError, match="64-bit"):
+            vector.set_uint64(array("I", [0] * 4))

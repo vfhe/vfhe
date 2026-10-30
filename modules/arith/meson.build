@@ -27,6 +27,7 @@ vfhe_c_sources += files(
     'c/src/kernels/ntt_portable.c',
     'c/src/kernels/ntt_scalar.c',
     'c/src/kernels/ntt_w32.c',
+    'c/src/kernels/u128.c',
     # one directory per implementation
     'c/src/complex/complex.c',
     'c/src/field/field.c',
