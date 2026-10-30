@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from math import comb
 from typing import Any
 
-from vfhe.arith.mle import MLE, SparseMLE, native_table, pair_indices
+from vfhe.arith import FieldVector
+from vfhe.arith.mle import MLE, SparseMLE, native_table, pair_indices, vector_table
+from vfhe.piop.oracle import EqOracle
 from vfhe.piop.virtual import (
     VirtualOracle,
     combine_terms,
@@ -67,6 +70,42 @@ def _mul(a, b) -> Any:
     if isinstance(b, int) and b == 1:
         return a
     return a * b
+
+
+def _signed_sums(terms: list, field) -> tuple[list, list]:
+    """A products form as sums of signed products: the terms whose
+    coefficients are equal or opposite share one sum, under the first such
+    coefficient. Returns the coefficients and the sums, the latter in the
+    shape `FieldVector.fold_product_sums` reads."""
+    coefficients: list = []
+    sums: list = []
+    for coeff, idxs in terms:
+        c = field.one * coeff
+        for k, other in enumerate(coefficients):
+            if c == other:
+                sums[k].append((1, idxs))
+                break
+            if c + other == field.zero:
+                sums[k].append((-1, idxs))
+                break
+        else:
+            coefficients.append(c)
+            sums.append([(1, idxs)])
+    return coefficients, sums
+
+
+def _combine_sums(coefficients: list, evals: list) -> tuple:
+    """sum_k coefficients[k] * evals[k], node by node."""
+    total = None
+    for c, node_values in zip(coefficients, evals, strict=True):
+        scaled_values = [c * e for e in node_values]
+        total = (
+            scaled_values
+            if total is None
+            else [a + b for a, b in zip(total, scaled_values, strict=True)]
+        )
+    assert total is not None
+    return tuple(total)
 
 
 def _scatter(k: int, bits: list[int], positions: list[int]) -> int:
@@ -126,17 +165,61 @@ class _ProverVirtual:
         )
         return view
 
+    def update_tables(self, var, r) -> tuple[_ProverVirtual, tuple | None]:
+        """Bind `var` to the challenge `r` in place [XZZPS19, Alg. 1, step
+        5]; returns this view and the next round's message when the update
+        forms it too, None otherwise.
+
+        Field tables, with `var` the first variable and at least one more
+        after it, are folded by `FieldVector.fold_and_product_sums`, which
+        sums the next round's products over the folded pairs in the same
+        pass; the message is the one `round_evals` gives for the folded
+        tables. Anything else is `evaluate`."""
+        if (
+            len(self.variables) >= 2
+            and self.variables[0] is var
+            and self._vector_tables()
+        ):
+            field = self.tables[0].field
+            rest = self.variables[1:]
+            coefficients, sums = _signed_sums(self.terms, field)
+            folded, evals = FieldVector.fold_and_product_sums(
+                [t._vector for t in self.tables],
+                r,
+                sums,
+                self.degree_in(rest[0]) + 1,
+            )
+            self.tables = [
+                MLE(field=field, variables=rest, evaluations=v) for v in folded
+            ]
+            self.variables = rest
+            return self, _combine_sums(coefficients, evals)
+        return self.evaluate({var: r}), None
+
     def constant(self):
         assert self.num_vars == 0, "constant() needs a fully-evaluated oracle"
         return combine_terms(self.terms, [t.constant() for t in self.tables])
 
+    def _vector_tables(self) -> bool:
+        """Whether every table is one field vector (`vector_table`)."""
+        return all(vector_table(t) for t in self.tables)
+
     def round_evals(self, var=None) -> tuple:
         """sum_terms coeff * (sum_b prod_j table_j(t, b)) at t = 0..degree,
-        b over the cube of the other variables — each term summed first,
-        then scaled once per node."""
+        b over the cube of the other variables. Over field tables and the
+        first variable, by `FieldVector.fold_product_sums` on the terms
+        grouped into signed sums (`_signed_sums`); otherwise each term is
+        summed first, then scaled once per node."""
         var = self.variables[0] if var is None else var
         idx = self.variables.index(var)
         nodes = self.degree_in(var) + 1
+        if idx == 0 and self._vector_tables():
+            field = self.tables[0].field
+            coefficients, sums = _signed_sums(self.terms, field)
+            evals = FieldVector.fold_product_sums(
+                [t._vector for t in self.tables], sums, nodes
+            )
+            return _combine_sums(coefficients, evals)
         total = None
         for coeff, idxs in self.terms:
             evals = self._term_round_evals(
@@ -177,6 +260,140 @@ class _ProverVirtual:
                 total = prod if total is None else total + prod
             evals.append(total)
         return evals
+
+
+class _ProverVirtualEq(_ProverVirtual):
+    """The dense strategy for a products form in which every term carries
+    the factor eq~(rho, X) over all the variables, read in their order, with
+    the other factors field tables. The round polynomial factors as [Gru24,
+    §3.2; BDDT25, §5.1]
+
+        s(t) = c * eq~(rho_1, t) * q(t),
+        q(t) = sum_b eq~(rho_rest, b) * sum_terms coeff * prod_j table_j(t, b),
+
+    with c = prod eq~(rho_k, r_k) over the bound variables: `q` has one
+    degree less, so it is summed at one node fewer, with the weights
+    eq~(rho_rest, b) instead of the eq table's folds, and extrapolated to the
+    last node. The message is `s` at the nodes, as `_ProverVirtual` sends it.
+    The variables are bound first to last."""
+
+    def __init__(self, variables: list, factors: list, terms: list, rho: list):
+        super().__init__(variables, factors, terms)
+        self.field: Any = self.tables[0].field
+        self.rho = list(rho)
+        self.scale: Any = self.field.one
+        self.weights = MLE.eq(self.field, self.rho[1:]).table
+
+    def degree_in(self, var) -> int:
+        """The eq factor's degree, one, plus the most other factors reading
+        `var` in one term."""
+        return 1 + max(
+            sum(1 for j in idxs if var in self.reads[j]) for _, idxs in self.terms
+        )
+
+    def _round_message(self, sums: tuple) -> tuple:
+        """s at the nodes 0..degree, from q's sums at the nodes below the
+        last (extrapolated by finite differences: q has that degree less one)."""
+        q = list(sums)
+        last = len(q)
+        top = None
+        for t, value in enumerate(q):
+            term = value * comb(last, t)
+            if (last - 1 - t) % 2:
+                top = -term if top is None else top - term
+            else:
+                top = term if top is None else top + term
+        q.append(top)
+        low = self.field.one - self.rho[0]  # eq~(rho_1, 0)
+        step = self.rho[0] - low  # eq~(rho_1, t) = low + t * step
+        return tuple(self.scale * (low + step * t) * value for t, value in enumerate(q))
+
+    def _bind_first(self, r) -> None:
+        """c *= eq~(rho_1, r); the weights lose their first variable."""
+        low = self.field.one - self.rho[0]
+        self.scale = self.scale * (low + (self.rho[0] - low) * r)
+        self.rho = self.rho[1:]
+        self.variables = self.variables[1:]
+        if self.variables:
+            even, odd = self.weights.split_even_odd()
+            self.weights = even + odd
+
+    def round_evals(self, var=None) -> tuple:
+        var = self.variables[0] if var is None else var
+        if var is not self.variables[0]:
+            raise ValueError("the eq-factored prover binds its variables in order")
+        coefficients, sums = _signed_sums(self.terms, self.field)
+        evals = FieldVector.fold_product_sums(
+            [t._vector for t in self.tables], sums, self.degree_in(var), self.weights
+        )
+        return self._round_message(_combine_sums(coefficients, evals))
+
+    def update_tables(self, var, r) -> tuple[_ProverVirtualEq, tuple | None]:
+        if len(self.variables) < 2 or var is not self.variables[0]:
+            return self.evaluate({var: r}), None
+        coefficients, sums = _signed_sums(self.terms, self.field)
+        vectors = [t._vector for t in self.tables]
+        self._bind_first(r)
+        folded, evals = FieldVector.fold_and_product_sums(
+            vectors, r, sums, self.degree_in(self.variables[0]), self.weights
+        )
+        self.tables = [
+            MLE(field=self.field, variables=self.variables, evaluations=v)
+            for v in folded
+        ]
+        return self, self._round_message(_combine_sums(coefficients, evals))
+
+    def evaluate(self, point: dict | list, in_place: bool = True) -> _ProverVirtualEq:
+        if isinstance(point, list):
+            point = dict(zip(self.variables, point, strict=True))
+        target = self if in_place else copy.copy(self)
+        for var in list(self.variables):
+            if var not in point:
+                break
+            r = point[var]
+            target.tables = [
+                t.evaluate({var: r}, in_place=False) for t in target.tables
+            ]
+            target._bind_first(r)
+        if any(v in target.variables for v in point):
+            raise ValueError("the eq-factored prover binds its variables in order")
+        return target
+
+    def constant(self):
+        assert self.num_vars == 0, "constant() needs a fully-evaluated oracle"
+        return self.scale * combine_terms(
+            self.terms, [t.constant() for t in self.tables]
+        )
+
+    @classmethod
+    def build(cls, oracle: VirtualOracle, tables: dict) -> _ProverVirtualEq | None:
+        """The strategy for `oracle` over its resolved `tables` (by
+        constituent index; the eq~ one is not needed), or None when no
+        `EqOracle` constituent has the shape it needs: read through a map
+        that is the oracle's variables in order, present once in every term
+        and alone in none, and every other constituent a field table."""
+        for j, c in enumerate(oracle.constituents):
+            if not isinstance(c, EqOracle):
+                continue
+            sources = [oracle.maps[j][v] for v in c.variables]
+            if len(sources) != len(oracle.variables) or any(
+                src is not var
+                for src, var in zip(sources, oracle.variables, strict=True)
+            ):
+                continue
+            if any(idxs.count(j) != 1 or len(idxs) < 2 for _, idxs in oracle.terms):
+                continue
+            others = [k for k in range(len(oracle.constituents)) if k != j]
+            if not all(k in tables and vector_table(tables[k]) for k in others):
+                continue
+            renumber = {k: i for i, k in enumerate(others)}
+            terms = [
+                (coeff, tuple(renumber[k] for k in idxs if k != j))
+                for coeff, idxs in oracle.terms
+            ]
+            factors = [tables[k] for k in others]
+            return cls(oracle.variables, factors, terms, c.point)
+        return None
 
 
 class _Unsupported(Exception):
@@ -476,7 +693,12 @@ def prover_view(oracle, witnesses: dict | None = None, strategy: str = "auto") -
         return resolve_table(oracle, witnesses)
     tables: dict[int, MLE] = {}
     sparse: dict[int, SparseMLE] = {}
+    # An eq~ constituent is held as its point; its table is built only for a
+    # strategy that reads it as a table.
+    deferred = [j for j, c in enumerate(oracle.constituents) if isinstance(c, EqOracle)]
     for j, c in enumerate(oracle.constituents):
+        if j in deferred:
+            continue
         table = resolve_table(c, witnesses)
         if isinstance(table, SparseMLE):
             if strategy != "dense":
@@ -485,6 +707,7 @@ def prover_view(oracle, witnesses: dict | None = None, strategy: str = "auto") -
             table = table.materialize()
         tables[j] = oracle.dense_constituent(j, table)
     if sparse:
+        _resolve_deferred(oracle, deferred, tables, witnesses)
         libra = _LibraProver.build(oracle, tables, sparse)
         if libra is not None:
             return libra
@@ -494,5 +717,19 @@ def prover_view(oracle, witnesses: dict | None = None, strategy: str = "auto") -
             )
         for j, table in sparse.items():
             tables[j] = oracle.dense_constituent(j, table.materialize())
+    factored = _ProverVirtualEq.build(oracle, tables)
+    if factored is not None:
+        return factored
+    _resolve_deferred(oracle, deferred, tables, witnesses)
     ordered = [tables[j] for j in range(len(oracle.constituents))]
     return _ProverVirtual(oracle.variables, ordered, oracle.terms)
+
+
+def _resolve_deferred(
+    oracle: VirtualOracle, deferred: list, tables: dict, witnesses: dict | None
+) -> None:
+    """The tables of the constituents `prover_view` left unresolved."""
+    for j in deferred:
+        if j not in tables:
+            table = resolve_table(oracle.constituents[j], witnesses)
+            tables[j] = oracle.dense_constituent(j, table)

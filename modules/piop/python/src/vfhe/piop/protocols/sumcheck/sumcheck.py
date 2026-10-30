@@ -13,7 +13,7 @@ See piop.md §4-§6.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from vfhe.arith import Field, Ring
 from vfhe.piop.evaluation import Relation_Eval
@@ -178,6 +178,19 @@ class Sumcheck(_SumcheckRounds):
     def _round_message(self, factors: list, var) -> tuple:
         (f,) = factors
         return round_evals(f, var)
+
+    def _update_tables(
+        self, factors: list, var, r, in_place: list
+    ) -> tuple[list, tuple | None]:
+        """A prover view of a virtual oracle updates its own tables
+        (`update_tables`), and may form the next round's message in the
+        same pass; a table is updated by `MLE.evaluate`."""
+        (f,) = factors
+        update: Any = getattr(f, "update_tables", None)
+        if callable(update):
+            f, message = cast("tuple", update(var, r))
+            return [f], message
+        return super()._update_tables(factors, var, r, in_place)
 
     def _prove_tail(
         self, _iop: IOP, statement: Statement, _label: str, factors: list, point: dict

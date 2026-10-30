@@ -390,6 +390,16 @@ void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const
 void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t *q0, uint64_t *q1,
                                      uint64_t *q2, const PMFVector a, const PMFVector b,
                                      const uint64_t *r);
+#define PMF_FOLD_MAX_TABLES ...
+#define PMF_FOLD_MAX_NODES ...
+#define PMF_FOLD_MAX_SUMS ...
+#define PMF_FOLD_MAX_PRODUCTS ...
+#define PMF_FOLD_MAX_FACTORS ...
+void pmf_vec_fold_product_sums(uint64_t *const *sums, const PMFVector *tables, uint64_t count,
+                               const uint64_t *shape, uint64_t nodes, const PMFVector weights);
+void pmf_vec_fold_and_product_sums(PMFVector *outs, uint64_t *const *sums, const PMFVector *tables,
+                                   uint64_t count, const uint64_t *r, const uint64_t *shape,
+                                   uint64_t nodes, const PMFVector weights);
 void pmf_vec_lift_twisted(PMFVector out, const PMFVector a, const PMFVector b, const PMFVector t);
 void pmf_vec_fold_twisted(PMFVector out, const PMFVector word, const PMFVector untwist,
                           const uint64_t *r);

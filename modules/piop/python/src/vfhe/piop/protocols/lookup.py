@@ -15,7 +15,7 @@ from vfhe.arith import MLE, FieldVector, MLE_Variable
 from vfhe.arith.mle import vector_table
 from vfhe.piop.evaluation import Relation_Eval
 from vfhe.piop.messages import OracleMessages
-from vfhe.piop.oracle import TableOracle
+from vfhe.piop.oracle import EqOracle, TableOracle
 from vfhe.piop.protocol import Protocol, Rejection
 from vfhe.piop.relations import Relation_Lookup, Relation_Sum
 from vfhe.piop.virtual import VirtualOracle, resolve_table
@@ -201,7 +201,7 @@ class Lookup(Protocol):
         that the `(1 - W_n)` factor has already multiplied by zero.
         """
         n = len(X)
-        eq = TableOracle(MLE.eq(self.field, point, variables=X), public=True)
+        eq = EqOracle(self.field, point, variables=X)
         constituents: list = [eq]
         maps: list[dict] = [{v: v for v in X}]
         terms: list[tuple[Any, tuple[int, ...]]] = []
