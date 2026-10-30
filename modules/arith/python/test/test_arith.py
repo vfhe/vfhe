@@ -204,12 +204,14 @@ def test_automorphism_stays_in_the_ntt_domain(ring, gen):
     )
 
 
+@pytest.mark.parametrize("split_degree", [1, 2, 4])
 @pytest.mark.parametrize("n", [4, 16])
 @pytest.mark.parametrize("sizes", [[60], [28], [28, 50, 30, 45, 60], [60] * 12])
-def test_centered_doubles_match_the_exact_crt(sizes, n):
+def test_centered_doubles_match_the_exact_crt(sizes, n, split_degree):
     # One prime takes a vectorized path from 8 coefficients on (narrow and
-    # wide rows); more take Garner's.
-    Rq = Ring(n, prime_size=[40, *sizes], split_degree=1)
+    # wide rows); more take Garner's. A split ring stores its coefficient rows
+    # interleaved, and the output is still in coefficient order.
+    Rq = Ring(n, prime_size=[40, *sizes], split_degree=split_degree)
     mask = 0
     for idx in Rq.prime_indices[1:]:
         mask |= 1 << idx
