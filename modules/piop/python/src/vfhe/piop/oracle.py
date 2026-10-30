@@ -10,7 +10,8 @@ an evaluation claim on it is discharged. The kinds are classes:
   or `SparseMLE`, untouched): `public` when the verifier holds it too, so
   that a claim on it is terminal; `plain` otherwise, the oracle of the ideal
   model, which the verifier may query while no commitment scheme is
-  registered;
+  registered; `EqOracle` is the public one of eq~(point, .), held as its
+  point;
 - `CommittedOracle`, a commitment, the scheme it was committed under and
   the variables, nothing else: the verifier's view of a committed polynomial
   ("the commitment to f is simply the oracle pi_f" [ZCF24, section 4]);
@@ -123,6 +124,55 @@ class TableOracle(Oracle):
 
     def __repr__(self) -> str:
         return f"TableOracle(vars={self.num_vars}, kind={self.kind.value})"
+
+
+class EqOracle(TableOracle):
+    """The public oracle to eq~(point, .) over `variables`, the polynomial
+    of `MLE.eq`, held as its point: a query is the product
+    `prod_i (z_i x_i + (1 - z_i)(1 - x_i))`, linear in the number of
+    variables, and the digest is that of the point. The table is built only
+    when something reads `polynomial` (a prover that folds it as a table, or
+    the ideal decider); a sumcheck prover reads `point` instead, to factor
+    the equality polynomial out of its round messages."""
+
+    def __init__(self, domain, point: list, variables: list) -> None:
+        if len(point) != len(variables):
+            raise ValueError(f"{len(point)} coordinates for {len(variables)} variables")
+        self.domain = domain
+        self.point = list(point)
+        self._variables = list(variables)
+        self._public = True
+        self._table: MLE | None = None
+
+    @property
+    def polynomial(self) -> MLE:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """The table of eq~(point, .), built on first use."""
+        if self._table is None:
+            self._table = MLE.eq(self.domain, self.point, variables=self._variables)
+        return self._table
+
+    @property
+    def variables(self) -> list:  # pyright: ignore[reportIncompatibleVariableOverride]
+        return self._variables
+
+    def query(self, point: dict) -> Any:
+        if not self.point:
+            return self.polynomial.constant()
+        value = None
+        for z, v in zip(self.point, self._variables, strict=True):
+            x = point[v]
+            factor = z * x + (z - 1) * (x - 1)
+            value = factor if value is None else value * factor
+        return value
+
+    def digest(self) -> bytes:
+        parts = [b"eq"]
+        parts += [element_digest(v) for v in self._variables]
+        parts += [element_digest(z) for z in self.point]
+        return chain_digest(parts)
+
+    def __repr__(self) -> str:
+        return f"EqOracle(vars={self.num_vars})"
 
 
 class CommittedOracle(Oracle):

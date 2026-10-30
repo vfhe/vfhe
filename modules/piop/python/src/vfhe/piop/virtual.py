@@ -379,6 +379,10 @@ def expand_table(table, variables: list) -> MLE:
     if getattr(table, "basis", MLE_Basis.eval) is not MLE_Basis.eval:
         raise NotImplementedError("defined oracles need evaluation-basis tables")
     own = [variables.index(v) for v in table.variables]
+    if own == list(range(len(variables))):  # the same variables, in order
+        same = table.copy()
+        same.variables = list(variables)
+        return same
     entries = [table.table[gather_bits(idx, own)] for idx in range(1 << len(variables))]
     return table_like([table], variables, entries)
 

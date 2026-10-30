@@ -8,7 +8,14 @@ from .evaluation import Relation_Eval, with_start
 from .fs import FS_Verifier
 from .iop import IOP
 from .messages import OracleMessages
-from .oracle import CommittedOracle, ImplicitOracle, Oracle, OracleKind, TableOracle
+from .oracle import (
+    CommittedOracle,
+    EqOracle,
+    ImplicitOracle,
+    Oracle,
+    OracleKind,
+    TableOracle,
+)
 from .party import Party, Prover, Verifier
 from .protocol import Protocol, Rejection, exceptional_set_size
 from .relation import Relation, Statement, statement_oracles
@@ -19,6 +26,7 @@ __all__ = [
     "IOP",
     "CommittedOracle",
     "Composed",
+    "EqOracle",
     "FS_Verifier",
     "ImplicitOracle",
     "Oracle",

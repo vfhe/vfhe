@@ -18,7 +18,12 @@ from array import array
 from typing import TYPE_CHECKING, cast
 
 from vfhe.arith._alloc import aligned64, aligned64_unset
-from vfhe.arith.base import FieldVector, _check_bit_field, index_buffer
+from vfhe.arith.base import (
+    FieldVector,
+    _check_bit_field,
+    _check_fold_product_sums,
+    index_buffer,
+)
 from vfhe.util.bindings import ffi, lib
 
 from .pseudo_mersenne import _LANES, PseudoMersenneElement
@@ -466,6 +471,67 @@ class PseudoMersenneVector(FieldVector):
         )
         return a, b, tuple(self.field._wrap(buf) for buf in evals)
 
+    @staticmethod
+    def fold_product_sums(
+        tables: list, sums: list, nodes: int, weights=None
+    ) -> list[tuple]:
+        """`FieldVector.fold_product_sums`, which documents the operation,
+        computed by the native kernel `pmf_vec_fold_product_sums` in one pass
+        over the tables; a shape past the kernel's bounds takes the
+        whole-vector body."""
+        tables = list(tables)
+        _check_fold_product_sums(tables, sums, nodes, weights)
+        shape = _product_shape(tables, sums, nodes, weights)
+        if shape is None:
+            return FieldVector._fold_product_sums(tables, sums, nodes, weights)
+        field = tables[0].field
+        evals = [field._new_buffer() for _ in range(len(sums) * nodes)]
+        lib.pmf_vec_fold_product_sums(
+            ffi.new("uint64_t *[]", evals),
+            ffi.new("PMFVector[]", [t._struct for t in tables]),
+            len(tables),
+            ffi.from_buffer("uint64_t[]", shape),
+            nodes,
+            ffi.NULL if weights is None else weights._struct,
+        )
+        return _product_sums(field, evals, len(sums), nodes)
+
+    @staticmethod
+    def fold_and_product_sums(
+        tables: list, r, sums: list, nodes: int, weights=None
+    ) -> tuple:
+        """`FieldVector.fold_and_product_sums`, which documents the
+        operation, computed by the native kernel
+        `pmf_vec_fold_and_product_sums` in one pass over the tables; a shape
+        past the kernel's bounds makes the separate calls."""
+        tables = list(tables)
+        _check_fold_product_sums(tables, sums, nodes, None)
+        first = tables[0]
+        if len(first) % 4:
+            raise ValueError(f"length {len(first)} is not a multiple of 4")
+        half = len(first) // 2
+        if weights is not None and len(weights) != half // 2:
+            raise ValueError(f"{len(weights)} weights for {half // 2} pairs")
+        shape = _product_shape(tables, sums, nodes, weights)
+        if shape is None:
+            folded = [t.fold(r) for t in tables]
+            return folded, FieldVector._fold_product_sums(folded, sums, nodes, weights)
+        field = first.field
+        element = first._coerce_element(r)
+        folded = [first._like(half) for _ in tables]
+        evals = [field._new_buffer() for _ in range(len(sums) * nodes)]
+        lib.pmf_vec_fold_and_product_sums(
+            ffi.new("PMFVector[]", [t._struct for t in folded]),
+            ffi.new("uint64_t *[]", evals),
+            ffi.new("PMFVector[]", [t._struct for t in tables]),
+            len(tables),
+            element._buf,
+            ffi.from_buffer("uint64_t[]", shape),
+            nodes,
+            ffi.NULL if weights is None else weights._struct,
+        )
+        return folded, _product_sums(field, evals, len(sums), nodes)
+
     def fold_twisted(self, untwist, r, out=None) -> PseudoMersenneVector:
         """`FieldVector.fold_twisted`, which documents the operation, computed
         by the native kernel `pmf_vec_fold_twisted` in one pass, two products
@@ -617,3 +683,37 @@ class PseudoMersenneVector(FieldVector):
         return (
             f"PseudoMersenneVector(n={self._n}, 2^{self.field.bits} - {self.field.c})"
         )
+
+
+def _product_shape(tables: list, sums: list, nodes: int, weights) -> array | None:
+    """The shape words `pmf_vec_fold_product_sums` reads, or None when the
+    operands are not all pseudo-Mersenne vectors of one field or the shape
+    is past the kernel's bounds."""
+    operands = tables if weights is None else [*tables, weights]
+    if not all(isinstance(v, PseudoMersenneVector) for v in operands):
+        return None
+    if any(v.field.prime != tables[0].field.prime for v in operands):
+        return None
+    products = [product for entry in sums for product in entry]
+    if (
+        len(tables) > lib.PMF_FOLD_MAX_TABLES
+        or nodes > lib.PMF_FOLD_MAX_NODES
+        or len(sums) > lib.PMF_FOLD_MAX_SUMS
+        or len(products) > lib.PMF_FOLD_MAX_PRODUCTS
+        or any(len(f) > lib.PMF_FOLD_MAX_FACTORS for _, f in products)
+    ):
+        return None
+    words = [len(sums)]
+    for entry in sums:
+        words.append(len(entry))
+        for sign, factors in entry:
+            words += [int(sign < 0), len(factors), *factors]
+    return array("Q", words)
+
+
+def _product_sums(field, evals: list, count: int, nodes: int) -> list[tuple]:
+    """The kernel's output elements, one tuple of `nodes` per sum."""
+    return [
+        tuple(field._wrap(evals[s * nodes + t]) for t in range(nodes))
+        for s in range(count)
+    ]

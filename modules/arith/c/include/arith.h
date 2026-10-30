@@ -784,6 +784,33 @@ extern "C"
     void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t *q0,
                                          uint64_t *q1, uint64_t *q2, const PMFVector a,
                                          const PMFVector b, const uint64_t *r);
+// The largest shape pmf_vec_fold_product_sums takes.
+#define PMF_FOLD_MAX_TABLES 8
+#define PMF_FOLD_MAX_NODES 4
+#define PMF_FOLD_MAX_SUMS 4
+#define PMF_FOLD_MAX_PRODUCTS 8 // over all the sums
+#define PMF_FOLD_MAX_FACTORS 8  // in one product
+    // Weighted sums of signed products of folded tables. With (u_ji, v_ji) the
+    // adjacent pairs of tables[j], for i < m = tables[0]->n / 2, and f_ji(t) =
+    // u_ji + t (v_ji - u_ji), sum s is the polynomial
+    //     S_s(t) = sum_i w_i sum_(p in s) (-1)^neg_p prod_(j in p) f_ji(t)
+    // and sums[s * nodes + t] receives S_s(t) for t < nodes. w_i is weights[i],
+    // or 1 when weights is NULL. `shape` lists the sums as words: their count,
+    // then for each sum the count of its products, and for each product neg_p
+    // (0 or 1), the count of its factors and their indices into tables. The
+    // `count` tables have one even length, weights has m elements, and the
+    // shape stays within the PMF_FOLD_MAX_* bounds above.
+    void pmf_vec_fold_product_sums(uint64_t *const *sums, const PMFVector *tables, uint64_t count,
+                                   const uint64_t *shape, uint64_t nodes, const PMFVector weights);
+    // outs[j] = fold(tables[j], r), as pmf_vec_fold, and sums =
+    // pmf_vec_fold_product_sums(outs, ...), in one pass over the tables. Their
+    // length must be a multiple of 4, each output holds half of it with
+    // canonical padding and may not alias an input, and weights has a quarter
+    // of it.
+    void pmf_vec_fold_and_product_sums(PMFVector *outs, uint64_t *const *sums,
+                                       const PMFVector *tables, uint64_t count, const uint64_t *r,
+                                       const uint64_t *shape, uint64_t nodes,
+                                       const PMFVector weights);
     // Two vectors combined through a table, into adjacent pairs:
     //     out[2i] = a[i] + b[i] * t[i mod t->n],  out[2i+1] = a[i] - b[i] * t[i mod t->n]
     // for i < a->n, with one product per pair. b->n == a->n, t->n divides a->n,

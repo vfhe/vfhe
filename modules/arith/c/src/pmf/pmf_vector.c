@@ -498,6 +498,291 @@ void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t 
     pmf_vec_inner_sums_extrapolate(q0, q1, q2, a->params);
 }
 
+// --- weighted sums of products of folds -----------------------------------
+//
+// Every table's pairs (u, v) are folded at the nodes once per group, f(t) = u +
+// t (v - u) as f(t - 1) + (v - u) from t = 2 on, and the products and sums of
+// the shape are formed from those folds.
+
+// The shape word array of pmf_vec_fold_product_sums, decoded. The products of
+// sum s are first_product[s] .. first_product[s + 1] - 1.
+typedef struct
+{
+    uint64_t sums;
+    uint64_t nodes;
+    uint64_t first_product[PMF_FOLD_MAX_SUMS + 1];
+    uint64_t negated[PMF_FOLD_MAX_PRODUCTS];
+    uint64_t factor_count[PMF_FOLD_MAX_PRODUCTS];
+    uint64_t factors[PMF_FOLD_MAX_PRODUCTS][PMF_FOLD_MAX_FACTORS];
+} PMFProductShape;
+
+static void pmf_vec_product_shape(PMFProductShape *shape, const uint64_t *words, uint64_t tables,
+                                  uint64_t nodes)
+{
+    assert(tables >= 1 && tables <= PMF_FOLD_MAX_TABLES);
+    assert(nodes >= 1 && nodes <= PMF_FOLD_MAX_NODES);
+    shape->nodes = nodes;
+    shape->sums = *words++;
+    assert(shape->sums >= 1 && shape->sums <= PMF_FOLD_MAX_SUMS);
+    uint64_t p = 0;
+    for (uint64_t s = 0; s < shape->sums; s++)
+    {
+        shape->first_product[s] = p;
+        const uint64_t products = *words++;
+        assert(products >= 1 && p + products <= PMF_FOLD_MAX_PRODUCTS);
+        for (uint64_t end = p + products; p < end; p++)
+        {
+            shape->negated[p] = *words++;
+            shape->factor_count[p] = *words++;
+            assert(shape->negated[p] <= 1);
+            assert(shape->factor_count[p] >= 1 && shape->factor_count[p] <= PMF_FOLD_MAX_FACTORS);
+            for (uint64_t f = 0; f < shape->factor_count[p]; f++)
+            {
+                shape->factors[p][f] = *words++;
+                assert(shape->factors[p][f] < tables);
+            }
+        }
+    }
+    shape->first_product[shape->sums] = p;
+}
+
+// The folds of one group of pairs (U, V) at the shape's nodes.
+PMF_INLINE void pmf_vec_fold_nodes(pv_t (*F)[PMF_MAX_LIMBS], const pv_t *U, const pv_t *V,
+                                   uint64_t nodes, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t D[PMF_MAX_LIMBS + 1], T[PMF_MAX_LIMBS + 1];
+
+    for (uint64_t k = 0; k < L; k++)
+        F[0][k] = U[k];
+    if (nodes > 1)
+        for (uint64_t k = 0; k < L; k++)
+            F[1][k] = V[k];
+    if (nodes > 2)
+        pmf_vec_sub_group(D, V, U, P);
+    for (uint64_t t = 2; t < nodes; t++)
+    {
+        pmf_vec_add_group(T, F[t - 1], D, P);
+        for (uint64_t k = 0; k < L; k++)
+            F[t][k] = T[k];
+    }
+}
+
+// Lanes `live` and up of X set to zero, the rest kept.
+PMF_INLINE void pmf_vec_keep_lanes(pv_t *X, uint64_t live, uint64_t L)
+{
+    _Alignas(64) uint64_t flags[PMF_LANES];
+    for (uint64_t lane = 0; lane < PMF_LANES; lane++)
+        flags[lane] = lane < live;
+    const pv_t keep = pv_mask_from_flag(pv_load(flags));
+    for (uint64_t k = 0; k < L; k++)
+        X[k] = pv_and(X[k], keep);
+}
+
+// The sums at every node, lane by lane, with limbs added unreduced in between.
+typedef struct
+{
+    pv_t acc[PMF_FOLD_MAX_SUMS][PMF_FOLD_MAX_NODES][PMF_MAX_LIMBS + 1];
+    uint64_t since_reduce;
+} PMFProductSums;
+
+PMF_INLINE void pmf_vec_product_sums_init(PMFProductSums *S, const PMFProductShape *shape,
+                                          uint64_t L)
+{
+    for (uint64_t s = 0; s < shape->sums; s++)
+        for (uint64_t t = 0; t < shape->nodes; t++)
+            for (uint64_t k = 0; k <= L; k++)
+                S->acc[s][t][k] = pv_zero();
+    S->since_reduce = 0;
+}
+
+// One group of pairs into the sums, from the folds F of every table and the
+// group's weights W (NULL for weights of one). Each sum adds one canonical
+// element a group to its accumulator, so 255 groups stay below 2^60, the most
+// pmf_vec_reduce_wide accepts; the sums are reduced that often.
+PMF_INLINE void pmf_vec_product_sums_add(PMFProductSums *S,
+                                         pv_t (*F)[PMF_FOLD_MAX_NODES][PMF_MAX_LIMBS],
+                                         const pv_t *W, const PMFProductShape *shape, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t G[PMF_MAX_LIMBS + 1], T[PMF_MAX_LIMBS + 1], Z[PMF_MAX_LIMBS];
+
+    for (uint64_t k = 0; k < L; k++)
+        Z[k] = pv_zero();
+    for (uint64_t s = 0; s < shape->sums; s++)
+        for (uint64_t t = 0; t < shape->nodes; t++)
+        {
+            for (uint64_t p = shape->first_product[s]; p < shape->first_product[s + 1]; p++)
+            {
+                const uint64_t *factors = shape->factors[p];
+                for (uint64_t k = 0; k < L; k++)
+                    T[k] = F[factors[0]][t][k];
+                for (uint64_t f = 1; f < shape->factor_count[p]; f++)
+                    pmf_vec_mul_group(T, T, F[factors[f]][t], P);
+                const pv_t *base = p == shape->first_product[s] ? Z : G;
+                if (shape->negated[p])
+                    pmf_vec_sub_group(G, base, T, P);
+                else
+                    pmf_vec_add_group(G, base, T, P);
+            }
+            if (W)
+                pmf_vec_mul_group(G, G, W, P);
+            pmf_vec_accumulate_group(S->acc[s][t], G, L);
+        }
+    if (++S->since_reduce == 255)
+    {
+        for (uint64_t s = 0; s < shape->sums; s++)
+            for (uint64_t t = 0; t < shape->nodes; t++)
+            {
+                S->acc[s][t][L] = pv_zero();
+                pmf_vec_reduce_wide(S->acc[s][t], P);
+            }
+        S->since_reduce = 0;
+    }
+}
+
+// The lanes of each sum added up into the element sums[s * nodes + t].
+PMF_INLINE void pmf_vec_product_sums_finish(uint64_t *const *sums, PMFProductSums *S,
+                                            const PMFProductShape *shape, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    _Alignas(64) uint64_t partial[PMF_LANES * PMF_MAX_LIMBS];
+    uint64_t element[PMF_LANES] = {0};
+
+    for (uint64_t s = 0; s < shape->sums; s++)
+        for (uint64_t t = 0; t < shape->nodes; t++)
+        {
+            uint64_t *out = sums[s * shape->nodes + t];
+            for (uint64_t k = 0; k < PMF_LANES; k++)
+                out[k] = 0;
+            S->acc[s][t][L] = pv_zero();
+            pmf_vec_reduce_wide(S->acc[s][t], P);
+            for (uint64_t k = 0; k < L; k++)
+                pv_store(partial + k * PMF_LANES, S->acc[s][t][k]);
+            for (uint64_t lane = 0; lane < PMF_VEC_GROUP; lane++)
+            {
+                for (uint64_t k = 0; k < L; k++)
+                    element[k] = partial[k * PMF_LANES + lane];
+                pmf_add(out, out, element, P);
+            }
+        }
+}
+
+// The pairs of every table from `i` on into the sums, with the lanes at or
+// past `pairs` zeroed: a product with a zero factor adds nothing, whatever
+// its weight.
+PMF_INLINE void pmf_vec_product_sums_load_add(PMFProductSums *S,
+                                              pv_t (*F)[PMF_FOLD_MAX_NODES][PMF_MAX_LIMBS],
+                                              const PMFVector *tables, uint64_t count,
+                                              const PMFVector weights, uint64_t i, uint64_t pairs,
+                                              const PMFProductShape *shape, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS], W[PMF_MAX_LIMBS];
+
+    for (uint64_t j = 0; j < count; j++)
+    {
+        pmf_vec_load_pairs(U, V, tables[j], i, L);
+        if (pairs - i < PMF_VEC_GROUP)
+        {
+            pmf_vec_keep_lanes(U, pairs - i, L);
+            pmf_vec_keep_lanes(V, pairs - i, L);
+        }
+        pmf_vec_fold_nodes(F[j], U, V, shape->nodes, P);
+    }
+    if (weights)
+        pmf_vec_load_group(W, weights, i, L);
+    pmf_vec_product_sums_add(S, F, weights ? W : NULL, shape, P);
+}
+
+PMF_INLINE void pmf_vec_fold_product_sums_body(uint64_t *const *sums, const PMFVector *tables,
+                                               uint64_t count, const PMFVector weights,
+                                               const PMFProductShape *shape, PMFParams P)
+{
+    pv_t F[PMF_FOLD_MAX_TABLES][PMF_FOLD_MAX_NODES][PMF_MAX_LIMBS];
+    PMFProductSums S;
+
+    pmf_vec_product_sums_init(&S, shape, P->limbs);
+    const uint64_t pairs = tables[0]->n / 2;
+    for (uint64_t i = 0; i < pairs; i += PMF_VEC_GROUP)
+        pmf_vec_product_sums_load_add(&S, F, tables, count, weights, i, pairs, shape, P);
+    pmf_vec_product_sums_finish(sums, &S, shape, P);
+}
+
+void pmf_vec_fold_product_sums(uint64_t *const *sums, const PMFVector *tables, uint64_t count,
+                               const uint64_t *shape, uint64_t nodes, const PMFVector weights)
+{
+    PMFProductShape decoded;
+    pmf_vec_product_shape(&decoded, shape, count, nodes);
+    for (uint64_t j = 0; j < count; j++)
+        assert(tables[j]->n % 2 == 0 && tables[j]->n == tables[0]->n);
+    assert(!weights || 2 * weights->n == tables[0]->n);
+    PMF_WITH_LIMBS(tables[0]->params,
+                   pmf_vec_fold_product_sums_body(sums, tables, count, weights, &decoded, &P_));
+}
+
+// As pmf_vec_fold_and_inner_products: each pass of the main loop folds two
+// output groups of every table, stores them, and takes the pairs of the next
+// round from the registers. The remaining output groups, padding included, are
+// folded alone, and the pairs among them summed from the stored folds.
+PMF_INLINE void pmf_vec_fold_and_product_sums_body(PMFVector *outs, uint64_t *const *sums,
+                                                   const PMFVector *tables, uint64_t count,
+                                                   const uint64_t *r, const PMFVector weights,
+                                                   const PMFProductShape *shape, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t R[PMF_MAX_LIMBS], W[PMF_MAX_LIMBS];
+    pv_t A0[PMF_MAX_LIMBS + 1], A1[PMF_MAX_LIMBS + 1];
+    pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS];
+    pv_t F[PMF_FOLD_MAX_TABLES][PMF_FOLD_MAX_NODES][PMF_MAX_LIMBS];
+    PMFProductSums S;
+
+    pmf_vec_load_scalar(R, r, L);
+    pmf_vec_product_sums_init(&S, shape, L);
+    const uint64_t pairs = outs[0]->n / 2;
+    const uint64_t whole = (pairs / PMF_VEC_GROUP) * PMF_VEC_GROUP;
+    for (uint64_t j = 0; j < whole; j += PMF_VEC_GROUP)
+    {
+        const uint64_t i = 2 * j;
+        for (uint64_t k = 0; k < count; k++)
+        {
+            pmf_vec_fold_group(A0, tables[k], i, R, P);
+            pmf_vec_fold_group(A1, tables[k], i + PMF_VEC_GROUP, R, P);
+            pmf_vec_store_group(outs[k], i, A0, L);
+            pmf_vec_store_group(outs[k], i + PMF_VEC_GROUP, A1, L);
+            pmf_vec_pairs_of(U, V, A0, A1, L);
+            pmf_vec_fold_nodes(F[k], U, V, shape->nodes, P);
+        }
+        if (weights)
+            pmf_vec_load_group(W, weights, j, L);
+        pmf_vec_product_sums_add(&S, F, weights ? W : NULL, shape, P);
+    }
+    for (uint64_t i = 2 * whole; i < outs[0]->allocated_n; i += PMF_VEC_GROUP)
+        for (uint64_t k = 0; k < count; k++)
+        {
+            pmf_vec_fold_group(A0, tables[k], i, R, P);
+            pmf_vec_store_group(outs[k], i, A0, L);
+        }
+    if (whole < pairs)
+        pmf_vec_product_sums_load_add(&S, F, (const PMFVector *)outs, count, weights, whole, pairs,
+                                      shape, P);
+    pmf_vec_product_sums_finish(sums, &S, shape, P);
+}
+
+void pmf_vec_fold_and_product_sums(PMFVector *outs, uint64_t *const *sums, const PMFVector *tables,
+                                   uint64_t count, const uint64_t *r, const uint64_t *shape,
+                                   uint64_t nodes, const PMFVector weights)
+{
+    PMFProductShape decoded;
+    pmf_vec_product_shape(&decoded, shape, count, nodes);
+    for (uint64_t j = 0; j < count; j++)
+        assert(tables[j]->n % 4 == 0 && tables[j]->n == tables[0]->n &&
+               2 * outs[j]->n == tables[0]->n);
+    assert(!weights || 4 * weights->n == tables[0]->n);
+    PMF_WITH_LIMBS(tables[0]->params, pmf_vec_fold_and_product_sums_body(
+                                          outs, sums, tables, count, r, weights, &decoded, &P_));
+}
+
 // One element, 1/2 = (p + 1) / 2: p is odd. PMF_LANES words.
 static void pmf_vec_half(uint64_t *half, PMFParams params)
 {

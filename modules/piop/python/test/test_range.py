@@ -23,12 +23,11 @@ from vfhe.piop.protocols import RangeDecomposition
 from vfhe.piop.protocols.range import balanced, base_digits, eq_int, uEval
 from vfhe.piop.relations import Relation_Lookup, Relation_Range
 
-# ell = 2, nu = 3, gamma = 1 -> ell* = 6, so mu' is a 64-entry table: small
-# enough for the pure-Python degree-3 rounds the lookup argument will add.
+# ell = 2, nu = 5, gamma = 1 -> ell* = 8, so mu' is a 256-entry table.
 BOUND = 1 << 6
 CHUNKS = 2
 ELL = 2
-NU = 3
+NU = 5
 M = 2
 ALPHABET = 1 << 8
 KAPPA = 2
