@@ -37,9 +37,12 @@ def rand_values(n):
     return [complex(draw[entropy.below(5)], draw[entropy.below(5)]) for _ in range(n)]
 
 
-def test_encode_decode():
+@pytest.mark.parametrize("split_degree", [1, 2, 4])
+def test_encode_decode(split_degree):
     scheme = CKKS_Scheme(
-        Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
+        Ring(N, 300, split_degree=split_degree),
+        scaling_factor=2**25,
+        special_primes=1,
     )
     values = rand_values(N // 2)
     dec = scheme.decode(scheme.encode(values))
@@ -111,9 +114,12 @@ def test_encode_reads_complex_buffers():
     ).get_polynomial(signed=True)
 
 
-def test_encrypt_decrypt():
+@pytest.mark.parametrize("split_degree", [1, 2, 4])
+def test_encrypt_decrypt(split_degree):
     scheme = CKKS_Scheme(
-        Ring(N, 300, split_degree=1), scaling_factor=2**25, special_primes=1
+        Ring(N, 300, split_degree=split_degree),
+        scaling_factor=2**25,
+        special_primes=1,
     )
     key = scheme.key_gen_sparse(N // 8, 3.2)
     values = rand_values(N // 2)
