@@ -1138,6 +1138,33 @@ def _check_bit_field(
     return count
 
 
+def _check_fold_product_sums(tables: list, sums: list, nodes: int, weights) -> None:
+    """The preconditions of `FieldVector.fold_product_sums`."""
+    length = len(tables[0])
+    if length % 2:
+        raise ValueError(f"length {length} is odd; the tables are read in pairs")
+    for table in tables:
+        if len(table) != length:
+            raise ValueError(f"length mismatch: {length} and {len(table)}")
+        if table.field != tables[0].field:
+            raise ValueError("tables belong to different fields")
+    if weights is not None:
+        if len(weights) != length // 2:
+            raise ValueError(f"{len(weights)} weights for {length // 2} pairs")
+        if weights.field != tables[0].field:
+            raise ValueError("weights belong to a different field")
+    if nodes < 1:
+        raise ValueError(f"need at least one node, got {nodes}")
+    for products in sums:
+        if not products:
+            raise ValueError("a sum needs at least one product")
+        for sign, factors in products:
+            if sign not in (1, -1):
+                raise ValueError(f"a sign is 1 or -1, got {sign}")
+            if not factors or any(not 0 <= j < len(tables) for j in factors):
+                raise ValueError(f"factors {factors} do not index the tables")
+
+
 class FieldVector(metaclass=_ImplementationDispatch):
     """Many elements of one `Field`, held together in one buffer.
 
@@ -1928,6 +1955,99 @@ class FieldVector(metaclass=_ImplementationDispatch):
             raise ValueError(f"length {len(self)} is not a multiple of 4")
         a, b = self.fold(r), other.fold(r)
         return a, b, a.fold_inner_products(b)
+
+    @staticmethod
+    def fold_product_sums(
+        tables: list, sums: list, nodes: int, weights: FieldVector | None = None
+    ) -> list[tuple]:
+        """Weighted sums of signed products of the tables folded at ``t`` =
+        0 .. ``nodes - 1``.
+
+        With ``(u_ji, v_ji)`` the adjacent pairs of ``tables[j]`` and
+        ``f_ji(t) = u_ji + t (v_ji - u_ji)`` its fold at ``t``, each entry
+        of `sums` is a list of signed products ``(sign, factors)``, ``sign``
+        1 or -1 and ``factors`` a nonempty tuple of indices into `tables`,
+        and stands for the polynomial::
+
+            S(t) = sum_i w_i sum_(sign, factors) sign * prod_(j in factors) f_ji(t)
+
+        with ``w_i = weights[i]``, or 1 without `weights`. Returns
+        ``(S(0), ..., S(nodes - 1))`` for each entry. The tables have one
+        even length ``2m`` and `weights` has ``m`` elements; an index may
+        appear in several products, and more than once in one.
+
+        Reached on the front, it dispatches to the tables' own
+        implementation; the body here runs it as whole-vector operations, a
+        fixed number of them per table, product and node.
+        """
+        tables = list(tables)
+        if not tables:
+            raise ValueError("fold_product_sums needs at least one table")
+        own = type(tables[0]).fold_product_sums
+        if own is not FieldVector.fold_product_sums:
+            return own(tables, sums, nodes, weights)
+        return FieldVector._fold_product_sums(tables, sums, nodes, weights)
+
+    @staticmethod
+    def _fold_product_sums(
+        tables: list, sums: list, nodes: int, weights: FieldVector | None
+    ) -> list[tuple]:
+        """`fold_product_sums` as whole-vector operations: each table's
+        pairs split once and its folds at the nodes formed as ``v + (t - 1)
+        (v - u)``, then each product and sum over those."""
+        _check_fold_product_sums(tables, sums, nodes, weights)
+        folds: dict[int, list] = {}
+        for j in sorted({j for products in sums for _, f in products for j in f}):
+            u, v = tables[j].split_even_odd()
+            values = [u, v][:nodes]
+            if nodes > 2:
+                d = v - u
+                for _ in range(nodes - 2):
+                    values.append(values[-1] + d)
+            folds[j] = values
+        result = []
+        for products in sums:
+            evals = []
+            for t in range(nodes):
+                total: Any = None
+                for sign, factors in products:
+                    term = folds[factors[0]][t]
+                    for j in factors[1:]:
+                        term = term * folds[j][t]
+                    if total is None:
+                        total = -term if sign < 0 else term
+                    else:
+                        total = total - term if sign < 0 else total + term
+                if weights is not None:
+                    total = total * weights
+                evals.append(total.sum())
+            result.append(tuple(evals))
+        return result
+
+    @staticmethod
+    def fold_and_product_sums(
+        tables: list, r, sums: list, nodes: int, weights: FieldVector | None = None
+    ) -> tuple:
+        """``(folded, sums)`` with ``folded = [t.fold(r) for t in tables]``
+        and ``sums = FieldVector.fold_product_sums(folded, sums, nodes,
+        weights)``.
+
+        The tables have one length, a multiple of 4, so that the folds have
+        an even length ``2m``, and `weights` has ``m`` elements. An
+        implementation with a kernel reads each table once, writing the
+        folds and summing their pairs in the same pass; the body here makes
+        the calls.
+        """
+        tables = list(tables)
+        if not tables:
+            raise ValueError("fold_and_product_sums needs at least one table")
+        own = type(tables[0]).fold_and_product_sums
+        if own is not FieldVector.fold_and_product_sums:
+            return own(tables, r, sums, nodes, weights)
+        if len(tables[0]) % 4:
+            raise ValueError(f"length {len(tables[0])} is not a multiple of 4")
+        folded = [t.fold(r) for t in tables]
+        return folded, FieldVector._fold_product_sums(folded, sums, nodes, weights)
 
     # --- sampling and digests ---
 

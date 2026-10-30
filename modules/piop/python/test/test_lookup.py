@@ -13,9 +13,10 @@ import random
 from collections import Counter
 
 import pytest
-from vfhe.arith import MLE, FieldVector, MLE_Variable, PseudoMersenneField
+from vfhe.arith import MLE, Field, FieldVector, MLE_Variable, PseudoMersenneField
 from vfhe.piop import (
     IOP,
+    EqOracle,
     OracleKind,
     Protocol,
     Relation_Eval,
@@ -30,7 +31,13 @@ from vfhe.piop.protocols.lookup import (
     product_tree,
     product_tree_vector,
 )
+from vfhe.piop.protocols.sumcheck.prover_view import (
+    _ProverVirtual,
+    _ProverVirtualEq,
+    prover_view,
+)
 from vfhe.piop.relations import Relation_Lookup, Relation_Sum
+from vfhe.piop.virtual import expanded_tables
 
 # beta = 8 (b* = 3) and a 64-entry oracle (ell* = 6): the two sides of the
 # protocol then have different widths, which is what catches an index that
@@ -270,6 +277,118 @@ def test_sumcheck_rounds_carry_four_nodes(field):
     assert {len(r) for r in rounds} == {4}
     # NUM_VARS rounds on mu's side, b* on the table's.
     assert len(rounds) == NUM_VARS + BETA.bit_length() - 1
+
+
+@pytest.mark.parametrize("field_name", ["208", "extension"])
+def test_eq_oracle_is_held_as_its_point(field_name):
+    """A query is the closed form, equal to the table's value at points
+    with field and 0/1 coordinates; the digest is the point's; the table is
+    built only when read."""
+    if field_name == "extension":
+        field = Field(562949948178433, 2, 5)
+    else:
+        field = PseudoMersenneField.generate(208, two_adicity=8)
+    rng = random.Random(3)
+    X = [MLE_Variable(f"x{i}") for i in range(5)]
+    point = [field(rng.randrange(field.prime)) for _ in X]
+    eq = EqOracle(field, point, variables=X)
+    assert eq._table is None and eq.variables == X and eq.public
+    queries: list[dict] = [
+        {v: field(rng.randrange(field.prime)) for v in X} for _ in range(3)
+    ]
+    queries.append({v: rng.randrange(2) for v in X})
+    values = [eq.query(q) for q in queries]
+    assert eq._table is None
+    assert values == [
+        eq.polynomial.evaluate(q, in_place=False).constant() for q in queries
+    ]
+    assert eq.polynomial.table == MLE.eq(field, point, variables=X).table
+    assert eq.digest() == EqOracle(field, point, variables=X).digest()
+    other = [*point[:-1], point[-1] + field.one]
+    assert eq.digest() != EqOracle(field, other, variables=X).digest()
+    with pytest.raises(ValueError, match="coordinates"):
+        EqOracle(field, point[:-1], variables=X)
+
+
+def test_neither_party_builds_the_eq_table(field, monkeypatch):
+    """The verifier evaluates eq~ in closed form and the prover factors it
+    out from its point, so a run never reads an `EqOracle`'s table."""
+
+    def refuse(_eq):
+        raise AssertionError("the eq~ table was built")
+
+    monkeypatch.setattr(EqOracle, "polynomial", property(refuse))
+    assert _iop(field).run(_statement(field, _bounded(seed=12)))
+
+
+def _summand_over_random_tables(lookup, field, num_vars, seed):
+    """The function `g` of one zerocheck over random tables: the zerocheck
+    need not hold, as the messages must agree all the same."""
+    rng = random.Random(seed)
+
+    def table(name, count):
+        variables = [MLE_Variable(f"{name}{i}") for i in range(count)]
+        entries = [field(rng.randrange(field.prime)) for _ in range(1 << count)]
+        return TableOracle(MLE(field=field, variables=variables, evaluations=entries))
+
+    pairs = [(table(f"f{a}", num_vars), table(f"w{a}", num_vars + 1)) for a in "ab"]
+    X = [MLE_Variable(f"x{i}") for i in range(num_vars)]
+    point = [field(rng.randrange(field.prime)) for _ in X]
+    return lookup._summand(X, point, field(rng.randrange(field.prime)), pairs)
+
+
+@pytest.mark.parametrize("num_vars", [1, 2, 3, 4, 5, 7])
+@pytest.mark.parametrize(
+    "field_name", ["156", "208", "260", "extension"], ids=lambda name: name
+)
+def test_zerocheck_round_messages_match_python_every_round(field_name, num_vars):
+    """At every round of a zerocheck, the message of the eq-factored prover
+    (bound by `evaluate`, or by `update_tables`, which brings the next
+    message along) and of the dense prover over field tables (both ways
+    too) equals the pure-Python pair loop's, over 3-, 4- and 5-limb pmf and
+    an extension field; the bound tables equal `evaluate`'s, and so does the
+    final value. The tables go below a lane group of pairs, through whole
+    groups, and past them."""
+    if field_name == "extension":
+        field = Field(562949948178433, 2, 5)
+    else:
+        field = PseudoMersenneField.generate(int(field_name), two_adicity=8)
+    g = _summand_over_random_tables(Lookup(field), field, num_vars, seed=num_vars)
+    tables = expanded_tables(g)
+    python = _ProverVirtual(
+        g.variables,
+        [MLE(variables=t.variables, evaluations=t.table.to_list()) for t in tables],
+        g.terms,
+    )
+    factored, fused = prover_view(g), prover_view(g)
+    assert isinstance(factored, _ProverVirtualEq)
+    dense, dense_fused = (_ProverVirtual(g.variables, tables, g.terms) for _ in "ab")
+    views = [factored, fused, dense, dense_fused]
+    carried: list = [None, None]
+    for var in list(g.variables):
+        message = python.round_evals()
+        assert len(message) == 4
+        for view in views:
+            assert view.round_evals() == message
+        if var is not g.variables[0]:
+            assert carried == [message, message]
+        r = field(random.Random(str(var)).randrange(field.prime))
+        python.evaluate({var: r})
+        factored.evaluate({var: r})
+        dense.evaluate({var: r})
+        fused, carried[0] = fused.update_tables(var, r)
+        dense_fused, carried[1] = dense_fused.update_tables(var, r)
+        if not python.variables:
+            assert carried == [None, None]
+        reference = [t.table for t in python.tables]
+        for view in (factored, fused):  # the eq table is constituent 0
+            assert [t.table.to_list() for t in view.tables] == reference[1:]
+        for view in (dense, dense_fused):
+            assert [t.table.to_list() for t in view.tables] == reference
+    value = python.constant()
+    assert all(
+        view.constant() == value for view in (factored, fused, dense, dense_fused)
+    )
 
 
 # --- which branch rejects which lie -----------------------------------------

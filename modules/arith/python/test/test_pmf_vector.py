@@ -96,6 +96,37 @@ def assert_vector(vector, expected_ints, f):
         assert int(element) == expected % f.prime
 
 
+def _dirty(vector):
+    """`vector` with its padding set to p - 1, which a kernel must not read
+    as values."""
+    filler = vector.field(vector.field.prime - 1)
+    for index in range(len(vector), vector._allocated_n):
+        lib.pmf_vec_set_element(vector._struct, index, filler._buf)
+    return vector
+
+
+def _product_sums(values, sums, nodes, weights, p):
+    """`FieldVector.fold_product_sums` over big ints: `values` are the
+    tables' entries, `weights` the pairs' weights or None."""
+    rows = []
+    for products in sums:
+        row = []
+        for t in range(nodes):
+            total = 0
+            for i in range(len(values[0]) // 2):
+                inner = 0
+                for sign, factors in products:
+                    term = 1
+                    for j in factors:
+                        u, v = values[j][2 * i], values[j][2 * i + 1]
+                        term *= u + t * (v - u)
+                    inner += sign * term
+                total += inner * (1 if weights is None else weights[i])
+            row.append(total % p)
+        rows.append(row)
+    return rows
+
+
 class TestDispatch:
     """The front resolves through the field's spec, as for the extension field."""
 
@@ -711,6 +742,115 @@ class TestNativeMovementAndFold:
             FieldVector(field, 6).fold_and_inner_products(FieldVector(field, 6), 3)
         with pytest.raises(ValueError, match="length mismatch"):
             FieldVector(field, 4).fold_and_inner_products(FieldVector(field, 8), 3)
+
+    @pytest.mark.parametrize("n", [2, 6, 16, 18, 50, 4102])
+    @pytest.mark.parametrize("weighted", [False, True], ids=["unweighted", "weighted"])
+    def test_fold_product_sums_match_big_ints(self, field, n, weighted):
+        """Every node count, against big ints and the front's whole-vector
+        body: pairs below a group, in whole groups and past them, and past
+        the 255 groups the lazy sums hold between reductions, with the
+        padding dirty. A table repeated in one product and shared between sums, products of one to
+        three factors, both signs, a negated first product."""
+        p = field.prime
+        values = [random_values(field, n, 100 + 7 * n + j) for j in range(5)]
+        weights = random_values(field, n // 2, 99 + n)
+        tables = [_dirty(FieldVector(field, v)) for v in values]
+        w = _dirty(FieldVector(field, weights)) if weighted else None
+        sums = [
+            [(1, (0,)), (-1, (1, 2))],
+            [(-1, (3, 4, 1)), (1, (2, 2))],
+            [(1, (4,))],
+        ]
+        for nodes in (1, 2, 3, 4):
+            got = FieldVector.fold_product_sums(tables, sums, nodes, w)
+            assert got == FieldVector._fold_product_sums(tables, sums, nodes, w)
+            assert [[int(e) for e in row] for row in got] == _product_sums(
+                values, sums, nodes, weights if weighted else None, p
+            )
+            for row in got:
+                for e in row:
+                    assert_canonical(e, field)
+
+    @pytest.mark.parametrize("n", [4, 8, 12, 32, 36, 100, 4104])
+    def test_fold_and_product_sums_match_the_separate_calls(self, field, n):
+        """The folds, their padding, and the sums over the folds, against
+        the calls they stand for and big ints, from tables and weights whose
+        padding is dirty."""
+        p = field.prime
+        values = [random_values(field, n, 200 + 5 * n + j) for j in range(4)]
+        weights = random_values(field, n // 4, 199 + n)
+        r = rng.randrange(p)
+        tables = [_dirty(FieldVector(field, v)) for v in values]
+        sums = [[(1, (0,)), (-1, (1, 2))], [(1, (3,)), (-1, (3, 0, 1))]]
+        for w in (None, _dirty(FieldVector(field, weights))):
+            folded, got = FieldVector.fold_and_product_sums(
+                tables, field(r), sums, 3, w
+            )
+            assert folded == [t.fold(r) for t in tables]
+            assert got == FieldVector.fold_product_sums(folded, sums, 3, w)
+            bound = [
+                [(v[2 * i] + r * (v[2 * i + 1] - v[2 * i])) % p for i in range(n // 2)]
+                for v in values
+            ]
+            assert [[int(e) for e in row] for row in got] == _product_sums(
+                bound, sums, 3, None if w is None else weights, p
+            )
+            for table in folded:
+                for index in range(len(table), table._allocated_n):
+                    value = sum(
+                        int(table._planes[k][index]) << (LIMB_BITS * k)
+                        for k in range(field.limbs)
+                    )
+                    assert value < p
+
+    @pytest.mark.parametrize("weighted", [False, True], ids=["unweighted", "weighted"])
+    def test_fold_product_sums_at_the_lazy_sum_bound(self, field, weighted):
+        """Every summand p - 1, over 4200 groups: entries p - 1 and weights 1,
+        or entries p - 1 under a negated product (summand 1) and weights
+        p - 1; through both kernels."""
+        p = field.prime
+        n = 2 * 8 * 4200
+        table = FieldVector(field, n) - field.one
+        if weighted:
+            w = FieldVector(field, n // 2) - field.one
+            sums = [[(-1, (0,))]]
+        else:
+            w, sums = None, [[(1, (0,))]]
+        expected = [(n // 2) * (p - 1) % p] * 4
+        got = FieldVector.fold_product_sums([table], sums, 4, w)
+        assert [int(e) for e in got[0]] == expected
+        if weighted:
+            w = FieldVector(field, n // 4) - field.one
+        _, got = FieldVector.fold_and_product_sums([table], 5, sums, 4, w)
+        assert [int(e) for e in got[0]] == [(n // 4) * (p - 1) % p] * 4
+
+    def test_fold_product_sums_past_the_kernel_bounds(self, field):
+        """A shape past the kernel's bounds takes the whole-vector body."""
+        values = [random_values(field, 8, 300 + j) for j in range(9)]
+        tables = [FieldVector(field, v) for v in values]
+        sums = [[(1, tuple(range(9)))]]
+        got = FieldVector.fold_product_sums(tables, sums, 2)
+        assert [[int(e) for e in row] for row in got] == _product_sums(
+            values, sums, 2, None, field.prime
+        )
+        assert len(FieldVector.fold_product_sums(tables, sums * 5, 5)) == 5
+
+    def test_fold_product_sums_reject_mismatches(self, field):
+        a, b = FieldVector(field, 6), FieldVector(field, 8)
+        with pytest.raises(ValueError, match="odd"):
+            FieldVector.fold_product_sums([FieldVector(field, 5)], [[(1, (0,))]], 2)
+        with pytest.raises(ValueError, match="length mismatch"):
+            FieldVector.fold_product_sums([a, b], [[(1, (0, 1))]], 2)
+        with pytest.raises(ValueError, match="weights"):
+            FieldVector.fold_product_sums([a], [[(1, (0,))]], 2, a)
+        with pytest.raises(ValueError, match="index"):
+            FieldVector.fold_product_sums([a], [[(1, (1,))]], 2)
+        with pytest.raises(ValueError, match="sign"):
+            FieldVector.fold_product_sums([a], [[(2, (0,))]], 2)
+        with pytest.raises(ValueError, match="multiple of 4"):
+            FieldVector.fold_and_product_sums([a], 3, [[(1, (0,))]], 2)
+        with pytest.raises(ValueError, match="weights"):
+            FieldVector.fold_and_product_sums([b], 3, [[(1, (0,))]], 2, b)
 
     def test_fold_accepts_an_int_and_needs_an_even_length(self, field):
         vector = FieldVector(field, random_values(field, 8, 80))
