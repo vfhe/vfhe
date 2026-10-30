@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 from vfhe.arith import FieldVector, PseudoMersenneField, PseudoMersenneVector
+from vfhe.crypto import hash_bytes
 from vfhe.util.bindings import lib
 
 rng = random.Random(0xB0A710)  # noqa: S311 - test data, not a key
@@ -38,7 +39,15 @@ LENGTHS = [0, 1, 5, 8, 13, 32]
 
 
 @pytest.fixture(
-    params=[260, 312, 256], ids=["5-limb-aligned", "6-limb-aligned", "5-limb-shifted"]
+    params=[156, 208, 193, 260, 312, 256],
+    ids=[
+        "3-limb-aligned",
+        "4-limb-aligned",
+        "4-limb-shifted",
+        "5-limb-aligned",
+        "6-limb-aligned",
+        "5-limb-shifted",
+    ],
 )
 def field(request):
     return PseudoMersenneField.generate(request.param, two_adicity=8)
@@ -476,6 +485,24 @@ class TestSamplingAndHashing:
         assert len(sliding) == 6
         assert sliding[2] == FieldVector(field, values[2:5]).hash()
 
+    @pytest.mark.parametrize("group", [1, 2, 3, 5])
+    def test_digests_are_blake3_of_the_big_endian_encodings(self, field, group):
+        """Against BLAKE3 of Python's own encodings, not of another digest.
+        1100 elements cross a 32 KiB staging buffer at every width, and
+        windows of 1 to 5 encodings end in a partial 64-byte block at every
+        width timed here."""
+        width = (field.bits + 7) // 8
+        values = random_values(field, 1100, 31)
+        values[:3] = [0, field.prime - 1, 1]
+        encoded = [v.to_bytes(width, "big") for v in values]
+        vector = FieldVector(field, values)
+        assert vector.hash() == hash_bytes(b"".join(encoded))
+        windows = digest_list(vector.hash_elements(group=group, stride=group))
+        assert windows == [
+            hash_bytes(b"".join(encoded[k : k + group]))
+            for k in range(0, len(values) - group + 1, group)
+        ]
+
     def test_hash_elements_drops_a_partial_window(self, field):
         vector = FieldVector(field, random_values(field, 7, 28))
         assert len(vector.hash_elements(group=2, stride=2)) == 3 * 32
@@ -651,40 +678,86 @@ class TestBlocksViewsAndIndexedSampling:
         with pytest.raises(ValueError):
             vector.view(1, 8)
 
-    def test_lift_twisted_takes_the_generic_body(self, field):
-        """No kernel here, so the front tiles the table and interleaves two
-        fused products; the result is the definition either way."""
-        n, period = 64, 16
+    @pytest.mark.parametrize(
+        ("n", "period"),
+        [
+            (1, 1),
+            (8, 1),
+            (8, 8),
+            (9, 3),
+            (40, 8),
+            (64, 16),
+            (64, 64),
+            (333, 333),
+            (96, 12),
+        ],
+    )
+    def test_lift_twisted_matches_the_pairwise_formula(self, field, n, period):
+        """The kernel against the definition: tables that are a whole number
+        of groups, the operands' own length, and ragged ones read lane by
+        lane."""
         a = FieldVector(field, random_values(field, n, 63))
         b = FieldVector(field, random_values(field, n, 64))
         twist = FieldVector(field, random_values(field, period, 65))
         lifted = FieldVector.lift_twisted(a, b, twist)
         p = field.prime
+        want = []
         for i in range(n):
-            t = int(twist[i % period])
-            assert int(lifted[2 * i]) == (int(a[i]) + int(b[i]) * t) % p
-            assert int(lifted[2 * i + 1]) == (int(a[i]) - int(b[i]) * t) % p
+            product = int(b[i]) * int(twist[i % period])
+            want += [(int(a[i]) + product) % p, (int(a[i]) - product) % p]
+        assert [int(e) for e in lifted] == want
+        for e in lifted:
+            assert_canonical(e, field)
+        out = FieldVector(field, 2 * n)
+        assert FieldVector.lift_twisted(a, b, twist, out=out) is out and out == lifted
 
-    def test_fold_twisted_takes_the_generic_body(self, field):
-        """No kernel here either: the fold is the formula, and with the table
-        `1 / (2 t)` it inverts a lift by `t`."""
-        n = 64
+    def test_lift_twisted_checks_its_operands(self, field):
+        a, b = FieldVector(field, 8), FieldVector(field, 8)
+        with pytest.raises(ValueError, match="does not divide"):
+            FieldVector.lift_twisted(a, b, FieldVector(field, 3))
+        with pytest.raises(ValueError, match="length mismatch"):
+            FieldVector.lift_twisted(a, FieldVector(field, 4), FieldVector(field, 8))
+        with pytest.raises(ValueError, match="holds 8 elements, not 16"):
+            FieldVector.lift_twisted(
+                a, b, FieldVector(field, 8), out=FieldVector(field, 8)
+            )
+
+    @pytest.mark.parametrize("n", [1, 4, 8, 9, 64, 333])
+    def test_fold_twisted_matches_the_pairwise_formula(self, field, n):
+        """The kernel against the definition, and with the table `1 / (2 t)`
+        it inverts a lift by `t`."""
         word = FieldVector(field, random_values(field, 2 * n, 66))
         table = FieldVector(field, random_values(field, n, 67))
         r = field(random_values(field, 1, 68)[0])
         folded = word.fold_twisted(table, r)
         p = field.prime
         half = (p + 1) // 2
-        for i in range(n):
-            lo, hi, s = int(word[2 * i]), int(word[2 * i + 1]), int(table[i])
-            assert int(folded[i]) == ((lo + hi) * half + (lo - hi) * s * int(r)) % p
+        assert [int(e) for e in folded] == [
+            (
+                (int(word[2 * i]) + int(word[2 * i + 1])) * half
+                + (int(word[2 * i]) - int(word[2 * i + 1])) * int(table[i]) * int(r)
+            )
+            % p
+            for i in range(n)
+        ]
         a = FieldVector(field, random_values(field, n, 69))
         b = FieldVector(field, random_values(field, n, 70))
         lifted = FieldVector.lift_twisted(a, b, table)
         assert lifted.fold_twisted(table.scale(2).inverse(), r) == a + b * r
+        out = FieldVector(field, n)
+        assert word.fold_twisted(table, r, out=out) is out and out == folded
 
-    def test_fold_twisted_blocks_takes_the_generic_body(self, field):
-        """Each block folded with its own element of `r`, by the generic body."""
+    def test_fold_twisted_checks_its_operands(self, field):
+        word = FieldVector(field, 16)
+        with pytest.raises(ValueError, match="not 8"):
+            word.fold_twisted(FieldVector(field, 4), 1)
+        table = FieldVector(field, 8)
+        with pytest.raises(ValueError, match="cannot write into an operand"):
+            word.fold_twisted(table, 1, out=table)
+
+    def test_fold_twisted_blocks_is_fold_twisted_per_block(self, field):
+        """Each block folded with its own element of `r`: the front's body,
+        a `fold_twisted` per block."""
         m, count = 5, 3
         word = FieldVector(field, random_values(field, 2 * m * count, 71))
         table = FieldVector(field, random_values(field, m, 72))
@@ -780,3 +853,81 @@ class TestDestinations:
         not_a_vector: Any = [0] * 8  # the check is a runtime one
         with pytest.raises(TypeError, match="out must be"):
             a.add(b, out=not_a_vector)
+
+
+#: Primes at the edges of the two reductions the vector kernels choose
+#: between: an aligned prime (n = 52 L) with the largest c below 2^44 takes the
+#: shorter one at the limit of its bounds; aligned and shifted primes with the
+#: largest c in budget take the general one at the limit of its.
+_REDUCTION_EDGES = {
+    "156-largest-c-below-2^44": (156, 17592185995263),
+    "208-largest-c-below-2^44": (208, 17592185978879),
+    "260-largest-c-below-2^44": (260, 17592185978879),
+    "208-largest-c": (208, 4503599626891263),
+    "193-largest-c": (193, 137438679039),
+}
+
+
+@pytest.fixture(params=list(_REDUCTION_EDGES), ids=list(_REDUCTION_EDGES))
+def edge_field(request):
+    bits, c = _REDUCTION_EDGES[request.param]
+    return PseudoMersenneField((1 << bits) - c)
+
+
+class TestReductionEdges:
+    """Every arithmetic kernel at the edges of its reduction's bounds, on
+    values that push them: 0, 1, p - 1, p - 2 and all-ones low limbs among
+    uniform ones."""
+
+    @staticmethod
+    def edge_values(f, n, seed):
+        p = f.prime
+        low = (1 << (LIMB_BITS * (f.limbs - 1))) - 1
+        edges = [0, 1, p - 1, p - 2, low, p - low, (p + 1) // 2]
+        local = random.Random(seed)  # noqa: S311 - test data, not a key
+        return [
+            local.choice(edges) if local.random() < 0.4 else local.randrange(p)
+            for _ in range(n)
+        ]
+
+    def test_elementwise(self, edge_field):
+        f, p = edge_field, edge_field.prime
+        xs, ys = self.edge_values(f, 333, 1), self.edge_values(f, 333, 2)
+        a, b = FieldVector(f, xs), FieldVector(f, ys)
+        s = self.edge_values(f, 1, 3)[0]
+        assert [int(e) for e in a + b] == [
+            (x + y) % p for x, y in zip(xs, ys, strict=True)
+        ]
+        assert [int(e) for e in a - b] == [
+            (x - y) % p for x, y in zip(xs, ys, strict=True)
+        ]
+        assert [int(e) for e in a * b] == [
+            x * y % p for x, y in zip(xs, ys, strict=True)
+        ]
+        assert [int(e) for e in a.scale(s)] == [x * s % p for x in xs]
+        assert [int(e) for e in -a] == [(-x) % p for x in xs]
+        for e in a * b:
+            assert_canonical(e, f)
+
+    def test_folds_and_lift(self, edge_field):
+        f, p = edge_field, edge_field.prime
+        xs = self.edge_values(f, 334, 4)
+        ws = self.edge_values(f, 167, 5)
+        r = self.edge_values(f, 1, 6)[0]
+        word, table = FieldVector(f, xs), FieldVector(f, ws)
+        assert [int(e) for e in word.fold(r)] == [
+            (xs[2 * i] + r * (xs[2 * i + 1] - xs[2 * i])) % p for i in range(167)
+        ]
+        half = (p + 1) // 2
+        assert [int(e) for e in word.fold_twisted(table, r)] == [
+            (
+                (xs[2 * i] + xs[2 * i + 1]) * half
+                + (xs[2 * i] - xs[2 * i + 1]) * ws[i] * r
+            )
+            % p
+            for i in range(167)
+        ]
+        a, b = FieldVector(f, xs[:167]), FieldVector(f, ws)
+        lifted = [int(e) for e in FieldVector.lift_twisted(a, b, table)]
+        assert lifted[0::2] == [(xs[i] + ws[i] * ws[i]) % p for i in range(167)]
+        assert lifted[1::2] == [(xs[i] - ws[i] * ws[i]) % p for i in range(167)]

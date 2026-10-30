@@ -28,7 +28,15 @@ LENGTHS = [1, 2, 4, 8, 16, 32, 128]
 
 
 @pytest.fixture(
-    params=[260, 312, 256], ids=["5-limb-aligned", "6-limb-aligned", "5-limb-shifted"]
+    params=[156, 208, 193, 260, 312, 256],
+    ids=[
+        "3-limb-aligned",
+        "4-limb-aligned",
+        "4-limb-shifted",
+        "5-limb-aligned",
+        "6-limb-aligned",
+        "5-limb-shifted",
+    ],
 )
 def field(request):
     return PseudoMersenneField.generate(request.param, two_adicity=8)
@@ -177,6 +185,49 @@ class TestTransform:
         assert plan.inverse(plan.forward(vector)) == vector
         assert plan.forward(plan.inverse(vector)) == vector
 
+    @pytest.mark.parametrize("n", LENGTHS)
+    def test_a_batch_is_its_blocks_transformed_one_by_one(self, field, n):
+        """Blocks end to end, each transformed on its own; below one group
+        a block shares its group with the next one."""
+        plan = field.ntt_plan(n)
+        blocks = 4
+        values = random_values(field, n * blocks, 300 + n)
+        batch = FieldVector(field, values)
+        one_by_one = [
+            plan.forward(FieldVector(field, values[b * n : (b + 1) * n]))
+            for b in range(blocks)
+        ]
+        out = plan.forward(batch, blocks=blocks)
+        assert out == FieldVector.concat(one_by_one)
+        assert plan.inverse(out, in_place=True, blocks=blocks) is out
+        assert out == batch
+
+    @pytest.mark.parametrize("n", [1, 2, 8, 16, 64, 128])
+    def test_encode_blocks_transforms_each_padded_message(self, field, n):
+        """Against the big-int transform of each zero-padded message: every
+        message length dividing n, batches that are and are not a multiple of
+        8, and messages under 8 coefficients with n at least 64."""
+        plan = field.ntt_plan(n)
+        psi, p = int(plan.root_of_unity), field.prime
+        for k in (1 << e for e in range(n.bit_length())):
+            for blocks in (1, 3, 8, 16):
+                values = random_values(field, k * blocks, 1000 * k + blocks)
+                encoded = plan.encode_blocks(FieldVector(field, values), blocks)
+                got = [int(x) for x in encoded]
+                for b in range(blocks):
+                    column = [values[i * blocks + b] for i in range(k)]
+                    want = cooley_tukey(column + [0] * (n - k), psi, p)
+                    assert got[b * n : (b + 1) * n] == want, (k, blocks, b)
+
+    def test_encode_blocks_checks_the_batch(self, field):
+        plan = field.ntt_plan(16)
+        with pytest.raises(ValueError, match="power of two dividing 16"):
+            plan.encode_blocks(FieldVector(field, 12), 2)
+        with pytest.raises(ValueError, match="power of two dividing 16"):
+            plan.encode_blocks(FieldVector(field, 64), 2)
+        with pytest.raises(ValueError, match="blocks must be"):
+            plan.encode_blocks(FieldVector(field, 16), 0)
+
     def test_a_long_transform(self, field):
         """Past the in-register stages, against the big-int Cooley-Tukey."""
         n = 1 << (field.two_adicity - 1)
@@ -281,10 +332,31 @@ class TestOperands:
         assert plan.inverse(vector, in_place=True) is vector
         assert vector.to_list() == plan.inverse(expected).to_list()
 
+    @pytest.mark.parametrize("n", [4, 8, 16])
+    @pytest.mark.parametrize("blocks", [1, 2, 8, 16])
+    def test_pack_moves_an_interleaved_batch_into_blocks(self, field, n, blocks):
+        plan = field.ntt_plan(n)
+        values = random_values(field, n * blocks, 14)
+        interleaved = FieldVector(field, values)
+        packed = plan.pack(interleaved, blocks, layout="interleaved")
+        assert [int(x) for x in packed] == [
+            values[i * blocks + b] for b in range(blocks) for i in range(n)
+        ]
+        assert plan.unpack(packed, blocks, layout="interleaved") == interleaved
+        assert plan.pack(packed, blocks) is packed
+        copied = plan.unpack(packed, blocks, out=FieldVector(field, n * blocks))
+        assert copied is not packed and copied == packed
+        with pytest.raises(ValueError, match="cannot write into its input"):
+            plan.pack(interleaved, blocks, out=interleaved, layout="interleaved")
+
     def test_wrong_length_field_or_type_is_rejected(self, field):
         plan = field.ntt_plan(8)
         with pytest.raises(ValueError, match="length mismatch"):
             plan.forward(FieldVector(field, 16))
+        with pytest.raises(ValueError, match="length mismatch"):
+            plan.forward(FieldVector(field, 16), blocks=3)
+        with pytest.raises(ValueError, match="blocks must be"):
+            plan.forward(FieldVector(field, 8), blocks=0)
         other = PseudoMersenneField.generate(312 if field.bits != 312 else 260)
         with pytest.raises(ValueError, match="different field"):
             plan.forward(FieldVector(other, 8))

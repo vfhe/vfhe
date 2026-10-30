@@ -41,34 +41,44 @@ uint64_t pmf_vec_padded_length(uint64_t n)
 
 // The three entry-point shapes below differ only in where the right-hand operand
 // comes from -- the other vector, or one element broadcast -- so each is a walk
-// over the groups around one of the cores in pmf_vec_group.h.
+// over the groups around one of the cores in pmf_vec_group.h. Every kernel in
+// this file is a body taking the params, behind an entry point that dispatches
+// it with PMF_WITH_LIMBS.
 
 #define PMF_VEC_BINARY(name, core)                                                                 \
-    void name(PMFVector out, const PMFVector a, const PMFVector b)                                 \
+    PMF_INLINE void name##_body(PMFVector out, const PMFVector a, const PMFVector b, PMFParams P)  \
     {                                                                                              \
-        const uint64_t L = a->params->limbs;                                                       \
+        const uint64_t L = P->limbs;                                                               \
         pv_t av[PMF_MAX_LIMBS], bv[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];                           \
         for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)                               \
         {                                                                                          \
             pmf_vec_load_group(av, a, i, L);                                                       \
             pmf_vec_load_group(bv, b, i, L);                                                       \
-            core(T, av, bv, a->params);                                                            \
+            core(T, av, bv, P);                                                                    \
             pmf_vec_store_group(out, i, T, L);                                                     \
         }                                                                                          \
+    }                                                                                              \
+    void name(PMFVector out, const PMFVector a, const PMFVector b)                                 \
+    {                                                                                              \
+        PMF_WITH_LIMBS(a->params, name##_body(out, a, b, &P_));                                    \
     }
 
 #define PMF_VEC_BROADCAST(name, core)                                                              \
-    void name(PMFVector out, const PMFVector a, const uint64_t *s)                                 \
+    PMF_INLINE void name##_body(PMFVector out, const PMFVector a, const uint64_t *s, PMFParams P)  \
     {                                                                                              \
-        const uint64_t L = a->params->limbs;                                                       \
+        const uint64_t L = P->limbs;                                                               \
         pv_t av[PMF_MAX_LIMBS], sv[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];                           \
         pmf_vec_load_scalar(sv, s, L);                                                             \
         for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)                               \
         {                                                                                          \
             pmf_vec_load_group(av, a, i, L);                                                       \
-            core(T, av, sv, a->params);                                                            \
+            core(T, av, sv, P);                                                                    \
             pmf_vec_store_group(out, i, T, L);                                                     \
         }                                                                                          \
+    }                                                                                              \
+    void name(PMFVector out, const PMFVector a, const uint64_t *s)                                 \
+    {                                                                                              \
+        PMF_WITH_LIMBS(a->params, name##_body(out, a, s, &P_));                                    \
     }
 
 PMF_VEC_BINARY(pmf_vec_add, pmf_vec_add_group)
@@ -79,23 +89,29 @@ PMF_VEC_BROADCAST(pmf_vec_add_scalar, pmf_vec_add_group)
 PMF_VEC_BROADCAST(pmf_vec_sub_scalar, pmf_vec_sub_group)
 PMF_VEC_BROADCAST(pmf_vec_scale, pmf_vec_mul_group)
 
-void pmf_vec_scalar_sub(PMFVector out, const uint64_t *s, const PMFVector a)
+PMF_INLINE void pmf_vec_scalar_sub_body(PMFVector out, const uint64_t *s, const PMFVector a,
+                                        PMFParams P)
 {
-    const uint64_t L = a->params->limbs;
+    const uint64_t L = P->limbs;
     pv_t av[PMF_MAX_LIMBS], sv[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];
 
     pmf_vec_load_scalar(sv, s, L);
     for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)
     {
         pmf_vec_load_group(av, a, i, L);
-        pmf_vec_sub_group(T, sv, av, a->params);
+        pmf_vec_sub_group(T, sv, av, P);
         pmf_vec_store_group(out, i, T, L);
     }
 }
 
-void pmf_vec_neg(PMFVector out, const PMFVector a)
+void pmf_vec_scalar_sub(PMFVector out, const uint64_t *s, const PMFVector a)
 {
-    const uint64_t L = a->params->limbs;
+    PMF_WITH_LIMBS(a->params, pmf_vec_scalar_sub_body(out, s, a, &P_));
+}
+
+PMF_INLINE void pmf_vec_neg_body(PMFVector out, const PMFVector a, PMFParams P)
+{
+    const uint64_t L = P->limbs;
     const pv_t mask = pv_mask52();
     pv_t av[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS];
 
@@ -113,7 +129,7 @@ void pmf_vec_neg(PMFVector out, const PMFVector a)
         pv_t borrow = pv_zero();
         for (uint64_t k = 0; k < L; k++)
         {
-            const pv_t difference = pv_sub(pv_sub(pv_bcast(a->params->p[k]), av[k]), borrow);
+            const pv_t difference = pv_sub(pv_sub(pv_bcast(P->p[k]), av[k]), borrow);
             borrow = pv_borrow(difference);
             T[k] = pv_and(pv_and(difference, mask), nonzero);
         }
@@ -121,6 +137,11 @@ void pmf_vec_neg(PMFVector out, const PMFVector a)
 
         pmf_vec_store_group(out, i, T, L);
     }
+}
+
+void pmf_vec_neg(PMFVector out, const PMFVector a)
+{
+    PMF_WITH_LIMBS(a->params, pmf_vec_neg_body(out, a, &P_));
 }
 
 void pmf_vec_sum(uint64_t *out, const PMFVector a)
@@ -184,10 +205,11 @@ void pmf_vec_sum(uint64_t *out, const PMFVector a)
 
 // The even- and odd-indexed elements among the 2 * PMF_VEC_GROUP input elements
 // from 2 * i0 on, as one group each. Where the input's allocation ends both
-// read as zero, which keeps whatever is computed from them canonical. The one
-// place in this file lanes are rearranged: a pair sits in adjacent lanes and
-// its two halves have to end up in the same lane of two registers.
-static inline void pmf_vec_load_pairs(pv_t *E, pv_t *O, const PMFVector a, uint64_t i0, uint64_t L)
+// read as zero, which keeps whatever is computed from them canonical. One of
+// the two places in this file lanes are rearranged (the other is
+// pmf_vec_store_pairs): a pair sits in adjacent lanes and its two halves have
+// to end up in the same lane of two registers.
+PMF_INLINE void pmf_vec_load_pairs(pv_t *E, pv_t *O, const PMFVector a, uint64_t i0, uint64_t L)
 {
     const uint64_t first = 2 * i0;
 #if VFHE_HAVE_AVX512IFMA
@@ -228,9 +250,9 @@ static inline void pmf_vec_load_pairs(pv_t *E, pv_t *O, const PMFVector a, uint6
 #endif
 }
 
-void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r)
+PMF_INLINE void pmf_vec_fold_body(PMFVector out, const PMFVector a, const uint64_t *r, PMFParams P)
 {
-    const uint64_t L = a->params->limbs;
+    const uint64_t L = P->limbs;
     pv_t E[PMF_MAX_LIMBS], O[PMF_MAX_LIMBS], R[PMF_MAX_LIMBS];
     pv_t D[PMF_MAX_LIMBS + 1], T[PMF_MAX_LIMBS + 1];
 
@@ -238,11 +260,151 @@ void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r)
     for (uint64_t i = 0; i < out->allocated_n; i += PMF_VEC_GROUP)
     {
         pmf_vec_load_pairs(E, O, a, i, L);
-        pmf_vec_sub_group(D, O, E, a->params);
-        pmf_vec_mul_group(T, D, R, a->params);
-        pmf_vec_add_group(D, E, T, a->params);
+        pmf_vec_sub_group(D, O, E, P);
+        pmf_vec_mul_group(T, D, R, P);
+        pmf_vec_add_group(D, E, T, P);
         pmf_vec_store_group(out, i, D, L);
     }
+}
+
+void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r)
+{
+    PMF_WITH_LIMBS(a->params, pmf_vec_fold_body(out, a, r, &P_));
+}
+
+// One element, 1/2 = (p + 1) / 2: p is odd. PMF_LANES words.
+static void pmf_vec_half(uint64_t *half, PMFParams params)
+{
+    const uint64_t L = params->limbs;
+    uint64_t sum[PMF_MAX_LIMBS + 1] = {0}, carry = 1;
+    for (uint64_t k = 0; k < L; k++)
+    {
+        const uint64_t s = params->p[k] + carry;
+        sum[k] = s & PMF_LIMB_MASK;
+        carry = s >> PMF_LIMB_BITS;
+    }
+    sum[L] = carry;
+    memset(half, 0, PMF_LANES * sizeof(*half));
+    for (uint64_t k = 0; k < L; k++)
+        half[k] = (sum[k] >> 1) | ((sum[k + 1] & 1) << (PMF_LIMB_BITS - 1));
+}
+
+// out = v + (u - v) (untwist r + 1/2) over each pair (u, v): the documented
+// (u + v)/2 + (u - v) untwist r with two products a pair.
+PMF_INLINE void pmf_vec_fold_twisted_body(PMFVector out, const PMFVector word,
+                                          const PMFVector untwist, const uint64_t *r,
+                                          const uint64_t *half, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS], W[PMF_MAX_LIMBS], R[PMF_MAX_LIMBS], H[PMF_MAX_LIMBS];
+    pv_t C[PMF_MAX_LIMBS + 1], D[PMF_MAX_LIMBS + 1], T[PMF_MAX_LIMBS + 1];
+
+    pmf_vec_load_scalar(R, r, L);
+    pmf_vec_load_scalar(H, half, L);
+    for (uint64_t i = 0; i < out->allocated_n; i += PMF_VEC_GROUP)
+    {
+        pmf_vec_load_pairs(U, V, word, i, L);
+        pmf_vec_load_group(W, untwist, i, L);
+        pmf_vec_mul_group(C, W, R, P);
+        pmf_vec_add_group(C, C, H, P);
+        pmf_vec_sub_group(D, U, V, P);
+        pmf_vec_mul_group(T, D, C, P);
+        pmf_vec_add_group(D, V, T, P);
+        pmf_vec_store_group(out, i, D, L);
+    }
+}
+
+void pmf_vec_fold_twisted(PMFVector out, const PMFVector word, const PMFVector untwist,
+                          const uint64_t *r)
+{
+    uint64_t half[PMF_LANES];
+    assert(word->n == 2 * out->n && untwist->n == out->n);
+    pmf_vec_half(half, word->params);
+    PMF_WITH_LIMBS(word->params, pmf_vec_fold_twisted_body(out, word, untwist, r, half, &P_));
+}
+
+// The table entries for the group at i, read cyclically from a table of
+// t->n: a plain load where the group lies inside one period at a group
+// boundary (a period that is a whole number of groups, or the operands' whole
+// length), lane by lane otherwise. Lanes past the operands read whatever the
+// period gives: what they produce lands in the output's padding, which only
+// has to stay canonical.
+PMF_INLINE void pmf_vec_load_cyclic(pv_t *W, const PMFVector t, uint64_t i, uint64_t n, uint64_t L)
+{
+    const uint64_t period = t->n;
+    if (period == n)
+    {
+        pmf_vec_load_group(W, t, i, L);
+        return;
+    }
+    if (period % PMF_VEC_GROUP == 0)
+    {
+        pmf_vec_load_group(W, t, i % period, L);
+        return;
+    }
+#if VFHE_HAVE_AVX512IFMA
+    long long index[PMF_VEC_GROUP];
+    for (uint64_t l = 0; l < PMF_VEC_GROUP; l++)
+        index[l] = (long long)((i + l) % period);
+    const __m512i at = _mm512_loadu_si512((const void *)index);
+    for (uint64_t k = 0; k < L; k++)
+        W[k] = _mm512_i64gather_epi64(at, (const void *)t->limbs[k], 8);
+#endif
+}
+
+// E and O as the pairs (E[l], O[l]) of the 2 * PMF_VEC_GROUP output elements
+// from 2i. The second place in this file lanes are rearranged: lane l of the
+// two registers goes to adjacent positions. Pairs past the output's
+// allocation are not stored: the input's padding runs to a whole group, and
+// twice that can exceed the output's.
+PMF_INLINE void pmf_vec_store_pairs(PMFVector out, uint64_t i, const pv_t *E, const pv_t *O,
+                                    uint64_t L)
+{
+#if VFHE_HAVE_AVX512IFMA
+    const __m512i first = _mm512_setr_epi64(0, 8, 1, 9, 2, 10, 3, 11);
+    const __m512i second = _mm512_setr_epi64(4, 12, 5, 13, 6, 14, 7, 15);
+    const int both = 2 * i + 2 * PMF_VEC_GROUP <= out->allocated_n;
+    for (uint64_t k = 0; k < L; k++)
+    {
+        pv_store(out->limbs[k] + 2 * i, _mm512_permutex2var_epi64(E[k], first, O[k]));
+        if (both)
+            pv_store(out->limbs[k] + 2 * i + PMF_VEC_GROUP,
+                     _mm512_permutex2var_epi64(E[k], second, O[k]));
+    }
+#else
+    if (2 * i + 1 >= out->allocated_n)
+        return;
+    for (uint64_t k = 0; k < L; k++)
+    {
+        out->limbs[k][2 * i] = E[k];
+        out->limbs[k][2 * i + 1] = O[k];
+    }
+#endif
+}
+
+PMF_INLINE void pmf_vec_lift_twisted_body(PMFVector out, const PMFVector a, const PMFVector b,
+                                          const PMFVector t, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t A[PMF_MAX_LIMBS], B[PMF_MAX_LIMBS], W[PMF_MAX_LIMBS];
+    pv_t M[PMF_MAX_LIMBS + 1], E[PMF_MAX_LIMBS + 1], O[PMF_MAX_LIMBS + 1];
+
+    for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)
+    {
+        pmf_vec_load_group(A, a, i, L);
+        pmf_vec_load_group(B, b, i, L);
+        pmf_vec_load_cyclic(W, t, i, a->n, L);
+        pmf_vec_mul_group(M, B, W, P);
+        pmf_vec_add_group(E, A, M, P);
+        pmf_vec_sub_group(O, A, M, P);
+        pmf_vec_store_pairs(out, i, E, O, L);
+    }
+}
+
+void pmf_vec_lift_twisted(PMFVector out, const PMFVector a, const PMFVector b, const PMFVector t)
+{
+    assert(b->n == a->n && out->n == 2 * a->n && t->n > 0 && a->n % t->n == 0);
+    PMF_WITH_LIMBS(a->params, pmf_vec_lift_twisted_body(out, a, b, t, &P_));
 }
 
 // --- movement -------------------------------------------------------------
@@ -352,9 +514,9 @@ int pmf_vec_is_equal(const PMFVector a, const PMFVector b)
 
 // --- sampling and hashing -------------------------------------------------
 //
-// Both go through the canonical encoding of one element at a time. They are
-// BLAKE3-bound rather than arithmetic-bound, so there is nothing for the limb
-// planes to do here beyond handing over each element.
+// Both go through the canonical encoding of one element at a time. Hashing
+// stages the encodings and hands BLAKE3 whole buffers or whole batches of
+// windows, since a 20-40 byte update per element costs more than the hashing.
 
 void pmf_vec_sample_random(PMFVector out, const uint8_t *seed, uint64_t seed_len)
 {
@@ -373,20 +535,56 @@ void pmf_vec_sample_random(PMFVector out, const uint8_t *seed, uint64_t seed_len
     }
 }
 
+// The canonical encoding of element `index`, the bytes pmf_to_bytes writes:
+// the value's nbytes bytes, most significant first. The limbs are shifted into
+// 64-bit words, least significant first, which are then written out from the
+// top byte down.
+static void pmf_vec_encode(uint8_t *out, const PMFVector a, uint64_t index)
+{
+    const uint64_t L = a->params->limbs, nbytes = a->params->nbytes;
+    uint64_t words[PMF_MAX_LIMBS] = {0};
+    unsigned __int128 acc = 0;
+    unsigned bits = 0, w = 0;
+
+    for (uint64_t k = 0; k < L; k++)
+    {
+        acc |= (unsigned __int128)a->limbs[k][index] << bits;
+        bits += PMF_LIMB_BITS;
+        if (bits >= 64)
+        {
+            words[w++] = (uint64_t)acc;
+            acc >>= 64;
+            bits -= 64;
+        }
+    }
+    if (bits)
+        words[w] = (uint64_t)acc;
+    for (uint64_t i = 0; i < nbytes; i++)
+        out[nbytes - 1 - i] = (uint8_t)(words[i / 8] >> (8 * (i % 8)));
+}
+
+// Encodings staged per call into BLAKE3, as a byte budget.
+#define PMF_VEC_HASH_STAGE_BYTES (32 * 1024)
+
+// BLAKE3 of the encodings of `count` elements from `start`, staged so the
+// hasher takes them a buffer at a time and runs its multi-chunk path.
 static void pmf_vec_hash_span(uint8_t *out, const PMFVector a, uint64_t start, uint64_t count)
 {
+    const uint64_t nbytes = a->params->nbytes, per = PMF_VEC_HASH_STAGE_BYTES / nbytes;
+    uint8_t *staged = (uint8_t *)safe_aligned_malloc(per * nbytes);
     blake3_hasher hasher;
-    uint64_t element[PMF_LANES];
-    uint8_t encoded[PMF_MAX_LIMBS * 8];
 
     blake3_hasher_init(&hasher);
-    for (uint64_t i = 0; i < count; i++)
+    for (uint64_t i = 0; i < count;)
     {
-        pmf_vec_get_element(element, a, start + i);
-        pmf_to_bytes(encoded, element, a->params);
-        blake3_hasher_update(&hasher, encoded, a->params->nbytes);
+        const uint64_t run = count - i < per ? count - i : per;
+        for (uint64_t j = 0; j < run; j++)
+            pmf_vec_encode(&staged[j * nbytes], a, start + i + j);
+        blake3_hasher_update(&hasher, staged, run * nbytes);
+        i += run;
     }
     blake3_hasher_finalize(&hasher, out, BLAKE3_OUT_LEN);
+    free(staged);
 }
 
 void pmf_vec_hash(uint8_t *out, const PMFVector a) { pmf_vec_hash_span(out, a, 0, a->n); }
@@ -407,10 +605,6 @@ uint64_t pmf_vec_hash_count(const PMFVector a, uint64_t group, uint64_t stride)
     return (a->n - group) / stride + 1;
 }
 
-// Windows staged per batch, as a byte budget; see field_vector.c, which sizes
-// its own staging the same way and for the same reasons.
-#define PMF_VEC_HASH_STAGE_BYTES (32 * 1024)
-
 void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint64_t stride)
 {
     const uint64_t count = pmf_vec_hash_count(a, group, stride);
@@ -419,9 +613,9 @@ void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint
     if (count == 0)
         return;
 
-    // A window the lanes cannot take: one hasher each, as before. Note this
-    // turns on the *encoded* width, so which windows qualify depends on the
-    // prime -- an element is nbytes here, not a machine word.
+    // A window past a BLAKE3 chunk, which hash_batch cannot take: one hasher
+    // each. The width is the *encoded* one, nbytes per element, not a machine
+    // word.
     if (!hash_batch_fits(leaf))
     {
         for (uint64_t k = 0; k < count; k++)
@@ -429,12 +623,12 @@ void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint
         return;
     }
 
-    // Staged because a digest covers canonical encodings, which nothing holds:
-    // pmf_to_bytes has to run per element whatever the hashing does with the
-    // result. hash_batch_fits caps `leaf` at a chunk, so this is at least 32.
+    // Staged because a digest covers canonical encodings, which nothing holds.
+    // Windows are batched by the same byte budget as a span; see field_vector.c,
+    // which sizes its own staging the same way and for the same reasons.
+    // hash_batch_fits caps `leaf` at a chunk, so a batch is at least 32.
     const uint64_t batch = PMF_VEC_HASH_STAGE_BYTES / leaf;
     uint8_t *staged = (uint8_t *)safe_aligned_malloc(batch * leaf);
-    uint64_t element[PMF_LANES];
     for (uint64_t k = 0; k < count;)
     {
         uint64_t run = count - k;
@@ -442,10 +636,7 @@ void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint
             run = batch;
         for (uint64_t j = 0; j < run; j++)
             for (uint64_t i = 0; i < group; i++)
-            {
-                pmf_vec_get_element(element, a, (k + j) * stride + i);
-                pmf_to_bytes(&staged[(j * group + i) * nbytes], element, a->params);
-            }
+                pmf_vec_encode(&staged[(j * group + i) * nbytes], a, (k + j) * stride + i);
         hash_batch(&out[k * BLAKE3_OUT_LEN], staged, run, leaf);
         k += run;
     }

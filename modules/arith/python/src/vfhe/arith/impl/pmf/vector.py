@@ -405,6 +405,51 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_fold(result._struct, self._struct, element._buf)
         return result
 
+    def fold_twisted(self, untwist, r, out=None) -> PseudoMersenneVector:
+        """`FieldVector.fold_twisted`, which documents the operation, computed
+        by the native kernel `pmf_vec_fold_twisted` in one pass, two products
+        a pair."""
+        half = self._n // 2
+        if not isinstance(untwist, PseudoMersenneVector):
+            raise TypeError("untwist must be a FieldVector")
+        if untwist.field.prime != self.field.prime:
+            raise ValueError("untwist belongs to a different field")
+        if len(untwist) != half:
+            raise ValueError(f"untwist holds {len(untwist)} elements, not {half}")
+        element = self._coerce_element(r)
+        result = self._destination(out, half)
+        if result is untwist:
+            raise ValueError("fold_twisted cannot write into an operand")
+        lib.pmf_vec_fold_twisted(
+            result._struct, self._struct, untwist._struct, element._buf
+        )
+        return result
+
+    @staticmethod
+    def lift_twisted(a, b, twist, out=None) -> PseudoMersenneVector:
+        """`FieldVector.lift_twisted`, which documents the operation,
+        computed by the native kernel `pmf_vec_lift_twisted` in one pass: one
+        product per pair, the table read cyclically in place, each pair
+        written where it belongs."""
+        if not isinstance(a, PseudoMersenneVector) or not isinstance(
+            b, PseudoMersenneVector
+        ):
+            raise TypeError("lift_twisted takes two PseudoMersenneVectors")
+        if b.field.prime != a.field.prime:
+            raise ValueError("operands belong to different fields")
+        if len(b) != len(a):
+            raise ValueError(f"length mismatch: {len(a)} and {len(b)}")
+        if not isinstance(twist, PseudoMersenneVector):
+            raise TypeError("twist must be a FieldVector")
+        if twist.field.prime != a.field.prime:
+            raise ValueError("twist belongs to a different field")
+        period = len(twist)
+        if period == 0 or len(a) % period:
+            raise ValueError(f"a table of {period} does not divide {len(a)} positions")
+        result = a._destination(out, 2 * len(a))
+        lib.pmf_vec_lift_twisted(result._struct, a._struct, b._struct, twist._struct)
+        return result
+
     def chunk_length(self, live: int = 4) -> int:
         """`FieldVector.chunk_length`, with an element taking one word per
         limb plane."""

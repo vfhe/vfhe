@@ -6,7 +6,7 @@ project(
     'c',
     license: 'Apache-2.0',
     meson_version: '>=1.4.0',
-    default_options: ['c_std=gnu11', 'buildtype=release'],
+    default_options: ['c_std=gnu11', 'buildtype=release', 'b_ndebug=if-release'],
 )
 
 fs = import('fs')
