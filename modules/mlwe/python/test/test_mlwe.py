@@ -1280,9 +1280,10 @@ def _schemes_on_shared_primes(*shapes, prime_size=(50, 50, 50), special_primes=1
     return schemes
 
 
-def test_lwe_extraction():
+@pytest.mark.parametrize("split_degree", [1, 2, 4])
+def test_lwe_extraction(split_degree):
     N = 256
-    Rq = Ring(N, prime_size=[50, 50, 50], split_degree=1)
+    Rq = Ring(N, prime_size=[50, 50, 50], split_degree=split_degree)
     Rp = Rq.quotient_ring(ell=1)
     scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=1)
     key = scheme.key_gen_sparse(64, 3.2, ternary=True)
@@ -1345,8 +1346,9 @@ def _check_packing(out_scheme, output_key, count, gadget_params=None):
 
 @pytest.mark.parametrize("balanced", [False, True])
 @pytest.mark.parametrize("keygen_threads", [1, 4])
-def test_packing_ksk(balanced, keygen_threads):
-    Rq = Ring(256, prime_size=[50, 50, 50], split_degree=1)
+@pytest.mark.parametrize("split_degree", [1, 2, 4])
+def test_packing_ksk(balanced, keygen_threads, split_degree):
+    Rq = Ring(256, prime_size=[50, 50, 50], split_degree=split_degree)
     out_scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=4, balanced=balanced)
     output_key = out_scheme.key_gen_sparse(64, 3.2, ternary=True)
     parallel.set_num_threads(keygen_threads)

@@ -273,6 +273,15 @@ static inline bool rns_row_is_narrow(RNS_Base base, size_t i)
 #define rns_row32(p, i)                                                                            \
     (assert(rns_row_is_narrow((p)->base, (i)) && (p)->rows32[(i)] != NULL), (p)->rows32[(i)])
 
+/* The position of coefficient c in a coefficient row of `base`. For
+   split_degree s > 1 the row interleaves: coefficient c at
+   (c % s) * (N / s) + c / s, s a power of two. */
+static inline uint64_t rns_row_position(RNS_Base base, uint64_t c)
+{
+    const uint64_t s = base->split_degree, log_s = (uint64_t)__builtin_ctzll(s);
+    return (c & (s - 1)) * (base->N >> log_s) + (c >> log_s);
+}
+
 /* One row through the element-wise kernels, at the row's own width: one branch
    per row, then a vectorized kernel over 16 lanes (narrow) or 8 (wide). `fn`
    names the 64-bit kernel; the narrow one is `fn##_w32`. */

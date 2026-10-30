@@ -634,7 +634,9 @@ class TestNativeMovementAndFold:
     rng = random.Random(0x5EED)  # noqa: S311 - test data, not a key
 
     def values(self, field, n):
-        return [[self.rng.randrange(PRIME) for _ in range(field.d)] for _ in range(n)]
+        return [
+            [self.rng.randrange(field.prime) for _ in range(field.d)] for _ in range(n)
+        ]
 
     @pytest.mark.parametrize("n", [2, 8, 18, 26])
     def test_interleave_inverts_split(self, n):
@@ -691,20 +693,28 @@ class TestNativeMovementAndFold:
         assert folded == FieldVector.fold_twisted(word, untwist, r)
 
     # Blocks shorter than a lane group, ragged against the kernel's window,
-    # aligned with it, and longer than it; one block and many.
+    # aligned with it, and longer than it; one block and many. (2, 9) and
+    # (13, 300) start and end blocks inside lane groups, the second over
+    # several windows with a short last one.
     @pytest.mark.parametrize(
-        ("m", "count"), [(1, 5), (3, 7), (8, 4), (13, 9), (6000, 3)]
+        ("m", "count"),
+        [(1, 5), (2, 9), (3, 7), (8, 4), (13, 9), (13, 300), (6000, 3)],
     )
     @pytest.mark.parametrize("subfield", [False, True])
-    def test_fold_twisted_blocks_is_fold_twisted_per_block(self, m, count, subfield):
+    @pytest.mark.parametrize("prime", ["generic", "fused"])
+    def test_fold_twisted_blocks_is_fold_twisted_per_block(
+        self, m, count, subfield, prime
+    ):
         """Block `b` folded with `r[b]`, all reading one table: the
         same as `fold_twisted` on each block, over a table in the field or
-        in its prime subfield, and the same as the generic body."""
-        field = make_field()
+        in its prime subfield, and the same as the generic body. Under the
+        fused prime the products take the fused kernels."""
+        p = PRIME if prime == "generic" else _FUSED_PRIME
+        field = ExtensionField(p, 4, W)
         word = FieldVector(field, self.values(field, 2 * m * count))
         if subfield:
             ints = [value[0] or 1 for value in self.values(field, m)]
-            table = FieldVector(ExtensionField(PRIME, 1), ints)
+            table = FieldVector(ExtensionField(p, 1), ints)
         else:
             table = FieldVector(field, self.values(field, m))
         r = FieldVector(field, self.values(field, count))

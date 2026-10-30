@@ -503,9 +503,16 @@ void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
     if (window < MOD_MIN_VECTOR_LEN)
         window = MOD_MIN_VECTOR_LEN;
     if (window > total)
-        window = total;
+        window = field_vec_padded_length(total);
 
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(3 * d * window * sizeof(uint64_t));
+    // The vector kernels take 64-byte-aligned planes in whole groups of
+    // MOD_MIN_VECTOR_LEN. When m is not a multiple of that, a run of the
+    // table can start or end inside a group, and such a run is computed here
+    // and copied into c.
+    uint64_t *unaligned_run = NULL;
+    if (m % MOD_MIN_VECTOR_LEN != 0)
+        unaligned_run = (uint64_t *)safe_aligned_malloc(d * window * sizeof(uint64_t));
     uint64_t **planes = (uint64_t **)safe_malloc(7 * d * sizeof(uint64_t *));
     uint64_t *r_block = (uint64_t *)safe_malloc(d * sizeof(uint64_t));
     struct _FieldVector lo = *out, hi = *out, c = *out, pair = *word, dst = *out;
@@ -528,15 +535,21 @@ void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
     for (uint64_t start = 0; start < total; start += window)
     {
         const uint64_t len = (total - start < window) ? total - start : window;
+        const uint64_t padded_len = field_vec_padded_length(len);
         for (uint64_t j = 0; j < d; j++)
         {
             dst.coeffs[j] = out->coeffs[j] + start;
             pair.coeffs[j] = word->coeffs[j] + 2 * start;
         }
         lo.n = hi.n = c.n = dst.n = len;
-        lo.allocated_n = hi.allocated_n = c.allocated_n = dst.allocated_n = len;
+        lo.allocated_n = hi.allocated_n = c.allocated_n = dst.allocated_n = padded_len;
         pair.n = pair.allocated_n = 2 * len;
         field_vec_split_even_odd(&lo, &hi, &pair);
+        // The kernels read the padding of a short last window: zeroed, it
+        // holds values below q.
+        if (padded_len > len)
+            for (uint64_t j = 0; j < 3 * d; j++)
+                memset(scratch + j * window + len, 0, (padded_len - len) * sizeof(uint64_t));
 
         /* c[t] = untwist[t mod m] * r[t / m] + 1/2 for the output positions
            t of the window. The window may cover parts of several blocks;
@@ -546,19 +559,38 @@ void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
         {
             const uint64_t block = pos / m, offset = pos % m;
             const uint64_t take = (m - offset < start + len - pos) ? m - offset : start + len - pos;
+            const bool aligned = offset % MOD_MIN_VECTOR_LEN == 0 &&
+                                 (pos - start) % MOD_MIN_VECTOR_LEN == 0 &&
+                                 take % MOD_MIN_VECTOR_LEN == 0;
+            const uint64_t padded_take = field_vec_padded_length(take);
             for (uint64_t j = 0; j < d; j++)
             {
                 r_block[j] = r->coeffs[j][block];
-                run.coeffs[j] = c.coeffs[j] + (pos - start);
+                run.coeffs[j] = aligned ? c.coeffs[j] + (pos - start) : unaligned_run + j * window;
             }
+            // Away from c, the run is scaled in place: a table over the prime
+            // subfield sits in the last plane, which is the last one written.
             for (uint64_t j = 0; j < untwist->d; j++)
-                table.coeffs[j] = untwist->coeffs[j] + offset;
-            run.n = run.allocated_n = table.n = table.allocated_n = take;
+            {
+                if (aligned)
+                {
+                    table.coeffs[j] = untwist->coeffs[j] + offset;
+                    continue;
+                }
+                table.coeffs[j] = run.coeffs[untwist->d == d ? j : d - 1];
+                memcpy(table.coeffs[j], untwist->coeffs[j] + offset, take * sizeof(uint64_t));
+                memset(table.coeffs[j] + take, 0, (padded_take - take) * sizeof(uint64_t));
+            }
+            run.n = table.n = take;
+            run.allocated_n = table.allocated_n = padded_take;
             if (untwist->d == 1 && d > 1)
                 for (uint64_t j = 0; j < d; j++)
                     mod_eltwise_scale(run.coeffs[j], table.coeffs[0], r_block[j], take, word->mod);
             else
                 field_vec_scale(&run, &table, r_block);
+            if (!aligned)
+                for (uint64_t j = 0; j < d; j++)
+                    memcpy(c.coeffs[j] + (pos - start), run.coeffs[j], take * sizeof(uint64_t));
             pos += take;
         }
         mod_eltwise_add_scalar(c.coeffs[0], c.coeffs[0], half, len, word->mod);
@@ -569,6 +601,7 @@ void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
 
     free(r_block);
     free(planes);
+    free(unaligned_run);
     free(scratch);
 }
 

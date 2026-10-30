@@ -33,9 +33,9 @@ static void spread_lwe_values(RNSc_Polynomial poly, uint64_t mask, LWE *in, uint
         {
             const uint64_t v = index == NULL ? in[k]->b[limb] : in[k]->a[limb][*index];
             if (narrow)
-                poly->rows32[g_idx][k] = (uint32_t)v;
+                poly->rows32[g_idx][rns_row_position(poly->base, k)] = (uint32_t)v;
             else
-                poly->rows64[g_idx][k] = v;
+                poly->rows64[g_idx][rns_row_position(poly->base, k)] = v;
         }
     }
 }
