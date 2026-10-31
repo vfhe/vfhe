@@ -55,6 +55,13 @@ int arith_add_handles(void *ring, void *out, void *a, void *b, int domain);
 int arith_sub_handles(void *ring, void *out, void *a, void *b, int domain);
 int arith_mul_handles(void *ring, void *out, void *a, void *b, int domain);
 int arith_scale_int(void *ring, ArithElement *out, const ArithElement *a, uint64_t scale);
+typedef struct
+{
+    void *handle;
+} ArithScalar;
+int arith_scalar_new(void *ring, const uint64_t *per_component, ArithScalar *out);
+void arith_scalar_free(void *ring, ArithScalar *scalar);
+int arith_scale_by(void *ring, ArithElement *out, const ArithElement *a, ArithScalar scale);
 int arith_permute(void *ring, ArithElement *out, const ArithElement *a, uint64_t gen);
 int arith_sample_gaussian(void *ring, ArithElement *out, double sigma);
 int arith_round_division(void *ring, ArithElement *element, void *to);
