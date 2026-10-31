@@ -16,3 +16,9 @@ void sumcheck_prod2_round_halves(ArithRing ring, ArithElement *g_out, ArithEleme
                                  ArithElement *tg, uint64_t size);
 void sumcheck_prod2_round(ArithRing ring, ArithElement *g_out, ArithElement *tf, ArithElement *tg,
                           uint64_t size, uint64_t eval_var_idx);
+void sumcheck_prod3_round_pairs(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                                ArithElement *tg, ArithElement *th, uint64_t size);
+void sumcheck_prod3_round_halves(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                                 ArithElement *tg, ArithElement *th, uint64_t size);
+void sumcheck_prod3_round(ArithRing ring, ArithElement *g_out, ArithElement *tf, ArithElement *tg,
+                          ArithElement *th, uint64_t size, uint64_t eval_var_idx);

@@ -672,6 +672,16 @@ versions may contain breaking changes.
   instead of building them again; it encodes, folds and commits exactly as
   the code built with that depth. `BasefoldMessages.from_code(code,
   num_vars)` builds the scheme of every table size from one code this way.
+- Native product-sumcheck rounds for three factors over `R_q`:
+  `prod_round_evals` hands three native tables over the same variables to
+  `sumcheck_prod3_round_pairs` / `_halves` / `sumcheck_prod3_round` (the
+  degree-3 message at `t = 0..3`, the round variable at any position), and
+  so does the dense prover view of a virtual oracle for a three-factor
+  term. The messages are the pure-Python path's.
+- `vfhe.piop.ClosedFormOracle(variables, evaluate, table, identity)`: a
+  public oracle the verifier evaluates by a function, whose table is built
+  only when something reads it as one, digested by the caller's
+  `identity` bytes and the variables.
 
 ### Changed
 
@@ -692,6 +702,12 @@ versions may contain breaking changes.
   digits reach past bit 128 and `q` exceeds `2^128`), the counters with
   `set_uint64`, the fingerprints with `fma`, and each grand product's
   product tree in `log n` passes of `split_even_odd` and a product.
+- `Relation_Range(B, c)` no longer needs `c` to divide `log2(B)`: the
+  digits are `c - 1` of `ceil(log2(B) / c)` bits and a shorter most
+  significant one (`top_beta`), and `RangeDecomposition` then adds a
+  `Relation_Lookup(top_beta)` on the restriction of the digit oracle to the
+  top digit, so the claim proved is `[0, B)`. Bounds `c` divides prove as
+  before, with the same transcript.
   `lookup.grand_product` is `lookup.product_tree`: it returns the whole
   table of partial products, not the grand product.
 
@@ -1287,6 +1303,10 @@ versions may contain breaking changes.
   batching and the verifier's challenges were drawn in the IOP's domain, so
   a scheme over another domain (ring Basefold in an IOP over a field) could
   not open its claims.
+- `Lookup` proves over a field vector whose internal nodes do not start at
+  a multiple of its padding unit (tables or looked-up oracles of fewer than
+  8 entries over a pseudo-Mersenne field, such as `Relation_Range(2^8, 4)`'s
+  digits): it gathers them instead of taking a view, which raised.
 
 ## [0.0.3] - 2026-09-10
 

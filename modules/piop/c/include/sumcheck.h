@@ -43,6 +43,18 @@ extern "C"
     void sumcheck_prod2_round(ArithRing ring, ArithElement *g_out, ArithElement *tf,
                               ArithElement *tg, uint64_t size, uint64_t eval_var_idx);
 
+    // Degree-3 round message for the product of three tables: g_out[t] =
+    // sum (f at t)·(g at t)·(h at t) for t in {0, 1, 2, 3}, with the
+    // evaluations at t = 2, 3 extrapolated division-free as lo + t·(hi − lo)
+    // per factor. The three tables share their variable layout.
+    void sumcheck_prod3_round_pairs(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                                    ArithElement *tg, ArithElement *th, uint64_t size);
+    void sumcheck_prod3_round_halves(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                                     ArithElement *tg, ArithElement *th, uint64_t size);
+    void sumcheck_prod3_round(ArithRing ring, ArithElement *g_out, ArithElement *tf,
+                              ArithElement *tg, ArithElement *th, uint64_t size,
+                              uint64_t eval_var_idx);
+
 #ifdef __cplusplus
 }
 #endif
