@@ -653,9 +653,37 @@ versions may contain breaking changes.
   split_degree=)`: the primes of the ring's form nearest `2^prime_size`,
   alternately above and below it, with an odd multiplier when the ring is
   split. Opt-in: the primes a ring draws by default do not change.
+- `vfhe.polycom.basefold_parameters(domain, num_vars, security_bits)`: the
+  general foldable code (`k0`, `c`, `d`), the schedule and the query count
+  `rep` of a basefold opening over a field or `R_q` whose soundness error,
+  as `BasefoldEval.soundness_error` reports it with the code's
+  `relative_distance`, is at most `2^-security_bits`, choosing among the
+  candidates the one with the smallest proof (`BasefoldParameters`, with
+  `gamma`, the proximity parameter `delta`, the error reached and a
+  proof-size estimate). It is the parameter estimator of [CCCFGS26] run on
+  the library's bounds, and lands on the same choice: `k0 = 2^8`,
+  `n0 = 2^10` and 314 to 352 queries for 11 to 24 variables over 180- and
+  260-bit fields at 128 bits. Takes the twist field, the distance bound and
+  a bundle's claims and polynomials; `basefold.basefold_soundness_error` is
+  the expression `soundness_error` evaluates, from its quantities alone.
+- `FoldableRS.truncated(depth)` / `FieldFoldableRS.truncated(depth)`: the
+  code of a smaller depth with the same seed and options, as the first
+  levels of this one, sharing their twist tables, transforms and plans
+  instead of building them again; it encodes, folds and commits exactly as
+  the code built with that depth. `BasefoldMessages.from_code(code,
+  num_vars)` builds the scheme of every table size from one code this way.
 
 ### Changed
 
+- `FoldableRS`'s twists default to the residue fields `F_(p^d)` of the
+  ring's primes (`twist_field="field"`) on a ring whose split degree is above
+  1, and stay the per-prime integers (`"prime"`) on an unsplit ring, where
+  the two give the same distance. The distance bound runs on `d log2 p`
+  bits instead of `log2 p`, which takes fewer queries for the same
+  soundness, at the price of an `F_(p^d)` product per twist multiply. The
+  base code's transform keeps its root in `F_p`. `basefold_parameters`
+  follows the same default. Codes built without `twist_field` on a split
+  ring commit differently from before.
 - `CKKS_Scheme.rational_rescale` takes `n_threads` and leaves its input in
   the coefficient domain; it is one `rational_rescale_batch`, with the same
   results as before.
@@ -1150,6 +1178,11 @@ versions may contain breaking changes.
 - Fix `RNSPolynomial.from_coeff_matrix` on a ring with `split_degree = 1`
   reading past a row shorter than `N` and writing what followed it into the
   polynomial: a short row now raises `IndexError`, as on a split ring.
+- Correct the documented meaning of `delta` in `BasefoldEval.soundness_error`
+  and `BatchFoldEval.soundness_error`: it is the proximity parameter, admissible
+  when `delta < J_gamma(J_gamma(Delta))` and `3 delta - d gamma < Delta` for the
+  code's relative distance `Delta` (`relative_distance()`), not that distance.
+  The bound is unchanged.
 - Correct `Polynomial.base_extend`'s documented contract: it returns a value
   congruent to this element modulo the ring's modulus, not the element
   itself. Behaviour is unchanged; the docstring claimed exactness the fast

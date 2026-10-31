@@ -155,9 +155,11 @@ class BatchFoldEval(BasefoldEval):
         smallest residue field, which is also the size of the set the shared
         challenges come from, l the number of variables, k the number of
         components at a prime, and d the code's depth (not the split degree).
-        `delta` is the smallest of the residue codes' relative distances
-        (``min(p.code.relative_distance() for p in residue_protocols)``),
-        and `gamma` is the caller's, as in `BasefoldEval.soundness_error`.
+        `gamma` and `delta` are the caller's, as in
+        `BasefoldEval.soundness_error`, with the smallest of the residue
+        codes' relative distances
+        (``min(p.code.relative_distance() for p in residue_protocols)``) as
+        the distance Delta that bounds `delta`.
         None if a field's size is unknown.
 
         Why one prime's error, not L times it. The ring commitment fixes the
