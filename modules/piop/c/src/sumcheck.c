@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "arith.h"
 #include "arith_generic.h"
+#include <alloc.h>
 #include <arith_trace.h>
 #include <parallel.h>
 #include <stdbool.h>
@@ -25,9 +26,9 @@
 //
 // A round over many pairs is split into contiguous chunks of pairs run on
 // the library's threads. Chunk 0 accumulates into the message itself, every
-// other chunk into accumulators of its own, and the caller adds those into
-// the message in chunk order once the loop is done. The arithmetic is exact,
-// so the message is the same at any number of chunks. While the execution
+// other chunk into accumulators of its own, and those are then added into the
+// message pairwise, a level at a time. The arithmetic is exact, so the
+// message is the same at any number of chunks and in any order of addition. While the execution
 // tape records, or the generic path is forced, a round runs on the calling
 // thread, so the tape sees every operation in order.
 
@@ -80,27 +81,39 @@ typedef struct
     ArithRing ring;
     RoundRange range;
     const void *round;
-    ArithElement *g_out;       // chunk 0's accumulators: the message
-    ArithElement *partial;     // chunk c > 0's start at (c - 1) * nodes
+    ArithElement *acc;         // chunk c's accumulators at c * nodes; chunk 0's are the message
     const ArithElement *model; // an entry, the shape of the accumulators
     uint64_t nodes, pairs, chunks;
+    uint64_t step; // while combining: chunk c absorbs chunk c + step
 } RoundChunks;
 
 static void round_chunk(void *ctx, uint64_t c)
 {
     const RoundChunks *job = (const RoundChunks *)ctx;
-    ArithElement *g = job->g_out;
+    ArithElement *g = &job->acc[c * job->nodes];
     if (c > 0)
     {
-        g = &job->partial[(c - 1) * job->nodes];
         for (uint64_t t = 0; t < job->nodes; t++)
         {
+            arith_new_like(job->ring, job->model, &g[t]);
             arith_zero_in(job->ring, &g[t], arith_mul_domain(job->ring));
         }
     }
     const uint64_t begin = c * job->pairs / job->chunks;
     const uint64_t end = (c + 1) * job->pairs / job->chunks;
     job->range(job->round, g, begin, end);
+}
+
+// One addition of a combining level: item k adds node k % nodes of the chunk
+// `step` above into the same node of chunk 2 step (k / nodes), and frees it.
+static void round_combine(void *ctx, uint64_t k)
+{
+    const RoundChunks *job = (const RoundChunks *)ctx;
+    const uint64_t c = 2 * job->step * (k / job->nodes), t = k % job->nodes;
+    ArithElement *into = &job->acc[c * job->nodes + t];
+    ArithElement *from = &job->acc[(c + job->step) * job->nodes + t];
+    arith_add(job->ring, into, into, from);
+    arith_free(job->ring, from);
 }
 
 // How many chunks a round of `pairs` pairs, each reading `entries_per_pair`
@@ -126,7 +139,10 @@ static uint64_t round_chunk_count(ArithRing ring, uint64_t pairs, uint64_t entri
 }
 
 // Zeroes g_out[0 .. nodes) and accumulates every pair of the round into it,
-// over chunks on the library's threads when the round is large enough.
+// over chunks on the library's threads when the round is large enough. The
+// chunks' sums are then added together pairwise, a level at a time, each
+// level on the library's threads, so the calling thread never adds them one
+// after another.
 static void round_over_pairs(ArithRing ring, ArithElement *g_out, uint64_t nodes,
                              const ArithElement *model, uint64_t size, uint64_t entries_per_pair,
                              RoundRange range, const void *round)
@@ -142,26 +158,24 @@ static void round_over_pairs(ArithRing ring, ArithElement *g_out, uint64_t nodes
         range(round, g_out, 0, pairs);
         return;
     }
-    const uint64_t n_partial = (chunks - 1) * nodes;
-    ArithElement *partial = (ArithElement *)malloc(n_partial * sizeof(ArithElement));
-    for (uint64_t k = 0; k < n_partial; k++)
+    ArithElement *acc = (ArithElement *)safe_malloc(chunks * nodes * sizeof(ArithElement));
+    for (uint64_t t = 0; t < nodes; t++)
     {
-        arith_new_like(ring, model, &partial[k]);
+        acc[t] = g_out[t];
     }
-    RoundChunks job = {ring, range, round, g_out, partial, model, nodes, pairs, chunks};
+    RoundChunks job = {ring, range, round, acc, model, nodes, pairs, chunks, 0};
     vfhe_parallel_for(chunks, 0, round_chunk, &job);
-    for (uint64_t c = 1; c < chunks; c++)
+    for (job.step = 1; job.step < chunks; job.step *= 2)
     {
-        for (uint64_t t = 0; t < nodes; t++)
-        {
-            arith_add(ring, &g_out[t], &g_out[t], &partial[(c - 1) * nodes + t]);
-        }
+        // The chunks 2 step k that have a chunk step above them.
+        const uint64_t receivers = (chunks - job.step + 2 * job.step - 1) / (2 * job.step);
+        vfhe_parallel_for(receivers * nodes, 0, round_combine, &job);
     }
-    for (uint64_t k = 0; k < n_partial; k++)
+    for (uint64_t t = 0; t < nodes; t++)
     {
-        arith_free(ring, &partial[k]);
+        g_out[t] = acc[t];
     }
-    free(partial);
+    free(acc);
 }
 
 // --- degree 1 ----------------------------------------------------------------
@@ -505,21 +519,21 @@ static void product_round(ArithRing ring, ArithElement *g_out, uint64_t nodes,
                      &job);
 }
 
-void sumcheck_prod_round_pairs(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                               ArithElement *const *tables, uint64_t factors, uint64_t size)
+void sumcheck_product_round_pairs(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                                  ArithElement *const *tables, uint64_t factors, uint64_t size)
 {
     product_round(ring, g_out, nodes, tables, factors, size, 0);
 }
 
-void sumcheck_prod_round_halves(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                                ArithElement *const *tables, uint64_t factors, uint64_t size)
+void sumcheck_product_round_halves(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                                   ArithElement *const *tables, uint64_t factors, uint64_t size)
 {
     product_round(ring, g_out, nodes, tables, factors, size, msb_index(size));
 }
 
-void sumcheck_prod_round(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                         ArithElement *const *tables, uint64_t factors, uint64_t size,
-                         uint64_t eval_var_idx)
+void sumcheck_product_round(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                            ArithElement *const *tables, uint64_t factors, uint64_t size,
+                            uint64_t eval_var_idx)
 {
     product_round(ring, g_out, nodes, tables, factors, size, eval_var_idx);
 }

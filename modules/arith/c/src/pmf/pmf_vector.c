@@ -366,9 +366,9 @@ void pmf_vec_sum(uint64_t *out, const PMFVector a)
 // each prefix product needs the one before it. Cut the vector into rows of
 // `width` elements and every column is a chain of its own, so a step of either
 // sweep is a group multiply per group of a row, none waiting on another, and a
-// chain is only as long as there are rows. The column totals are then inverted
-// together by the trick over single elements; 256 rows keep those a small
-// fraction of the work.
+// chain is only as long as there are rows. The column totals, one row of
+// them, are inverted by the same function, so the part left to the trick over
+// single elements shrinks by this factor at every level.
 #define PMF_VEC_INV_ROWS 256
 
 // Montgomery's trick over `count >= 1` elements laid out PMF_LANES words
@@ -472,6 +472,19 @@ static void pmf_vec_inv_backward_range(const PMFVecJob *job, uint64_t begin, uin
                                                           job->width, begin, end, &P_));
 }
 
+// `length` elements of `v` from `start`, a multiple of PMF_LANES, as a vector
+// in its own right over `limbs`: the planes are v's, offset.
+static struct _PMFVector pmf_vec_window(const PMFVector v, uint64_t start, uint64_t length,
+                                        uint64_t **limbs)
+{
+    struct _PMFVector window = *v;
+    for (uint64_t k = 0; k < v->params->limbs; k++)
+        limbs[k] = v->limbs[k] + start;
+    window.limbs = limbs;
+    window.n = window.allocated_n = length;
+    return window;
+}
+
 int pmf_vec_inv(PMFVector out, const PMFVector a)
 {
     const uint64_t n = a->n, L = a->params->limbs;
@@ -482,54 +495,55 @@ int pmf_vec_inv(PMFVector out, const PMFVector a)
     // starts aligned. Below PMF_VEC_INV_ROWS such runs there are no rows, and
     // every element goes through the trick over single elements.
     const uint64_t width = (n / PMF_VEC_INV_ROWS) & ~(uint64_t)(PMF_LANES - 1);
-    const uint64_t rows = width ? n / width : 0, body = rows * width;
-
-    // Inverted one at a time: the column totals, then the elements past the
-    // last whole row.
-    const uint64_t singles = width + (n - body);
-    uint64_t *x = (uint64_t *)safe_malloc(2 * singles * PMF_LANES * sizeof(uint64_t));
-    uint64_t *inv = x + singles * PMF_LANES;
-
-    uint64_t *planes[PMF_MAX_LIMBS];
-    uint64_t *block = NULL;
-    struct _PMFVector prefix = *a;
-    if (width)
+    if (width == 0)
     {
-        block = (uint64_t *)safe_aligned_malloc(L * body * sizeof(uint64_t));
-        for (uint64_t k = 0; k < L; k++)
-            planes[k] = block + k * body;
-        prefix.limbs = planes;
-        prefix.n = prefix.allocated_n = body;
-        PMFVecJob job = {.range = pmf_vec_inv_forward_range,
-                         .params = a->params,
-                         .a = a,
-                         .t = &prefix,
-                         .rows = rows,
-                         .width = width};
-        pmf_vec_run(&job, width, PMF_VEC_PRODUCT_GRAIN / rows);
-        pmf_vec_get_range(x, &prefix, body - width, width);
+        uint64_t *x = (uint64_t *)safe_malloc(2 * n * PMF_LANES * sizeof(uint64_t));
+        uint64_t *inv = x + n * PMF_LANES;
+        pmf_vec_get_range(x, a, 0, n);
+        const int status = pmf_inv_serial(inv, x, n, a->params);
+        if (status)
+            pmf_vec_set_range(out, 0, inv, n);
+        free(x);
+        return status;
     }
-    pmf_vec_get_range(x + width * PMF_LANES, a, body, n - body);
+    const uint64_t rows = n / width, body = rows * width;
 
-    const int status = pmf_inv_serial(inv, x, singles, a->params);
+    uint64_t *planes[PMF_MAX_LIMBS], *window_limbs[2 * PMF_MAX_LIMBS];
+    uint64_t *block = (uint64_t *)safe_aligned_malloc(L * body * sizeof(uint64_t));
+    struct _PMFVector prefix = *a;
+    for (uint64_t k = 0; k < L; k++)
+        planes[k] = block + k * body;
+    prefix.limbs = planes;
+    prefix.n = prefix.allocated_n = body;
+    PMFVecJob job = {.range = pmf_vec_inv_forward_range,
+                     .params = a->params,
+                     .a = a,
+                     .t = &prefix,
+                     .rows = rows,
+                     .width = width};
+    pmf_vec_run(&job, width, PMF_VEC_PRODUCT_GRAIN / rows);
+
+    // The column totals are the last prefix row; their inverses replace them.
+    struct _PMFVector totals = pmf_vec_window(&prefix, body - width, width, window_limbs);
+    int status = pmf_vec_inv(&totals, &totals);
+
+    // Whatever did not fit into whole rows is its own vector. It is inverted
+    // before any row of `out` is written, so that a zero there leaves `out`
+    // untouched; the backward sweep reads only the whole rows of `a`.
+    if (status && body < n)
+    {
+        struct _PMFVector tail_in = pmf_vec_window(a, body, n - body, window_limbs);
+        struct _PMFVector tail_out = pmf_vec_window(out, body, n - body, window_limbs + L);
+        status = pmf_vec_inv(&tail_out, &tail_in);
+    }
+
     if (status)
     {
-        if (width)
-        {
-            pmf_vec_set_range(&prefix, body - width, inv, width);
-            PMFVecJob job = {.range = pmf_vec_inv_backward_range,
-                             .params = a->params,
-                             .out = out,
-                             .a = a,
-                             .t = &prefix,
-                             .rows = rows,
-                             .width = width};
-            pmf_vec_run(&job, width, PMF_VEC_PRODUCT_GRAIN / rows);
-        }
-        pmf_vec_set_range(out, body, inv + width * PMF_LANES, n - body);
+        job.range = pmf_vec_inv_backward_range;
+        job.out = out;
+        pmf_vec_run(&job, width, PMF_VEC_PRODUCT_GRAIN / rows);
     }
     free(block);
-    free(x);
     return status;
 }
 

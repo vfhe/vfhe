@@ -1207,15 +1207,102 @@ static int field_vec_inv_serial(FieldVector out, const FieldVector a)
     return status;
 }
 
-// Rows the parallel sweep aims for. The trick's two sweeps are a serial chain
-// -- each step needs the one before it -- so one chain advances an element at a
-// time however wide the vector is. Cut the vector into rows and the chains
-// become the columns: a step is one whole-vector multiply over a row, and the
-// chain is only as long as there are rows. More rows means fewer columns and so
-// fewer of the single inversions the backward sweep starts from; 256 keeps
-// those to about a nanosecond an element while leaving rows wide enough to be
-// worth handing to a kernel.
+// Rows the inversion cuts a vector into. Montgomery's trick is a serial chain:
+// each prefix product needs the one before it. Cut the vector into rows of
+// `width` elements and every column is a chain of its own, so a step of either
+// sweep is a whole-vector multiply over a run of a row, and a chain is only as
+// long as there are rows. The column totals, one row of them, are inverted by
+// the same function, so the part left to the single-element trick shrinks by
+// this factor at every level.
 #define FIELD_VEC_INV_ROWS 256
+
+// The two sweeps of field_vec_inv over a range of columns: `a` read as `rows`
+// rows of `width` elements, `prefix` the prefix products of those rows.
+typedef struct FieldVecInvSweep
+{
+    FieldVector out, a, prefix;
+    uint64_t rows, width;
+    VecChunks chunks;
+    void (*columns)(const struct FieldVecInvSweep *sweep, uint64_t c0, uint64_t c1);
+} FieldVecInvSweep;
+
+// Prefix row t over columns [c0, c1) is the product of rows 0..t of `a`.
+static void field_vec_inv_forward(const FieldVecInvSweep *sweep, uint64_t c0, uint64_t c1)
+{
+    const FieldVector a = sweep->a, prefix = sweep->prefix;
+    const uint64_t d = a->d, width = sweep->width, length = c1 - c0;
+    uint64_t **planes = (uint64_t **)safe_malloc(3 * d * sizeof(uint64_t *));
+    struct _FieldVector to = field_vec_window(prefix, c0, length, planes);
+    struct _FieldVector row = field_vec_window(a, c0, length, planes + d);
+    field_vec_copy(&to, &row);
+    for (uint64_t t = 1; t < sweep->rows; t++)
+    {
+        struct _FieldVector from = field_vec_window(prefix, (t - 1) * width + c0, length, planes);
+        to = field_vec_window(prefix, t * width + c0, length, planes + d);
+        row = field_vec_window(a, t * width + c0, length, planes + 2 * d);
+        field_vec_mul(&to, &from, &row);
+    }
+    free(planes);
+}
+
+// Over columns [c0, c1), starting from the inverses of the column totals in
+// the last prefix row: for t from the last row down to 1, out row t is the
+// running inverse times prefix row t - 1, and the running inverse then absorbs
+// row t of `a`. Out row 0 is what is left. Row t of `a` is read before out row
+// t is written, so `out` may be `a`.
+static void field_vec_inv_backward(const FieldVecInvSweep *sweep, uint64_t c0, uint64_t c1)
+{
+    const FieldVector a = sweep->a, prefix = sweep->prefix, out = sweep->out;
+    const uint64_t d = a->d, width = sweep->width, length = c1 - c0, rows = sweep->rows;
+    uint64_t **planes = (uint64_t **)safe_malloc(5 * d * sizeof(uint64_t *));
+    uint64_t *block = (uint64_t *)safe_aligned_malloc(2 * d * length * sizeof(uint64_t));
+    struct _FieldVector running = *a, next = *a;
+    running.coeffs = planes;
+    next.coeffs = planes + d;
+    for (uint64_t j = 0; j < d; j++)
+    {
+        running.coeffs[j] = block + j * length;
+        next.coeffs[j] = block + (d + j) * length;
+    }
+    running.n = running.allocated_n = next.n = next.allocated_n = length;
+    struct _FieldVector totals =
+        field_vec_window(prefix, (rows - 1) * width + c0, length, planes + 2 * d);
+    field_vec_copy(&running, &totals);
+    for (uint64_t t = rows; t-- > 1;)
+    {
+        struct _FieldVector below =
+            field_vec_window(prefix, (t - 1) * width + c0, length, planes + 2 * d);
+        struct _FieldVector row = field_vec_window(a, t * width + c0, length, planes + 3 * d);
+        struct _FieldVector dest = field_vec_window(out, t * width + c0, length, planes + 4 * d);
+        field_vec_mul(&next, &running, &row);
+        field_vec_mul(&dest, &running, &below);
+        struct _FieldVector spare = running;
+        running = next;
+        next = spare;
+    }
+    struct _FieldVector first = field_vec_window(out, c0, length, planes + 2 * d);
+    field_vec_copy(&first, &running);
+    free(block);
+    free(planes);
+}
+
+static void field_vec_inv_chunk(void *ctx, uint64_t chunk)
+{
+    const FieldVecInvSweep *sweep = (const FieldVecInvSweep *)ctx;
+    sweep->columns(sweep, vec_chunk_begin(&sweep->chunks, chunk),
+                   vec_chunk_end(&sweep->chunks, chunk));
+}
+
+// sweep->columns over every column, split across threads when they are
+// allowed. A column costs a product or two per row.
+static void field_vec_inv_sweep(FieldVecInvSweep *sweep)
+{
+    uint64_t grain = FIELD_VEC_PRODUCT_GRAIN / sweep->rows;
+    if (vec_chunks_plan(&sweep->chunks, sweep->width, grain, MOD_MIN_VECTOR_LEN))
+        vfhe_parallel_for(sweep->chunks.count, 0, field_vec_inv_chunk, sweep);
+    else
+        sweep->columns(sweep, 0, sweep->width);
+}
 
 int field_vec_inv(FieldVector out, const FieldVector a)
 {
@@ -1231,78 +1318,42 @@ int field_vec_inv(FieldVector out, const FieldVector a)
     const uint64_t rows = n / width, body = rows * width;
 
     uint64_t *prefix_block = (uint64_t *)safe_aligned_malloc(d * body * sizeof(uint64_t));
-    uint64_t *carry_block = (uint64_t *)safe_aligned_malloc(3 * d * width * sizeof(uint64_t));
-    uint64_t **planes = (uint64_t **)safe_malloc(8 * d * sizeof(uint64_t *));
-
-    struct _FieldVector prefix = *a, running = *a, folded = *a, next = *a;
+    uint64_t **planes = (uint64_t **)safe_malloc(4 * d * sizeof(uint64_t *));
+    struct _FieldVector prefix = *a;
     for (uint64_t j = 0; j < d; j++)
-    {
         planes[j] = prefix_block + j * body;
-        planes[d + j] = carry_block + j * width;
-        planes[2 * d + j] = carry_block + (d + j) * width;
-        planes[3 * d + j] = carry_block + (2 * d + j) * width;
-    }
     prefix.coeffs = planes;
     prefix.n = prefix.allocated_n = body;
-    running.coeffs = planes + d;
-    folded.coeffs = planes + 2 * d;
-    next.coeffs = planes + 3 * d;
-    running.n = running.allocated_n = width;
-    folded.n = folded.allocated_n = width;
-    next.n = next.allocated_n = width;
 
-    uint64_t **a_planes = planes + 4 * d, **p_planes = planes + 5 * d;
-    uint64_t **q_planes = planes + 6 * d, **o_planes = planes + 7 * d;
+    FieldVecInvSweep sweep = {.out = out,
+                              .a = a,
+                              .prefix = &prefix,
+                              .rows = rows,
+                              .width = width,
+                              .columns = field_vec_inv_forward};
+    field_vec_inv_sweep(&sweep);
 
-    // Forward: prefix row t is the product of rows 0..t, column by column.
-    struct _FieldVector head = field_vec_window(&prefix, 0, width, p_planes);
-    struct _FieldVector head_in = field_vec_window(a, 0, width, a_planes);
-    field_vec_copy(&head, &head_in);
-    for (uint64_t t = 1; t < rows; t++)
-    {
-        struct _FieldVector to = field_vec_window(&prefix, t * width, width, p_planes);
-        struct _FieldVector from = field_vec_window(&prefix, (t - 1) * width, width, q_planes);
-        struct _FieldVector row = field_vec_window(a, t * width, width, a_planes);
-        field_vec_mul(&to, &from, &row);
-    }
+    // The column totals are the last prefix row; their inverses replace them.
+    struct _FieldVector totals = field_vec_window(&prefix, body - width, width, planes + d);
+    int status = field_vec_inv(&totals, &totals);
 
-    // One inversion per column, which is the trick again over a single row.
-    struct _FieldVector last = field_vec_window(&prefix, (rows - 1) * width, width, p_planes);
-    int status = field_vec_inv_serial(&running, &last);
-
-    // Whatever did not fit into whole rows is its own chain. It is inverted
+    // Whatever did not fit into whole rows is its own vector. It is inverted
     // before any row of `out` is written, so that a zero there leaves `out`
-    // untouched; the backward sweep below reads only the whole rows of `a`.
+    // untouched; the backward sweep reads only the whole rows of `a`.
     if (status && body < n)
     {
-        struct _FieldVector tail_in = field_vec_window(a, body, n - body, a_planes);
-        struct _FieldVector tail_out = field_vec_window(out, body, n - body, o_planes);
-        status = field_vec_inv_serial(&tail_out, &tail_in);
+        struct _FieldVector tail_in = field_vec_window(a, body, n - body, planes + 2 * d);
+        struct _FieldVector tail_out = field_vec_window(out, body, n - body, planes + 3 * d);
+        status = field_vec_inv(&tail_out, &tail_in);
     }
 
     if (status)
     {
-        // Backward: out row t is the running product times prefix row t-1, and
-        // the running product then absorbs row t. Row t of `a` is read into
-        // `next` before out row t is written, because `out` may be `a`.
-        for (uint64_t t = rows; t-- > 1;)
-        {
-            struct _FieldVector below = field_vec_window(&prefix, (t - 1) * width, width, p_planes);
-            struct _FieldVector row = field_vec_window(a, t * width, width, a_planes);
-            struct _FieldVector dest = field_vec_window(out, t * width, width, o_planes);
-            field_vec_mul(&folded, &running, &below);
-            field_vec_mul(&next, &running, &row);
-            field_vec_copy(&dest, &folded);
-            struct _FieldVector spare = running;
-            running = next;
-            next = spare;
-        }
-        struct _FieldVector first = field_vec_window(out, 0, width, o_planes);
-        field_vec_copy(&first, &running);
+        sweep.columns = field_vec_inv_backward;
+        field_vec_inv_sweep(&sweep);
     }
 
     free(prefix_block);
-    free(carry_block);
     free(planes);
     return status;
 }

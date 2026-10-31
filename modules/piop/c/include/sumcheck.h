@@ -66,13 +66,14 @@ extern "C"
     // division-free by adding hi_j - lo_j once per node. `tables` holds
     // `factors` >= 1 tables sharing their variable layout (a table may
     // appear more than once) and g_out `nodes` >= 1 elements.
-    void sumcheck_prod_round_pairs(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                                   ArithElement *const *tables, uint64_t factors, uint64_t size);
-    void sumcheck_prod_round_halves(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                                    ArithElement *const *tables, uint64_t factors, uint64_t size);
-    void sumcheck_prod_round(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                             ArithElement *const *tables, uint64_t factors, uint64_t size,
-                             uint64_t eval_var_idx);
+    void sumcheck_product_round_pairs(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                                      ArithElement *const *tables, uint64_t factors, uint64_t size);
+    void sumcheck_product_round_halves(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                                       ArithElement *const *tables, uint64_t factors,
+                                       uint64_t size);
+    void sumcheck_product_round(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                                ArithElement *const *tables, uint64_t factors, uint64_t size,
+                                uint64_t eval_var_idx);
 
 #ifdef __cplusplus
 }

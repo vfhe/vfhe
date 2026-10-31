@@ -292,22 +292,22 @@ int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degre
 #define LEAF_CHUNKS_PER_THREAD 4
 
 // The digests of leaves [first, last).
-static void leaf_digests_range(uint8_t *out, ArithElement *word, uint64_t size, uint64_t first,
+static void leaf_digests_range(uint8_t *out, ArithElement *word, uint64_t leaf_size, uint64_t first,
                                uint64_t last)
 {
-    const uint64_t block = size < LEAF_BLOCK_SYMBOLS ? LEAF_BLOCK_SYMBOLS / size : 1;
-    uint8_t *staged = (uint8_t *)safe_malloc(block * size * DIGEST_LEN);
+    const uint64_t block = leaf_size < LEAF_BLOCK_SYMBOLS ? LEAF_BLOCK_SYMBOLS / leaf_size : 1;
+    uint8_t *staged = (uint8_t *)safe_malloc(block * leaf_size * DIGEST_LEN);
     void *state = safe_malloc(hash_stream_size());
     for (uint64_t leaf = first; leaf < last; leaf += block)
     {
         const uint64_t leaves = last - leaf < block ? last - leaf : block;
-        for (uint64_t s = 0; s < leaves * size; s++)
+        for (uint64_t s = 0; s < leaves * leaf_size; s++)
         {
             hash_stream_init(state);
-            polynomial_RNS_hash_update(state, arith_rns_polynomial(&word[leaf * size + s]));
+            polynomial_RNS_hash_update(state, arith_rns_polynomial(&word[leaf * leaf_size + s]));
             hash_stream_digest(state, &staged[s * DIGEST_LEN]);
         }
-        hash_batch(&out[leaf * DIGEST_LEN], staged, leaves, size * DIGEST_LEN);
+        hash_batch(&out[leaf * DIGEST_LEN], staged, leaves, leaf_size * DIGEST_LEN);
     }
     free(state);
     free(staged);
@@ -317,7 +317,7 @@ typedef struct
 {
     uint8_t *out;
     ArithElement *word;
-    uint64_t size, leaves, per_chunk;
+    uint64_t leaf_size, leaves, per_chunk;
 } LeavesJob;
 
 static void leaf_digests_chunk(void *ctx, uint64_t c)
@@ -326,12 +326,12 @@ static void leaf_digests_chunk(void *ctx, uint64_t c)
     const uint64_t first = c * job->per_chunk;
     const uint64_t last =
         first + job->per_chunk < job->leaves ? first + job->per_chunk : job->leaves;
-    leaf_digests_range(job->out, job->word, job->size, first, last);
+    leaf_digests_range(job->out, job->word, job->leaf_size, first, last);
 }
 
-void rs_leaf_digests(uint8_t *out, ArithElement *word, uint64_t count, uint64_t size)
+void rs_leaf_digests(uint8_t *out, ArithElement *word, uint64_t length, uint64_t leaf_size)
 {
-    const uint64_t leaves = count / size;
+    const uint64_t leaves = length / leaf_size;
     if (leaves == 0)
         return;
     // The symbols of a codeword share a ring, so the first one's rows give the
@@ -342,11 +342,11 @@ void rs_leaf_digests(uint8_t *out, ArithElement *word, uint64_t count, uint64_t 
         if (first->rns_mask & (1ULL << i))
             symbol_bytes += first->base->N * (rns_row_is_narrow(first->base, i) ? sizeof(uint32_t)
                                                                                 : sizeof(uint64_t));
-    const uint64_t most_chunks = leaves * size * symbol_bytes / LEAF_PARALLEL_BYTES;
+    const uint64_t most_chunks = leaves * leaf_size * symbol_bytes / LEAF_PARALLEL_BYTES;
     const uint64_t threads = vfhe_threads_for(0, most_chunks);
     if (threads <= 1)
     {
-        leaf_digests_range(out, word, size, 0, leaves);
+        leaf_digests_range(out, word, leaf_size, 0, leaves);
         return;
     }
     uint64_t chunks = threads * LEAF_CHUNKS_PER_THREAD;
@@ -356,6 +356,6 @@ void rs_leaf_digests(uint8_t *out, ArithElement *word, uint64_t count, uint64_t 
     // 64-byte line of `out`.
     uint64_t per_chunk = (leaves + chunks - 1) / chunks;
     per_chunk += per_chunk & 1;
-    LeavesJob job = {out, word, size, leaves, per_chunk};
+    LeavesJob job = {out, word, leaf_size, leaves, per_chunk};
     vfhe_parallel_for((leaves + per_chunk - 1) / per_chunk, 0, leaf_digests_chunk, &job);
 }

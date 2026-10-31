@@ -1474,8 +1474,8 @@ extern "C"
     // x < bound. Returns false, with `prior` and `totals` partly written, when a
     // value is `bound` or more. `prior` holds `count` words and `totals`
     // `bound`; neither aliases `values`.
-    bool vec_occurrence_counts(uint64_t *prior, uint64_t *totals, const uint64_t *values,
-                               uint64_t count, uint64_t bound);
+    bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values,
+                           uint64_t count, uint64_t bound);
 
     MPScalar mp_load(uint64_t *in, uint64_t d);
     mp_vector_t *load_m512(uint64_t in);

@@ -25,7 +25,7 @@ from vfhe.arith import (
     FieldVector,
     PseudoMersenneField,
     PseudoMersenneNTT,
-    occurrence_counts,
+    count_occurrences,
 )
 from vfhe.util import parallel
 
@@ -315,6 +315,59 @@ class TestDigits:
         assert vector == before
 
 
+#: Long enough that the inversion's column totals are themselves inverted by
+#: rows: 2^20 + 3000 elements are 256 rows of 4104 and a tail of 952, and the
+#: 4104 totals are 256 rows of 16 and a tail of 8.
+N_INVERSE = (1 << 20) + 3000
+
+
+@pytest.fixture(
+    scope="module",
+    params=["pmf", "extension"],
+)
+def inverse_field(request):
+    if request.param == "pmf":
+        return PseudoMersenneField.generate(156, two_adicity=8)
+    return ExtensionField(_FUSED_PRIME, 2, 3)
+
+
+def native_inverse(field) -> Callable[[Any, Any], int]:
+    """The C entry inverting vectors over `field`, which leaves `out` unwritten
+    when it returns 0."""
+    from vfhe.util.bindings import lib
+
+    if isinstance(field, PseudoMersenneField):
+        return lib.pmf_vec_inv
+    return lib.field_vec_inv
+
+
+class TestInverseByLevels:
+    @pytest.mark.parametrize("where", [None, 0, "middle", "tail"])
+    def test_inverse(self, inverse_field, where):
+        """The values and `out == a` on one thread and many, and a zero in a
+        column chain or in the tail refused with `out` unwritten."""
+        n = N_INVERSE
+        invert = native_inverse(inverse_field)
+        a = sampled(inverse_field, n, b"inverse by levels")
+        if where is None:
+            serial, threaded = at_one_and_many(a.inverse)
+            assert threaded == serial
+            assert a * serial == FieldVector(inverse_field, [1] * n)
+            in_place = a.copy()
+            assert invert(in_place._struct, in_place._struct) == 1
+            assert in_place == serial
+            return
+        a[{"middle": n // 2, "tail": n - 5}.get(where, where)] = 0
+
+        def refused() -> bool:
+            out = a.copy()
+            return invert(out._struct, a._struct) == 0 and out == a
+
+        assert at_one_and_many(refused) == (True, True)
+        with pytest.raises(ValueError, match="not invertible"):
+            a.inverse()
+
+
 def reference_counts(values, bound: int) -> tuple[list[int], list[int]]:
     seen: dict[int, int] = {}
     prior, totals = [], [0] * bound
@@ -330,33 +383,33 @@ class TestOccurrenceCounts:
     def test_matches_a_dictionary(self, n, bound):
         rng = random.Random(n)  # noqa: S311 - test data, not a key
         values = array("Q", (rng.randrange(bound) for _ in range(n)))
-        counts = occurrence_counts(values, bound)
+        counts = count_occurrences(values, bound)
         assert counts is not None
         prior, totals = counts
         assert (list(prior), list(totals)) == reference_counts(values, bound)
 
     def test_a_value_out_of_range_gives_none(self):
-        assert occurrence_counts(array("Q", [0, 3, 4, 1]), 4) is None
-        assert occurrence_counts(array("Q", [2**64 - 1]), 4) is None
+        assert count_occurrences(array("Q", [0, 3, 4, 1]), 4) is None
+        assert count_occurrences(array("Q", [2**64 - 1]), 4) is None
 
     def test_on_one_thread_and_many(self):
         rng = random.Random(5)  # noqa: S311 - test data, not a key
         n, bound = (1 << 18) + 5, 1 << 10
         values = array("Q", (rng.randrange(bound) for _ in range(n)))
-        serial, threaded = at_one_and_many(lambda: occurrence_counts(values, bound))
+        serial, threaded = at_one_and_many(lambda: count_occurrences(values, bound))
         assert serial == threaded
         prior, totals = serial
         assert (list(prior), list(totals)) == reference_counts(values, bound)
         values[n - 3] = bound
-        assert at_one_and_many(lambda: occurrence_counts(values, bound)) == (None, None)
+        assert at_one_and_many(lambda: count_occurrences(values, bound)) == (None, None)
 
     def test_rejects_other_buffers(self):
         with pytest.raises(TypeError):
-            occurrence_counts(array("i", [1, 2]), 4)
+            count_occurrences(array("i", [1, 2]), 4)
         # Two rows of 64-bit words: counting them as one row would be wrong.
         rows = memoryview(array("Q", [0, 1, 2, 3])).cast("B").cast("Q", (2, 2))
         with pytest.raises(TypeError):
-            occurrence_counts(rows, 4)
+            count_occurrences(rows, 4)
 
 
 _FUSED_PRIME = 562949953421201

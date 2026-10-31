@@ -54,9 +54,9 @@ from vfhe.util.bindings import ffi, lib
 
 from .code import (
     DEFAULT_SEED,
+    _check_whole_leaves,
     bit_reverse_permutation,
     check_instantiation,
-    check_whole_fibers,
     derive_seed,
     foldable_relative_distance,
     vandermonde_inverse,
@@ -1091,7 +1091,7 @@ class FieldFoldableRS:
         A read-only view of the kernel's buffer, not a copy of it -- so a
         codeword reaches its root without its digests being duplicated on the
         way. `bytes(...)` is how a caller takes a copy."""
-        check_whole_fibers(len(word), size)
+        _check_whole_leaves(len(word), size)
         return word.hash_elements(group=size, stride=size)
 
     def fold_at(self, word: FieldVector, r, level: int, i: int):

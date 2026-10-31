@@ -440,7 +440,7 @@ void pmf_vec_ntt_encode_blocks(PMFVector out, const PMFVector msg, uint64_t bloc
                                PMFNTTPlan plan);
 
 // --- counting ---
-bool vec_occurrence_counts(uint64_t *prior, uint64_t *totals, const uint64_t *values,
+bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values,
                            uint64_t count, uint64_t bound);
 
 // --- the execution tape ---

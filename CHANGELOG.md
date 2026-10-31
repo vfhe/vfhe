@@ -26,7 +26,7 @@ versions may contain breaking changes.
   shape `(2^n, ell, N)` works), in one native call.
 - `polynomial_RNS_get_natural_array` / `polynomial_RNS_set_natural_array`:
   the natural-order rows of many polynomials, read or written in one call.
-- `sumcheck_prod_round{,_pairs,_halves}`: one sumcheck round message for a
+- `sumcheck_product_round{,_pairs,_halves}`: one sumcheck round message for a
   product of any number of `R_q` tables at any number of nodes.
 - `docs/USAGE.md` "Threads, processes and memory": the thread limit, Python
   threads and the GIL, what a forked child may use, and memory placement on
@@ -715,8 +715,8 @@ versions may contain breaking changes.
   elements per digit, with the values optionally read as a matrix of
   `columns` columns and written column by column; one native call on a
   pseudo-Mersenne vector (C `pmf_vec_set_radix_decomposition`).
-- `vfhe.arith.occurrence_counts(values, bound)` (C
-  `vec_occurrence_counts`): for an `array('Q')`, how often each value
+- `vfhe.arith.count_occurrences(values, bound)` (and the C function of the
+  same name): for an `array('Q')`, how often each value
   occurred before each position and how often each value below `bound`
   occurs, or None when a value is out of range.
 
@@ -729,7 +729,7 @@ versions may contain breaking changes.
   the same at any thread count, and at the default limit of one thread the
   single-threaded code runs.
 - Sumcheck rounds over products of native ring tables of any number of
-  factors, at any number of nodes, run natively (`sumcheck_prod_round*`)
+  factors, at any number of nodes, run natively (`sumcheck_product_round*`)
   instead of entry by entry in Python; messages are unchanged.
 - `FoldableRS.leaf_digests` and `leaf_digests_of` digest every leaf in one
   native call, `rs_leaf_digests`, with the same bytes, so roots, openings
@@ -740,7 +740,7 @@ versions may contain breaking changes.
   the field code dropped it.
 - `vfhe.piop.protocols.lookup.counters` returns `array('Q')`s for an
   `array('Q')` whose values are all in the table (counted natively by
-  `occurrence_counts`), and lists otherwise.
+  `count_occurrences`), and lists otherwise.
 - `FoldableRS`'s twists default to the residue fields `F_(p^d)` of the
   ring's primes (`twist_field="field"`) on a ring whose split degree is above
   1, and stay the per-prime integers (`"prime"`) on an unsplit ring, where

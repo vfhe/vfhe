@@ -9,7 +9,7 @@ from array import array
 from vfhe.util.bindings import ffi, lib
 
 
-def occurrence_counts(values, bound: int) -> tuple[array, array] | None:
+def count_occurrences(values, bound: int) -> tuple[array, array] | None:
     """For `values`, a one-dimensional buffer of 64-bit unsigned integers
     (``array('Q')``),
     the pair ``(prior, totals)`` of ``array('Q')``s: ``prior[i]`` is how many
@@ -28,7 +28,7 @@ def occurrence_counts(values, bound: int) -> tuple[array, array] | None:
     count = len(view)
     prior = array("Q", bytes(8 * count))
     totals = array("Q", bytes(8 * bound))
-    if count and not lib.vec_occurrence_counts(
+    if count and not lib.count_occurrences(
         ffi.from_buffer("uint64_t[]", prior),
         ffi.from_buffer("uint64_t[]", totals),
         ffi.from_buffer("uint64_t[]", values),

@@ -295,11 +295,11 @@ def pair_digest(pair: tuple[RNSPolynomial, RNSPolynomial]) -> bytes:
     return _fiber_digest((lo, hi))
 
 
-def check_whole_fibers(length: int, size: int) -> None:
+def _check_whole_leaves(length: int, leaf_size: int) -> None:
     """Raises `ValueError` unless a word of `length` symbols is a whole number
-    of `size`-symbol Merkle leaves."""
-    if size < 1 or length % size:
-        raise ValueError(f"{length} symbols are not whole leaves of {size}")
+    of Merkle leaves of `leaf_size` symbols."""
+    if leaf_size < 1 or length % leaf_size:
+        raise ValueError(f"{length} symbols are not whole leaves of {leaf_size}")
 
 
 def _fiber_digest(fiber) -> bytes:
@@ -929,7 +929,7 @@ class FoldableRS:
         form, as `get_hash` hashes them, and are left in the form they are
         in. The result is a read-only view of the kernel's buffer.
         """
-        check_whole_fibers(len(word), size)
+        _check_whole_leaves(len(word), size)
         if not word:
             return memoryview(b"")
         # The views own the rows the kernel reads, so they stay bound until
