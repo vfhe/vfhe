@@ -731,6 +731,11 @@ extern "C"
     void pmf_vec_scale(PMFVector out, const PMFVector a, const uint64_t *s);
     // Sum of the first n elements, into one PMF_LANES-word element.
     void pmf_vec_sum(uint64_t *out, const PMFVector a);
+    // Elementwise inverse by Montgomery's trick: one inversion and three
+    // multiplications per element. Returns 0 without writing `out` if any of the
+    // first n elements is zero, 1 otherwise. `out` holds a->n elements and may
+    // be `a`.
+    int pmf_vec_inv(PMFVector out, const PMFVector a);
     // Transpose between the planes and one PMF_LANES-word element buffer; the
     // range forms move `count` consecutive elements laid out PMF_LANES words
     // apart, so building a vector costs one call rather than `count`.
@@ -1162,6 +1167,18 @@ extern "C"
        c mod 2^128 is written as low[e * N + k] + 2^64 high[e * N + k]. */
     void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial *in,
                                        uint64_t count);
+    /* The active rows of `p` as words, in natural order: N words per row,
+       rows in ascending base index, and word u + s t of a row is the residue
+       at (u, t) of the native layout, u * (N / s) + t, for split_degree s.
+       In the coefficient domain that is coefficient order; in the mul domain
+       the s residues of each slot are adjacent. Either domain, as the rows
+       are; narrow rows are widened. */
+    void polynomial_RNS_get_natural(uint64_t *out, RNS_Polynomial p);
+    /* The inverse: overwrites the active rows of `p` from `in`, laid out as
+       polynomial_RNS_get_natural writes them. Returns -1, or the position
+       among the active rows of the first row of `in` holding a word >= its
+       prime, in which case `p` is left unchanged. */
+    int64_t polynomial_RNS_set_natural(RNS_Polynomial p, const uint64_t *in);
     RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N,
                                                         uint64_t rns_mask, RNS_Base base);
     void free_RNS_polynomial_array(uint64_t size, RNS_Polynomial *p);
