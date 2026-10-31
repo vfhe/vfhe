@@ -201,6 +201,145 @@ void pmf_vec_sum(uint64_t *out, const PMFVector a)
     }
 }
 
+// --- inversion ------------------------------------------------------------
+
+// Rows the inversion cuts a vector into. Montgomery's trick is a serial chain:
+// each prefix product needs the one before it. Cut the vector into rows of
+// `width` elements and every column is a chain of its own, so a step of either
+// sweep is a group multiply per group of a row, none waiting on another, and a
+// chain is only as long as there are rows. The column totals are then inverted
+// together by the trick over single elements; 256 rows keep those a small
+// fraction of the work.
+#define PMF_VEC_INV_ROWS 256
+
+// Montgomery's trick over `count >= 1` elements laid out PMF_LANES words
+// apart, on the element kernels: inv[i] = 1 / x[i]. Returns 0, with `inv`
+// holding no inverses, if one of the elements is zero. `inv` may not be `x`.
+static int pmf_inv_serial(uint64_t *inv, const uint64_t *x, uint64_t count, PMFParams params)
+{
+    // inv[i] holds the prefix product x[0] ... x[i] until the sweep back
+    // overwrites it.
+    memcpy(inv, x, PMF_LANES * sizeof(uint64_t));
+    for (uint64_t i = 1; i < count; i++)
+        pmf_mul(inv + i * PMF_LANES, inv + (i - 1) * PMF_LANES, x + i * PMF_LANES, params);
+
+    // The product is canonical, so it is zero exactly when every limb is.
+    const uint64_t *total = inv + (count - 1) * PMF_LANES;
+    uint64_t any = 0;
+    for (uint64_t k = 0; k < params->limbs; k++)
+        any |= total[k];
+    if (!any)
+        return 0;
+
+    uint64_t running[PMF_LANES];
+    pmf_ref_inverse(running, total, params);
+    for (uint64_t i = count; i-- > 1;)
+    {
+        pmf_mul(inv + i * PMF_LANES, running, inv + (i - 1) * PMF_LANES, params);
+        pmf_mul(running, running, x + i * PMF_LANES, params);
+    }
+    memcpy(inv, running, sizeof(running));
+    return 1;
+}
+
+// The forward sweep over the first rows * width elements of `a`: prefix row t
+// is the product of rows 0..t, column by column.
+PMF_INLINE void pmf_vec_inv_forward_body(PMFVector prefix, const PMFVector a, uint64_t rows,
+                                         uint64_t width, PMFParams P)
+{
+    const uint64_t L = P->limbs;
+    pv_t pv[PMF_MAX_LIMBS], av[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];
+
+    for (uint64_t k = 0; k < L; k++)
+        memcpy(prefix->limbs[k], a->limbs[k], width * sizeof(uint64_t));
+    for (uint64_t i = width; i < rows * width; i += PMF_VEC_GROUP)
+    {
+        pmf_vec_load_group(pv, prefix, i - width, L);
+        pmf_vec_load_group(av, a, i, L);
+        pmf_vec_mul_group(T, pv, av, P);
+        pmf_vec_store_group(prefix, i, T, L);
+    }
+}
+
+// The backward sweep. The last prefix row holds the running inverses, one per
+// column, starting from the inverses of the column totals: for t from the last
+// row down to 1, out row t is the running inverse times prefix row t - 1, and
+// the running inverse then absorbs row t of `a`. Out row 0 is what is left.
+// Each group of `a` is loaded before the same group of `out` is stored, so
+// `out` may be `a`.
+PMF_INLINE void pmf_vec_inv_backward_body(PMFVector out, const PMFVector a, PMFVector prefix,
+                                          uint64_t rows, uint64_t width, PMFParams P)
+{
+    const uint64_t L = P->limbs, last = (rows - 1) * width;
+    pv_t rv[PMF_MAX_LIMBS], pv[PMF_MAX_LIMBS], av[PMF_MAX_LIMBS];
+    pv_t T[PMF_MAX_LIMBS + 1], U[PMF_MAX_LIMBS + 1];
+
+    for (uint64_t t = rows; t-- > 1;)
+    {
+        for (uint64_t g = 0; g < width; g += PMF_VEC_GROUP)
+        {
+            const uint64_t i = t * width + g;
+            pmf_vec_load_group(rv, prefix, last + g, L);
+            pmf_vec_load_group(pv, prefix, i - width, L);
+            pmf_vec_load_group(av, a, i, L);
+            pmf_vec_mul_group(T, rv, pv, P);
+            pmf_vec_mul_group(U, rv, av, P);
+            pmf_vec_store_group(out, i, T, L);
+            pmf_vec_store_group(prefix, last + g, U, L);
+        }
+    }
+    for (uint64_t k = 0; k < L; k++)
+        memcpy(out->limbs[k], prefix->limbs[k] + last, width * sizeof(uint64_t));
+}
+
+int pmf_vec_inv(PMFVector out, const PMFVector a)
+{
+    const uint64_t n = a->n, L = a->params->limbs;
+    if (n == 0)
+        return 1;
+
+    // A row is a whole number of runs of PMF_LANES elements, so every row
+    // starts aligned. Below PMF_VEC_INV_ROWS such runs there are no rows, and
+    // every element goes through the trick over single elements.
+    const uint64_t width = (n / PMF_VEC_INV_ROWS) & ~(uint64_t)(PMF_LANES - 1);
+    const uint64_t rows = width ? n / width : 0, body = rows * width;
+
+    // Inverted one at a time: the column totals, then the elements past the
+    // last whole row.
+    const uint64_t singles = width + (n - body);
+    uint64_t *x = (uint64_t *)safe_malloc(2 * singles * PMF_LANES * sizeof(uint64_t));
+    uint64_t *inv = x + singles * PMF_LANES;
+
+    uint64_t *planes[PMF_MAX_LIMBS];
+    uint64_t *block = NULL;
+    struct _PMFVector prefix = *a;
+    if (width)
+    {
+        block = (uint64_t *)safe_aligned_malloc(L * body * sizeof(uint64_t));
+        for (uint64_t k = 0; k < L; k++)
+            planes[k] = block + k * body;
+        prefix.limbs = planes;
+        prefix.n = prefix.allocated_n = body;
+        PMF_WITH_LIMBS(a->params, pmf_vec_inv_forward_body(&prefix, a, rows, width, &P_));
+        pmf_vec_get_range(x, &prefix, body - width, width);
+    }
+    pmf_vec_get_range(x + width * PMF_LANES, a, body, n - body);
+
+    const int status = pmf_inv_serial(inv, x, singles, a->params);
+    if (status)
+    {
+        if (width)
+        {
+            pmf_vec_set_range(&prefix, body - width, inv, width);
+            PMF_WITH_LIMBS(a->params, pmf_vec_inv_backward_body(out, a, &prefix, rows, width, &P_));
+        }
+        pmf_vec_set_range(out, body, inv + width * PMF_LANES, n - body);
+    }
+    free(block);
+    free(x);
+    return status;
+}
+
 // --- adjacent pairs -------------------------------------------------------
 
 // The even- and odd-indexed elements among the 2 * PMF_VEC_GROUP input elements

@@ -1010,3 +1010,123 @@ def test_centered_lift_is_the_rns_gadget_digit():
 
         assert _lift_residue(x, idx, centered=False).get_polynomial() == row
     assert [s % Q for s in recombined] == x.get_polynomial()
+
+
+# --- rows in natural order: get/from_coeff_matrix and to/from_uint64 ---------
+
+#: (N, prime sizes, split degree): a plain ring, split degrees below and above
+#: sqrt(N) (the two ways the transpose is sliced) and equal to N, each with a
+#: narrow prime (stored 32-bit), a prime stored 64-bit but below 2^32, and wide
+#: ones.
+ROW_SHAPES = [
+    (16, [28, 50], 1),
+    (64, [28, 31, 61], 4),
+    (256, [29, 32, 40], 16),
+    (16, [50, 28], 16),
+    (1024, [30, 60], 2),
+]
+
+
+def _native_rows(poly, representation):
+    """The rows read one residue at a time from the native layout, where
+    coefficient ``j`` sits at ``(j % d) * (N / d) + j // d``."""
+    from vfhe.arith.impl.rns.polynomial import _row
+
+    view = poly._viewed_as(representation)
+    p = ffi.cast("RNS_Polynomial", view.obj)
+    n, d = poly.ring.N, poly.ring.split_degree
+    rows = [_row(p, idx) for idx in poly.ring.prime_indices]
+    return [[int(row[(j % d) * (n // d) + j // d]) for j in range(n)] for row in rows]
+
+
+@pytest.mark.parametrize(("n", "sizes", "d"), ROW_SHAPES)
+@pytest.mark.parametrize("representation", [repr.coeff, repr.ntt])
+def test_rows_read_in_natural_order(n, sizes, d, representation):
+    ring = Ring(n, prime_size=sizes, split_degree=d)
+    a = ring.random_element(ntt=representation == repr.ntt)
+    expected = _native_rows(a, representation)
+    held = a.repr
+    assert a.get_coeff_matrix(repr=representation) == expected
+    words = a.to_uint64(repr=representation)
+    assert words.typecode == "Q"
+    assert words.tolist() == [v for row in expected for v in row]
+    other = repr.coeff if representation == repr.ntt else repr.ntt
+    assert a.to_uint64(repr=other).tolist() == [
+        v for row in _native_rows(a, other) for v in row
+    ]
+    assert a.repr == held  # reading never converts the object read
+
+
+@pytest.mark.parametrize(("n", "sizes", "d"), ROW_SHAPES)
+@pytest.mark.parametrize("representation", [repr.coeff, repr.ntt])
+def test_rows_written_in_natural_order(n, sizes, d, representation):
+    ring = Ring(n, prime_size=sizes, split_degree=d)
+    a = ring.random_element(ntt=True)
+    matrix = a.get_coeff_matrix(repr=representation)
+    words = a.to_uint64(repr=representation)
+    for back in (
+        Polynomial(ring).from_coeff_matrix(matrix, repr=representation),
+        Polynomial(ring).from_uint64(words, repr=representation),
+    ):
+        assert back.repr == representation
+        assert back == a
+        assert _native_rows(back, representation) == matrix
+
+
+@pytest.mark.parametrize(("n", "sizes", "d"), ROW_SHAPES)
+def test_ntt_rows_are_the_residues_modulo_the_slot_factors(n, sizes, d):
+    """Slot ``s`` of an NTT row is the residue modulo ``X^d - w_s``, with
+    ``w_s = w_0^(2 brv(s) + 1)`` the root `get_rou_matrix` lists."""
+    ring = Ring(n, prime_size=sizes, split_degree=d)
+    a = ring.random_element(ntt=False)
+    k, bits = n // d, (n // d).bit_length() - 1
+    coeffs = a.get_coeff_matrix(repr=repr.coeff)
+    slots = a.get_coeff_matrix(repr=repr.ntt)
+    for i, p in enumerate(ring.primes):
+        roots = ring.get_rou_matrix()[i]
+        for s in range(k):
+            brv = int(format(s, f"0{bits}b")[::-1], 2) if bits else 0
+            w = roots[s]
+            assert w == pow(roots[0], 2 * brv + 1, p)
+            residue = [
+                sum(coeffs[i][u + d * t] * pow(w, t, p) for t in range(k)) % p
+                for u in range(d)
+            ]
+            assert slots[i][s * d : (s + 1) * d] == residue
+
+
+def test_from_uint64_takes_a_numpy_matrix():
+    np = pytest.importorskip("numpy")
+    ring = Ring(64, prime_size=[28, 50], split_degree=4)
+    a = ring.random_element(ntt=False)
+    matrix = np.frombuffer(a.to_uint64(), dtype=np.uint64).reshape(ring.ell, ring.N)
+    assert matrix.tolist() == a.get_coeff_matrix()
+    assert Polynomial(ring).from_uint64(matrix.copy()) == a
+    with pytest.raises(TypeError, match="C-contiguous"):
+        Polynomial(ring).from_uint64(np.asfortranarray(matrix))
+
+
+def test_from_uint64_refuses_a_value_above_its_prime():
+    from array import array
+
+    ring = Ring(32, prime_size=[28, 50], split_degree=2)
+    a = ring.random_element(ntt=False)
+    words = a.to_uint64()
+    words[ring.N + 5] = ring.primes[1]
+    b = ring.random_element(ntt=False)
+    before = b.get_coeff_matrix()
+    with pytest.raises(ValueError, match="row 1"):
+        b.from_uint64(words)
+    assert b.get_coeff_matrix() == before
+    with pytest.raises(ValueError, match="values for"):
+        b.from_uint64(words[:-1])
+    with pytest.raises(TypeError, match="64-bit"):
+        b.from_uint64(array("I", [0] * (2 * ring.N)))
+
+
+@pytest.mark.parametrize("sizes", [[50], [30]])
+@pytest.mark.parametrize("split_degree", [1, 4])
+def test_from_coeff_matrix_needs_whole_rows(sizes, split_degree):
+    ring = Ring(16, prime_size=sizes, split_degree=split_degree)
+    with pytest.raises(IndexError):
+        Polynomial(ring).from_coeff_matrix([[1, 2, 3]])

@@ -81,7 +81,7 @@ static void pmf_ref_pow_u64(uint64_t *out, const uint64_t *a, uint64_t e, PMFPar
 }
 
 // a^(p-2), Fermat. Only zero has no inverse, and no caller passes it.
-static void pmf_ref_inverse(uint64_t *out, const uint64_t *a, PMFParams params)
+void pmf_ref_inverse(uint64_t *out, const uint64_t *a, PMFParams params)
 {
     const uint64_t L = params->limbs;
     uint64_t exp[PMF_MAX_LIMBS];

@@ -535,6 +535,8 @@ void pmf_ref_reduce_wide(uint64_t *out, uint64_t *T, PMFParams params);
 // PMFParams holds p in). Square-and-multiply over pmf_ref_mul.
 void pmf_ref_pow(uint64_t *out, const uint64_t *a, const uint64_t *exp, uint64_t exp_limbs,
                  PMFParams params);
+// a^(p-2), the inverse of a nonzero a (Fermat), over pmf_ref_pow.
+void pmf_ref_inverse(uint64_t *out, const uint64_t *a, PMFParams params);
 
 // The scalar transform (pmf_ntt.c): the loops of pmf_vec_ntt_* over the element
 // kernels above, on `n` elements laid out PMF_LANES words apart, in place. Same

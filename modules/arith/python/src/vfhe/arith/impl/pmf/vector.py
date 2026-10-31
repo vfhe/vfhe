@@ -337,6 +337,13 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_sum(buf, self._struct)
         return self.field._wrap(buf)
 
+    def inverse(self) -> PseudoMersenneVector:
+        """See `FieldVector.inverse`; one call for the whole vector."""
+        result = self._like()
+        if not lib.pmf_vec_inv(result._struct, self._struct):
+            raise ValueError("vector contains an element that is not invertible")
+        return result
+
     def split_even_odd(
         self,
         block: int = 1,

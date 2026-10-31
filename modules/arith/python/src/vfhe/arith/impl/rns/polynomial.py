@@ -65,6 +65,37 @@ def _row(p, idx: int):
     return p.rows64[idx]
 
 
+def _to_natural_order(row: list, d: int) -> list:
+    """A row of a ring with split degree `d`, from the native layout to
+    natural order: entry ``u + d t`` of the result is entry ``u * (N/d) + t``
+    of `row`, for ``N = len(row)``. A transpose, done by slices along the
+    shorter side."""
+    n = len(row)
+    k = n // d
+    out = [0] * n
+    if d <= k:
+        for u in range(d):
+            out[u::d] = row[u * k : (u + 1) * k]
+    else:
+        for t in range(k):
+            out[t * d : (t + 1) * d] = row[t::k]
+    return out
+
+
+def _from_natural_order(values: list, d: int) -> list:
+    """The inverse of `_to_natural_order`."""
+    n = len(values)
+    k = n // d
+    out = [0] * n
+    if d <= k:
+        for u in range(d):
+            out[u * k : (u + 1) * k] = values[u::d]
+    else:
+        for t in range(k):
+            out[t::k] = values[t * d : (t + 1) * d]
+    return out
+
+
 @dataclasses.dataclass(frozen=True)
 class RingParameters:
     """What makes two `RNSRing` objects the same ring: degree, split degree and
@@ -1248,7 +1279,11 @@ class RNSPolynomial(Polynomial):
         return iter(self.get_coeff_matrix(repr=repr.coeff))
 
     def get_coeff_matrix(self, repr=repr.coeff):
-        """One list of ``N`` coefficients per prime, in `RNSRing.primes` order."""
+        """One list of ``N`` coefficients per prime, in `RNSRing.primes` order.
+
+        The rows are in the order `to_uint64` gives, which says what that
+        order is in each representation.
+        """
         # `view` must stay referenced: `p` points into the buffer it owns, and a
         # temporary would be freed before the rows below are read.
         view = self._viewed_as(repr)
@@ -1257,39 +1292,82 @@ class RNSPolynomial(Polynomial):
         values = [ffi.unpack(_row(p, idx), N) for idx in self.ring.prime_indices]
         if self.ring.split_degree == 1:
             return values
-        modMask = self.ring.split_degree - 1
-        poly_size = N // self.ring.split_degree
-        return [
-            [
-                row[(j & modMask) * poly_size + j // self.ring.split_degree]
-                for j in range(N)
-            ]
-            for row in values
-        ]
+        return [_to_natural_order(row, self.ring.split_degree) for row in values]
 
     def from_coeff_matrix(self, matrix, repr=repr.coeff):
         """Overwrite with one list of ``N`` coefficients per prime; returns ``self``."""
         p = ffi.cast("RNS_Polynomial", self.obj)
         N = self.ring.N
-        modMask = self.ring.split_degree - 1
-        poly_size = N // self.ring.split_degree
+        d = self.ring.split_degree
         for k, idx in enumerate(self.ring.prime_indices):
             row = _row(p, idx)
-            if self.ring.split_degree == 1:
-                # A split ring interleaves, so only the plain layout can be
-                # copied straight in; the loop below is the general case.
-                width = 4 if (p.base.narrow_mask >> idx) & 1 else 8
-                code = _ROW_CODE[width]
-                try:
-                    packed = array.array(code, matrix[k])
-                except TypeError:
-                    packed = array.array(code, [int(v) for v in matrix[k]])
-                ffi.memmove(row, packed, N * width)
-                continue
-            for j in range(N):
-                row[(j & modMask) * poly_size + j // self.ring.split_degree] = int(
-                    matrix[k][j]
-                )
+            values = matrix[k]
+            if d > 1:
+                values = list(values)
+                if len(values) < N:
+                    raise IndexError(f"row {k} holds {len(values)} values, not {N}")
+                values = _from_natural_order(values[:N], d)
+            width = 4 if (p.base.narrow_mask >> idx) & 1 else 8
+            code = _ROW_CODE[width]
+            try:
+                packed = array.array(code, values)
+            except TypeError:
+                packed = array.array(code, [int(v) for v in values])
+            if len(packed) < N:
+                raise IndexError(f"row {k} holds {len(packed)} values, not {N}")
+            ffi.memmove(row, packed, N * width)
+        self.repr = repr
+        return self
+
+    def to_uint64(self, repr=repr.coeff) -> array.array:
+        """The rows in representation `repr`, as one ``array('Q')`` of
+        ``ell * N`` words: words ``i * N`` to ``(i + 1) * N - 1`` are the row
+        of ``ring.primes[i]``. ``numpy.frombuffer(words, numpy.uint64)
+        .reshape(ell, N)`` reads it as a matrix without copying.
+
+        In `Representation.coeff`, word ``i * N + j`` is coefficient ``j``
+        modulo ``primes[i]``. In `Representation.ntt` a row is the ``N / d``
+        slots of the incomplete transform one after another, ``d =
+        split_degree``: words ``i * N + s * d`` to ``i * N + s * d + d - 1``
+        are the coefficients, low degree first, of the residue modulo
+        ``X^d - w_s`` (for ``d = 1`` the value at ``w_s``), with ``w_s =
+        get_rou_matrix()[i][s] = w_0^(2 brv(s) + 1)`` and ``brv`` the
+        reversal of ``log2(N / d)`` bits. `get_coeff_matrix` returns the same
+        rows as lists of Python ints.
+
+        Reads a converted copy when ``self`` is in the other representation.
+        """
+        view = self._viewed_as(repr)  # a local: the call reads its rows
+        words = array.array("Q", bytes(8 * self.ring.ell * self.ring.N))
+        self.ring.lib.polynomial_RNS_get_natural(
+            ffi.from_buffer("uint64_t[]", words), view.obj
+        )
+        return words
+
+    def from_uint64(self, values, repr=repr.coeff) -> RNSPolynomial:
+        """Overwrite with rows laid out as `to_uint64` returns them, holding
+        representation `repr`; returns ``self``.
+
+        `values` is an ``array('Q')`` or any C-contiguous buffer of
+        ``ell * N`` unsigned 64-bit integers, such as a ``numpy.uint64`` array
+        of shape ``(ell, N)``. Every word must be below its row's prime;
+        ValueError otherwise, with ``self`` unchanged.
+        """
+        view = memoryview(values)
+        if view.itemsize != 8 or view.format not in ("Q", "L"):
+            raise TypeError("values must be a buffer of 64-bit unsigned integers")
+        if not view.c_contiguous:
+            raise TypeError("values must be C-contiguous")
+        size = self.ring.ell * self.ring.N
+        if view.nbytes != 8 * size:
+            raise ValueError(f"{view.nbytes // 8} values for {size} residues")
+        bad = self.ring.lib.polynomial_RNS_set_natural(
+            self.obj, ffi.from_buffer("uint64_t[]", view.cast("B"))
+        )
+        if bad >= 0:
+            raise ValueError(
+                f"row {bad} holds a value not below its prime {self.ring.primes[bad]}"
+            )
         self.repr = repr
         return self
 

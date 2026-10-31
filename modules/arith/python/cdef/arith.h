@@ -148,6 +148,8 @@ int64_t polynomial_RNS_read_rows(void *p, const uint8_t *in, const uint64_t *row
 uint64_t *polynomial_RNS_get_hash_p(void *p);
 void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial *in,
                                    uint64_t count);
+void polynomial_RNS_get_natural(uint64_t *out, void *p);
+int64_t polynomial_RNS_set_natural(void *p, const uint64_t *in);
 
 // --- negacyclic FFT ---
 typedef struct _FFT_Plan *FFT_Plan;
@@ -378,6 +380,7 @@ void pmf_vec_sub_scalar(PMFVector out, const PMFVector a, const uint64_t *s);
 void pmf_vec_scalar_sub(PMFVector out, const uint64_t *s, const PMFVector a);
 void pmf_vec_scale(PMFVector out, const PMFVector a, const uint64_t *s);
 void pmf_vec_sum(uint64_t *out, const PMFVector a);
+int pmf_vec_inv(PMFVector out, const PMFVector a);
 void pmf_vec_get_element(uint64_t *out, const PMFVector a, uint64_t index);
 void pmf_vec_set_element(PMFVector out, uint64_t index, const uint64_t *value);
 void pmf_vec_set_range(PMFVector out, uint64_t start, const uint64_t *values, uint64_t count);

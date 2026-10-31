@@ -608,6 +608,25 @@ versions may contain breaking changes.
   element-wise kernels (IFMA for primes up to 50 bits), then the rows'
   combination modulo `2^128` in 52-bit limbs with IFMA products
   (`vec_combination_mod_2_128`), the elements on several threads.
+- `FieldVector.inverse` over a pseudo-Mersenne field is one C call
+  (`pmf_vec_inv`) instead of the front's loop over elements: Montgomery's
+  trick with the vector cut into rows, so each step of either sweep is a
+  group multiply per group of a row, and one inversion for the whole
+  vector. A zero element
+  raises `ValueError`, as the front documents and the extension-field
+  vector does, rather than `ZeroDivisionError`.
+- `RNSPolynomial.to_uint64(repr)` and `from_uint64(values, repr)`: the rows
+  as one `array('Q')` of `ell * N` words, a row per prime, and back from any
+  C-contiguous buffer of 64-bit words such as a `numpy.uint64` matrix of
+  shape `(ell, N)`, in one C call each (`polynomial_RNS_get_natural`,
+  `polynomial_RNS_set_natural`). The words are in the order
+  `get_coeff_matrix` lists, now documented: coefficient order in the
+  coefficient representation and, in the NTT one, each slot's `split_degree`
+  coefficients of the residue modulo `X^d - w_s` together, slots in the
+  order of `get_rou_matrix`. `from_uint64` refuses a word not below its
+  prime, leaving the polynomial unchanged.
+- Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix` on a split
+  ring: a row is reordered by slices instead of one coefficient at a time.
 
 ### Changed
 
@@ -1099,6 +1118,9 @@ versions may contain breaking changes.
   each prime. A value outside a word, and one integer per prime (a list,
   now also accepted by `*=`), become an `RNSScalar`, so these products are
   on the execution tape as `"scale_by"` events.
+- Fix `RNSPolynomial.from_coeff_matrix` on a ring with `split_degree = 1`
+  reading past a row shorter than `N` and writing what followed it into the
+  polynomial: a short row now raises `IndexError`, as on a split ring.
 - Correct `Polynomial.base_extend`'s documented contract: it returns a value
   congruent to this element modulo the ring's modulus, not the element
   itself. Behaviour is unchanged; the docstring claimed exactness the fast
