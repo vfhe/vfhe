@@ -214,6 +214,8 @@ extern "C"
     void free_mlwe_RNS_sample(void *p);
     void mlwe_scale_RNS_mlwe_addto(RNS_MLWE out, RNS_MLWE in, uint64_t scale);
     void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly);
+    // out = in1 + in2 or in1 - in2 for a polynomial in2: in2 is added to or subtracted from
+    // the b component, and out's mask is a copy of in1's. out may be in1.
     void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
     void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
     void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2);

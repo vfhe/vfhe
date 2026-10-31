@@ -75,6 +75,73 @@ def test_add_sub_negate_scale(ring):
     ]
 
 
+@pytest.mark.parametrize("sizes", [[30, 30], [50, 61]])
+@pytest.mark.parametrize("ntt", [False, True])
+@pytest.mark.parametrize(
+    "k", [-1, -5, -(2**64) - 3, 2**64, 2**64 + 7, 3 * 2**130 + 1, -(2**200)]
+)
+def test_scale_by_any_integer(sizes, ntt, k):
+    ring = Ring(N, prime_size=sizes, split_degree=1)
+    a_c = [rng.randrange(ring.q_l) for _ in range(N)]
+    a = Polynomial(ring).from_bigint_array(a_c)
+    if not ntt:
+        a.to_coeff()
+    expected = [(k * x) % ring.q_l for x in a_c]
+    assert (a * k).get_polynomial() == expected
+    assert (k * a).get_polynomial() == expected
+    a *= k
+    assert a.get_polynomial() == expected
+
+
+def test_scale_by_numpy_integers(ring):
+    np = pytest.importorskip("numpy")
+    a_c = [i * 7 + 1 for i in range(N)]
+    a = Polynomial(ring).from_array(a_c)
+    for k in (np.int64(-3), np.int32(4), np.uint64(2**64 - 1)):
+        expected = [(int(k) * x) % ring.q_l for x in a_c]
+        assert (a * k).get_polynomial() == expected
+        b = a.copy()
+        b *= k
+        assert b.get_polynomial() == expected
+
+
+@pytest.mark.parametrize("ntt", [False, True])
+def test_a_ring_scalar_is_reused_across_products(ntt):
+    ring = Ring(N, prime_size=[30, 50, 61], split_degree=1)
+    scalar = ring.scalar([-1, 2**70 + 3, 5])
+    for _ in range(3):
+        a_c = [rng.randrange(ring.q_l) for _ in range(N)]
+        a = Polynomial(ring).from_bigint_array(a_c)
+        if not ntt:
+            a.to_coeff()
+        expected = [
+            [(r * x) % p for x in row]
+            for r, p, row in zip(
+                scalar.residues, ring.primes, a.get_coeff_matrix(), strict=True
+            )
+        ]
+        assert (a * scalar).get_coeff_matrix() == expected
+        assert (scalar * a).get_coeff_matrix() == expected
+        a *= scalar
+        assert a.get_coeff_matrix() == expected
+    assert ring.scalar(-3).residues == tuple((-3) % p for p in ring.primes)
+    with pytest.raises(ValueError, match="expected 3 values"):
+        ring.scalar([1, 2])
+
+
+def test_a_ring_scalar_serves_its_quotients_only(ring):
+    a = ring.random_element()
+    quotient = ring.quotient_ring(ell=1)
+    b = Polynomial(quotient).from_array(list(range(N)))
+    k = ring.scalar(-7)
+    assert (b * k).get_polynomial() == (b * -7).get_polynomial()
+    with pytest.raises(ValueError, match="not over this ring"):
+        _ = a * quotient.scalar(3)
+    other = Ring(2 * N, prime_size=[30, 30], split_degree=1)
+    with pytest.raises(ValueError, match="not over this ring"):
+        _ = Polynomial(other).from_array([1] * (2 * N)) * k
+
+
 def test_ntt_roundtrip(ring):
     v = [rng.randrange(ring.q_l) for _ in range(N)]
     p = Polynomial(ring).from_array(v)  # ends in NTT form
