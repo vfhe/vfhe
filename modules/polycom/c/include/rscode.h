@@ -34,6 +34,10 @@ extern "C"
     //
     // `plans` is indexed by *global* RNS prime index (like RNS_Polynomial's
     // `coeffs`), with NULL in the slots the mask excludes.
+    //
+    // The transforms and the leaf digests spread a large call across up to
+    // the library's thread limit (parallel.h); their results are the same at
+    // any number of threads.
 
     // One NTT_Plan per active prime of `rns_mask`, for codewords of length
     // `size`; the array owns its plans and is one past `rns_mask`'s highest set
@@ -64,6 +68,15 @@ extern "C"
     // the output partially written.
     int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degree,
                   NTT_Plan *plans);
+
+    // The Merkle leaf digests of `word[0..count)` taken `size` adjacent
+    // elements at a time: out[32 i .. 32 (i + 1)) is the BLAKE3 digest of the
+    // polynomial_RNS_get_hash digests of word[size i .. size (i + 1)),
+    // concatenated in order. Writes count / size digests; elements past the
+    // last whole leaf are not read. The elements belong to one ring. Their
+    // rows are hashed as stored, so, as for polynomial_RNS_get_hash, the
+    // caller pins the domain.
+    void rs_leaf_digests(uint8_t *out, ArithElement *word, uint64_t count, uint64_t size);
 
     // The same code over an extension field F_p[x]/(x^d - w), on FieldVector
     // planes (rscode_field.c). The evaluation points lie in F_p, so the

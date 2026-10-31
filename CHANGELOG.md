@@ -14,6 +14,32 @@ versions may contain breaking changes.
 
 ### Added
 
+- `MLE.linear_combination(tables, coefficients)`: the table
+  `sum_i c_i T_i`, entry by entry, for tables sharing their variables (in the
+  same order), ring or field and basis; coefficients are elements of that
+  ring or field, or integers. Over a ring it is one native call
+  (`mle_dense_poly_linear_combination`), which over RNS sums each entry's
+  products with one reduction per coefficient where the kernel family allows.
+- `MLE.from_uint64(ring, variables, values, repr=repr.coeff)` and
+  `MLE.to_uint64(repr=repr.coeff)`: a ring table from and to one buffer of
+  64-bit words, entry after entry, each laid out as
+  `RNSPolynomial.from_uint64` / `to_uint64` lay out one element (a
+  `numpy.uint64` array of shape `(2^n, ell, N)` works). One native call
+  for the whole table, on the library's threads for large tables, with the
+  transforms between the coefficient rows and the table's NTT form inside
+  it (`polynomial_RNS_get_natural_array`,
+  `polynomial_RNS_set_natural_array`).
+- `sumcheck_prod_round{,_pairs,_halves}`: one sumcheck round message for a
+  product of any number of `R_q` tables at any number of nodes.
+  `prod_round_evals` sends native tables over one ring and the same
+  variables there when no two- or three-factor kernel applies, and the
+  dense prover view of a virtual oracle sends every such term there, so
+  terms of one, two, four or more tables, or at more nodes than their
+  degree, no longer run per entry in Python. Messages and transcripts are
+  unchanged.
+- `docs/USAGE.md` "Threads, processes and memory": the thread limit, Python
+  threads and the GIL, what a forked child may use, and memory placement on
+  machines with several NUMA nodes.
 - `Oracle.domain`: the ring or field of an oracle's values -- a table's, an
   `EqOracle`'s, a `ClosedFormOracle`'s or an `ImplicitOracle`'s when given
   (both take `domain=`), a `CommittedOracle`'s scheme's (`Basefold.domain`,
@@ -693,9 +719,51 @@ versions may contain breaking changes.
   public oracle the verifier evaluates by a function, whose table is built
   only when something reads it as one, digested by the caller's
   `identity` bytes and the variables.
+- `FieldVector.set_radix_decomposition(values, width, digits, high=None, columns=1)`:
+  the base-`2^width` digits of 64- or 128-bit integers, one block of
+  elements per digit, with the values optionally read as a matrix of
+  `columns` columns and written column by column; one native call on a
+  pseudo-Mersenne vector (C `pmf_vec_set_radix_decomposition`).
+- `vfhe.arith.occurrence_counts(values, bound)` (C
+  `vec_occurrence_counts`): for an `array('Q')`, how often each value
+  occurred before each position and how often each value below `bound`
+  occurs, or None when a value is out of range.
 
 ### Changed
 
+- The dense ring-table kernels (`mle_dense_poly_*`: add, sub, scale and the
+  variable bindings) use the library's threads on large tables; the results
+  do not depend on the thread count. A product on a ring with split degree
+  above 1 takes its scratch from the memory pool.
+- piop's sumcheck round kernels (`sumcheck.c`) use the library's threads
+  when the tables are large enough; the messages are the same at any
+  thread count.
+- `FoldableRS.leaf_digests` and `leaf_digests_of` digest every leaf in one
+  native call, `rs_leaf_digests` (`rscode.h`), instead of hashing each ring
+  element and each leaf from Python. The digests are the same bytes, so
+  roots, openings and transcripts do not change; `leaf_digests` returns a
+  read-only view of the kernel's buffer. `FoldableRS.leaf_digests` and
+  `FieldFoldableRS.leaf_digests` raise `ValueError` for a word that is not a
+  whole number of leaves; the ring code hashed a shorter last leaf and the
+  field code dropped it.
+- polycom's Reed-Solomon transforms (`rs_encode`, `rs_decode`,
+  `rs_field_encode`, `rs_field_decode`) and ring leaf digests, and crypto's
+  `hash_batch`, Merkle tree levels and `join_digests`, use the library's
+  threads when the input is large. Results do not depend on the number of
+  threads.
+- The field vector kernels use the library's threads when the vector is
+  long enough. Pseudo-Mersenne: elementwise arithmetic, folds, twisted folds
+  and lifts, sums and the sums of products of folds, batch inversion, the
+  data movements, `hash_elements`, the batch transforms and
+  `encode_blocks`. Extension fields: elementwise arithmetic, products,
+  `fma`, the twisted folds and lifts, `fma_interleave`, `hash_elements` and
+  `hash_fibers`. Results are the
+  same at any thread count; at the default limit of one thread the code
+  that runs is the single-threaded one.
+- The range prover writes its digit table with one `set_radix_decomposition` call, and
+  the lookup prover counts `read_ts` and `final_cts` with
+  `occurrence_counts` when every value is in the table (the per-value loop
+  remains for the others). Proofs are unchanged.
 - `FoldableRS`'s twists default to the residue fields `F_(p^d)` of the
   ring's primes (`twist_field="field"`) on a ring whose split degree is above
   1, and stay the per-prime integers (`"prime"`) on an unsplit ring, where
@@ -1190,6 +1258,9 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix a process forked while another thread looked up a shared ring (as
+  every MLWE sample allocation does) leaving the child blocked on its first
+  such lookup: arith's ring caches are now locked across a fork.
 - Fix `Basefold.commit` with a prover also recording the opening (the
   codeword and its Merkle tree) on the scheme, for the scheme's lifetime: a
   scheme reused across proofs, such as the ones `BasefoldMessages` commits a

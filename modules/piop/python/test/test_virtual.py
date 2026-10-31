@@ -436,6 +436,63 @@ def test_dense_view_three_ring_factors_take_the_native_round(monkeypatch):
         assert all(u == w for u, w in zip(a, b, strict=True))
 
 
+def test_dense_view_any_product_takes_the_native_round(monkeypatch):
+    # A degree-4 products form with terms of one to four ring tables, one of
+    # them with a table repeated: at five nodes no fixed-degree kernel
+    # applies, every term goes to the kernel for any product, and the
+    # Fiat-Shamir proof is the one the Python node sums give.
+    ring = Ring(1024, prime_size=[49, 49], split_degree=4)
+    x = _vars("x0", "x1", "x2", "x3")
+    tables = [
+        MLE(
+            ring=ring,
+            variables=x,
+            evaluations=[ring.random_element() for _ in range(16)],
+        )
+        for _ in range(4)
+    ]
+    terms = [
+        (1, (0, 1, 2, 3)),
+        (3, (0, 1, 2)),
+        (5, (1, 3)),
+        (7, (2,)),
+        (2, (0, 0, 1)),
+    ]
+    G = VirtualOracle(x, [TableOracle(t) for t in tables], terms=terms)
+    total = None
+    for b in range(16):
+        for coeff, idxs in terms:
+            product = tables[idxs[0]].table[b]
+            for j in idxs[1:]:
+                product = product * tables[j].table[b]
+            product = product * coeff
+            total = product if total is None else total + product
+    stmt = Statement(Relation_Sum(), oracles=[G], value=total)
+
+    calls = []
+    kernel = view_module.prod_round_evals_native
+
+    def counted(tables, nodes, var):
+        calls.append((len(tables), nodes))
+        return kernel(tables, nodes, var)
+
+    monkeypatch.setattr(view_module, "prod_round_evals_native", counted)
+    native = _iop(domain=ring, fiat_shamir=True).prove(stmt)
+    assert sorted(set(calls)) == [(1, 5), (2, 5), (3, 5), (4, 5)]
+    monkeypatch.setattr(
+        view_module,
+        "prod_round_evals_native",
+        lambda tables, nodes, var: view_module._term_round_evals_python(
+            tables, tables[0].variables.index(var), nodes
+        ),
+    )
+    python = _iop(domain=ring, fiat_shamir=True).prove(stmt)
+    monkeypatch.undo()
+    assert native.labels == python.labels
+    assert native.digest() == python.digest()
+    assert _iop(domain=ring, fiat_shamir=True).verify(stmt, native)
+
+
 def _index_oracle(ring, x, identity=b"index-weights"):
     """P(x) = sum_i 2^i x_i, the MLE of b -> the integer b, as a closed-form
     oracle, with a record of every table build."""

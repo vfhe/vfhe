@@ -1138,6 +1138,25 @@ def _check_bit_field(
     return count
 
 
+def _check_radix_decomposition(
+    n: int, values, width: int, digits: int, high=None, columns: int = 1
+) -> int:
+    """The preconditions of `FieldVector.set_radix_decomposition` on a vector of `n`
+    elements; returns the number of values."""
+    if not 1 <= width <= 64 or digits < 0 or columns < 1:
+        raise ValueError(
+            "need 1 <= width <= 64, digits >= 0 and columns >= 1, "
+            f"got {width}, {digits}, {columns}"
+        )
+    # The values only have to fit as digits, checked below, not as elements.
+    count = _check_bit_field(len(memoryview(values)), values, 0, 0, width, high)
+    if count % columns:
+        raise ValueError(f"{count} values do not fill rows of {columns} columns")
+    if digits * count > n:
+        raise ValueError(f"{digits} digits of {count} values into {n} elements")
+    return count
+
+
 def _check_fold_product_sums(tables: list, sums: list, nodes: int, weights) -> None:
     """The preconditions of `FieldVector.fold_product_sums`."""
     length = len(tables[0])
@@ -1305,6 +1324,35 @@ class FieldVector(metaclass=_ImplementationDispatch):
         for i in range(count):
             value = values[i] if high is None else values[i] | high[i] << 64
             self[start + i] = (value >> shift) & mask
+
+    def set_radix_decomposition(
+        self, values, width: int, digits: int, high=None, columns: int = 1
+    ) -> None:
+        """The base-``2^width`` digits of the integers ``v_i = values[i] +
+        2^64 high[i]`` (``values[i]`` without `high`), least significant
+        first, one block of ``len(values)`` elements per digit: element ``j *
+        len(values) + i`` becomes ``(v_i >> (j * width)) mod 2^width`` for
+        ``j < digits``, in place. Digits past bit 128 are zero.
+
+        With `columns`, the values are read as a matrix of ``len(values) //
+        columns`` rows of `columns` entries, stored row by row, and every
+        block holds it column by column: element ``j * len(values) + k * rows
+        + i`` is digit ``j`` of ``v_(i * columns + k)``.
+
+        `values` and `high` are as in `set_uint64`. Needs ``1 <= width <=
+        64``, `columns` dividing ``len(values)`` and ``digits * len(values)
+        <= len(self)``; the elements past the blocks are left as they are.
+        """
+        count = _check_radix_decomposition(
+            len(self), values, width, digits, high, columns
+        )
+        rows = count // columns
+        mask = (1 << width) - 1
+        for at in range(count):
+            value = values[at] if high is None else values[at] | high[at] << 64
+            i, k = divmod(at, columns)
+            for j in range(digits):
+                self[j * count + k * rows + i] = (value >> (j * width)) & mask
 
     def to_uint64(self) -> array | None:
         """The elements as an ``array('Q')``, or None when one of them is not

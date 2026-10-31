@@ -754,6 +754,17 @@ extern "C"
     // out[i] = a[i] for i < a->n when every element is below 2^64; false, with
     // out partly written, when one is not.
     bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a);
+    // The base-2^width digits of the 128-bit integers v = low[at] + 2^64
+    // high[at] (high may be NULL, for zero), with the values read as a matrix
+    // of `rows` rows and `columns` columns stored row by row (at = i * columns
+    // + k) and written column by column, one block of rows * columns elements
+    // per digit: out[j * rows * columns + k * rows + i] = (v >> (j * width)) mod
+    // 2^width for j < digits, which is zero once j * width reaches 128. Needs
+    // digits * rows * columns <= out->n and 1 <= width <= 64; every digit is
+    // below 2^64 < p, so it is canonical as written.
+    void pmf_vec_set_radix_decomposition(PMFVector out, const uint64_t *low, const uint64_t *high,
+                                         uint64_t rows, uint64_t columns, uint32_t width,
+                                         uint64_t digits);
     void pmf_vec_copy(PMFVector out, const PMFVector a);
     // Deinterleave: even gets elements 0, 2, 4, ... and odd gets 1, 3, 5, ....
     // `a->n` must be even and each output must hold a->n / 2 elements.
@@ -1179,6 +1190,22 @@ extern "C"
        among the active rows of the first row of `in` holding a word >= its
        prime, in which case `p` is left unchanged. */
     int64_t polynomial_RNS_set_natural(RNS_Polynomial p, const uint64_t *in);
+    /* polynomial_RNS_get_natural over `count` polynomials on one base with
+       one mask: the L active rows of p[e] start at out + e * L * N. With
+       `to_canonical`, the polynomials are in the mul domain and the rows
+       written are those of their coefficient-domain transform; the
+       polynomials are left as they are. Runs on up to the library's thread
+       limit (parallel.h) when the rows are large enough. */
+    void polynomial_RNS_get_natural_array(uint64_t *out, RNS_Polynomial *p, uint64_t count,
+                                          bool to_canonical);
+    /* The inverse: overwrites the active rows of p[0 .. count) from `in`,
+       laid out as polynomial_RNS_get_natural_array writes them. With
+       `to_mul`, `in` holds coefficient-domain rows and the polynomials get
+       their mul-domain transform. Returns -1, or the smallest e * L + r such
+       that row r of polynomial e in `in` holds a word >= its prime, in which
+       case the contents of the polynomials are unspecified. */
+    int64_t polynomial_RNS_set_natural_array(RNS_Polynomial *p, const uint64_t *in, uint64_t count,
+                                             bool to_mul);
     RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N,
                                                         uint64_t rns_mask, RNS_Base base);
     void free_RNS_polynomial_array(uint64_t size, RNS_Polynomial *p);
@@ -1442,6 +1469,13 @@ extern "C"
     uint64_t double2int(double x);
     uint32_t int_rev(uint32_t b);
     void bit_rev(uint64_t *out, uint64_t *in, uint64_t n, uint64_t log_n);
+    // For `count` values below `bound`: prior[i] = how many of values[0 .. i-1]
+    // equal values[i], and totals[x] = how many of all the values equal x, for
+    // x < bound. Returns false, with `prior` and `totals` partly written, when a
+    // value is `bound` or more. `prior` holds `count` words and `totals`
+    // `bound`; neither aliases `values`.
+    bool vec_occurrence_counts(uint64_t *prior, uint64_t *totals, const uint64_t *values,
+                               uint64_t count, uint64_t bound);
 
     MPScalar mp_load(uint64_t *in, uint64_t d);
     mp_vector_t *load_m512(uint64_t in);

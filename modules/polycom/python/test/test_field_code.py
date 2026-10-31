@@ -28,6 +28,7 @@ from vfhe.polycom import (
     bit_reverse,
     foldable_relative_distance,
 )
+from vfhe.util import parallel
 
 # Extension fields over primes with 2-adicity 20 and 22 (x^2 - w irreducible
 # for the given w), and pseudo-Mersenne fields of three to six limbs.
@@ -154,6 +155,8 @@ def test_leaf_digests(field, instantiation):
         assert digests[32 * i : 32 * (i + 1)] == code.leaf_digest(code.pair_at(word, i))
     lo, hi = code.pair_at(word, 0)
     assert code.leaf_digest((hi, lo)) != digests[:32]  # an ordered pair
+    with pytest.raises(ValueError, match="whole leaves"):
+        code.leaf_digests(word, 3)
 
 
 def test_parameter_validation(field, instantiation):
@@ -642,3 +645,36 @@ def test_rs_over_a_field_arith_cannot_transform_raises():
 
     with pytest.raises(NotImplementedError, match="no Reed-Solomon transform"):
         FieldFoldableRS(_Unsupported(), k0=4, c=4, d=2, instantiation="rs")  # pyright: ignore[reportArgumentType]
+
+
+def _at_thread_limits(compute) -> list:
+    """`compute()` at the default limit of one thread, then at 8."""
+    results = []
+    try:
+        for limit in (1, 8):
+            parallel.set_num_threads(limit)
+            results.append(compute())
+    finally:
+        parallel.set_num_threads()
+    return results
+
+
+@pytest.mark.parametrize("name", list(_EXTENSION))
+def test_rs_kernels_agree_at_any_thread_limit(name):
+    """The extension-field transforms run their coefficient planes on
+    separate threads once the limit is raised and a plane is above the
+    chunk grain (2^16 words). The codeword, the decoded message and the
+    degree check are the same at every limit, and a failure confined to the
+    last plane is still found."""
+    field = _field(name)
+    code = _rs(field, k0=1024, c=32, d=1)  # n_d = 2^16
+    message = _random(field, code.k_d, b"m")
+    serial, threaded = _at_thread_limits(lambda: code.encode(message))
+    assert serial == threaded
+    for ok, decoded in _at_thread_limits(lambda: code.decode(serial)):
+        assert ok and decoded == message
+    for coefficients in ([1], [0, 1]):
+        tampered = FieldVector.concat([serial])
+        tampered[7] = tampered[7] + type(field.one)(field, coefficients)
+        decoded = _at_thread_limits(lambda t=tampered: code.decode(t))
+        assert not any(ok for ok, _ in decoded)

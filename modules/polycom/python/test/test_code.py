@@ -15,7 +15,7 @@ per-prime evaluation at the bit-reversed negacyclic points, and the
 import math
 
 import pytest
-from vfhe.arith import Ring, RNSRing
+from vfhe.arith import Ring, RNSRing, repr
 from vfhe.polycom import (
     INSTANTIATIONS,
     FoldableRS,
@@ -23,6 +23,7 @@ from vfhe.polycom import (
     foldable_relative_distance,
 )
 from vfhe.polycom import code as code_module
+from vfhe.util import parallel
 
 
 def _ring() -> RNSRing:
@@ -408,3 +409,89 @@ def test_truncated_code_borrows_its_plans(monkeypatch):
     freed.clear()
     del shortest
     assert freed == [rows] * 4  # the four levels of the depth-3 code
+
+
+# --- thread limits ---
+
+# A narrow and a wide prime, on a plain and on a split ring.
+_TWO_PRIME_RINGS = [([30, 49], 1), ([49, 30], 4)]
+
+
+def _at_thread_limits(compute) -> list:
+    """`compute()` at the default limit of one thread, then at 5 and 8."""
+    results = []
+    try:
+        for limit in (1, 5, 8):
+            parallel.set_num_threads(limit)
+            results.append(compute())
+    finally:
+        parallel.set_num_threads()
+    return results
+
+
+def _with_one_slot_changed(p, row: int, slot: int):
+    """A copy of `p` whose NTT form differs from `p`'s at one slot of one
+    prime only."""
+    out = p.copy()
+    rows = out.get_coeff_matrix(repr.ntt)
+    rows[row][slot] = (rows[row][slot] + 1) % out.ring.primes[row]
+    return out.from_coeff_matrix(rows, repr.ntt)
+
+
+@pytest.mark.parametrize(("prime_size", "split_degree"), _TWO_PRIME_RINGS)
+def test_rs_kernels_agree_at_any_thread_limit(prime_size, split_degree):
+    """The transforms run their (prime, slot) columns in chunks once the
+    limit is raised: 2048 columns of 256 words are above the chunk grain, and
+    at five threads the chunks neither divide the columns nor stop at a
+    prime's last slot. The codewords, the decoded messages and the degree
+    check are the same at every limit, and a failure confined to one column
+    -- in the first chunk or in the last -- is still found."""
+    ring = Ring(1024, prime_size=prime_size, split_degree=split_degree)
+    code = _rs(ring, k0=8, c=4, d=3)  # n_d = 256
+    message = [ring.random_element() for _ in range(code.k_d)]
+    words = _at_thread_limits(lambda: code.encode(message))
+    for word in words[1:]:
+        assert _equal(word, words[0])
+    word = words[0]
+    for ok, decoded in _at_thread_limits(lambda: code.decode(word)):
+        assert ok and _equal(decoded, message)
+    for row, slot in ((0, 0), (-1, -1)):
+        tampered = list(word)
+        tampered[5] = _with_one_slot_changed(word[5], row, slot)
+        decoded = _at_thread_limits(lambda t=tampered: code.decode(t))
+        assert not any(ok for ok, _ in decoded)
+
+
+@pytest.mark.parametrize(("prime_size", "split_degree"), _TWO_PRIME_RINGS)
+def test_leaf_digests_are_the_digests_of_the_entries(prime_size, split_degree):
+    """A leaf's digest is BLAKE3 over its entries' `get_hash` digests (the
+    pair digest at two symbols), whatever form the entries are in, and the
+    entries keep their form. Fibers whose digest input is past one BLAKE3
+    chunk (64 symbols) and words large enough to be digested in chunks once
+    the limit is raised give the same bytes at every limit. A word that is
+    not a whole number of leaves is refused."""
+    ring = Ring(1024, prime_size=prime_size, split_degree=split_degree)
+    code = _code(ring)
+    word = [ring.random_element() for _ in range(192)]
+    for p in word[::3]:
+        p.to_coeff()
+    forms = [p.repr for p in word]
+    assert len(set(forms)) == 2
+    for size in (1, 2, 4, 64):
+        expected = b"".join(
+            code_module._fiber_digest(word[i : i + size])
+            for i in range(0, len(word), size)
+        )
+        for digests in _at_thread_limits(lambda s=size: code.leaf_digests(word, s)):
+            assert bytes(digests) == expected, f"size {size}"
+    assert [p.repr for p in word] == forms
+    pairs = code.pair_leaves(word)
+    assert bytes(code.leaf_digests_of(pairs[:7])) == b"".join(
+        code_module.pair_digest(pair) for pair in pairs[:7]
+    )
+    assert bytes(code.leaf_digests(word[:1], 1)) == code_module._fiber_digest(word[:1])
+    assert bytes(code.leaf_digests([])) == b""
+    with pytest.raises(ValueError, match="whole leaves"):
+        code.leaf_digests(word[:191], 2)
+    with pytest.raises(ValueError, match="whole leaves"):
+        code.leaf_digests(word, 0)

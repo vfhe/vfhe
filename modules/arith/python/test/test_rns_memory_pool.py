@@ -55,3 +55,17 @@ def test_capacity_zero_keeps_no_rows():
     del p
     gc.collect()
     assert memory_pool.statistics().retained_bytes == 0
+
+
+def test_a_product_on_a_split_ring_takes_its_scratch_from_the_pool():
+    # At split degree 2 the block product needs a scratch row of N / 2 words
+    # at each width, both past the size the pool serves.
+    ring = Ring(N, prime_size=PRIME_SIZES, split_degree=2)
+    x, y, out = ring.random_element(), ring.random_element(), Polynomial(ring)
+    out.multiply(x, y)
+    before = memory_pool.statistics()
+    out.multiply(x, y)
+    after = memory_pool.statistics()
+    assert after.misses == before.misses
+    assert after.hits >= before.hits + 2
+    assert out == x * y

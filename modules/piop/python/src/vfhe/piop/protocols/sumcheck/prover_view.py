@@ -37,7 +37,13 @@ from vfhe.piop.virtual import (
     table_like,
 )
 
-from .rounds import prod2_round_evals_native, prod3_round_evals_native, round_evals
+from .rounds import (
+    native_tables,
+    prod2_round_evals_native,
+    prod3_round_evals_native,
+    prod_round_evals_native,
+    round_evals,
+)
 
 
 def _one_of(tables) -> Any:
@@ -240,7 +246,8 @@ class _ProverVirtual:
     @staticmethod
     def _term_round_evals(tables: list, var, idx: int, nodes: int) -> list:
         """One product's node sums; the native kernels for the shapes they
-        cover (one table, two ring tables at three nodes, or three at four),
+        cover (one table at two nodes, two ring tables at three nodes, three
+        at four, and any number of ring tables at any number of nodes),
         Python pairs otherwise. Every factor is multilinear, so its value at
         node t is `lo + t * (hi - lo)` from the pair."""
         if len(tables) == 1 and nodes == 2:
@@ -250,19 +257,28 @@ class _ProverVirtual:
         if len(tables) == 3 and nodes == 4 and all(native_table(t) for t in tables):
             f, g, h = tables
             return list(prod3_round_evals_native(f, g, h, var))
-        size = 1 << tables[0].num_vars
-        evals = []
-        for t in range(nodes):
-            total = None
-            for lo, hi in pair_indices(size, idx):
-                prod = None
-                for table in tables:
-                    a, b = table.table[lo], table.table[hi]
-                    v = a if t == 0 else b if t == 1 else a + t * (b - a)
-                    prod = v if prod is None else prod * v
-                total = prod if total is None else total + prod
-            evals.append(total)
-        return evals
+        if native_tables(tables):
+            return list(prod_round_evals_native(tables, nodes, var))
+        return _term_round_evals_python(tables, idx, nodes)
+
+
+def _term_round_evals_python(tables: list, idx: int, nodes: int) -> list:
+    """The node sums of `_ProverVirtual._term_round_evals` computed in
+    Python, over the table pairs of the variable at position `idx`: the path
+    for tables no kernel takes."""
+    size = 1 << tables[0].num_vars
+    evals = []
+    for t in range(nodes):
+        total = None
+        for lo, hi in pair_indices(size, idx):
+            prod = None
+            for table in tables:
+                a, b = table.table[lo], table.table[hi]
+                v = a if t == 0 else b if t == 1 else a + t * (b - a)
+                prod = v if prod is None else prod * v
+            total = prod if total is None else total + prod
+        evals.append(total)
+    return evals
 
 
 class _ProverVirtualEq(_ProverVirtual):

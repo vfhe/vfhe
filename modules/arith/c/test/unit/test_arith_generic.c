@@ -10,7 +10,11 @@
  * rules are checked separately, since they are the part with no direct
  * equivalent to compare against.
  */
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "arith_internal.h" /* rns_row_is_narrow: row width is per prime */
 #include <string.h>
@@ -838,6 +842,49 @@ void test_the_shared_ring_is_shared(void)
     TEST_ASSERT_TRUE(again != arith_rns_ring_get(TEST_N, 0x3, base));
 }
 
+/* Looks the shared rings up until told to stop, so that the cache lock is
+ * often held when another thread forks. */
+static atomic_bool stop_looking_up;
+
+static void *look_up_rings(void *unused)
+{
+    (void)unused;
+    while (!atomic_load(&stop_looking_up))
+    {
+        arith_rns_ring_get(TEST_N, TEST_MASK, base);
+        arith_rns_ring_get(TEST_N, 0x3, base);
+    }
+    return NULL;
+}
+
+/* A child forked while another thread uses the ring cache can use it too. The
+ * child arms an alarm, so a lock inherited held ends it with a signal instead
+ * of hanging the test. */
+void test_a_forked_child_uses_the_shared_rings(void)
+{
+    ArithRing expected = arith_rns_ring_get(TEST_N, TEST_MASK, base);
+    atomic_store(&stop_looking_up, false);
+    pthread_t t;
+    TEST_ASSERT_EQUAL_INT(0, pthread_create(&t, NULL, look_up_rings, NULL));
+    for (int i = 0; i < 200; i++)
+    {
+        const pid_t pid = fork();
+        if (pid == 0)
+        {
+            alarm(10);
+            const int ok = arith_rns_ring_get(TEST_N, TEST_MASK, base) == expected &&
+                           arith_rns_ring_get(TEST_N, 0x7, base) != NULL;
+            _exit(ok ? 0 : 1);
+        }
+        int status = 0;
+        waitpid(pid, &status, 0);
+        TEST_ASSERT_TRUE(WIFEXITED(status));
+        TEST_ASSERT_EQUAL_INT(0, WEXITSTATUS(status));
+    }
+    atomic_store(&stop_looking_up, true);
+    pthread_join(t, NULL);
+}
+
 /* Dispatch is a switch on the ring's tag with the method table as its
  * default. A ring whose tag the switch does not know -- a backend loaded at
  * runtime -- must behave identically through the table, so run a real
@@ -1107,6 +1154,7 @@ int main(void)
     RUN_TEST(test_mod_down_is_round_division_up_to_half_the_primes);
     RUN_TEST(test_round_division_to_a_smaller_ring);
     RUN_TEST(test_the_shared_ring_is_shared);
+    RUN_TEST(test_a_forked_child_uses_the_shared_rings);
     RUN_TEST(test_decompose_digit_is_the_lifted_residue);
     RUN_TEST(test_decompose_digit_is_the_radix_digit);
     RUN_TEST(test_decompose_digit_of_a_group_keeps_its_residues);
