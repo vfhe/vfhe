@@ -24,3 +24,5 @@ void mle_dense_poly_evaluate(ArithRing ring, ArithElement *out, ArithElement *in
                              uint64_t num_vars, uint64_t eval_var_idx);
 void mle_dense_poly_evaluate_scalar(ArithRing ring, ArithElement *out, ArithElement *in, uint64_t a,
                                     uint64_t num_vars, uint64_t eval_var_idx);
+int mle_dense_poly_linear_combination(ArithRing ring, ArithElement *out, ArithElement **tables,
+                                      ArithElement *coeff, uint64_t k, uint64_t size);

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # vfhe.arith public API re-exports.
 from .base import ArithParent, Field, FieldElement, FieldVector, Polynomial, Ring
+from .counting import occurrence_counts
 from .dispatch import generic_only, set_generic_only
 from .impl.complex.complex import ComplexPolynomial, ComplexRing
 from .impl.field.field import ExtensionField, ExtensionFieldElement
@@ -66,6 +67,7 @@ __all__ = [
     "generic_only",
     "implementations",
     "is_prime",
+    "occurrence_counts",
     "register_conversion",
     "registered",
     "repr",

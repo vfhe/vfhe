@@ -2,11 +2,13 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file test_hash.c
- * @brief hash_batch and hash_chain against the one-at-a-time digests they
- *        have to reproduce.
+ * @brief hash_batch, hash_chain and the Merkle digests against the
+ *        one-at-a-time digests they have to reproduce, at any thread limit.
  */
 #include <blake3.h>
 #include <crypto.h>
+#include <merkle.h>
+#include <parallel.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -120,6 +122,93 @@ void test_chain_matches_link_by_link(void)
     }
 }
 
+/* The thread limits a batch is checked at: the default, and one that splits
+ * a batch above the chunk grain into chunks that do not divide it. */
+static const uint64_t LIMITS[] = {1, 3, 4};
+
+/* hash_batch over batches of 0.5 to 1.1 MiB, enough to run in chunks once
+ * the limit is raised, on each of its paths: whole blocks, a partial last
+ * block, and inputs past one chunk. Every digest is the one-at-a-time digest
+ * at every limit. */
+void test_large_batches_match_at_any_thread_limit(void)
+{
+    const uint64_t counts[] = {12365, 9001, 777};
+    const uint64_t lengths[] = {64, 66, 1500};
+    for (uint64_t l = 0; l < 3; l++)
+        for (uint64_t t = 0; t < 3; t++)
+        {
+            vfhe_set_num_threads(LIMITS[t]);
+            assert_batch_matches(counts[l], lengths[l]);
+        }
+    vfhe_set_num_threads(0);
+}
+
+/* merkle_join_digests against its definition, digest by digest, over enough
+ * digests to run in chunks once the limit is raised. */
+void test_large_joins_match_at_any_thread_limit(void)
+{
+    const uint64_t count = 7001, part_count = 3;
+    uint8_t *parts_buffer = (uint8_t *)malloc(part_count * count * 32);
+    uint8_t *joined = (uint8_t *)malloc(count * 32);
+    const uint8_t *parts[3];
+    for (uint64_t i = 0; i < part_count * count * 32; i++)
+        parts_buffer[i] = (uint8_t)(i * 167u + 5);
+    for (uint64_t p = 0; p < part_count; p++)
+        parts[p] = &parts_buffer[p * count * 32];
+
+    for (uint64_t t = 0; t < 3; t++)
+    {
+        vfhe_set_num_threads(LIMITS[t]);
+        memset(joined, 0, count * 32);
+        merkle_join_digests(joined, parts, part_count, count);
+        for (uint64_t i = 0; i < count; i++)
+        {
+            uint8_t concatenated[3 * 32], expected[32];
+            for (uint64_t p = 0; p < part_count; p++)
+                memcpy(&concatenated[p * 32], &parts[p][i * 32], 32);
+            digest_alone(expected, concatenated, sizeof concatenated);
+            TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, &joined[i * 32], 32);
+        }
+    }
+    vfhe_set_num_threads(0);
+    free(joined);
+    free(parts_buffer);
+}
+
+/* A tree whose lower levels are hashed in chunks once the limit is raised:
+ * every level, not only the root, is the same at every limit. */
+void test_a_large_tree_is_the_same_at_any_thread_limit(void)
+{
+    const uint64_t size = (1u << 15) + 3;
+    uint8_t *leaves = (uint8_t *)malloc(size * MERKLE_DIGEST_LEN);
+    for (uint64_t i = 0; i < size * MERKLE_DIGEST_LEN; i++)
+        leaves[i] = (uint8_t)(i * 97u + 1);
+
+    Merkle reference = merkle_new(size);
+    vfhe_set_num_threads(1);
+    merkle_commit(reference, leaves);
+    for (uint64_t t = 1; t < 3; t++)
+    {
+        Merkle tree = merkle_new(size);
+        vfhe_set_num_threads(LIMITS[t]);
+        merkle_commit(tree, leaves);
+        for (uint64_t i = 0; i <= tree->log_size; i++)
+            TEST_ASSERT_EQUAL_UINT8_ARRAY(reference->levels[i], tree->levels[i],
+                                          (1ULL << i) * MERKLE_DIGEST_LEN);
+        merkle_free(tree);
+    }
+    vfhe_set_num_threads(0);
+
+    /* The root is the tree over the leaves, built pair by pair. */
+    uint8_t root[MERKLE_DIGEST_LEN], path[16 * MERKLE_DIGEST_LEN];
+    merkle_get_root(root, reference);
+    merkle_open(path, reference, size - 1);
+    TEST_ASSERT_TRUE(merkle_verify(root, size - 1, path, reference->log_size,
+                                   &leaves[(size - 1) * MERKLE_DIGEST_LEN]));
+    merkle_free(reference);
+    free(leaves);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -128,5 +217,8 @@ int main(void)
     RUN_TEST(test_lengths_outside_the_batch_still_hash);
     RUN_TEST(test_an_empty_batch_writes_nothing);
     RUN_TEST(test_chain_matches_link_by_link);
+    RUN_TEST(test_large_batches_match_at_any_thread_limit);
+    RUN_TEST(test_large_joins_match_at_any_thread_limit);
+    RUN_TEST(test_a_large_tree_is_the_same_at_any_thread_limit);
     return UNITY_END();
 }

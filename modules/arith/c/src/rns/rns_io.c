@@ -4,6 +4,7 @@
 // An RNS polynomial as bytes, and an RNS polynomial from a seed.
 #include "arith.h"
 #include <alloc.h>
+#include <memory_pool.h>
 #include <parallel.h>
 #include <crypto.h>
 #include <string.h>
@@ -307,27 +308,38 @@ typedef struct
     uint64_t L;
 } LiftJob;
 
-// Row `i` of `p` into `out` in natural coefficient order: coefficient u + s t
-// sits at u * block + t, s the splitting degree and block = N / s.
+// A row of N words of either width into `out` in natural coefficient order:
+// coefficient u + s t sits at u * block + t, s the splitting degree and
+// block = N / s.
+static void natural_from_row32(uint64_t *out, const uint32_t *row, uint64_t N, uint64_t s)
+{
+    const uint64_t block = N / s;
+    for (uint64_t u = 0; u < s; u++)
+        for (uint64_t t = 0; t < block; t++)
+            out[u + s * t] = row[u * block + t];
+}
+
+static void natural_from_row64(uint64_t *out, const uint64_t *row, uint64_t N, uint64_t s)
+{
+    const uint64_t block = N / s;
+    if (s == 1)
+    {
+        memcpy(out, row, N * sizeof(uint64_t));
+        return;
+    }
+    for (uint64_t u = 0; u < s; u++)
+        for (uint64_t t = 0; t < block; t++)
+            out[u + s * t] = row[u * block + t];
+}
+
+// Row `i` of `p` into `out` in natural coefficient order.
 static void natural_row(uint64_t *out, RNS_Polynomial p, uint64_t i)
 {
-    const uint64_t N = p->base->N, s = p->base->split_degree, block = N / s;
+    const uint64_t N = p->base->N, s = p->base->split_degree;
     if (rns_row_is_narrow(p->base, i))
-    {
-        const uint32_t *row = rns_row32(p, i);
-        for (uint64_t u = 0; u < s; u++)
-            for (uint64_t t = 0; t < block; t++)
-                out[u + s * t] = row[u * block + t];
-    }
-    else if (s == 1)
-        memcpy(out, rns_row64(p, i), N * sizeof(uint64_t));
+        natural_from_row32(out, rns_row32(p, i), N, s);
     else
-    {
-        const uint64_t *row = rns_row64(p, i);
-        for (uint64_t u = 0; u < s; u++)
-            for (uint64_t t = 0; t < block; t++)
-                out[u + s * t] = row[u * block + t];
-    }
+        natural_from_row64(out, rns_row64(p, i), N, s);
 }
 
 static void lift_polynomial(void *ctx, uint64_t e)
@@ -415,14 +427,11 @@ static void get_natural_row(void *ctx, uint64_t r)
     natural_row(job->words + r * job->p->base->N, job->p, job->rows[r]);
 }
 
-// The inverse of natural_row: word u + s t of the input goes to u * block + t.
-static void set_natural_row(void *ctx, uint64_t r)
+// The inverse of natural_row: word u + s t of `in` goes to u * block + t of
+// row `i` of `p`.
+static void row_from_natural(RNS_Polynomial p, uint64_t i, const uint64_t *in)
 {
-    const NaturalJob *job = (const NaturalJob *)ctx;
-    const RNS_Polynomial p = job->p;
-    const uint64_t i = job->rows[r];
     const uint64_t N = p->base->N, s = p->base->split_degree, block = N / s;
-    const uint64_t *in = job->words + r * N;
     if (rns_row_is_narrow(p->base, i))
     {
         uint32_t *row = rns_row32(p, i);
@@ -439,6 +448,12 @@ static void set_natural_row(void *ctx, uint64_t r)
             for (uint64_t t = 0; t < block; t++)
                 row[u * block + t] = in[u + s * t];
     }
+}
+
+static void set_natural_row(void *ctx, uint64_t r)
+{
+    const NaturalJob *job = (const NaturalJob *)ctx;
+    row_from_natural(job->p, job->rows[r], job->words + r * job->p->base->N);
 }
 
 void polynomial_RNS_get_natural(uint64_t *out, RNS_Polynomial p)
@@ -470,4 +485,149 @@ int64_t polynomial_RNS_set_natural(RNS_Polynomial p, const uint64_t *in)
     const bool wide = count * N * sizeof(uint64_t) >= COPY_PARALLEL_BYTES;
     vfhe_parallel_for(count, wide ? 0 : 1, set_natural_row, &job);
     return -1;
+}
+
+// --- many polynomials' rows in natural order -----------------------------------
+
+// Words per item of the loops over many polynomials' rows: an item is as
+// many whole rows as fit in this many words, and at least one, so that small
+// rings still hand out items of a useful size.
+#define NATURAL_ITEM_WORDS (1u << 14)
+
+typedef struct
+{
+    RNS_Polynomial *p;
+    uint64_t *words;      // L rows of N words per polynomial
+    const uint64_t *rows; // the active base indices, ascending
+    uint64_t L, rows_per_item, total_rows;
+    bool transform; // get: from the mul domain to the coefficient one; set: back
+    int64_t *bad;   // set: the smallest e * L + r whose input row is out of range, or -1
+} NaturalArrayJob;
+
+// The end of the item of rows starting at `first`.
+static uint64_t item_end(const NaturalArrayJob *job, uint64_t first)
+{
+    const uint64_t end = first + job->rows_per_item;
+    return end < job->total_rows ? end : job->total_rows;
+}
+
+// Row `i` of `p`, held in the mul domain, into `out` in natural coefficient
+// order in the coefficient domain: the inverse transform of each of the s
+// blocks of a copy of the row in `scratch`, N words aligned for the
+// transform.
+static void canonical_natural_row(uint64_t *out, RNS_Polynomial p, uint64_t i, uint64_t *scratch)
+{
+    const RNS_Base base = p->base;
+    const uint64_t N = base->N, s = base->split_degree, block = N / s;
+    if (rns_row_is_narrow(base, i))
+    {
+        uint32_t *row = (uint32_t *)scratch;
+        memcpy(row, rns_row32(p, i), N * sizeof(uint32_t));
+        for (uint64_t k = 0; k < s; k++)
+            ntt_reverse_w32(&row[k * block], &row[k * block], base->plans[i]);
+        natural_from_row32(out, row, N, s);
+    }
+    else
+    {
+        memcpy(scratch, rns_row64(p, i), N * sizeof(uint64_t));
+        for (uint64_t k = 0; k < s; k++)
+            ntt_reverse(&scratch[k * block], &scratch[k * block], base->plans[i]);
+        natural_from_row64(out, scratch, N, s);
+    }
+}
+
+static void get_natural_rows(void *ctx, uint64_t item)
+{
+    const NaturalArrayJob *job = (const NaturalArrayJob *)ctx;
+    const uint64_t N = job->p[0]->base->N;
+    const uint64_t first = item * job->rows_per_item;
+    const uint64_t last = item_end(job, first);
+    uint64_t *scratch = job->transform ? mempool_aligned_malloc(N * sizeof(uint64_t)) : NULL;
+    for (uint64_t f = first; f < last; f++)
+    {
+        const RNS_Polynomial p = job->p[f / job->L];
+        const uint64_t i = job->rows[f % job->L];
+        if (job->transform)
+            canonical_natural_row(job->words + f * N, p, i, scratch);
+        else
+            natural_row(job->words + f * N, p, i);
+    }
+    mempool_free(scratch, N * sizeof(uint64_t));
+}
+
+static void set_natural_rows(void *ctx, uint64_t item)
+{
+    const NaturalArrayJob *job = (const NaturalArrayJob *)ctx;
+    const RNS_Base base = job->p[0]->base;
+    const uint64_t N = base->N, s = base->split_degree, block = N / s;
+    const uint64_t first = item * job->rows_per_item;
+    const uint64_t last = item_end(job, first);
+    for (uint64_t f = first; f < last; f++)
+    {
+        const RNS_Polynomial p = job->p[f / job->L];
+        const uint64_t i = job->rows[f % job->L];
+        const uint64_t q = base->mods[i]->q;
+        const uint64_t *in = job->words + f * N;
+        uint64_t above = 0;
+        for (uint64_t k = 0; k < N; k++)
+            above |= in[k] >= q;
+        if (above)
+        {
+            // Items run concurrently: keep the smallest offending row.
+            int64_t seen = __atomic_load_n(job->bad, __ATOMIC_RELAXED);
+            while ((seen < 0 || (int64_t)f < seen) &&
+                   !__atomic_compare_exchange_n(job->bad, &seen, (int64_t)f, false,
+                                                __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            {
+            }
+            continue;
+        }
+        row_from_natural(p, i, in);
+        if (!job->transform)
+            continue;
+        if (rns_row_is_narrow(base, i))
+            for (uint64_t k = 0; k < s; k++)
+                ntt_forward_w32(&rns_row32(p, i)[k * block], &rns_row32(p, i)[k * block],
+                                base->plans[i]);
+        else
+            for (uint64_t k = 0; k < s; k++)
+                ntt_forward(&rns_row64(p, i)[k * block], &rns_row64(p, i)[k * block],
+                            base->plans[i]);
+    }
+}
+
+// Runs `body` over the rows of `count` polynomials, in items of whole rows, on
+// more than one thread when the rows are large enough. A transform is
+// compute-bound work, a plain copy memory-bound.
+static int64_t natural_rows_for(RNS_Polynomial *p, uint64_t *words, uint64_t count, bool transform,
+                                void (*body)(void *ctx, uint64_t item))
+{
+    if (count == 0)
+        return -1;
+    const RNS_Base base = p[0]->base;
+    for (uint64_t e = 0; e < count; e++)
+        assert(p[e]->base == base && p[e]->rns_mask == p[0]->rns_mask);
+    uint64_t rows[64];
+    const uint64_t L = active_rows(rows, p[0]), N = base->N;
+    const uint64_t rows_per_item = NATURAL_ITEM_WORDS > N ? NATURAL_ITEM_WORDS / N : 1;
+    const uint64_t total_rows = count * L;
+    const uint64_t items = (total_rows + rows_per_item - 1) / rows_per_item;
+    int64_t bad = -1;
+    NaturalArrayJob job = {p, words, rows, L, rows_per_item, total_rows, transform, &bad};
+    const uint64_t bytes = total_rows * N * sizeof(uint64_t);
+    const bool wide = bytes >= (transform ? EXPAND_PARALLEL_BYTES : COPY_PARALLEL_BYTES);
+    vfhe_parallel_for(items, wide ? 0 : 1, body, &job);
+    return bad;
+}
+
+void polynomial_RNS_get_natural_array(uint64_t *out, RNS_Polynomial *p, uint64_t count,
+                                      bool to_canonical)
+{
+    natural_rows_for(p, out, count, to_canonical, get_natural_rows);
+}
+
+int64_t polynomial_RNS_set_natural_array(RNS_Polynomial *p, const uint64_t *in, uint64_t count,
+                                         bool to_mul)
+{
+    return natural_rows_for(p, (uint64_t *)in, count, to_mul, set_natural_rows);
 }

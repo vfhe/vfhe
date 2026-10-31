@@ -5,6 +5,8 @@
 #include "arith_dispatch.h"
 #include <alloc.h>
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 // RNS as an implementation of the generic arithmetic interface.
 //
@@ -511,6 +513,30 @@ void arith_rns_ring_cache_clear(void)
     }
     ring_cache_len = 0;
     pthread_mutex_unlock(&ring_cache_lock);
+}
+
+// A fork copies only the forking thread. Both caches are locked across it, so
+// the child never inherits a lock held by a thread that does not exist there,
+// or a cache caught halfway through growing.
+static void lock_caches(void)
+{
+    pthread_mutex_lock(&group_cache_lock);
+    pthread_mutex_lock(&ring_cache_lock);
+}
+
+static void unlock_caches(void)
+{
+    pthread_mutex_unlock(&ring_cache_lock);
+    pthread_mutex_unlock(&group_cache_lock);
+}
+
+__attribute__((constructor)) static void caches_watch_forks(void)
+{
+    if (pthread_atfork(lock_caches, unlock_caches, unlock_caches) != 0)
+    {
+        perror("vfhe: pthread_atfork"); /* GCOVR_EXCL_LINE */
+        abort();                        /* GCOVR_EXCL_LINE */
+    }
 }
 
 ArithRing arith_rns_ring_new(uint64_t N, uint64_t rns_mask, RNS_Base base)

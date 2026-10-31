@@ -8,15 +8,26 @@ bookkeeping form (a sparse map of hypercube evaluations).
 
 from __future__ import annotations
 
+import array
 import operator
 from enum import Enum
-from typing import Any
+from numbers import Integral
+from typing import TYPE_CHECKING, Any
 
 from vfhe.crypto import DigestChain, hash_bytes, int_digest, str_digest
 from vfhe.util.bindings import ffi, lib
 
 from .base import Field, FieldVector, Polynomial
-from .impl.rns.polynomial import RNSPolynomial, RNSRing, domain_of, repr
+from .impl.rns.polynomial import (
+    Representation,
+    RNSPolynomial,
+    RNSRing,
+    domain_of,
+    repr,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # Which basis a dense table is written in — a property of the table, not of
 # its domain class.
@@ -105,6 +116,18 @@ def mark_ntt(polys: list) -> None:
     """
     for p in polys:
         p.repr = repr.ntt
+
+
+def _ring_coefficient(ring: RNSRing, value) -> RNSPolynomial:
+    """A coefficient of a ring-backed linear combination: an element of
+    `ring` as it is, or an integer as a constant of `ring`."""
+    if isinstance(value, RNSPolynomial):
+        if value.ring != ring:
+            raise ValueError("a coefficient must be over the tables' ring")
+        return value
+    if isinstance(value, Integral):
+        return Polynomial(ring).from_bigint_array([int(value)])
+    raise TypeError("a coefficient over a ring must be a Polynomial or an integer")
 
 
 def native_table(f) -> bool:
@@ -350,6 +373,92 @@ class MLE:
             table = [t * nz for t in table] + [t * z for t in table]
         return cls(ring=ring, variables=variables, evaluations=table)
 
+    @classmethod
+    def from_uint64(
+        cls,
+        ring: RNSRing,
+        variables: list,
+        values,
+        repr: Representation = repr.coeff,
+    ) -> MLE:
+        """A table over `ring` in the evaluation basis, its ``n =
+        2^len(variables)`` entries read from `values` in representation
+        `repr`, one after another, each laid out as
+        `RNSPolynomial.from_uint64` reads it: words ``(b * ell + i) * N`` to
+        ``(b * ell + i + 1) * N - 1`` are the row of entry ``b`` modulo
+        ``ring.primes[i]``. In `Representation.coeff` word ``(b * ell + i) * N
+        + j`` is coefficient ``j``; in `Representation.ntt` a row holds the
+        ``N / d`` slots one after another, as `RNSPolynomial.to_uint64`
+        describes.
+
+        `values` is an ``array('Q')`` or any C-contiguous buffer of ``n * ell
+        * N`` unsigned 64-bit integers, such as a ``numpy.uint64`` array of
+        shape ``(n, ell, N)``. Every word must be below its row's prime;
+        ValueError otherwise. The entries are held in `Representation.ntt`,
+        as every native table's; coefficient rows are transformed in the
+        same native call that reads them.
+        """
+        if not isinstance(ring, RNSRing):
+            raise TypeError("from_uint64 needs an RNS ring")
+        if repr not in (Representation.coeff, Representation.ntt):
+            raise ValueError(f"cannot read values in {repr}: not a data representation")
+        view = memoryview(values)
+        if view.itemsize != 8 or view.format not in ("Q", "L"):
+            raise TypeError("values must be a buffer of 64-bit unsigned integers")
+        if not view.c_contiguous:
+            raise TypeError("values must be C-contiguous")
+        count = 1 << len(variables)
+        size = count * ring.ell * ring.N
+        if view.nbytes != 8 * size:
+            raise ValueError(f"{view.nbytes // 8} values for {size} residues")
+        entries = [Polynomial(ring) for _ in range(count)]
+        handles = ffi.new(
+            "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", p.obj) for p in entries]
+        )
+        bad = ring.lib.polynomial_RNS_set_natural_array(
+            handles,
+            ffi.from_buffer("uint64_t[]", view.cast("B")),
+            count,
+            repr is Representation.coeff,
+        )
+        if bad >= 0:
+            entry, row = divmod(bad, ring.ell)
+            raise ValueError(
+                f"entry {entry}, row {row} holds a value not below its prime "
+                f"{ring.primes[row]}"
+            )
+        mark_ntt(entries)
+        return cls(ring=ring, variables=variables, evaluations=entries)
+
+    def to_uint64(self, repr: Representation = repr.coeff) -> array.array:
+        """The entries' rows in representation `repr`, as one ``array('Q')``
+        laid out as `from_uint64` reads it: entry ``b`` is words ``b * ell *
+        N`` to ``(b + 1) * ell * N - 1``, as `RNSPolynomial.to_uint64` gives
+        it. ``numpy.frombuffer(words, numpy.uint64).reshape(n, ell, N)``
+        reads it without copying. Needs a table over an RNS ring; the
+        entries are left as they are.
+        """
+        ring = self._ring
+        if repr not in (Representation.coeff, Representation.ntt):
+            raise ValueError(
+                f"cannot write values in {repr}: not a data representation"
+            )
+        # The native call reads NTT rows; an entry held otherwise is read
+        # through a converted copy.
+        views = [p._viewed_as(Representation.ntt) for p in self._polys]
+        words = array.array("Q", [0]) * (len(views) * ring.ell * ring.N)
+        if views:
+            handles = ffi.new(
+                "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", p.obj) for p in views]
+            )
+            ring.lib.polynomial_RNS_get_natural_array(
+                ffi.from_buffer("uint64_t[]", words),
+                handles,
+                len(views),
+                repr is Representation.coeff,
+            )
+        return words
+
     def to_NTT(self) -> None:
         """Put every entry in NTT (RNS) form, the representation the C
         kernels read; a no-op on a table of plain Python values.
@@ -459,6 +568,69 @@ class MLE:
 
     def __rmul__(self, other):
         return self.__mul__(other)
+
+    @classmethod
+    def linear_combination(cls, tables: Sequence[MLE], coefficients: Sequence) -> MLE:
+        """The table ``sum_i coefficients[i] * tables[i]``, entry by entry.
+
+        The tables must share their variables, in the same order, their ring
+        or field and their basis; the result has them too. A coefficient is
+        an element of that ring or field, or an integer. Over a ring, tables
+        and coefficients not in NTT form are converted in place.
+        """
+        if not tables or len(tables) != len(coefficients):
+            raise ValueError(
+                "expected one coefficient per table, and at least one table"
+            )
+        first = tables[0]
+        for t in tables:
+            if not isinstance(t, MLE):
+                raise TypeError("can only combine MLE tables")
+            if t.variables != first.variables:
+                raise ValueError(
+                    "the tables must share their variables, in the same order"
+                )
+            if (
+                t.ring != first.ring
+                or t.field != first.field
+                or t.basis is not first.basis
+            ):
+                raise ValueError(
+                    "the tables must share their ring or field and their basis"
+                )
+        if first.field is not None:
+            out = first._vector.scale(coefficients[0])
+            for t, c in zip(tables[1:], coefficients[1:], strict=True):
+                out = out.fma(t._vector, c, out=out)
+            return cls._like(first, out)
+        if first.ring is None:
+            entries = [coefficients[0] * e for e in first._entries]
+            for t, c in zip(tables[1:], coefficients[1:], strict=True):
+                entries = [
+                    acc + c * e for acc, e in zip(entries, t._entries, strict=True)
+                ]
+            return cls._like(first, entries)
+        ring = first._ring
+        coeffs = [_ring_coefficient(ring, c) for c in coefficients]
+        for t in tables:
+            t.to_NTT()
+        for c in coeffs:
+            c.to_NTT()
+        size = 1 << first.num_vars
+        new_table = [Polynomial(ring) for _ in range(size)]
+        res = cls._like(first, new_table)
+        status = lib.mle_dense_poly_linear_combination(
+            ring.arith_ring,
+            res.table_ptr,
+            ffi.new("ArithElement *[]", [t.table_ptr for t in tables]),
+            element_array(coeffs),
+            len(tables),
+            size,
+        )
+        if status != 0:
+            raise ValueError(f"mle_dense_poly_linear_combination failed with {status}")
+        mark_ntt(new_table)
+        return res
 
     def evaluate(self, point: dict | list, in_place: bool = True) -> MLE:
         """Bind the variables in `point` to concrete values; variables not

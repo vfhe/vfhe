@@ -32,11 +32,118 @@
 #include "arith_internal.h"
 #include "alloc.h"
 #include "pmf_vec_group.h"
+#include "../vec_chunks.h"
 
 uint64_t pmf_vec_padded_length(uint64_t n)
 {
     const uint64_t unit = PMF_LANES;
     return ((n + unit - 1) / unit) * unit;
+}
+
+// --- running a kernel on the library's threads -----------------------------
+//
+// A kernel whose groups are independent is a loop over a range of its vector
+// with that range as parameters. On one thread it runs once over the whole
+// range; otherwise once per chunk (vec_chunks.h), each chunk a multiple of
+// PMF_LANES elements, so chunks never share a group. A reduction keeps one
+// partial result per chunk and adds them up in chunk order; every partial is
+// canonical, so the total is the serial one, representation included.
+
+// The fewest elements a chunk covers, by what an element costs.
+// One addition or subtraction an element, bounded by memory traffic.
+#define PMF_VEC_ADD_GRAIN (1u << 15)
+// A field product or more an element: products, folds, sums of products and
+// the inversion's sweeps.
+#define PMF_VEC_PRODUCT_GRAIN (1u << 13)
+// Copies and layout changes, in bytes of planes written: bandwidth-bound and
+// cheap per byte, so a chunk is large.
+#define PMF_VEC_MOVE_GRAIN_BYTES (4u << 20)
+// Hashing, in bytes of encodings: an encoding per element and a compression
+// per 64 bytes.
+#define PMF_VEC_HASH_GRAIN_BYTES (256u << 10)
+
+typedef struct PMFVecJob PMFVecJob;
+
+// A kernel's operands, and its loop over [begin, end) of the range it splits;
+// `chunk` indexes the partial result of a reduction. Which operand fields are
+// used is up to the kernel.
+struct PMFVecJob
+{
+    void (*range)(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk);
+    VecChunks chunks;
+    uint64_t total; // the range split, [0, total)
+    PMFParams params;
+    PMFVector out, out2, a, b, t;
+    const uint64_t *s, *s2;
+    PMFVector *outs;
+    const PMFVector *tables;
+    uint64_t count;
+    const void *shape;
+    uint64_t rows, width;
+    uint64_t start, shift, mask;
+    uint64_t group, stride;
+    uint64_t *words;
+    uint8_t *bytes;
+    uint64_t *partials; // a reduction's `slots` elements per chunk
+    uint64_t slots;
+};
+
+static void pmf_vec_chunk(void *ctx, uint64_t chunk)
+{
+    const PMFVecJob *job = (const PMFVecJob *)ctx;
+    job->range(job, vec_chunk_begin(&job->chunks, chunk), vec_chunk_end(&job->chunks, chunk),
+               chunk);
+}
+
+// Plans the chunks of [0, total); false when the kernel gets one thread.
+static bool pmf_vec_split(PMFVecJob *job, uint64_t total, uint64_t grain)
+{
+    job->total = total;
+    return vec_chunks_plan(&job->chunks, total, grain, PMF_LANES);
+}
+
+static void pmf_vec_run_chunks(PMFVecJob *job)
+{
+    vfhe_parallel_for(job->chunks.count, 0, pmf_vec_chunk, job);
+}
+
+// job->range over [0, total), split across threads when they are allowed.
+static void pmf_vec_run(PMFVecJob *job, uint64_t total, uint64_t grain)
+{
+    if (pmf_vec_split(job, total, grain))
+        pmf_vec_run_chunks(job);
+    else
+        job->range(job, 0, total, 0);
+}
+
+// The elements a chunk of a data-movement kernel covers at least.
+static uint64_t pmf_vec_move_grain(PMFParams params)
+{
+    return PMF_VEC_MOVE_GRAIN_BYTES / (params->limbs * sizeof(uint64_t));
+}
+
+// The `slots` result elements of chunk `chunk`, PMF_LANES words each.
+static uint64_t *pmf_vec_partial(const PMFVecJob *job, uint64_t chunk, uint64_t slot)
+{
+    return job->partials + (chunk * job->slots + slot) * PMF_LANES;
+}
+
+// Runs a planned split of a reduction: every chunk writes its `slots` partial
+// results, which are then added up into results[0 .. slots - 1] in chunk
+// order.
+static void pmf_vec_reduce_chunks(PMFVecJob *job, uint64_t *const *results, uint64_t slots)
+{
+    const uint64_t count = job->chunks.count;
+    job->slots = slots;
+    job->partials = (uint64_t *)safe_malloc(count * slots * PMF_LANES * sizeof(uint64_t));
+    pmf_vec_run_chunks(job);
+    for (uint64_t s = 0; s < slots; s++)
+    {
+        memcpy(results[s], pmf_vec_partial(job, 0, s), PMF_LANES * sizeof(uint64_t));
+        for (uint64_t c = 1; c < count; c++)
+            pmf_add(results[s], results[s], pmf_vec_partial(job, c, s), job->params);
+    }
+    free(job->partials);
 }
 
 // The three entry-point shapes below differ only in where the right-hand operand
@@ -45,12 +152,13 @@ uint64_t pmf_vec_padded_length(uint64_t n)
 // this file is a body taking the params, behind an entry point that dispatches
 // it with PMF_WITH_LIMBS.
 
-#define PMF_VEC_BINARY(name, core)                                                                 \
-    PMF_INLINE void name##_body(PMFVector out, const PMFVector a, const PMFVector b, PMFParams P)  \
+#define PMF_VEC_BINARY(name, core, grain)                                                          \
+    PMF_INLINE void name##_body(PMFVector out, const PMFVector a, const PMFVector b,               \
+                                uint64_t begin, uint64_t end, PMFParams P)                         \
     {                                                                                              \
         const uint64_t L = P->limbs;                                                               \
         pv_t av[PMF_MAX_LIMBS], bv[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];                           \
-        for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)                               \
+        for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)                                      \
         {                                                                                          \
             pmf_vec_load_group(av, a, i, L);                                                       \
             pmf_vec_load_group(bv, b, i, L);                                                       \
@@ -58,45 +166,58 @@ uint64_t pmf_vec_padded_length(uint64_t n)
             pmf_vec_store_group(out, i, T, L);                                                     \
         }                                                                                          \
     }                                                                                              \
+    static void name##_range(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk)   \
+    {                                                                                              \
+        (void)chunk;                                                                               \
+        PMF_WITH_LIMBS(job->params, name##_body(job->out, job->a, job->b, begin, end, &P_));       \
+    }                                                                                              \
     void name(PMFVector out, const PMFVector a, const PMFVector b)                                 \
     {                                                                                              \
-        PMF_WITH_LIMBS(a->params, name##_body(out, a, b, &P_));                                    \
+        PMFVecJob job = {.range = name##_range, .params = a->params, .out = out, .a = a, .b = b};  \
+        pmf_vec_run(&job, a->allocated_n, grain);                                                  \
     }
 
-#define PMF_VEC_BROADCAST(name, core)                                                              \
-    PMF_INLINE void name##_body(PMFVector out, const PMFVector a, const uint64_t *s, PMFParams P)  \
+#define PMF_VEC_BROADCAST(name, core, grain)                                                       \
+    PMF_INLINE void name##_body(PMFVector out, const PMFVector a, const uint64_t *s,               \
+                                uint64_t begin, uint64_t end, PMFParams P)                         \
     {                                                                                              \
         const uint64_t L = P->limbs;                                                               \
         pv_t av[PMF_MAX_LIMBS], sv[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];                           \
         pmf_vec_load_scalar(sv, s, L);                                                             \
-        for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)                               \
+        for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)                                      \
         {                                                                                          \
             pmf_vec_load_group(av, a, i, L);                                                       \
             core(T, av, sv, P);                                                                    \
             pmf_vec_store_group(out, i, T, L);                                                     \
         }                                                                                          \
     }                                                                                              \
+    static void name##_range(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk)   \
+    {                                                                                              \
+        (void)chunk;                                                                               \
+        PMF_WITH_LIMBS(job->params, name##_body(job->out, job->a, job->s, begin, end, &P_));       \
+    }                                                                                              \
     void name(PMFVector out, const PMFVector a, const uint64_t *s)                                 \
     {                                                                                              \
-        PMF_WITH_LIMBS(a->params, name##_body(out, a, s, &P_));                                    \
+        PMFVecJob job = {.range = name##_range, .params = a->params, .out = out, .a = a, .s = s};  \
+        pmf_vec_run(&job, a->allocated_n, grain);                                                  \
     }
 
-PMF_VEC_BINARY(pmf_vec_add, pmf_vec_add_group)
-PMF_VEC_BINARY(pmf_vec_sub, pmf_vec_sub_group)
-PMF_VEC_BINARY(pmf_vec_mul, pmf_vec_mul_group)
+PMF_VEC_BINARY(pmf_vec_add, pmf_vec_add_group, PMF_VEC_ADD_GRAIN)
+PMF_VEC_BINARY(pmf_vec_sub, pmf_vec_sub_group, PMF_VEC_ADD_GRAIN)
+PMF_VEC_BINARY(pmf_vec_mul, pmf_vec_mul_group, PMF_VEC_PRODUCT_GRAIN)
 
-PMF_VEC_BROADCAST(pmf_vec_add_scalar, pmf_vec_add_group)
-PMF_VEC_BROADCAST(pmf_vec_sub_scalar, pmf_vec_sub_group)
-PMF_VEC_BROADCAST(pmf_vec_scale, pmf_vec_mul_group)
+PMF_VEC_BROADCAST(pmf_vec_add_scalar, pmf_vec_add_group, PMF_VEC_ADD_GRAIN)
+PMF_VEC_BROADCAST(pmf_vec_sub_scalar, pmf_vec_sub_group, PMF_VEC_ADD_GRAIN)
+PMF_VEC_BROADCAST(pmf_vec_scale, pmf_vec_mul_group, PMF_VEC_PRODUCT_GRAIN)
 
 PMF_INLINE void pmf_vec_scalar_sub_body(PMFVector out, const uint64_t *s, const PMFVector a,
-                                        PMFParams P)
+                                        uint64_t begin, uint64_t end, PMFParams P)
 {
     const uint64_t L = P->limbs;
     pv_t av[PMF_MAX_LIMBS], sv[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];
 
     pmf_vec_load_scalar(sv, s, L);
-    for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)
+    for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)
     {
         pmf_vec_load_group(av, a, i, L);
         pmf_vec_sub_group(T, sv, av, P);
@@ -104,18 +225,28 @@ PMF_INLINE void pmf_vec_scalar_sub_body(PMFVector out, const uint64_t *s, const 
     }
 }
 
-void pmf_vec_scalar_sub(PMFVector out, const uint64_t *s, const PMFVector a)
+static void pmf_vec_scalar_sub_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                     uint64_t chunk)
 {
-    PMF_WITH_LIMBS(a->params, pmf_vec_scalar_sub_body(out, s, a, &P_));
+    (void)chunk;
+    PMF_WITH_LIMBS(job->params, pmf_vec_scalar_sub_body(job->out, job->s, job->a, begin, end, &P_));
 }
 
-PMF_INLINE void pmf_vec_neg_body(PMFVector out, const PMFVector a, PMFParams P)
+void pmf_vec_scalar_sub(PMFVector out, const uint64_t *s, const PMFVector a)
+{
+    PMFVecJob job = {
+        .range = pmf_vec_scalar_sub_range, .params = a->params, .out = out, .a = a, .s = s};
+    pmf_vec_run(&job, a->allocated_n, PMF_VEC_ADD_GRAIN);
+}
+
+PMF_INLINE void pmf_vec_neg_body(PMFVector out, const PMFVector a, uint64_t begin, uint64_t end,
+                                 PMFParams P)
 {
     const uint64_t L = P->limbs;
     const pv_t mask = pv_mask52();
     pv_t av[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS];
 
-    for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)
+    for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)
     {
         pmf_vec_load_group(av, a, i, L);
 
@@ -139,12 +270,23 @@ PMF_INLINE void pmf_vec_neg_body(PMFVector out, const PMFVector a, PMFParams P)
     }
 }
 
-void pmf_vec_neg(PMFVector out, const PMFVector a)
+static void pmf_vec_neg_range(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk)
 {
-    PMF_WITH_LIMBS(a->params, pmf_vec_neg_body(out, a, &P_));
+    (void)chunk;
+    PMF_WITH_LIMBS(job->params, pmf_vec_neg_body(job->out, job->a, begin, end, &P_));
 }
 
-void pmf_vec_sum(uint64_t *out, const PMFVector a)
+void pmf_vec_neg(PMFVector out, const PMFVector a)
+{
+    PMFVecJob job = {.range = pmf_vec_neg_range, .params = a->params, .out = out, .a = a};
+    pmf_vec_run(&job, a->allocated_n, PMF_VEC_ADD_GRAIN);
+}
+
+// The sum of elements [begin, end) of `a`, both multiples of PMF_VEC_GROUP,
+// through the lanes, plus elements end .. to - 1 one at a time, into one
+// canonical element.
+static void pmf_vec_sum_span(uint64_t *out, const PMFVector a, uint64_t begin, uint64_t end,
+                             uint64_t to)
 {
     const uint64_t L = a->params->limbs;
     // Every live element is canonical, so each limb is below 2^52 and 255 of
@@ -158,11 +300,8 @@ void pmf_vec_sum(uint64_t *out, const PMFVector a)
     for (uint64_t k = 0; k <= L; k++)
         acc[k] = pv_zero();
 
-    // Whole groups of live elements only: the padding is canonical but carries
-    // no value, so it must not reach the total.
-    const uint64_t whole = (a->n / PMF_VEC_GROUP) * PMF_VEC_GROUP;
     uint64_t since_reduce = 0;
-    for (uint64_t i = 0; i < whole; i += PMF_VEC_GROUP)
+    for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)
     {
         pmf_vec_load_group(av, a, i, L);
         for (uint64_t k = 0; k < L; k++)
@@ -194,11 +333,31 @@ void pmf_vec_sum(uint64_t *out, const PMFVector a)
             element[k] = partial[k * PMF_LANES + lane];
         pmf_add(out, out, element, a->params);
     }
-    for (uint64_t i = whole; i < a->n; i++)
+    for (uint64_t i = end; i < to; i++)
     {
         pmf_vec_get_element(element, a, i);
         pmf_add(out, out, element, a->params);
     }
+}
+
+// The last chunk also takes the elements past the last whole group.
+static void pmf_vec_sum_range(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk)
+{
+    const uint64_t to = end == job->total ? job->a->n : end;
+    pmf_vec_sum_span(pmf_vec_partial(job, chunk, 0), job->a, begin, end, to);
+}
+
+void pmf_vec_sum(uint64_t *out, const PMFVector a)
+{
+    // Whole groups of live elements only go through the lanes: the padding is
+    // canonical but carries no value, so it must not reach the total.
+    const uint64_t whole = (a->n / PMF_VEC_GROUP) * PMF_VEC_GROUP;
+    PMFVecJob job = {.range = pmf_vec_sum_range, .params = a->params, .a = a};
+    uint64_t *const results[1] = {out};
+    if (pmf_vec_split(&job, whole, PMF_VEC_ADD_GRAIN))
+        pmf_vec_reduce_chunks(&job, results, 1);
+    else
+        pmf_vec_sum_span(out, a, 0, whole, a->n);
 }
 
 // --- inversion ------------------------------------------------------------
@@ -242,33 +401,36 @@ static int pmf_inv_serial(uint64_t *inv, const uint64_t *x, uint64_t count, PMFP
     return 1;
 }
 
-// The forward sweep over the first rows * width elements of `a`: prefix row t
-// is the product of rows 0..t, column by column.
+// The forward sweep over columns [c0, c1) of the first rows * width elements
+// of `a`: prefix row t is the product of rows 0..t, column by column.
 PMF_INLINE void pmf_vec_inv_forward_body(PMFVector prefix, const PMFVector a, uint64_t rows,
-                                         uint64_t width, PMFParams P)
+                                         uint64_t width, uint64_t c0, uint64_t c1, PMFParams P)
 {
     const uint64_t L = P->limbs;
     pv_t pv[PMF_MAX_LIMBS], av[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];
 
     for (uint64_t k = 0; k < L; k++)
-        memcpy(prefix->limbs[k], a->limbs[k], width * sizeof(uint64_t));
-    for (uint64_t i = width; i < rows * width; i += PMF_VEC_GROUP)
-    {
-        pmf_vec_load_group(pv, prefix, i - width, L);
-        pmf_vec_load_group(av, a, i, L);
-        pmf_vec_mul_group(T, pv, av, P);
-        pmf_vec_store_group(prefix, i, T, L);
-    }
+        memcpy(prefix->limbs[k] + c0, a->limbs[k] + c0, (c1 - c0) * sizeof(uint64_t));
+    for (uint64_t t = 1; t < rows; t++)
+        for (uint64_t g = c0; g < c1; g += PMF_VEC_GROUP)
+        {
+            const uint64_t i = t * width + g;
+            pmf_vec_load_group(pv, prefix, i - width, L);
+            pmf_vec_load_group(av, a, i, L);
+            pmf_vec_mul_group(T, pv, av, P);
+            pmf_vec_store_group(prefix, i, T, L);
+        }
 }
 
-// The backward sweep. The last prefix row holds the running inverses, one per
-// column, starting from the inverses of the column totals: for t from the last
-// row down to 1, out row t is the running inverse times prefix row t - 1, and
-// the running inverse then absorbs row t of `a`. Out row 0 is what is left.
-// Each group of `a` is loaded before the same group of `out` is stored, so
-// `out` may be `a`.
+// The backward sweep over columns [c0, c1). The last prefix row holds the
+// running inverses, one per column, starting from the inverses of the column
+// totals: for t from the last row down to 1, out row t is the running inverse
+// times prefix row t - 1, and the running inverse then absorbs row t of `a`.
+// Out row 0 is what is left. Each group of `a` is loaded before the same group
+// of `out` is stored, so `out` may be `a`.
 PMF_INLINE void pmf_vec_inv_backward_body(PMFVector out, const PMFVector a, PMFVector prefix,
-                                          uint64_t rows, uint64_t width, PMFParams P)
+                                          uint64_t rows, uint64_t width, uint64_t c0, uint64_t c1,
+                                          PMFParams P)
 {
     const uint64_t L = P->limbs, last = (rows - 1) * width;
     pv_t rv[PMF_MAX_LIMBS], pv[PMF_MAX_LIMBS], av[PMF_MAX_LIMBS];
@@ -276,7 +438,7 @@ PMF_INLINE void pmf_vec_inv_backward_body(PMFVector out, const PMFVector a, PMFV
 
     for (uint64_t t = rows; t-- > 1;)
     {
-        for (uint64_t g = 0; g < width; g += PMF_VEC_GROUP)
+        for (uint64_t g = c0; g < c1; g += PMF_VEC_GROUP)
         {
             const uint64_t i = t * width + g;
             pmf_vec_load_group(rv, prefix, last + g, L);
@@ -289,7 +451,25 @@ PMF_INLINE void pmf_vec_inv_backward_body(PMFVector out, const PMFVector a, PMFV
         }
     }
     for (uint64_t k = 0; k < L; k++)
-        memcpy(out->limbs[k], prefix->limbs[k] + last, width * sizeof(uint64_t));
+        memcpy(out->limbs[k] + c0, prefix->limbs[k] + last + c0, (c1 - c0) * sizeof(uint64_t));
+}
+
+// The columns are independent chains, so the sweeps split by columns: job->t
+// is the prefix vector, job->rows and job->width its shape.
+static void pmf_vec_inv_forward_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                      uint64_t chunk)
+{
+    (void)chunk;
+    PMF_WITH_LIMBS(job->params, pmf_vec_inv_forward_body(job->t, job->a, job->rows, job->width,
+                                                         begin, end, &P_));
+}
+
+static void pmf_vec_inv_backward_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                       uint64_t chunk)
+{
+    (void)chunk;
+    PMF_WITH_LIMBS(job->params, pmf_vec_inv_backward_body(job->out, job->a, job->t, job->rows,
+                                                          job->width, begin, end, &P_));
 }
 
 int pmf_vec_inv(PMFVector out, const PMFVector a)
@@ -320,7 +500,13 @@ int pmf_vec_inv(PMFVector out, const PMFVector a)
             planes[k] = block + k * body;
         prefix.limbs = planes;
         prefix.n = prefix.allocated_n = body;
-        PMF_WITH_LIMBS(a->params, pmf_vec_inv_forward_body(&prefix, a, rows, width, &P_));
+        PMFVecJob job = {.range = pmf_vec_inv_forward_range,
+                         .params = a->params,
+                         .a = a,
+                         .t = &prefix,
+                         .rows = rows,
+                         .width = width};
+        pmf_vec_run(&job, width, PMF_VEC_PRODUCT_GRAIN / rows);
         pmf_vec_get_range(x, &prefix, body - width, width);
     }
     pmf_vec_get_range(x + width * PMF_LANES, a, body, n - body);
@@ -331,7 +517,14 @@ int pmf_vec_inv(PMFVector out, const PMFVector a)
         if (width)
         {
             pmf_vec_set_range(&prefix, body - width, inv, width);
-            PMF_WITH_LIMBS(a->params, pmf_vec_inv_backward_body(out, a, &prefix, rows, width, &P_));
+            PMFVecJob job = {.range = pmf_vec_inv_backward_range,
+                             .params = a->params,
+                             .out = out,
+                             .a = a,
+                             .t = &prefix,
+                             .rows = rows,
+                             .width = width};
+            pmf_vec_run(&job, width, PMF_VEC_PRODUCT_GRAIN / rows);
         }
         pmf_vec_set_range(out, body, inv + width * PMF_LANES, n - body);
     }
@@ -402,22 +595,30 @@ PMF_INLINE void pmf_vec_fold_group(pv_t *T, const PMFVector a, uint64_t i, const
     pmf_vec_add_group(T, E, T, P);
 }
 
-PMF_INLINE void pmf_vec_fold_body(PMFVector out, const PMFVector a, const uint64_t *r, PMFParams P)
+PMF_INLINE void pmf_vec_fold_body(PMFVector out, const PMFVector a, const uint64_t *r,
+                                  uint64_t begin, uint64_t end, PMFParams P)
 {
     const uint64_t L = P->limbs;
     pv_t R[PMF_MAX_LIMBS], T[PMF_MAX_LIMBS + 1];
 
     pmf_vec_load_scalar(R, r, L);
-    for (uint64_t i = 0; i < out->allocated_n; i += PMF_VEC_GROUP)
+    for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)
     {
         pmf_vec_fold_group(T, a, i, R, P);
         pmf_vec_store_group(out, i, T, L);
     }
 }
 
+static void pmf_vec_fold_range(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk)
+{
+    (void)chunk;
+    PMF_WITH_LIMBS(job->params, pmf_vec_fold_body(job->out, job->a, job->s, begin, end, &P_));
+}
+
 void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r)
 {
-    PMF_WITH_LIMBS(a->params, pmf_vec_fold_body(out, a, r, &P_));
+    PMFVecJob job = {.range = pmf_vec_fold_range, .params = a->params, .out = out, .a = a, .s = r};
+    pmf_vec_run(&job, out->allocated_n, PMF_VEC_PRODUCT_GRAIN);
 }
 
 // --- inner products of folds ----------------------------------------------
@@ -531,24 +732,36 @@ static void pmf_vec_inner_sums_extrapolate(uint64_t *q0, uint64_t *q1, uint64_t 
     pmf_sub(q2, q2, q0, params);
 }
 
-// The pairs in whole groups go through the lanes; the rest, whose lanes would
-// reach the padding, through the element kernels.
+// The pairs [begin, end) go through the lanes, and the pairs from `from` on,
+// which no whole group covers and whose lanes would reach the padding,
+// through the element kernels.
 PMF_INLINE void pmf_vec_fold_inner_products_body(uint64_t *const *sums, const PMFVector a,
-                                                 const PMFVector b, PMFParams P)
+                                                 const PMFVector b, uint64_t begin, uint64_t end,
+                                                 uint64_t from, PMFParams P)
 {
     const uint64_t L = P->limbs;
     pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS], X[PMF_MAX_LIMBS], Y[PMF_MAX_LIMBS];
     PMFInnerSums S;
 
     pmf_vec_inner_sums_init(&S, L);
-    const uint64_t whole = (a->n / 2 / PMF_VEC_GROUP) * PMF_VEC_GROUP;
-    for (uint64_t i = 0; i < whole; i += PMF_VEC_GROUP)
+    for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)
     {
         pmf_vec_load_pairs(U, V, a, i, L);
         pmf_vec_load_pairs(X, Y, b, i, L);
         pmf_vec_inner_sums_add(&S, U, V, X, Y, P);
     }
-    pmf_vec_inner_sums_finish(sums, &S, a, b, whole, P);
+    pmf_vec_inner_sums_finish(sums, &S, a, b, from, P);
+}
+
+// The last chunk also takes the pairs past the last whole group.
+static void pmf_vec_fold_inner_products_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                              uint64_t chunk)
+{
+    uint64_t *const sums[3] = {pmf_vec_partial(job, chunk, 0), pmf_vec_partial(job, chunk, 1),
+                               pmf_vec_partial(job, chunk, 2)};
+    const uint64_t from = end == job->total ? end : job->a->n / 2;
+    PMF_WITH_LIMBS(job->params,
+                   pmf_vec_fold_inner_products_body(sums, job->a, job->b, begin, end, from, &P_));
 }
 
 void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const PMFVector a,
@@ -556,7 +769,14 @@ void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const
 {
     assert(a->n % 2 == 0 && b->n == a->n);
     uint64_t *const sums[3] = {q0, q1, q2};
-    PMF_WITH_LIMBS(a->params, pmf_vec_fold_inner_products_body(sums, a, b, &P_));
+    const uint64_t whole = (a->n / 2 / PMF_VEC_GROUP) * PMF_VEC_GROUP;
+    PMFVecJob job = {
+        .range = pmf_vec_fold_inner_products_range, .params = a->params, .a = a, .b = b};
+    if (pmf_vec_split(&job, whole, PMF_VEC_PRODUCT_GRAIN))
+        pmf_vec_reduce_chunks(&job, sums, 3);
+    else
+        PMF_WITH_LIMBS(a->params,
+                       pmf_vec_fold_inner_products_body(sums, a, b, 0, whole, whole, &P_));
     pmf_vec_inner_sums_extrapolate(q0, q1, q2, a->params);
 }
 
@@ -587,9 +807,14 @@ PMF_INLINE void pmf_vec_pairs_of(pv_t *E, pv_t *O, const pv_t *F0, const pv_t *F
 // stored: the 2 * PMF_VEC_GROUP output elements from 2j are the pairs j .. j +
 // PMF_VEC_GROUP - 1 of the folded vector. The remaining output groups, padding
 // included, are folded alone, and the pairs among them summed one at a time.
+//
+// [begin, end) is the range of j, the pairs of the folded vector the main loop
+// covers; `last` adds the rest: the output groups past them and the pairs among
+// those.
 PMF_INLINE void pmf_vec_fold_and_inner_products_body(PMFVector a_out, PMFVector b_out,
                                                      uint64_t *const *sums, const PMFVector a,
                                                      const PMFVector b, const uint64_t *r,
+                                                     uint64_t begin, uint64_t end, int last,
                                                      PMFParams P)
 {
     const uint64_t L = P->limbs;
@@ -600,8 +825,7 @@ PMF_INLINE void pmf_vec_fold_and_inner_products_body(PMFVector a_out, PMFVector 
 
     pmf_vec_load_scalar(R, r, L);
     pmf_vec_inner_sums_init(&S, L);
-    const uint64_t whole = (a_out->n / 2 / PMF_VEC_GROUP) * PMF_VEC_GROUP;
-    for (uint64_t j = 0; j < whole; j += PMF_VEC_GROUP)
+    for (uint64_t j = begin; j < end; j += PMF_VEC_GROUP)
     {
         const uint64_t i = 2 * j;
         pmf_vec_fold_group(A0, a, i, R, P);
@@ -616,14 +840,29 @@ PMF_INLINE void pmf_vec_fold_and_inner_products_body(PMFVector a_out, PMFVector 
         pmf_vec_pairs_of(X, Y, B0, B1, L);
         pmf_vec_inner_sums_add(&S, U, V, X, Y, P);
     }
-    for (uint64_t i = 2 * whole; i < a_out->allocated_n; i += PMF_VEC_GROUP)
+    if (!last)
+    {
+        pmf_vec_inner_sums_finish(sums, &S, a_out, b_out, a_out->n / 2, P);
+        return;
+    }
+    for (uint64_t i = 2 * end; i < a_out->allocated_n; i += PMF_VEC_GROUP)
     {
         pmf_vec_fold_group(A0, a, i, R, P);
         pmf_vec_fold_group(B0, b, i, R, P);
         pmf_vec_store_group(a_out, i, A0, L);
         pmf_vec_store_group(b_out, i, B0, L);
     }
-    pmf_vec_inner_sums_finish(sums, &S, a_out, b_out, whole, P);
+    pmf_vec_inner_sums_finish(sums, &S, a_out, b_out, end, P);
+}
+
+static void pmf_vec_fold_and_inner_products_range(const PMFVecJob *job, uint64_t begin,
+                                                  uint64_t end, uint64_t chunk)
+{
+    uint64_t *const sums[3] = {pmf_vec_partial(job, chunk, 0), pmf_vec_partial(job, chunk, 1),
+                               pmf_vec_partial(job, chunk, 2)};
+    PMF_WITH_LIMBS(job->params, pmf_vec_fold_and_inner_products_body(job->out, job->out2, sums,
+                                                                     job->a, job->b, job->s, begin,
+                                                                     end, end == job->total, &P_));
 }
 
 void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t *q0, uint64_t *q1,
@@ -632,8 +871,19 @@ void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t 
 {
     assert(a->n % 4 == 0 && b->n == a->n && 2 * a_out->n == a->n && 2 * b_out->n == a->n);
     uint64_t *const sums[3] = {q0, q1, q2};
-    PMF_WITH_LIMBS(a->params,
-                   pmf_vec_fold_and_inner_products_body(a_out, b_out, sums, a, b, r, &P_));
+    const uint64_t whole = (a_out->n / 2 / PMF_VEC_GROUP) * PMF_VEC_GROUP;
+    PMFVecJob job = {.range = pmf_vec_fold_and_inner_products_range,
+                     .params = a->params,
+                     .out = a_out,
+                     .out2 = b_out,
+                     .a = a,
+                     .b = b,
+                     .s = r};
+    if (pmf_vec_split(&job, whole, PMF_VEC_PRODUCT_GRAIN / 2))
+        pmf_vec_reduce_chunks(&job, sums, 3);
+    else
+        PMF_WITH_LIMBS(a->params, pmf_vec_fold_and_inner_products_body(a_out, b_out, sums, a, b, r,
+                                                                       0, whole, 1, &P_));
     pmf_vec_inner_sums_extrapolate(q0, q1, q2, a->params);
 }
 
@@ -834,18 +1084,36 @@ PMF_INLINE void pmf_vec_product_sums_load_add(PMFProductSums *S,
     pmf_vec_product_sums_add(S, F, weights ? W : NULL, shape, P);
 }
 
+// The pairs [begin, end) of the tables, `begin` a multiple of PMF_VEC_GROUP.
 PMF_INLINE void pmf_vec_fold_product_sums_body(uint64_t *const *sums, const PMFVector *tables,
                                                uint64_t count, const PMFVector weights,
-                                               const PMFProductShape *shape, PMFParams P)
+                                               const PMFProductShape *shape, uint64_t begin,
+                                               uint64_t end, PMFParams P)
 {
     pv_t F[PMF_FOLD_MAX_TABLES][PMF_FOLD_MAX_NODES][PMF_MAX_LIMBS];
     PMFProductSums S;
 
     pmf_vec_product_sums_init(&S, shape, P->limbs);
-    const uint64_t pairs = tables[0]->n / 2;
-    for (uint64_t i = 0; i < pairs; i += PMF_VEC_GROUP)
-        pmf_vec_product_sums_load_add(&S, F, tables, count, weights, i, pairs, shape, P);
+    for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)
+        pmf_vec_product_sums_load_add(&S, F, tables, count, weights, i, end, shape, P);
     pmf_vec_product_sums_finish(sums, &S, shape, P);
+}
+
+// Pointers to the sums * nodes results of one chunk.
+static void pmf_vec_product_partials(uint64_t **sums, const PMFVecJob *job, uint64_t chunk)
+{
+    for (uint64_t s = 0; s < job->slots; s++)
+        sums[s] = pmf_vec_partial(job, chunk, s);
+}
+
+static void pmf_vec_fold_product_sums_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                            uint64_t chunk)
+{
+    uint64_t *sums[PMF_FOLD_MAX_SUMS * PMF_FOLD_MAX_NODES];
+    pmf_vec_product_partials(sums, job, chunk);
+    PMF_WITH_LIMBS(job->params, pmf_vec_fold_product_sums_body(
+                                    sums, job->tables, job->count, job->b,
+                                    (const PMFProductShape *)job->shape, begin, end, &P_));
 }
 
 void pmf_vec_fold_product_sums(uint64_t *const *sums, const PMFVector *tables, uint64_t count,
@@ -856,18 +1124,33 @@ void pmf_vec_fold_product_sums(uint64_t *const *sums, const PMFVector *tables, u
     for (uint64_t j = 0; j < count; j++)
         assert(tables[j]->n % 2 == 0 && tables[j]->n == tables[0]->n);
     assert(!weights || 2 * weights->n == tables[0]->n);
-    PMF_WITH_LIMBS(tables[0]->params,
-                   pmf_vec_fold_product_sums_body(sums, tables, count, weights, &decoded, &P_));
+    const uint64_t pairs = tables[0]->n / 2;
+    PMFVecJob job = {.range = pmf_vec_fold_product_sums_range,
+                     .params = tables[0]->params,
+                     .b = weights,
+                     .tables = tables,
+                     .count = count,
+                     .shape = &decoded};
+    if (pmf_vec_split(&job, pairs, PMF_VEC_PRODUCT_GRAIN / count))
+        pmf_vec_reduce_chunks(&job, sums, decoded.sums * decoded.nodes);
+    else
+        PMF_WITH_LIMBS(
+            tables[0]->params,
+            pmf_vec_fold_product_sums_body(sums, tables, count, weights, &decoded, 0, pairs, &P_));
 }
 
 // As pmf_vec_fold_and_inner_products: each pass of the main loop folds two
 // output groups of every table, stores them, and takes the pairs of the next
 // round from the registers. The remaining output groups, padding included, are
 // folded alone, and the pairs among them summed from the stored folds.
+//
+// [begin, end) is the range of j, as in pmf_vec_fold_and_inner_products_body,
+// and `last` adds the rest.
 PMF_INLINE void pmf_vec_fold_and_product_sums_body(PMFVector *outs, uint64_t *const *sums,
                                                    const PMFVector *tables, uint64_t count,
                                                    const uint64_t *r, const PMFVector weights,
-                                                   const PMFProductShape *shape, PMFParams P)
+                                                   const PMFProductShape *shape, uint64_t begin,
+                                                   uint64_t end, int last, PMFParams P)
 {
     const uint64_t L = P->limbs;
     pv_t R[PMF_MAX_LIMBS], W[PMF_MAX_LIMBS];
@@ -879,8 +1162,7 @@ PMF_INLINE void pmf_vec_fold_and_product_sums_body(PMFVector *outs, uint64_t *co
     pmf_vec_load_scalar(R, r, L);
     pmf_vec_product_sums_init(&S, shape, L);
     const uint64_t pairs = outs[0]->n / 2;
-    const uint64_t whole = (pairs / PMF_VEC_GROUP) * PMF_VEC_GROUP;
-    for (uint64_t j = 0; j < whole; j += PMF_VEC_GROUP)
+    for (uint64_t j = begin; j < end; j += PMF_VEC_GROUP)
     {
         const uint64_t i = 2 * j;
         for (uint64_t k = 0; k < count; k++)
@@ -896,16 +1178,30 @@ PMF_INLINE void pmf_vec_fold_and_product_sums_body(PMFVector *outs, uint64_t *co
             pmf_vec_load_group(W, weights, j, L);
         pmf_vec_product_sums_add(&S, F, weights ? W : NULL, shape, P);
     }
-    for (uint64_t i = 2 * whole; i < outs[0]->allocated_n; i += PMF_VEC_GROUP)
-        for (uint64_t k = 0; k < count; k++)
-        {
-            pmf_vec_fold_group(A0, tables[k], i, R, P);
-            pmf_vec_store_group(outs[k], i, A0, L);
-        }
-    if (whole < pairs)
-        pmf_vec_product_sums_load_add(&S, F, (const PMFVector *)outs, count, weights, whole, pairs,
-                                      shape, P);
+    if (last)
+    {
+        for (uint64_t i = 2 * end; i < outs[0]->allocated_n; i += PMF_VEC_GROUP)
+            for (uint64_t k = 0; k < count; k++)
+            {
+                pmf_vec_fold_group(A0, tables[k], i, R, P);
+                pmf_vec_store_group(outs[k], i, A0, L);
+            }
+        if (end < pairs)
+            pmf_vec_product_sums_load_add(&S, F, (const PMFVector *)outs, count, weights, end,
+                                          pairs, shape, P);
+    }
     pmf_vec_product_sums_finish(sums, &S, shape, P);
+}
+
+static void pmf_vec_fold_and_product_sums_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                                uint64_t chunk)
+{
+    uint64_t *sums[PMF_FOLD_MAX_SUMS * PMF_FOLD_MAX_NODES];
+    pmf_vec_product_partials(sums, job, chunk);
+    PMF_WITH_LIMBS(job->params,
+                   pmf_vec_fold_and_product_sums_body(
+                       job->outs, sums, job->tables, job->count, job->s, job->b,
+                       (const PMFProductShape *)job->shape, begin, end, end == job->total, &P_));
 }
 
 void pmf_vec_fold_and_product_sums(PMFVector *outs, uint64_t *const *sums, const PMFVector *tables,
@@ -918,8 +1214,21 @@ void pmf_vec_fold_and_product_sums(PMFVector *outs, uint64_t *const *sums, const
         assert(tables[j]->n % 4 == 0 && tables[j]->n == tables[0]->n &&
                2 * outs[j]->n == tables[0]->n);
     assert(!weights || 4 * weights->n == tables[0]->n);
-    PMF_WITH_LIMBS(tables[0]->params, pmf_vec_fold_and_product_sums_body(
-                                          outs, sums, tables, count, r, weights, &decoded, &P_));
+    const uint64_t whole = (outs[0]->n / 2 / PMF_VEC_GROUP) * PMF_VEC_GROUP;
+    PMFVecJob job = {.range = pmf_vec_fold_and_product_sums_range,
+                     .params = tables[0]->params,
+                     .b = weights,
+                     .s = r,
+                     .outs = outs,
+                     .tables = tables,
+                     .count = count,
+                     .shape = &decoded};
+    if (pmf_vec_split(&job, whole, PMF_VEC_PRODUCT_GRAIN / (2 * count)))
+        pmf_vec_reduce_chunks(&job, sums, decoded.sums * decoded.nodes);
+    else
+        PMF_WITH_LIMBS(tables[0]->params,
+                       pmf_vec_fold_and_product_sums_body(outs, sums, tables, count, r, weights,
+                                                          &decoded, 0, whole, 1, &P_));
 }
 
 // One element, 1/2 = (p + 1) / 2: p is odd. PMF_LANES words.
@@ -943,7 +1252,8 @@ static void pmf_vec_half(uint64_t *half, PMFParams params)
 // (u + v)/2 + (u - v) untwist r with two products a pair.
 PMF_INLINE void pmf_vec_fold_twisted_body(PMFVector out, const PMFVector word,
                                           const PMFVector untwist, const uint64_t *r,
-                                          const uint64_t *half, PMFParams P)
+                                          const uint64_t *half, uint64_t begin, uint64_t end,
+                                          PMFParams P)
 {
     const uint64_t L = P->limbs;
     pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS], W[PMF_MAX_LIMBS], R[PMF_MAX_LIMBS], H[PMF_MAX_LIMBS];
@@ -951,7 +1261,7 @@ PMF_INLINE void pmf_vec_fold_twisted_body(PMFVector out, const PMFVector word,
 
     pmf_vec_load_scalar(R, r, L);
     pmf_vec_load_scalar(H, half, L);
-    for (uint64_t i = 0; i < out->allocated_n; i += PMF_VEC_GROUP)
+    for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)
     {
         pmf_vec_load_pairs(U, V, word, i, L);
         pmf_vec_load_group(W, untwist, i, L);
@@ -964,13 +1274,30 @@ PMF_INLINE void pmf_vec_fold_twisted_body(PMFVector out, const PMFVector word,
     }
 }
 
+// job->a is the word, job->t the untwisting table, job->s and job->s2 are r
+// and 1/2.
+static void pmf_vec_fold_twisted_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                       uint64_t chunk)
+{
+    (void)chunk;
+    PMF_WITH_LIMBS(job->params, pmf_vec_fold_twisted_body(job->out, job->a, job->t, job->s, job->s2,
+                                                          begin, end, &P_));
+}
+
 void pmf_vec_fold_twisted(PMFVector out, const PMFVector word, const PMFVector untwist,
                           const uint64_t *r)
 {
     uint64_t half[PMF_LANES];
     assert(word->n == 2 * out->n && untwist->n == out->n);
     pmf_vec_half(half, word->params);
-    PMF_WITH_LIMBS(word->params, pmf_vec_fold_twisted_body(out, word, untwist, r, half, &P_));
+    PMFVecJob job = {.range = pmf_vec_fold_twisted_range,
+                     .params = word->params,
+                     .out = out,
+                     .a = word,
+                     .t = untwist,
+                     .s = r,
+                     .s2 = half};
+    pmf_vec_run(&job, out->allocated_n, PMF_VEC_PRODUCT_GRAIN);
 }
 
 // The table entries for the group at i, read cyclically from a table of
@@ -1033,13 +1360,14 @@ PMF_INLINE void pmf_vec_store_pairs(PMFVector out, uint64_t i, const pv_t *E, co
 }
 
 PMF_INLINE void pmf_vec_lift_twisted_body(PMFVector out, const PMFVector a, const PMFVector b,
-                                          const PMFVector t, PMFParams P)
+                                          const PMFVector t, uint64_t begin, uint64_t end,
+                                          PMFParams P)
 {
     const uint64_t L = P->limbs;
     pv_t A[PMF_MAX_LIMBS], B[PMF_MAX_LIMBS], W[PMF_MAX_LIMBS];
     pv_t M[PMF_MAX_LIMBS + 1], E[PMF_MAX_LIMBS + 1], O[PMF_MAX_LIMBS + 1];
 
-    for (uint64_t i = 0; i < a->allocated_n; i += PMF_VEC_GROUP)
+    for (uint64_t i = begin; i < end; i += PMF_VEC_GROUP)
     {
         pmf_vec_load_group(A, a, i, L);
         pmf_vec_load_group(B, b, i, L);
@@ -1051,10 +1379,24 @@ PMF_INLINE void pmf_vec_lift_twisted_body(PMFVector out, const PMFVector a, cons
     }
 }
 
+static void pmf_vec_lift_twisted_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                       uint64_t chunk)
+{
+    (void)chunk;
+    PMF_WITH_LIMBS(job->params,
+                   pmf_vec_lift_twisted_body(job->out, job->a, job->b, job->t, begin, end, &P_));
+}
+
 void pmf_vec_lift_twisted(PMFVector out, const PMFVector a, const PMFVector b, const PMFVector t)
 {
     assert(b->n == a->n && out->n == 2 * a->n && t->n > 0 && a->n % t->n == 0);
-    PMF_WITH_LIMBS(a->params, pmf_vec_lift_twisted_body(out, a, b, t, &P_));
+    PMFVecJob job = {.range = pmf_vec_lift_twisted_range,
+                     .params = a->params,
+                     .out = out,
+                     .a = a,
+                     .b = b,
+                     .t = t};
+    pmf_vec_run(&job, a->allocated_n, PMF_VEC_PRODUCT_GRAIN);
 }
 
 // --- movement -------------------------------------------------------------
@@ -1107,12 +1449,16 @@ static inline void pmf_vec_set_limbs(uint64_t *limb0, uint64_t *limb1, uint64_t 
     limb1[i] = value >> PMF_LIMB_BITS;
 }
 
-void pmf_vec_set_uint64(PMFVector out, uint64_t start, const uint64_t *low, const uint64_t *high,
-                        uint64_t count, uint32_t shift, uint32_t width)
+// Values [begin, end) of pmf_vec_set_uint64, job->s and job->s2 being `low`
+// and `high`.
+static void pmf_vec_set_uint64_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                     uint64_t chunk)
 {
-    assert(start + count <= out->n && shift < (high ? 128u : 64u) && width >= 1 && width <= 64);
-    const uint64_t mask = width == 64 ? ~0ULL : (1ULL << width) - 1;
-    uint64_t *limb0 = out->limbs[0] + start, *limb1 = out->limbs[1] + start;
+    (void)chunk;
+    const uint64_t *low = job->s + begin, *high = job->s2 ? job->s2 + begin : NULL;
+    const uint64_t shift = job->shift, mask = job->mask, count = end - begin;
+    const uint64_t at = job->start + begin;
+    uint64_t *limb0 = job->out->limbs[0] + at, *limb1 = job->out->limbs[1] + at;
     // One loop per case, so none of them branches per element.
     if (!high || shift == 0)
         for (uint64_t i = 0; i < count; i++)
@@ -1124,16 +1470,86 @@ void pmf_vec_set_uint64(PMFVector out, uint64_t start, const uint64_t *low, cons
         for (uint64_t i = 0; i < count; i++)
             pmf_vec_set_limbs(limb0, limb1, i,
                               ((low[i] >> shift) | (high[i] << (64 - shift))) & mask);
-    for (uint64_t k = 2; k < out->params->limbs; k++)
-        memset(out->limbs[k] + start, 0, count * sizeof(uint64_t));
+    for (uint64_t k = 2; k < job->params->limbs; k++)
+        memset(job->out->limbs[k] + at, 0, count * sizeof(uint64_t));
 }
 
-bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a)
+void pmf_vec_set_uint64(PMFVector out, uint64_t start, const uint64_t *low, const uint64_t *high,
+                        uint64_t count, uint32_t shift, uint32_t width)
 {
-    // Limbs are 52 bits, so a canonical element is below 2^64 exactly when its
-    // limbs from the third on are zero and the second is below 2^12.
+    assert(start + count <= out->n && shift < (high ? 128u : 64u) && width >= 1 && width <= 64);
+    PMFVecJob job = {.range = pmf_vec_set_uint64_range,
+                     .params = out->params,
+                     .out = out,
+                     .s = low,
+                     .s2 = high,
+                     .start = start,
+                     .shift = shift,
+                     .mask = width == 64 ? ~0ULL : (1ULL << width) - 1};
+    pmf_vec_run(&job, count, pmf_vec_move_grain(out->params));
+}
+
+// Columns [begin, end) of pmf_vec_set_radix_decomposition, job->s and job->s2 being `low`
+// and `high`, job->rows and job->width the matrix's shape, job->count the
+// digits and job->shift the digit width. Eight columns at a time, so that the
+// reads of a row are one run and the writes of a column stay sequential.
+static void pmf_vec_set_radix_decomposition_range(const PMFVecJob *job, uint64_t begin,
+                                                  uint64_t end, uint64_t chunk)
+{
+    (void)chunk;
+    const uint64_t rows = job->rows, columns = job->width, digits = job->count;
+    const uint64_t block = rows * columns, width = job->shift;
+    const uint64_t mask = width == 64 ? ~0ULL : (1ULL << width) - 1;
+    const uint64_t *low = job->s, *high = job->s2;
+    uint64_t *limb0 = job->out->limbs[0], *limb1 = job->out->limbs[1];
+
+    for (uint64_t k0 = begin; k0 < end; k0 += 8)
+    {
+        const uint64_t k1 = end - k0 < 8 ? end : k0 + 8;
+        for (uint64_t i = 0; i < rows; i++)
+            for (uint64_t k = k0; k < k1; k++)
+            {
+                const uint64_t at = i * columns + k;
+                unsigned __int128 v = (unsigned __int128)(high ? high[at] : 0) << 64 | low[at];
+                uint64_t position = k * rows + i;
+                for (uint64_t j = 0; j < digits; j++, position += block)
+                {
+                    pmf_vec_set_limbs(limb0, limb1, position, (uint64_t)v & mask);
+                    v >>= width;
+                }
+            }
+    }
+    for (uint64_t k = 2; k < job->params->limbs; k++)
+        for (uint64_t j = 0; j < digits; j++)
+            memset(job->out->limbs[k] + j * block + begin * rows, 0,
+                   (end - begin) * rows * sizeof(uint64_t));
+}
+
+void pmf_vec_set_radix_decomposition(PMFVector out, const uint64_t *low, const uint64_t *high,
+                                     uint64_t rows, uint64_t columns, uint32_t width,
+                                     uint64_t digits)
+{
+    assert(digits * rows * columns <= out->n && width >= 1 && width <= 64);
+    PMFVecJob job = {.range = pmf_vec_set_radix_decomposition_range,
+                     .params = out->params,
+                     .out = out,
+                     .s = low,
+                     .s2 = high,
+                     .rows = rows,
+                     .width = columns,
+                     .count = digits,
+                     .shift = width};
+    const uint64_t per_column = digits * rows > 0 ? digits * rows : 1;
+    pmf_vec_run(&job, columns, pmf_vec_move_grain(out->params) / per_column);
+}
+
+// Limbs are 52 bits, so a canonical element is below 2^64 exactly when its
+// limbs from the third on are zero and the second is below 2^12. Elements
+// [begin, end); false at the first that is not.
+static bool pmf_vec_get_uint64_span(uint64_t *out, const PMFVector a, uint64_t begin, uint64_t end)
+{
     const uint64_t *low = a->limbs[0], *high = a->limbs[1];
-    for (uint64_t i = 0; i < a->n; i++)
+    for (uint64_t i = begin; i < end; i++)
     {
         uint64_t above = high[i] >> (64 - PMF_LIMB_BITS);
         for (uint64_t k = 2; k < a->params->limbs; k++)
@@ -1145,53 +1561,170 @@ bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a)
     return true;
 }
 
-void pmf_vec_copy(PMFVector out, const PMFVector a)
+// job->partials holds one flag per chunk: whether its elements fit.
+static void pmf_vec_get_uint64_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                     uint64_t chunk)
 {
-    for (uint64_t k = 0; k < a->params->limbs; k++)
-        memcpy(out->limbs[k], a->limbs[k], a->allocated_n * sizeof(uint64_t));
+    job->partials[chunk] = pmf_vec_get_uint64_span(job->words, job->a, begin, end);
 }
 
-void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a)
+bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a)
 {
-    const uint64_t half = a->n / 2;
-    for (uint64_t k = 0; k < a->params->limbs; k++)
+    PMFVecJob job = {.range = pmf_vec_get_uint64_range, .params = a->params, .a = a, .words = out};
+    if (!pmf_vec_split(&job, a->n, pmf_vec_move_grain(a->params)))
+        return pmf_vec_get_uint64_span(out, a, 0, a->n);
+    job.partials = (uint64_t *)safe_malloc(job.chunks.count * sizeof(uint64_t));
+    pmf_vec_run_chunks(&job);
+    bool fits = true;
+    for (uint64_t c = 0; c < job.chunks.count; c++)
+        fits = fits && job.partials[c];
+    free(job.partials);
+    return fits;
+}
+
+static void pmf_vec_copy_range(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk)
+{
+    (void)chunk;
+    for (uint64_t k = 0; k < job->params->limbs; k++)
+        memcpy(job->out->limbs[k] + begin, job->a->limbs[k] + begin,
+               (end - begin) * sizeof(uint64_t));
+}
+
+void pmf_vec_copy(PMFVector out, const PMFVector a)
+{
+    PMFVecJob job = {.range = pmf_vec_copy_range, .params = a->params, .out = out, .a = a};
+    pmf_vec_run(&job, a->allocated_n, pmf_vec_move_grain(a->params));
+}
+
+// Elements [begin, end) of the two halves; job->out and job->out2 are the even
+// and odd ones.
+static void pmf_vec_split_even_odd_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                         uint64_t chunk)
+{
+    (void)chunk;
+    for (uint64_t k = 0; k < job->params->limbs; k++)
     {
-        const uint64_t *plane = a->limbs[k];
-        for (uint64_t i = 0; i < half; i++)
+        const uint64_t *plane = job->a->limbs[k];
+        uint64_t *even = job->out->limbs[k], *odd = job->out2->limbs[k];
+        for (uint64_t i = begin; i < end; i++)
         {
-            even->limbs[k][i] = plane[2 * i];
-            odd->limbs[k][i] = plane[2 * i + 1];
+            even[i] = plane[2 * i];
+            odd[i] = plane[2 * i + 1];
         }
     }
 }
 
+void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a)
+{
+    PMFVecJob job = {.range = pmf_vec_split_even_odd_range,
+                     .params = a->params,
+                     .out = even,
+                     .out2 = odd,
+                     .a = a};
+    pmf_vec_run(&job, a->n / 2, pmf_vec_move_grain(a->params) / 2);
+}
+
+// Elements [begin, end) of each half; job->a and job->b are the even and odd
+// ones.
+static void pmf_vec_interleave_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                     uint64_t chunk)
+{
+    (void)chunk;
+    for (uint64_t k = 0; k < job->params->limbs; k++)
+        vec_interleave_u64(job->out->limbs[k] + 2 * begin, job->a->limbs[k] + begin,
+                           job->b->limbs[k] + begin, end - begin);
+}
+
 void pmf_vec_interleave(PMFVector out, const PMFVector even, const PMFVector odd)
 {
-    for (uint64_t k = 0; k < out->params->limbs; k++)
-        vec_interleave_u64(out->limbs[k], even->limbs[k], odd->limbs[k], even->n);
+    PMFVecJob job = {
+        .range = pmf_vec_interleave_range, .params = out->params, .out = out, .a = even, .b = odd};
+    pmf_vec_run(&job, even->n, pmf_vec_move_grain(out->params) / 2);
+}
+
+// Elements [begin, end) of the output, from whichever parts they lie in.
+static void pmf_vec_concat_range(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk)
+{
+    (void)chunk;
+    uint64_t at = 0;
+    for (uint64_t p = 0; p < job->count && at < end; p++)
+    {
+        const PMFVector part = job->tables[p];
+        const uint64_t from = begin > at ? begin : at;
+        const uint64_t to = at + part->n < end ? at + part->n : end;
+        if (from < to)
+            for (uint64_t k = 0; k < job->params->limbs; k++)
+                memcpy(job->out->limbs[k] + from, part->limbs[k] + (from - at),
+                       (to - from) * sizeof(uint64_t));
+        at += part->n;
+    }
 }
 
 void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count)
 {
-    uint64_t at = 0;
+    uint64_t total = 0;
     for (uint64_t p = 0; p < count; p++)
+        total += parts[p]->n;
+    PMFVecJob job = {.range = pmf_vec_concat_range,
+                     .params = out->params,
+                     .out = out,
+                     .tables = parts,
+                     .count = count};
+    pmf_vec_run(&job, total, pmf_vec_move_grain(out->params));
+}
+
+// job->s holds the indices; job->partials one flag per chunk, whether all of
+// its indices are in range.
+static void pmf_vec_gather_check_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                       uint64_t chunk)
+{
+    uint64_t valid = 1;
+    for (uint64_t i = begin; i < end; i++)
+        valid &= job->s[i] < job->a->n;
+    job->partials[chunk] = valid;
+}
+
+static void pmf_vec_gather_range(const PMFVecJob *job, uint64_t begin, uint64_t end, uint64_t chunk)
+{
+    (void)chunk;
+    const uint64_t *indices = job->s;
+    for (uint64_t k = 0; k < job->params->limbs; k++)
     {
-        for (uint64_t k = 0; k < out->params->limbs; k++)
-            memcpy(out->limbs[k] + at, parts[p]->limbs[k], parts[p]->n * sizeof(uint64_t));
-        at += parts[p]->n;
+        uint64_t *to = job->out->limbs[k];
+        const uint64_t *from = job->a->limbs[k];
+        for (uint64_t i = begin; i < end; i++)
+            to[i] = from[indices[i]];
     }
 }
 
 bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count)
 {
-    // Validated in its own pass, for the reasons field_vec_gather gives.
-    for (uint64_t i = 0; i < count; i++)
-        if (indices[i] >= a->n)
-            return false;
-    for (uint64_t k = 0; k < a->params->limbs; k++)
+    PMFVecJob job = {
+        .range = pmf_vec_gather_check_range, .params = a->params, .out = out, .a = a, .s = indices};
+    if (!pmf_vec_split(&job, count, pmf_vec_move_grain(a->params)))
+    {
+        // Validated in its own pass, for the reasons field_vec_gather gives.
         for (uint64_t i = 0; i < count; i++)
-            out->limbs[k][i] = a->limbs[k][indices[i]];
-    return true;
+            if (indices[i] >= a->n)
+                return false;
+        for (uint64_t k = 0; k < a->params->limbs; k++)
+            for (uint64_t i = 0; i < count; i++)
+                out->limbs[k][i] = a->limbs[k][indices[i]];
+        return true;
+    }
+    // Every index is checked, by all the chunks, before any is used.
+    job.partials = (uint64_t *)safe_malloc(job.chunks.count * sizeof(uint64_t));
+    pmf_vec_run_chunks(&job);
+    bool valid = true;
+    for (uint64_t c = 0; c < job.chunks.count; c++)
+        valid = valid && job.partials[c];
+    free(job.partials);
+    if (valid)
+    {
+        job.range = pmf_vec_gather_range;
+        pmf_vec_run_chunks(&job);
+    }
+    return valid;
 }
 
 int pmf_vec_is_equal(const PMFVector a, const PMFVector b)
@@ -1299,33 +1832,34 @@ uint64_t pmf_vec_hash_count(const PMFVector a, uint64_t group, uint64_t stride)
     return (a->n - group) / stride + 1;
 }
 
-void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint64_t stride)
+// Digests [begin, end) of pmf_vec_hash_elements, into job->bytes. A window
+// past a BLAKE3 chunk, which hash_batch cannot take, gets one hasher each.
+// Otherwise windows are staged because a digest covers canonical encodings,
+// which nothing holds, and batched by the same byte budget as a span; see
+// field_vector.c, which sizes its own staging the same way and for the same
+// reasons. hash_batch_fits caps a window at a chunk, so a batch is at least
+// 32.
+static void pmf_vec_hash_elements_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                        uint64_t chunk)
 {
-    const uint64_t count = pmf_vec_hash_count(a, group, stride);
-    const uint64_t nbytes = a->params->nbytes;
-    const uint64_t leaf = group * nbytes;
-    if (count == 0)
-        return;
+    (void)chunk;
+    const PMFVector a = job->a;
+    const uint64_t group = job->group, stride = job->stride;
+    const uint64_t nbytes = a->params->nbytes, leaf = group * nbytes;
+    uint8_t *out = job->bytes;
 
-    // A window past a BLAKE3 chunk, which hash_batch cannot take: one hasher
-    // each. The width is the *encoded* one, nbytes per element, not a machine
-    // word.
     if (!hash_batch_fits(leaf))
     {
-        for (uint64_t k = 0; k < count; k++)
+        for (uint64_t k = begin; k < end; k++)
             pmf_vec_hash_span(&out[k * BLAKE3_OUT_LEN], a, k * stride, group);
         return;
     }
 
-    // Staged because a digest covers canonical encodings, which nothing holds.
-    // Windows are batched by the same byte budget as a span; see field_vector.c,
-    // which sizes its own staging the same way and for the same reasons.
-    // hash_batch_fits caps `leaf` at a chunk, so a batch is at least 32.
     const uint64_t batch = PMF_VEC_HASH_STAGE_BYTES / leaf;
     uint8_t *staged = (uint8_t *)safe_aligned_malloc(batch * leaf);
-    for (uint64_t k = 0; k < count;)
+    for (uint64_t k = begin; k < end;)
     {
-        uint64_t run = count - k;
+        uint64_t run = end - k;
         if (run > batch)
             run = batch;
         for (uint64_t j = 0; j < run; j++)
@@ -1335,4 +1869,20 @@ void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint
         k += run;
     }
     free(staged);
+}
+
+void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint64_t stride)
+{
+    const uint64_t count = pmf_vec_hash_count(a, group, stride);
+    if (count == 0)
+        return;
+    // The width is the *encoded* one, nbytes per element, not a machine word.
+    const uint64_t leaf = group * a->params->nbytes;
+    PMFVecJob job = {.range = pmf_vec_hash_elements_range,
+                     .params = a->params,
+                     .a = a,
+                     .group = group,
+                     .stride = stride,
+                     .bytes = out};
+    pmf_vec_run(&job, count, PMF_VEC_HASH_GRAIN_BYTES / leaf);
 }

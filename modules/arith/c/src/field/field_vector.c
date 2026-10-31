@@ -13,6 +13,7 @@
 #include <string.h>
 #include "arith_internal.h"
 #include "alloc.h"
+#include "../vec_chunks.h"
 #include <crypto.h>
 
 uint64_t field_vec_padded_length(uint64_t n)
@@ -30,44 +31,179 @@ void field_vec_clear_padding(FieldVector a)
         memset(a->coeffs[j] + a->n, 0, tail);
 }
 
+// --- running a kernel on the library's threads -----------------------------
+//
+// An elementwise kernel is a loop over a range of positions; a windowed one a
+// loop over windows. On one thread it runs once over the whole range;
+// otherwise once per chunk (vec_chunks.h), each chunk a multiple of
+// MOD_MIN_VECTOR_LEN positions (or of the window), so every plane offset stays
+// 64-byte aligned and the eltwise kernels keep their no-tail contract.
+
+// The fewest positions a chunk covers, by what a position costs.
+// One addition or subtraction a coefficient, bounded by memory traffic.
+#define FIELD_VEC_ADD_GRAIN (1u << 15)
+// An extension product or more a position.
+#define FIELD_VEC_PRODUCT_GRAIN (1u << 13)
+// Hashing, in bytes of elements hashed: a gather and a compression per 64
+// bytes.
+#define FIELD_VEC_HASH_GRAIN_BYTES (256u << 10)
+
+typedef struct FieldVecJob FieldVecJob;
+
+// A kernel's operands, and its loop over [begin, end) of the range it splits.
+// Which operand fields are used is up to the kernel.
+struct FieldVecJob
+{
+    void (*range)(const FieldVecJob *job, uint64_t begin, uint64_t end);
+    VecChunks chunks;
+    FieldVector out, a, b, c, c2;
+    const uint64_t *s, *s2;
+    uint64_t window, period;
+    uint64_t group, window_step, element_step;
+    uint8_t *bytes;
+};
+
+static void field_vec_chunk(void *ctx, uint64_t chunk)
+{
+    const FieldVecJob *job = (const FieldVecJob *)ctx;
+    job->range(job, vec_chunk_begin(&job->chunks, chunk), vec_chunk_end(&job->chunks, chunk));
+}
+
+// Plans the chunks of [0, total), a multiple of `unit` each; false when the
+// kernel gets one thread.
+static bool field_vec_split(FieldVecJob *job, uint64_t total, uint64_t grain, uint64_t unit)
+{
+    return vec_chunks_plan(&job->chunks, total, grain, unit);
+}
+
+static void field_vec_run_chunks(FieldVecJob *job)
+{
+    vfhe_parallel_for(job->chunks.count, 0, field_vec_chunk, job);
+}
+
+// job->range over [0, total), split across threads when they are allowed.
+static void field_vec_run(FieldVecJob *job, uint64_t total, uint64_t grain, uint64_t unit)
+{
+    if (field_vec_split(job, total, grain, unit))
+        field_vec_run_chunks(job);
+    else
+        job->range(job, 0, total);
+}
+
+// Positions [begin, end) of each operand of an elementwise kernel, as vectors
+// of their own over `planes` (5 * d pointers): views[0..4] are out, a, b, c and
+// c2, those that are NULL left unset.
+static void field_vec_views(struct _FieldVector *views, uint64_t **planes, const FieldVecJob *job,
+                            uint64_t begin, uint64_t end)
+{
+    const FieldVector operands[5] = {job->out, job->a, job->b, job->c, job->c2};
+    for (uint64_t v = 0; v < 5; v++)
+    {
+        const FieldVector x = operands[v];
+        if (x == NULL)
+            continue;
+        views[v] = *x;
+        views[v].coeffs = planes + v * job->a->d;
+        for (uint64_t j = 0; j < x->d; j++)
+            views[v].coeffs[j] = x->coeffs[j] + begin;
+        views[v].n = views[v].allocated_n = end - begin;
+    }
+}
+
+// The plane pointers field_vec_views needs, from the stack up to
+// FIELD_MAX_STACK_D.
+#define FIELD_VEC_VIEW_PLANES(planes, d)                                                           \
+    uint64_t *planes##_stack[5 * FIELD_MAX_STACK_D];                                               \
+    uint64_t **planes = (d) <= FIELD_MAX_STACK_D                                                   \
+                            ? planes##_stack                                                       \
+                            : (uint64_t **)safe_malloc(5 * (d) * sizeof(uint64_t *))
+#define FIELD_VEC_FREE_VIEW_PLANES(planes, d)                                                      \
+    do                                                                                             \
+    {                                                                                              \
+        if ((d) > FIELD_MAX_STACK_D)                                                               \
+            free(planes);                                                                          \
+    } while (0)
+
+static void field_vec_add_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    for (uint64_t j = 0; j < job->a->d; j++)
+        mod_eltwise_add(job->out->coeffs[j] + begin, job->a->coeffs[j] + begin,
+                        job->b->coeffs[j] + begin, end - begin, job->a->mod);
+}
+
 void field_vec_add(FieldVector out, const FieldVector a, const FieldVector b)
 {
-    for (uint64_t j = 0; j < a->d; j++)
-        mod_eltwise_add(out->coeffs[j], a->coeffs[j], b->coeffs[j], a->allocated_n, a->mod);
+    FieldVecJob job = {.range = field_vec_add_range, .out = out, .a = a, .b = b};
+    field_vec_run(&job, a->allocated_n, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN);
+}
+
+static void field_vec_sub_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    for (uint64_t j = 0; j < job->a->d; j++)
+        mod_eltwise_sub(job->out->coeffs[j] + begin, job->a->coeffs[j] + begin,
+                        job->b->coeffs[j] + begin, end - begin, job->a->mod);
 }
 
 void field_vec_sub(FieldVector out, const FieldVector a, const FieldVector b)
 {
-    for (uint64_t j = 0; j < a->d; j++)
-        mod_eltwise_sub(out->coeffs[j], a->coeffs[j], b->coeffs[j], a->allocated_n, a->mod);
+    FieldVecJob job = {.range = field_vec_sub_range, .out = out, .a = a, .b = b};
+    field_vec_run(&job, a->allocated_n, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN);
+}
+
+static void field_vec_neg_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    for (uint64_t j = 0; j < job->a->d; j++)
+        mod_eltwise_negate(job->out->coeffs[j] + begin, job->a->coeffs[j] + begin, end - begin,
+                           job->a->mod);
 }
 
 void field_vec_neg(FieldVector out, const FieldVector a)
 {
-    for (uint64_t j = 0; j < a->d; j++)
-        mod_eltwise_negate(out->coeffs[j], a->coeffs[j], a->allocated_n, a->mod);
+    FieldVecJob job = {.range = field_vec_neg_range, .out = out, .a = a};
+    field_vec_run(&job, a->allocated_n, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN);
+}
+
+static void field_vec_add_scalar_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    for (uint64_t j = 0; j < job->a->d; j++)
+        mod_eltwise_add_scalar(job->out->coeffs[j] + begin, job->a->coeffs[j] + begin, job->s[j],
+                               end - begin, job->a->mod);
 }
 
 void field_vec_add_scalar(FieldVector out, const FieldVector a, const uint64_t *s)
 {
-    for (uint64_t j = 0; j < a->d; j++)
-        mod_eltwise_add_scalar(out->coeffs[j], a->coeffs[j], s[j], a->allocated_n, a->mod);
+    FieldVecJob job = {.range = field_vec_add_scalar_range, .out = out, .a = a, .s = s};
+    field_vec_run(&job, a->allocated_n, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN);
+}
+
+static void field_vec_sub_scalar_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    for (uint64_t j = 0; j < job->a->d; j++)
+        mod_eltwise_sub_scalar(job->out->coeffs[j] + begin, job->a->coeffs[j] + begin, job->s[j],
+                               end - begin, job->a->mod);
 }
 
 void field_vec_sub_scalar(FieldVector out, const FieldVector a, const uint64_t *s)
 {
-    for (uint64_t j = 0; j < a->d; j++)
-        mod_eltwise_sub_scalar(out->coeffs[j], a->coeffs[j], s[j], a->allocated_n, a->mod);
+    FieldVecJob job = {.range = field_vec_sub_scalar_range, .out = out, .a = a, .s = s};
+    field_vec_run(&job, a->allocated_n, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN);
+}
+
+// s - a = -(a - s): the eltwise layer has no reversed-operand kernel.
+static void field_vec_scalar_sub_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    for (uint64_t j = 0; j < job->a->d; j++)
+    {
+        uint64_t *out = job->out->coeffs[j] + begin;
+        mod_eltwise_sub_scalar(out, job->a->coeffs[j] + begin, job->s[j], end - begin, job->a->mod);
+        mod_eltwise_negate(out, out, end - begin, job->a->mod);
+    }
 }
 
 void field_vec_scalar_sub(FieldVector out, const uint64_t *s, const FieldVector a)
 {
-    // s - a = -(a - s): the eltwise layer has no reversed-operand kernel.
-    for (uint64_t j = 0; j < a->d; j++)
-    {
-        mod_eltwise_sub_scalar(out->coeffs[j], a->coeffs[j], s[j], a->allocated_n, a->mod);
-        mod_eltwise_negate(out->coeffs[j], out->coeffs[j], a->allocated_n, a->mod);
-    }
+    FieldVecJob job = {.range = field_vec_scalar_sub_range, .out = out, .a = a, .s = s};
+    field_vec_run(&job, a->allocated_n, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN);
 }
 
 // The schoolbook product of two degree-(d-1) polynomials, one plane at a time,
@@ -129,7 +265,7 @@ static void field_vec_mul_generic(FieldVector out, const FieldVector a, const vo
     free(scratch);
 }
 
-void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b)
+static void field_vec_mul_whole(FieldVector out, const FieldVector a, const FieldVector b)
 {
     if (field_fused_applies(a->mod, a->d, a->allocated_n))
     {
@@ -139,7 +275,7 @@ void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b)
     field_vec_mul_generic(out, a, (const void *)b, 1);
 }
 
-void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s)
+static void field_vec_scale_whole(FieldVector out, const FieldVector a, const uint64_t *s)
 {
     if (field_fused_applies(a->mod, a->d, a->allocated_n))
     {
@@ -147,6 +283,44 @@ void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s)
         return;
     }
     field_vec_mul_generic(out, a, (const void *)s, 0);
+}
+
+// The products, and the fused multiply-adds below, split by positions: each
+// chunk runs the whole-vector kernel on views of its positions.
+static void field_vec_mul_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    struct _FieldVector v[5];
+    FIELD_VEC_VIEW_PLANES(planes, job->a->d);
+    field_vec_views(v, planes, job, begin, end);
+    field_vec_mul_whole(&v[0], &v[1], &v[2]);
+    FIELD_VEC_FREE_VIEW_PLANES(planes, job->a->d);
+}
+
+void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b)
+{
+    FieldVecJob job = {.range = field_vec_mul_range, .out = out, .a = a, .b = b};
+    if (field_vec_split(&job, a->allocated_n, FIELD_VEC_PRODUCT_GRAIN, MOD_MIN_VECTOR_LEN))
+        field_vec_run_chunks(&job);
+    else
+        field_vec_mul_whole(out, a, b);
+}
+
+static void field_vec_scale_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    struct _FieldVector v[5];
+    FIELD_VEC_VIEW_PLANES(planes, job->a->d);
+    field_vec_views(v, planes, job, begin, end);
+    field_vec_scale_whole(&v[0], &v[1], job->s);
+    FIELD_VEC_FREE_VIEW_PLANES(planes, job->a->d);
+}
+
+void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s)
+{
+    FieldVecJob job = {.range = field_vec_scale_range, .out = out, .a = a, .s = s};
+    if (field_vec_split(&job, a->allocated_n, FIELD_VEC_PRODUCT_GRAIN, MOD_MIN_VECTOR_LEN))
+        field_vec_run_chunks(&job);
+    else
+        field_vec_scale_whole(out, a, s);
 }
 
 // out = a + b * c, in one pass where the fused kernel applies. Everywhere else
@@ -174,7 +348,8 @@ static void field_vec_fma_generic(FieldVector out, const FieldVector a, const Fi
     free(scratch);
 }
 
-void field_vec_fma(FieldVector out, const FieldVector a, const FieldVector b, const FieldVector c)
+static void field_vec_fma_whole(FieldVector out, const FieldVector a, const FieldVector b,
+                                const FieldVector c)
 {
     if (field_fused_applies(a->mod, a->d, a->allocated_n))
     {
@@ -185,8 +360,8 @@ void field_vec_fma(FieldVector out, const FieldVector a, const FieldVector b, co
     field_vec_fma_generic(out, a, b, (const void *)c, 1);
 }
 
-void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVector b,
-                          const uint64_t *s)
+static void field_vec_fma_scalar_whole(FieldVector out, const FieldVector a, const FieldVector b,
+                                       const uint64_t *s)
 {
     if (field_fused_applies(a->mod, a->d, a->allocated_n))
     {
@@ -197,26 +372,56 @@ void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVecto
     field_vec_fma_generic(out, a, b, (const void *)s, 0);
 }
 
+static void field_vec_fma_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    struct _FieldVector v[5];
+    FIELD_VEC_VIEW_PLANES(planes, job->a->d);
+    field_vec_views(v, planes, job, begin, end);
+    field_vec_fma_whole(&v[0], &v[1], &v[2], &v[3]);
+    FIELD_VEC_FREE_VIEW_PLANES(planes, job->a->d);
+}
+
+void field_vec_fma(FieldVector out, const FieldVector a, const FieldVector b, const FieldVector c)
+{
+    FieldVecJob job = {.range = field_vec_fma_range, .out = out, .a = a, .b = b, .c = c};
+    if (field_vec_split(&job, a->allocated_n, FIELD_VEC_PRODUCT_GRAIN, MOD_MIN_VECTOR_LEN))
+        field_vec_run_chunks(&job);
+    else
+        field_vec_fma_whole(out, a, b, c);
+}
+
+static void field_vec_fma_scalar_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    struct _FieldVector v[5];
+    FIELD_VEC_VIEW_PLANES(planes, job->a->d);
+    field_vec_views(v, planes, job, begin, end);
+    field_vec_fma_scalar_whole(&v[0], &v[1], &v[2], job->s);
+    FIELD_VEC_FREE_VIEW_PLANES(planes, job->a->d);
+}
+
+void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVector b,
+                          const uint64_t *s)
+{
+    FieldVecJob job = {.range = field_vec_fma_scalar_range, .out = out, .a = a, .b = b, .s = s};
+    if (field_vec_split(&job, a->allocated_n, FIELD_VEC_PRODUCT_GRAIN, MOD_MIN_VECTOR_LEN))
+        field_vec_run_chunks(&job);
+    else
+        field_vec_fma_scalar_whole(out, a, b, s);
+}
+
 // Scratch for the two halves `field_vec_fma_interleave` produces, sized to
 // stay in a core's own cache between being written and being read back.
 #define FMA_INTERLEAVE_SCRATCH_BYTES (256u * 1024u)
 
-void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldVector b,
-                              const FieldVector c_even, const uint64_t *s_even,
-                              const FieldVector c_odd, const uint64_t *s_odd)
+// The windows from `begin` up to `end` of field_vec_fma_interleave: job->c
+// and job->s are c_even and s_even, job->c2 and job->s2 c_odd and s_odd.
+static void field_vec_fma_interleave_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
 {
-    const uint64_t d = a->d, n = a->n, padded = a->allocated_n;
-    if (padded == 0)
-        return;
+    const FieldVector out = job->out, a = job->a, b = job->b, c_even = job->c, c_odd = job->c2;
+    const uint64_t *s_even = job->s, *s_odd = job->s2;
+    const uint64_t d = a->d, n = a->n, padded = end, window = job->window;
 
     // One window's two halves, plus the operand views that read it.
-    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (2 * d * sizeof(uint64_t));
-    window -= window % MOD_MIN_VECTOR_LEN;
-    if (window < MOD_MIN_VECTOR_LEN)
-        window = MOD_MIN_VECTOR_LEN;
-    if (window > padded)
-        window = padded;
-
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(2 * d * window * sizeof(uint64_t));
     uint64_t **planes = (uint64_t **)safe_malloc(6 * d * sizeof(uint64_t *));
     struct _FieldVector even = *a, odd = *a, av = *a, bv = *a, cev = *a, cov = *a;
@@ -233,7 +438,7 @@ void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldV
         odd.coeffs[j] = scratch + (d + j) * window;
     }
 
-    for (uint64_t start = 0; start < padded; start += window)
+    for (uint64_t start = begin; start < padded; start += window)
     {
         const uint64_t len = (padded - start < window) ? padded - start : window;
         for (uint64_t j = 0; j < d; j++)
@@ -272,30 +477,101 @@ void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldV
     free(scratch);
 }
 
+// The window of a windowed kernel over `padded` positions keeping `planes`
+// planes of d words a position in FMA_INTERLEAVE_SCRATCH_BYTES.
+static uint64_t field_vec_scratch_window(uint64_t planes, uint64_t d, uint64_t padded)
+{
+    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (planes * d * sizeof(uint64_t));
+    window -= window % MOD_MIN_VECTOR_LEN;
+    if (window < MOD_MIN_VECTOR_LEN)
+        window = MOD_MIN_VECTOR_LEN;
+    if (window > padded)
+        window = padded;
+    return window;
+}
+
+// Windows are independent and each carries its own scratch, so the windowed
+// kernels split by runs of whole windows.
+// Whether a plane of `out` shares memory with a plane of `in`. A fold
+// written over its own word reads, at each window, pairs past the positions
+// earlier windows wrote, so it is correct only one window after another.
+static bool field_vec_planes_overlap(const FieldVector out, const FieldVector in)
+{
+    for (uint64_t i = 0; i < out->d; i++)
+        for (uint64_t j = 0; j < in->d; j++)
+        {
+            const uint64_t *o = out->coeffs[i], *w = in->coeffs[j];
+            if (o < w + in->allocated_n && w < o + out->allocated_n)
+                return true;
+        }
+    return false;
+}
+
+static void field_vec_run_windows(FieldVecJob *job, uint64_t total)
+{
+    const uint64_t grain =
+        job->window < FIELD_VEC_PRODUCT_GRAIN ? FIELD_VEC_PRODUCT_GRAIN : job->window;
+    field_vec_run(job, total, grain, job->window);
+}
+
+void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldVector b,
+                              const FieldVector c_even, const uint64_t *s_even,
+                              const FieldVector c_odd, const uint64_t *s_odd)
+{
+    const uint64_t padded = a->allocated_n;
+    if (padded == 0)
+        return;
+    FieldVecJob job = {.range = field_vec_fma_interleave_range,
+                       .out = out,
+                       .a = a,
+                       .b = b,
+                       .c = c_even,
+                       .c2 = c_odd,
+                       .s = s_even,
+                       .s2 = s_odd,
+                       .window = field_vec_scratch_window(2, a->d, padded)};
+    field_vec_run_windows(&job, padded);
+}
+
 // Product with a table of prime-field scalars, one per position: `t` holds a
 // single plane (d == 1) over the same modulus, and out[i] = a[i] * t[i] is
 // each of a's d planes scaled position-wise by it -- d eltwise passes, no
 // cross-plane terms and no reduction by w, against the 2d^2 + d - 1 passes of
 // the full product. `out` may alias `a`.
+static void field_vec_mul_plane_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    for (uint64_t j = 0; j < job->a->d; j++)
+        mod_eltwise_mul(job->out->coeffs[j] + begin, job->a->coeffs[j] + begin,
+                        job->c->coeffs[0] + begin, end - begin, job->a->mod);
+}
+
 void field_vec_mul_plane(FieldVector out, const FieldVector a, const FieldVector t)
 {
-    for (uint64_t j = 0; j < a->d; j++)
-        mod_eltwise_mul(out->coeffs[j], a->coeffs[j], t->coeffs[0], a->allocated_n, a->mod);
+    FieldVecJob job = {.range = field_vec_mul_plane_range, .out = out, .a = a, .c = t};
+    field_vec_run(&job, a->allocated_n, FIELD_VEC_PRODUCT_GRAIN, MOD_MIN_VECTOR_LEN);
 }
 
 // out = a + b * t for the same kind of table. `out` may alias any operand:
 // the product goes through one scratch plane.
+static void field_vec_fma_plane_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    const uint64_t len = end - begin;
+    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(len * sizeof(uint64_t));
+    for (uint64_t j = 0; j < job->a->d; j++)
+    {
+        mod_eltwise_mul(scratch, job->b->coeffs[j] + begin, job->c->coeffs[0] + begin, len,
+                        job->a->mod);
+        mod_eltwise_add(job->out->coeffs[j] + begin, job->a->coeffs[j] + begin, scratch, len,
+                        job->a->mod);
+    }
+    free(scratch);
+}
+
 void field_vec_fma_plane(FieldVector out, const FieldVector a, const FieldVector b,
                          const FieldVector t)
 {
-    const uint64_t len = a->allocated_n;
-    uint64_t *scratch = (uint64_t *)safe_aligned_malloc(len * sizeof(uint64_t));
-    for (uint64_t j = 0; j < a->d; j++)
-    {
-        mod_eltwise_mul(scratch, b->coeffs[j], t->coeffs[0], len, a->mod);
-        mod_eltwise_add(out->coeffs[j], a->coeffs[j], scratch, len, a->mod);
-    }
-    free(scratch);
+    FieldVecJob job = {.range = field_vec_fma_plane_range, .out = out, .a = a, .b = b, .c = t};
+    field_vec_run(&job, a->allocated_n, FIELD_VEC_PRODUCT_GRAIN, MOD_MIN_VECTOR_LEN);
 }
 
 // A table is either d planes (an element per position) or one (a prime-field
@@ -321,30 +597,13 @@ static void mul_by_table(FieldVector out, const FieldVector a, const FieldVector
 // `period` is the table's length. Below a->n it must be a power of two and a
 // whole number of eltwise vectors, so that the windows below never straddle a
 // repetition; at or above a->n the table is read like `a` itself.
-void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVector b,
-                            const FieldVector t, uint64_t period)
+// The windows from `begin` up to `end` of field_vec_lift_twisted; job->c is
+// the table.
+static void field_vec_lift_twisted_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
 {
-    const uint64_t d = a->d, n = a->n, padded = a->allocated_n;
-    if (padded == 0)
-        return;
+    const FieldVector out = job->out, a = job->a, b = job->b, t = job->c;
+    const uint64_t d = a->d, n = a->n, padded = end, window = job->window, period = job->period;
     const int periodic = period < n;
-
-    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (2 * d * sizeof(uint64_t));
-    window -= window % MOD_MIN_VECTOR_LEN;
-    if (window < MOD_MIN_VECTOR_LEN)
-        window = MOD_MIN_VECTOR_LEN;
-    if (window > padded)
-        window = padded;
-    if (periodic)
-    {
-        // A power of two no larger than the period, so that every window
-        // start is a multiple of the window and every window lies inside one
-        // repetition of the table.
-        uint64_t pow2 = MOD_MIN_VECTOR_LEN;
-        while (pow2 * 2 <= window)
-            pow2 *= 2;
-        window = pow2 < period ? pow2 : period;
-    }
 
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(2 * d * window * sizeof(uint64_t));
     uint64_t **planes = (uint64_t **)safe_malloc(5 * d * sizeof(uint64_t *));
@@ -361,7 +620,7 @@ void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVec
         odd.coeffs[j] = scratch + (d + j) * window;
     }
 
-    for (uint64_t start = 0; start < padded; start += window)
+    for (uint64_t start = begin; start < padded; start += window)
     {
         const uint64_t len = (padded - start < window) ? padded - start : window;
         const uint64_t offset = periodic ? start % period : start;
@@ -392,6 +651,34 @@ void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVec
     free(scratch);
 }
 
+void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVector b,
+                            const FieldVector t, uint64_t period)
+{
+    const uint64_t padded = a->allocated_n;
+    if (padded == 0)
+        return;
+
+    uint64_t window = field_vec_scratch_window(2, a->d, padded);
+    if (period < a->n)
+    {
+        // A power of two no larger than the period, so that every window
+        // start is a multiple of the window and every window lies inside one
+        // repetition of the table.
+        uint64_t pow2 = MOD_MIN_VECTOR_LEN;
+        while (pow2 * 2 <= window)
+            pow2 *= 2;
+        window = pow2 < period ? pow2 : period;
+    }
+    FieldVecJob job = {.range = field_vec_lift_twisted_range,
+                       .out = out,
+                       .a = a,
+                       .b = b,
+                       .c = t,
+                       .window = window,
+                       .period = period};
+    field_vec_run_windows(&job, padded);
+}
+
 // `word` read as adjacent pairs, folded with the table and one element r:
 //
 //     out[i] = (word[2i] + word[2i + 1]) / 2
@@ -401,20 +688,14 @@ void field_vec_lift_twisted(FieldVector out, const FieldVector a, const FieldVec
 // c[i] = untwist[i] * r + 1/2: two products per pair. The passes run a
 // window at a time so that the split's two halves and `c` stay cached instead
 // of being streamed back from memory between each one.
-void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector untwist,
-                            const uint64_t *r)
+//
+// The windows from `begin` up to `end`; job->a is the word, job->c the table.
+static void field_vec_fold_twisted_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
 {
-    const uint64_t d = word->d, padded = out->allocated_n;
-    if (padded == 0)
-        return;
+    const FieldVector out = job->out, word = job->a, untwist = job->c;
+    const uint64_t *r = job->s;
+    const uint64_t d = word->d, padded = end, window = job->window;
     const uint64_t half = (word->mod->q + 1) / 2;
-
-    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (3 * d * sizeof(uint64_t));
-    window -= window % MOD_MIN_VECTOR_LEN;
-    if (window < MOD_MIN_VECTOR_LEN)
-        window = MOD_MIN_VECTOR_LEN;
-    if (window > padded)
-        window = padded;
 
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(3 * d * window * sizeof(uint64_t));
     uint64_t **planes = (uint64_t **)safe_malloc(6 * d * sizeof(uint64_t *));
@@ -433,7 +714,7 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
         c.coeffs[j] = scratch + (2 * d + j) * window;
     }
 
-    for (uint64_t start = 0; start < padded; start += window)
+    for (uint64_t start = begin; start < padded; start += window)
     {
         const uint64_t len = (padded - start < window) ? padded - start : window;
         // The result is padded to n and `word` to 2n, and those round
@@ -482,28 +763,36 @@ void field_vec_fold_twisted(FieldVector out, const FieldVector word, const Field
     free(scratch);
 }
 
+void field_vec_fold_twisted(FieldVector out, const FieldVector word, const FieldVector untwist,
+                            const uint64_t *r)
+{
+    const uint64_t padded = out->allocated_n;
+    if (padded == 0)
+        return;
+    FieldVecJob job = {.range = field_vec_fold_twisted_range,
+                       .out = out,
+                       .a = word,
+                       .c = untwist,
+                       .s = r,
+                       .window = field_vec_scratch_window(3, word->d, padded)};
+    if (field_vec_planes_overlap(out, word))
+        field_vec_fold_twisted_range(&job, 0, padded);
+    else
+        field_vec_run_windows(&job, padded);
+}
+
 /* Each output element is computed as v + (u - v) * c with
    c = untwist[i] * r[b] + 1/2, which equals the header's
    (u + v) / 2 + (u - v) * untwist[i] * r[b] with two products per pair. The
    output is produced a window at a time: the window's pairs are split into
    u and v, c is built for its positions, and the result is written, all in a
    scratch buffer small enough to stay in cache. */
-void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
-                                   const FieldVector untwist, const FieldVector r)
+static void field_vec_fold_twisted_blocks_range(const FieldVecJob *job, uint64_t begin,
+                                                uint64_t end)
 {
-    const uint64_t d = word->d, m = untwist->n, count = r->n;
-    const uint64_t total = m * count;
-    assert(word->n == 2 * total && out->n == total && r->d == d);
-    if (total == 0)
-        return;
+    const FieldVector out = job->out, word = job->a, untwist = job->c, r = job->b;
+    const uint64_t d = word->d, m = untwist->n, total = end, window = job->window;
     const uint64_t half = (word->mod->q + 1) / 2;
-
-    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (3 * d * sizeof(uint64_t));
-    window -= window % MOD_MIN_VECTOR_LEN;
-    if (window < MOD_MIN_VECTOR_LEN)
-        window = MOD_MIN_VECTOR_LEN;
-    if (window > total)
-        window = field_vec_padded_length(total);
 
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(3 * d * window * sizeof(uint64_t));
     // The vector kernels take 64-byte-aligned planes in whole groups of
@@ -532,7 +821,7 @@ void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
         c.coeffs[j] = scratch + (2 * d + j) * window;
     }
 
-    for (uint64_t start = 0; start < total; start += window)
+    for (uint64_t start = begin; start < total; start += window)
     {
         const uint64_t len = (total - start < window) ? total - start : window;
         const uint64_t padded_len = field_vec_padded_length(len);
@@ -603,6 +892,32 @@ void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
     free(planes);
     free(unaligned_run);
     free(scratch);
+}
+
+void field_vec_fold_twisted_blocks(FieldVector out, const FieldVector word,
+                                   const FieldVector untwist, const FieldVector r)
+{
+    const uint64_t d = word->d, total = untwist->n * r->n;
+    assert(word->n == 2 * total && out->n == total && r->d == d);
+    if (total == 0)
+        return;
+
+    uint64_t window = FMA_INTERLEAVE_SCRATCH_BYTES / (3 * d * sizeof(uint64_t));
+    window -= window % MOD_MIN_VECTOR_LEN;
+    if (window < MOD_MIN_VECTOR_LEN)
+        window = MOD_MIN_VECTOR_LEN;
+    if (window > total)
+        window = field_vec_padded_length(total);
+    FieldVecJob job = {.range = field_vec_fold_twisted_blocks_range,
+                       .out = out,
+                       .a = word,
+                       .b = r,
+                       .c = untwist,
+                       .window = window};
+    if (field_vec_planes_overlap(out, word))
+        field_vec_fold_twisted_blocks_range(&job, 0, total);
+    else
+        field_vec_run_windows(&job, total);
 }
 
 void field_vec_sum(uint64_t *out, const FieldVector a)
@@ -1106,20 +1421,24 @@ void field_vec_hash(uint8_t *out, const FieldVector a) { hash_span(out, a, 0, a-
 // and an element's d words live one per plane -- so a window's bytes are never
 // already contiguous and a batch has to be staged. The gather is a pass over
 // the vector either way; staging only decides where it writes.
-static void hash_windows(uint8_t *out, const FieldVector a, uint64_t count, uint64_t group,
-                         uint64_t window_step, uint64_t element_step)
+//
+// Windows are independent, so the digests split by runs of windows, each with
+// its own staging. This is windows [begin, end), into job->bytes.
+static void hash_windows_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
 {
+    const FieldVector a = job->a;
+    const uint64_t group = job->group, window_step = job->window_step;
+    const uint64_t element_step = job->element_step;
     const uint64_t d = a->d;
     const uint64_t leaf = group * d * sizeof(uint64_t);
-    if (count == 0)
-        return;
+    uint8_t *out = job->bytes;
 
     if (!hash_batch_fits(leaf))
     {
         // A window past a BLAKE3 chunk, which hash_batch cannot take: one
         // hasher per window, fed element by element.
         uint64_t *element = (uint64_t *)safe_malloc(d * sizeof(uint64_t));
-        for (uint64_t k = 0; k < count; k++)
+        for (uint64_t k = begin; k < end; k++)
         {
             blake3_hasher hasher;
             blake3_hasher_init(&hasher);
@@ -1137,9 +1456,9 @@ static void hash_windows(uint8_t *out, const FieldVector a, uint64_t count, uint
     // hash_batch_fits caps `leaf` at a BLAKE3 chunk, so this is at least 32.
     const uint64_t batch = FIELD_VEC_HASH_STAGE_BYTES / leaf;
     uint64_t *staged = (uint64_t *)safe_aligned_malloc(batch * leaf);
-    for (uint64_t k = 0; k < count;)
+    for (uint64_t k = begin; k < end;)
     {
-        uint64_t run = count - k;
+        uint64_t run = end - k;
         if (run > batch)
             run = batch;
         for (uint64_t j = 0; j < run; j++)
@@ -1150,6 +1469,21 @@ static void hash_windows(uint8_t *out, const FieldVector a, uint64_t count, uint
         k += run;
     }
     free(staged);
+}
+
+static void hash_windows(uint8_t *out, const FieldVector a, uint64_t count, uint64_t group,
+                         uint64_t window_step, uint64_t element_step)
+{
+    if (count == 0)
+        return;
+    const uint64_t leaf = group * a->d * sizeof(uint64_t);
+    FieldVecJob job = {.range = hash_windows_range,
+                       .a = a,
+                       .group = group,
+                       .window_step = window_step,
+                       .element_step = element_step,
+                       .bytes = out};
+    field_vec_run(&job, count, FIELD_VEC_HASH_GRAIN_BYTES / leaf, 1);
 }
 
 uint64_t field_vec_hash_fiber_count(const FieldVector a, uint64_t group, uint64_t stride)

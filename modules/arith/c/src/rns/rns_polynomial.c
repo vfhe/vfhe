@@ -532,8 +532,8 @@ static void rns_product(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial i
         return;
     }
 
-    uint32_t *t32 = (uint32_t *)safe_aligned_malloc(ps * sizeof(uint32_t));
-    uint64_t *t64 = (uint64_t *)safe_aligned_malloc(ps * sizeof(uint64_t));
+    uint32_t *t32 = (uint32_t *)mempool_aligned_malloc(ps * sizeof(uint32_t));
+    uint64_t *t64 = (uint64_t *)mempool_aligned_malloc(ps * sizeof(uint64_t));
     for (size_t i = 0; i < b->l; i++)
     {
         if (!(out->rns_mask & (1ULL << i)))
@@ -546,8 +546,8 @@ static void rns_product(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial i
             rns_row_block_mul_wide(out->rows64[i], in1->rows64[i], in2->rows64[i], t64, b->w[i], sd,
                                    ps, mod, acc);
     }
-    free(t32);
-    free(t64);
+    mempool_free(t32, ps * sizeof(uint32_t));
+    mempool_free(t64, ps * sizeof(uint64_t));
 }
 
 void polynomial_mul_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2)
@@ -675,10 +675,10 @@ void polynomial_multo_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in)
     }
 
     const uint64_t sd = b->split_degree, N = b->N, ps = N / sd;
-    uint32_t *t32 = (uint32_t *)safe_aligned_malloc(ps * sizeof(uint32_t));
-    uint64_t *t64 = (uint64_t *)safe_aligned_malloc(ps * sizeof(uint64_t));
-    uint32_t *prev32 = (uint32_t *)safe_aligned_malloc(N * sizeof(uint32_t));
-    uint64_t *prev64 = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
+    uint32_t *t32 = (uint32_t *)mempool_aligned_malloc(ps * sizeof(uint32_t));
+    uint64_t *t64 = (uint64_t *)mempool_aligned_malloc(ps * sizeof(uint64_t));
+    uint32_t *prev32 = (uint32_t *)mempool_aligned_malloc(N * sizeof(uint32_t));
+    uint64_t *prev64 = (uint64_t *)mempool_aligned_malloc(N * sizeof(uint64_t));
     for (size_t i = 0; i < b->l; i++)
     {
         if (!(out->rns_mask & (1ULL << i)))
@@ -697,10 +697,10 @@ void polynomial_multo_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in)
                                    RNS_BLOCK_SET);
         }
     }
-    free(t32);
-    free(t64);
-    free(prev32);
-    free(prev64);
+    mempool_free(t32, ps * sizeof(uint32_t));
+    mempool_free(t64, ps * sizeof(uint64_t));
+    mempool_free(prev32, N * sizeof(uint32_t));
+    mempool_free(prev64, N * sizeof(uint64_t));
 }
 
 void polynomial_sub_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2)

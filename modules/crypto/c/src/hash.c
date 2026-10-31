@@ -6,6 +6,7 @@
 #include <blake3_impl.h>
 
 #include "crypto.h"
+#include "parallel.h"
 
 // -------------------------------------------------------------
 // Many small independent inputs, hashed across the SIMD lanes
@@ -38,6 +39,14 @@
 // against handing over one array for the whole batch, and saves an allocation
 // proportional to the input count.
 #define HASH_BATCH_POINTERS 256
+
+// Input bytes a chunk of a batch hashes at least when the batch runs on
+// several threads: at the lane-parallel rate this is tens of microseconds of
+// hashing, above what handing a chunk to a thread costs, so a batch under two
+// of these stays on the calling thread.
+#define HASH_PARALLEL_BYTES (256u << 10)
+// Chunks per thread, so that threads finishing early take another one.
+#define HASH_CHUNKS_PER_THREAD 4
 
 uint64_t hash_stream_size(void) { return sizeof(blake3_hasher); }
 
@@ -111,7 +120,8 @@ static void hash_batch_split(uint8_t *out, const uint8_t *const *inputs, uint64_
     }
 }
 
-void hash_batch(uint8_t *out, const uint8_t *in, uint64_t count, uint64_t len)
+// hash_batch on the calling thread.
+static void hash_batch_serial(uint8_t *out, const uint8_t *in, uint64_t count, uint64_t len)
 {
     if (!hash_batch_fits(len))
     {
@@ -143,4 +153,41 @@ void hash_batch(uint8_t *out, const uint8_t *in, uint64_t count, uint64_t len)
                              CHUNK_END | ROOT, &out[done * BLAKE3_OUT_LEN]);
         done += run;
     }
+}
+
+typedef struct
+{
+    uint8_t *out;
+    const uint8_t *in;
+    uint64_t count, len, per_chunk;
+} BatchJob;
+
+static void hash_batch_chunk(void *ctx, uint64_t c)
+{
+    const BatchJob *job = (const BatchJob *)ctx;
+    const uint64_t first = c * job->per_chunk;
+    const uint64_t left = job->count - first;
+    hash_batch_serial(&job->out[first * BLAKE3_OUT_LEN], &job->in[first * job->len],
+                      left < job->per_chunk ? left : job->per_chunk, job->len);
+}
+
+void hash_batch(uint8_t *out, const uint8_t *in, uint64_t count, uint64_t len)
+{
+    const uint64_t most_chunks = count * len / HASH_PARALLEL_BYTES;
+    const uint64_t threads = vfhe_threads_for(0, most_chunks);
+    if (threads <= 1)
+    {
+        hash_batch_serial(out, in, count, len);
+        return;
+    }
+    // Every digest depends on its own input only, so the chunks are
+    // contiguous runs of inputs, each a whole number of the runs the serial
+    // code hands the lane-parallel core.
+    uint64_t chunks = threads * HASH_CHUNKS_PER_THREAD;
+    if (chunks > most_chunks)
+        chunks = most_chunks;
+    uint64_t per_chunk = (count + chunks - 1) / chunks;
+    per_chunk = (per_chunk + HASH_BATCH_POINTERS - 1) / HASH_BATCH_POINTERS * HASH_BATCH_POINTERS;
+    BatchJob job = {out, in, count, len, per_chunk};
+    vfhe_parallel_for((count + per_chunk - 1) / per_chunk, 0, hash_batch_chunk, &job);
 }

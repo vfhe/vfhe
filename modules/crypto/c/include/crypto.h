@@ -33,6 +33,9 @@ extern "C"
     // A `len` that hash_batch_fits rejects is still hashed, one input at a
     // time: callers need not branch, they only lose the speedup. `in` and
     // `out` must not overlap.
+    //
+    // A large batch is split across up to the library's thread limit
+    // (parallel.h); the digests are the same at any number of threads.
     void hash_batch(uint8_t *out, const uint8_t *in, uint64_t count, uint64_t len);
 
     // Incremental BLAKE3 for callers that cannot embed the hasher type: the

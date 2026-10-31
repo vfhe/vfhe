@@ -41,7 +41,8 @@ extern "C"
     // of every one of the `part_count` arrays `parts`, concatenated in order.
     // Each array holds `count` digests of MERKLE_DIGEST_LEN bytes, packed. A
     // tree over `out` commits to all the arrays' leaves at once, one leaf per
-    // index.
+    // index. A large join is split across up to the library's thread limit
+    // (parallel.h), with the same result at any number of threads.
     void merkle_join_digests(uint8_t *out, const uint8_t *const *parts, uint64_t part_count,
                              uint64_t count);
 
@@ -51,7 +52,9 @@ extern "C"
     void merkle_free(Merkle mk);
 
     // Fill the leaf level with `size` digests (MERKLE_DIGEST_LEN bytes each,
-    // contiguous) and rebuild every internal level.
+    // contiguous) and rebuild every internal level. A large level is hashed
+    // on up to the library's thread limit (parallel.h), with the same tree at
+    // any number of threads.
     void merkle_commit(Merkle mk, const uint8_t *leaf_digests);
     void merkle_get_root(uint8_t *out, Merkle mk);
 

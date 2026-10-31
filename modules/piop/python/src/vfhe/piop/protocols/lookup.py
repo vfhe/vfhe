@@ -11,7 +11,7 @@ from __future__ import annotations
 from array import array
 from typing import TYPE_CHECKING, Any, cast
 
-from vfhe.arith import MLE, FieldVector, MLE_Variable
+from vfhe.arith import MLE, FieldVector, MLE_Variable, occurrence_counts
 from vfhe.arith.mle import vector_table
 from vfhe.piop.evaluation import Relation_Eval
 from vfhe.piop.messages import OracleMessages
@@ -21,6 +21,8 @@ from vfhe.piop.relations import Relation_Lookup, Relation_Sum
 from vfhe.piop.virtual import VirtualOracle, resolve_table
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from vfhe.piop.oracle import Oracle
     from vfhe.piop.party import Prover, Verifier
     from vfhe.piop.relation import Relation, Statement
@@ -35,7 +37,7 @@ FINGERPRINTS = ("WSmu", "RS", "WSt", "S")
 _SIDE = {"WSmu": "mu", "RS": "mu", "WSt": "t", "S": "t"}
 
 
-def counters(values: list[int], beta: int) -> tuple[list[int], list[int]]:
+def counters(values: Sequence[int], beta: int) -> tuple[Sequence[int], Sequence[int]]:
     """The `read_ts` and `final_cts` of Lemma I.3, in one pass.
 
     `read_ts[i]` is how many times `values[i]` has already occurred strictly
@@ -49,7 +51,14 @@ def counters(values: list[int], beta: int) -> tuple[list[int], list[int]]:
     that balance, whatever it does. Tolerating them here (rather than
     raising) is what lets a false statement produce a well-formed proof that
     the verifier then rejects, instead of an exception from the prover.
+
+    Values given as an ``array('Q')`` and all in range are counted natively
+    (`occurrence_counts`), and the counters come back as arrays.
     """
+    if isinstance(values, array):
+        counts = occurrence_counts(values, beta)
+        if counts is not None:
+            return counts
     seen: dict[int, int] = {}
     read_ts, final_cts = [], [0] * beta
     for value in values:
@@ -257,10 +266,10 @@ class Lookup(Protocol):
             "S": table.fma(final_cts, zeta) - tau,
         }
 
-    def _counter_table(self, variables: list, counts: list[int]) -> MLE:
+    def _counter_table(self, variables: list, counts: Sequence[int]) -> MLE:
         """`counts`, small non-negative integers, as a field table."""
         vector = FieldVector(self.field, len(counts))
-        vector.set_uint64(array("Q", counts))
+        vector.set_uint64(counts if isinstance(counts, array) else array("Q", counts))
         return MLE(field=self.field, variables=variables, evaluations=vector)
 
     def _virtuals(self, parts: dict, f1: dict, zeta: Any, tau: Any) -> dict:

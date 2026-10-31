@@ -26,7 +26,6 @@ in `modules/piop/range.md`.
 
 from __future__ import annotations
 
-from array import array
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -373,8 +372,8 @@ class RangeDecomposition(Protocol):
     def _digit_vector(self, v: MLE, shape: _Shape) -> FieldVector | None:
         """`_digit_table`, lifted into `F_p`, built with whole-array steps
         from the coefficients of `v` as integers modulo ``2^128``
-        (`lift_mod_2_128`): `beta` is a power of two, so digit `j` of every
-        coefficient is one bit field, written into block `j` in one call.
+        (`lift_mod_2_128`): `beta` is a power of two, so the digits are bit
+        fields, written into their blocks by one `set_radix_decomposition` call.
 
         None when a digit is wider than 64 bits, or when the digits reach past
         bit 128 while `q` exceeds ``2^128`` (a coefficient's bits there are
@@ -389,19 +388,14 @@ class RangeDecomposition(Protocol):
             width * shape.chunks > 128 and shape.ring.q_l.bit_length() > 128
         ):
             return None
-        rows, columns = 1 << shape.ell, shape.ring.N
-        words = shape.ring.lift_mod_2_128(v.table)  # k fastest within each v(i)
-        low, high = (array("Q", bytes(8 * rows * columns)) for _ in range(2))
-        for k in range(columns):  # to i fastest
-            low[k * rows : (k + 1) * rows] = words[0][k::columns]
-            high[k * rows : (k + 1) * rows] = words[1][k::columns]
-        block = rows * columns
-        table = FieldVector(self.field, block * shape.chunks)
-        for j in range(shape.chunks):
-            if width * j < 128:  # past bit 128 every coefficient's bits are zero
-                table.set_uint64(
-                    low, start=j * block, shift=width * j, width=width, high=high
-                )
+        # Entry i * N + k is coefficient k of v(i); every block holds them i
+        # fastest.
+        low, high = shape.ring.lift_mod_2_128(v.table)
+        size = (1 << shape.ell) * shape.ring.N
+        table = FieldVector(self.field, size * shape.chunks)
+        table.set_radix_decomposition(
+            low, width, shape.chunks, high=high, columns=shape.ring.N
+        )
         return table
 
     def _bind_prefix(self, shape: _Shape, r: list[int]) -> dict:

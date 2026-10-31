@@ -105,6 +105,39 @@ a witness built from a later piece is given the earlier values
 and with `trace.enable(limit=...)` a consumer thread drains the tape while
 the computation runs.
 
+## Threads, processes and memory
+
+vFHE runs on one thread unless told otherwise. The limit is one setting for
+the whole library: `VFHE_NUM_THREADS` in the environment, or
+`vfhe.util.parallel.set_num_threads(n)` at run time, and every operation that
+can use several threads stays within it. `local_num_threads(n)` lowers it for
+the calls one thread makes inside a `with` block. The threads are native and
+kept in a pool between calls; Python only makes one call per operation.
+
+Native calls release the GIL, so Python threads may call vFHE at the same
+time. They gain little on small operations, whose time is mostly the Python
+around the call; raising the limit is what puts more cores on one operation.
+
+A process may `fork` after building vFHE objects, and the child may use them
+and the library as usual:
+
+- the child starts its own thread pool on its first parallel call;
+- the memory pool keeps, in the child, only the buffers the forking thread had
+  retained;
+- the entropy stream discards what the child inherited, so parent and child
+  never draw the same bytes;
+- rings, keys, polynomials and tables are the child's own copies.
+
+Fork while no other thread of the process is inside a vFHE call, and with no
+trace enabled.
+
+vFHE does not choose where memory is placed. On a machine with several NUMA
+nodes, `numactl --interleave=all` spreads large tables over every node's
+memory, and `numactl --cpunodebind=N --membind=N` keeps a process on one
+node. The memory pool keeps freed buffers per thread for reuse, up to the
+peak in use; `VFHE_MEMPOOL_CAPACITY` bounds it in bytes, and `0` turns it
+off.
+
 ## Next steps
 
 - Raise `Ring`'s degree and modulus bit-count for deeper computations, at the

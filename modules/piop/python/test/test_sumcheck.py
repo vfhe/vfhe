@@ -9,21 +9,24 @@ query.
 """
 
 import pytest
-from vfhe.arith import MLE, MLE_Variable, Ring
+from vfhe.arith import MLE, MLE_Variable, Ring, repr, set_generic_only
 from vfhe.piop import IOP, Proof, Statement, TableOracle
 from vfhe.piop.protocols import Sumcheck, SumcheckProd
 from vfhe.piop.protocols.sumcheck import rounds
+from vfhe.piop.protocols.sumcheck.prover_view import _term_round_evals_python
 from vfhe.piop.protocols.sumcheck.rounds import (
     _prod_round_evals_python,
     _round_evals_python,
     prod2_round_evals_native,
     prod3_round_evals_native,
     prod_round_evals,
+    prod_round_evals_native,
     round_evals,
     round_evals_native,
 )
 from vfhe.piop.relation import aligned_tables
 from vfhe.piop.relations import Relation_Sum, Relation_SumProd
+from vfhe.util import parallel
 
 
 class _IntDomain:
@@ -400,6 +403,66 @@ def test_prod3_dispatch_needs_the_same_variables():
     assert all(
         a == b for a, b in zip(prod_round_evals(factors, v[1]), expected, strict=True)
     )
+
+
+@pytest.mark.parametrize("factors", [1, 2, 3, 4, 5])
+def test_prod_round_evals_match_python_every_position(factors):
+    # The kernel for any product gives the Python node sums at k+1 to k+3
+    # nodes, and at two (a term whose other factors do not read the round
+    # variable), for every variable position, with a table repeated; the
+    # dispatch gives the Python message.
+    ring = Ring(256, prime_size=[30, 49], split_degree=4)
+    v = [MLE_Variable(f"x{i}") for i in range(3)]
+    tables = _random_tables(ring, v, factors)
+    if factors > 1:
+        tables[-1] = tables[0]
+    for idx, var in enumerate(v):
+        for nodes in (2, factors + 1, factors + 2, factors + 3):
+            native = prod_round_evals_native(tables, nodes, var)
+            python = _term_round_evals_python(tables, idx, nodes)
+            assert len(native) == nodes
+            assert all(a == b for a, b in zip(native, python, strict=True))
+        dispatched = prod_round_evals(tables, var)
+        expected = _prod_round_evals_python(tables, var)
+        assert all(a == b for a, b in zip(dispatched, expected, strict=True))
+
+
+@pytest.fixture
+def threads():
+    """Lets the test's parallel calls use up to 6 threads (vfhe defaults to
+    1): 24 chunks, which do not divide the rounds' pairs."""
+    parallel.set_num_threads(6)
+    yield
+    parallel.set_num_threads()
+
+
+@pytest.mark.usefixtures("threads")
+def test_round_kernels_are_the_same_on_more_threads():
+    # Tables of 2^10 entries of 4 KiB, above the size where a round goes to
+    # other threads: every kernel family, at every pair layout, writes the
+    # same words as on one thread, and so does the generic path, which runs
+    # on one thread whatever the limit.
+    ring = Ring(256, prime_size=[30, 49], split_degree=4)
+    v = [MLE_Variable(f"x{i}") for i in range(10)]
+    f, g, h, k = _random_tables(ring, v, 4)
+
+    def messages():
+        out = []
+        for var in (v[0], v[4], v[-1]):
+            out.append(round_evals_native(f, var))
+            out.append(prod2_round_evals_native(f, g, var))
+            out.append(prod3_round_evals_native(f, g, h, var))
+            out.append(prod_round_evals_native([f, g, h, k, f], 7, var))
+        return [[(p.repr, p.to_uint64(repr=repr.ntt)) for p in m] for m in out]
+
+    with parallel.local_num_threads(1):
+        serial = messages()
+    assert messages() == serial
+    set_generic_only(True)
+    try:
+        assert messages() == serial
+    finally:
+        set_generic_only(False)
 
 
 def _prod3_proof(ring, factors, value) -> Proof:

@@ -56,6 +56,7 @@ from .code import (
     DEFAULT_SEED,
     bit_reverse_permutation,
     check_instantiation,
+    check_whole_fibers,
     derive_seed,
     foldable_relative_distance,
     vandermonde_inverse,
@@ -1085,10 +1086,12 @@ class FieldFoldableRS:
         windows). Leaf `i` is ``digests[32 * i : 32 * (i + 1)]``, and equals
         `leaf_digest` of `pair_at(word, i)`. With `size`, the leaves are the
         fibers of that many symbols instead, `fiber_at(word, i, size)`.
+        Raises `ValueError` when `size` does not divide the length of `word`.
 
         A read-only view of the kernel's buffer, not a copy of it -- so a
         codeword reaches its root without its digests being duplicated on the
         way. `bytes(...)` is how a caller takes a copy."""
+        check_whole_fibers(len(word), size)
         return word.hash_elements(group=size, stride=size)
 
     def fold_at(self, word: FieldVector, r, level: int, i: int):

@@ -44,6 +44,7 @@
 #include "alloc.h"
 #include "arith_internal.h"
 #include "pmf_vec_group.h"
+#include "../vec_chunks.h"
 
 // --- scalar helpers -------------------------------------------------------
 
@@ -632,20 +633,31 @@ void pmf_vec_ntt_inverse(PMFVector a, PMFNTTPlan plan)
 
 // --- batches of transforms ------------------------------------------------
 
-// Every block of `a` transformed as a vector of its own. A block that is a whole
-// number of groups is one directly, over the same planes. A shorter block shares
-// its group with its neighbours, and the in-group stages compute on every lane
-// of a group, so it is transformed in a staging group whose other lanes are zero.
-static void pmf_ntt_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan, int inverse)
+// Blocks are independent, so a batch splits into runs of blocks across the
+// library's threads (vec_chunks.h). A run covers at least this many elements,
+// several products each.
+#define PMF_NTT_GRAIN (1u << 13)
+
+// The blocks a chunk of a batch of `n`-element blocks covers at least.
+static uint64_t pmf_ntt_grain_blocks(uint64_t n)
+{
+    return n >= PMF_NTT_GRAIN ? 1 : PMF_NTT_GRAIN / n;
+}
+
+// Blocks [b0, b1) of `a` transformed as vectors of their own. A block that is
+// a whole number of groups is one directly, over the same planes. A shorter
+// block shares its group with its neighbours, and the in-group stages compute
+// on every lane of a group, so it is transformed in a staging group whose
+// other lanes are zero.
+static void pmf_ntt_block_range(PMFVector a, uint64_t b0, uint64_t b1, PMFNTTPlan plan, int inverse)
 {
     const uint64_t n = plan->n, L = plan->limbs;
     uint64_t *planes[PMF_MAX_LIMBS];
     struct _PMFVector block = {planes, n, n, a->params};
 
-    assert(a->n == n * blocks);
     if (n % PMF_VEC_GROUP == 0)
     {
-        for (uint64_t b = 0; b < blocks; b++)
+        for (uint64_t b = b0; b < b1; b++)
         {
             for (uint64_t k = 0; k < L; k++)
                 planes[k] = a->limbs[k] + b * n;
@@ -662,7 +674,7 @@ static void pmf_ntt_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan, int in
     block.allocated_n = PMF_VEC_GROUP;
     for (uint64_t k = 0; k < L; k++)
         planes[k] = staging[k];
-    for (uint64_t b = 0; b < blocks; b++)
+    for (uint64_t b = b0; b < b1; b++)
     {
         for (uint64_t k = 0; k < L; k++)
             memcpy(staging[k], a->limbs[k] + b * n, n * sizeof(uint64_t));
@@ -673,6 +685,33 @@ static void pmf_ntt_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan, int in
         for (uint64_t k = 0; k < L; k++)
             memcpy(a->limbs[k] + b * n, staging[k], n * sizeof(uint64_t));
     }
+}
+
+typedef struct
+{
+    VecChunks chunks;
+    PMFVector a, msg;
+    uint64_t blocks;
+    PMFNTTPlan plan;
+    int inverse;
+} PMFNTTJob;
+
+static void pmf_ntt_blocks_chunk(void *ctx, uint64_t chunk)
+{
+    const PMFNTTJob *job = (const PMFNTTJob *)ctx;
+    pmf_ntt_block_range(job->a, vec_chunk_begin(&job->chunks, chunk),
+                        vec_chunk_end(&job->chunks, chunk), job->plan, job->inverse);
+}
+
+// Every block of `a` transformed as a vector of its own.
+static void pmf_ntt_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan, int inverse)
+{
+    assert(a->n == plan->n * blocks);
+    PMFNTTJob job = {.a = a, .blocks = blocks, .plan = plan, .inverse = inverse};
+    if (vec_chunks_plan(&job.chunks, blocks, pmf_ntt_grain_blocks(plan->n), 1))
+        vfhe_parallel_for(job.chunks.count, 0, pmf_ntt_blocks_chunk, &job);
+    else
+        pmf_ntt_block_range(a, 0, blocks, plan, inverse);
 }
 
 void pmf_vec_ntt_forward_blocks(PMFVector a, uint64_t blocks, PMFNTTPlan plan)
@@ -748,24 +787,37 @@ PMF_INLINE void pmf_ntt_place_tiles(PMFVector out, const PMFVector msg, uint64_t
 }
 #endif
 
+// The messages pmf_vec_ntt_encode_body places at a time: 8 by 8 tiles on the
+// tuned engine where the shapes allow, one otherwise.
+static uint64_t pmf_vec_ntt_encode_width(uint64_t blocks, uint64_t k, uint64_t n)
+{
+#if VFHE_HAVE_AVX512IFMA
+    if (blocks % 8 == 0 && k % 8 == 0 && n % PMF_VEC_GROUP == 0)
+        return 8;
+#endif
+    (void)blocks;
+    (void)k;
+    (void)n;
+    return 1;
+}
+
+// Messages [m0, m1) of the batch; both are multiples of
+// pmf_vec_ntt_encode_width.
 PMF_INLINE void pmf_vec_ntt_encode_body(PMFVector out, const PMFVector msg, uint64_t blocks,
-                                        PMFNTTPlan plan, PMFParams P)
+                                        uint64_t m0, uint64_t m1, PMFNTTPlan plan, PMFParams P)
 {
     const uint64_t n = plan->n, L = P->limbs, k = msg->n / blocks;
     uint64_t copies = n / k, start = n / k;
-    uint64_t width = 1;
-    int tiled = 0;
+    const uint64_t width = pmf_vec_ntt_encode_width(blocks, k, n);
+    const int tiled = width == 8;
     if (n % PMF_VEC_GROUP)
         copies = start = 1;
 #if VFHE_HAVE_AVX512IFMA
     if (plan->tail_fwd && k < 8)
         copies = start = 1;
-    tiled = blocks % 8 == 0 && k % 8 == 0 && n % PMF_VEC_GROUP == 0;
-    if (tiled)
-        width = 8;
 #endif
 
-    for (uint64_t b0 = 0; b0 < blocks; b0 += width)
+    for (uint64_t b0 = m0; b0 < m1; b0 += width)
     {
 #if VFHE_HAVE_AVX512IFMA
         if (tiled)
@@ -793,15 +845,30 @@ PMF_INLINE void pmf_vec_ntt_encode_body(PMFVector out, const PMFVector msg, uint
                 continue;
             }
             // A block shorter than a group: the staged path of the batch above.
-            pmf_ntt_blocks(&block, 1, plan, 0);
+            pmf_ntt_block_range(&block, 0, 1, plan, 0);
         }
     }
+}
+
+static void pmf_vec_ntt_encode_chunk(void *ctx, uint64_t chunk)
+{
+    const PMFNTTJob *job = (const PMFNTTJob *)ctx;
+    const uint64_t m0 = vec_chunk_begin(&job->chunks, chunk);
+    const uint64_t m1 = vec_chunk_end(&job->chunks, chunk);
+    PMF_WITH_LIMBS(job->plan->params,
+                   pmf_vec_ntt_encode_body(job->a, job->msg, job->blocks, m0, m1, job->plan, &P_));
 }
 
 void pmf_vec_ntt_encode_blocks(PMFVector out, const PMFVector msg, uint64_t blocks, PMFNTTPlan plan)
 {
     assert(out->n == blocks * plan->n && msg->n % blocks == 0);
-    PMF_WITH_LIMBS(plan->params, pmf_vec_ntt_encode_body(out, msg, blocks, plan, &P_));
+    const uint64_t width = pmf_vec_ntt_encode_width(blocks, msg->n / blocks, plan->n);
+    PMFNTTJob job = {.a = out, .msg = msg, .blocks = blocks, .plan = plan};
+    if (vec_chunks_plan(&job.chunks, blocks, pmf_ntt_grain_blocks(plan->n), width))
+        vfhe_parallel_for(job.chunks.count, 0, pmf_vec_ntt_encode_chunk, &job);
+    else
+        PMF_WITH_LIMBS(plan->params,
+                       pmf_vec_ntt_encode_body(out, msg, blocks, 0, blocks, plan, &P_));
 }
 
 // --- the scalar oracle ----------------------------------------------------

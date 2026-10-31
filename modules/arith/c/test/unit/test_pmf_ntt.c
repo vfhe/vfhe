@@ -12,6 +12,7 @@
 
 #include <arith.h>
 #include <alloc.h> /* safe_aligned_malloc: the planes must be 64-byte aligned */
+#include <parallel.h>
 
 #include "arith_internal.h"
 #include "unity.h"
@@ -201,6 +202,73 @@ void test_plan_rejects_a_bad_root_or_length(void)
     pmf_ntt_free_plan(plan);
 }
 
+static int vectors_equal(const PMFVector a, const PMFVector b)
+{
+    for (uint64_t k = 0; k < L; k++)
+        if (memcmp(a->limbs[k], b->limbs[k], a->allocated_n * sizeof(uint64_t)) != 0)
+            return 0;
+    return 1;
+}
+
+/* A batch long enough to be split across threads gives the same planes,
+   padding included, on one thread and on eight: blocks of whole groups,
+   blocks shorter than a group (the staged path), and the zero-padded encoder
+   with messages placed by tiles and one at a time. */
+void test_batches_are_the_same_on_one_thread_and_many(void)
+{
+    static const struct
+    {
+        uint64_t n, blocks;
+    } SHAPES[] = {{64, 301}, {4, 4101}};
+    for (uint64_t s = 0; s < sizeof(SHAPES) / sizeof(SHAPES[0]); s++)
+    {
+        const uint64_t n = SHAPES[s].n, blocks = SHAPES[s].blocks;
+        uint64_t root[PMF_LANES];
+        root_for(root, __builtin_ctzll(n));
+        PMFNTTPlan plan = pmf_ntt_new_plan(n, root, params);
+        uint64_t *elements = random_elements(n * blocks);
+        PMFVector serial = vector_from(elements, n * blocks);
+        PMFVector threaded = vector_from(elements, n * blocks);
+
+        vfhe_set_num_threads(1);
+        pmf_vec_ntt_forward_blocks(serial, blocks, plan);
+        vfhe_set_num_threads(8);
+        pmf_vec_ntt_forward_blocks(threaded, blocks, plan);
+        TEST_ASSERT_TRUE_MESSAGE(vectors_equal(serial, threaded), "forward batches differ");
+
+        vfhe_set_num_threads(1);
+        pmf_vec_ntt_inverse_blocks(serial, blocks, plan);
+        vfhe_set_num_threads(8);
+        pmf_vec_ntt_inverse_blocks(threaded, blocks, plan);
+        TEST_ASSERT_TRUE_MESSAGE(vectors_equal(serial, threaded), "inverse batches differ");
+        assert_vector_equals_elements(threaded, elements);
+
+        /* Messages of 8 coefficients, placed by tiles, and of 2 for the blocks
+           shorter than a group. */
+        const uint64_t k = n >= 8 ? 8 : 2, messages = blocks - blocks % 8;
+        PMFVector message = vector_from(elements, k * messages);
+        PMFVector encoded[2];
+        for (uint64_t t = 0; t < 2; t++)
+        {
+            vfhe_set_num_threads(t ? 8 : 1);
+            uint64_t *zeros = (uint64_t *)calloc(n * messages * PMF_LANES, sizeof(uint64_t));
+            encoded[t] = vector_from(zeros, n * messages);
+            free(zeros);
+            pmf_vec_ntt_encode_blocks(encoded[t], message, messages, plan);
+        }
+        TEST_ASSERT_TRUE_MESSAGE(vectors_equal(encoded[0], encoded[1]), "encoded batches differ");
+        vfhe_set_num_threads(0);
+
+        vector_free(encoded[0]);
+        vector_free(encoded[1]);
+        vector_free(message);
+        vector_free(serial);
+        vector_free(threaded);
+        free(elements);
+        pmf_ntt_free_plan(plan);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -211,6 +279,7 @@ int main(void)
         RUN_TEST(test_vector_matches_scalar_oracle_and_round_trips);
         RUN_TEST(test_negacyclic_convolution);
         RUN_TEST(test_plan_rejects_a_bad_root_or_length);
+        RUN_TEST(test_batches_are_the_same_on_one_thread_and_many);
         pmf_free_params(params);
     }
     return UNITY_END();
