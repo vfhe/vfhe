@@ -190,6 +190,26 @@ def test_basefold_rejects_false_claim():
     )
 
 
+def test_a_commit_made_for_a_prover_stays_with_the_prover():
+    """With a prover, the opening is installed on it and not recorded on the
+    scheme, so a scheme reused across proofs keeps none of theirs; without
+    one, the scheme records it for any prover to find."""
+    ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
+    iop = IOP(domain=ring)
+    oracle, opening = scheme.commit(f, prover=iop.prover)
+    assert oracle.commitment not in scheme.openings
+    assert iop.prover.witnesses[oracle.commitment] is opening
+    assert iop.prover.witnesses[oracle] is f
+    iop.register(Relation_Eval, BasefoldEval(scheme, rep=4))
+    point, value = _claim(f, ring)
+    assert iop.run(
+        Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
+    )
+
+    oracle, opening = scheme.commit(f)
+    assert scheme.openings[oracle.commitment] is opening
+
+
 def test_basefold_opening_witness_is_required_and_typed():
     ring, scheme, f = _setup(num_vars=4, k0=4, c=4, d=2)
     oracle, _ = scheme.commit(f)

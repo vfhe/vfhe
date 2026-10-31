@@ -133,6 +133,17 @@ def test_compiled_range_proof_accepts(field, ring, m):
     assert len(runs) == 3
 
 
+def test_schemes_reused_across_proofs_keep_no_opening_of_theirs(field, ring):
+    """The oracles a proof sends are committed for its prover: two proofs
+    under the same schemes leave no opening on the field schemes, and only
+    the one of `v`, committed up front without a prover, on the ring's."""
+    setup = _Setup(field, ring, _witness(ring), ELL + NU)
+    for _ in range(2):
+        assert setup.iop().run(setup.statement)
+    assert all(not scheme.openings for scheme in setup.field_schemes)
+    assert list(setup.ring_scheme.openings) == [setup.v.commitment]
+
+
 def test_compiled_range_proof_as_an_argument_string(field, ring):
     setup = _Setup(field, ring, _witness(ring), ELL + NU)
     proof = setup.iop(fiat_shamir=True).prove(setup.statement)

@@ -1190,6 +1190,16 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix `Basefold.commit` with a prover also recording the opening (the
+  codeword and its Merkle tree) on the scheme, for the scheme's lifetime: a
+  scheme reused across proofs, such as the ones `BasefoldMessages` commits a
+  proof's messages under, kept every proof's openings. With a prover the
+  opening now lives on that prover only; a commit without one is still
+  recorded on the scheme (`openings`), where any prover finds it.
+- Fix `field_vec_inv` writing part of `out` before finding a zero among the
+  elements past its last whole row, against its contract of leaving `out`
+  untouched when it returns 0. Those elements are now inverted before any row
+  is written.
 - Fix `RangeDecomposition` and `Lookup` drawing their challenges in the
   IOP's domain instead of their own field: in an IOP over another ring or
   field they handed ring elements to field code. Their own challenges are
