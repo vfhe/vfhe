@@ -101,8 +101,8 @@ static void occurrence_prior_chunk(void *ctx, uint64_t chunk)
         job->prior[i] = running[job->values[i]]++;
 }
 
-bool vec_occurrence_counts(uint64_t *prior, uint64_t *totals, const uint64_t *values,
-                           uint64_t count, uint64_t bound)
+bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values, uint64_t count,
+                       uint64_t bound)
 {
     OccurrenceJob job = {.prior = prior, .values = values, .bound = bound};
     uint64_t grain = OCCURRENCE_BOUND_FACTOR * bound;

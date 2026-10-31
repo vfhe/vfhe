@@ -458,6 +458,11 @@ def test_round_kernels_are_the_same_on_more_threads():
     with parallel.local_num_threads(1):
         serial = messages()
     assert messages() == serial
+    # 12 and 20 chunks: the pairwise sums leave an odd chunk out at other
+    # levels than 24 do.
+    for limit in (3, 5):
+        with parallel.local_num_threads(limit):
+            assert messages() == serial
     set_generic_only(True)
     try:
         assert messages() == serial

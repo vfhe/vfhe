@@ -69,15 +69,15 @@ extern "C"
     int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degree,
                   NTT_Plan *plans);
 
-    // The Merkle leaf digests of `word[0..count)` taken `size` adjacent
+    // The Merkle leaf digests of `word[0..length)` taken `leaf_size` adjacent
     // elements at a time: out[32 i .. 32 (i + 1)) is the BLAKE3 digest of the
-    // polynomial_RNS_get_hash digests of word[size i .. size (i + 1)),
-    // concatenated in order. Writes count / size digests; elements past the
+    // polynomial_RNS_get_hash digests of word[leaf_size i .. leaf_size (i + 1)),
+    // concatenated in order. Writes length / leaf_size digests; elements past the
     // last whole leaf are not read. The elements belong to one ring. Their
     // rows are hashed as stored, so a digest depends on each element's
     // domain: the caller passes every element in the domain the digests are
     // defined over.
-    void rs_leaf_digests(uint8_t *out, ArithElement *word, uint64_t count, uint64_t size);
+    void rs_leaf_digests(uint8_t *out, ArithElement *word, uint64_t length, uint64_t leaf_size);
 
     // The same code over an extension field F_p[x]/(x^d - w), on FieldVector
     // planes (rscode_field.c). The evaluation points lie in F_p, so the
