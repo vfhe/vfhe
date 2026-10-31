@@ -12,8 +12,17 @@ import math
 import pytest
 from vfhe.arith import MLE, MLE_Variable, Polynomial, PseudoMersenneField, Ring
 from vfhe.crypto import DIGEST_LEN
-from vfhe.piop import IOP, OracleKind, Relation_Eval, Statement
+from vfhe.piop import (
+    IOP,
+    OracleKind,
+    Protocol,
+    Relation,
+    Relation_Eval,
+    Statement,
+    TableOracle,
+)
 from vfhe.piop.protocols import Lookup, RangeDecomposition, Sumcheck, VirtualEval
+from vfhe.piop.relation import hypercube_sum
 from vfhe.piop.relations import Relation_Lookup, Relation_Range, Relation_Sum
 from vfhe.polycom import (
     Basefold,
@@ -79,9 +88,11 @@ class _Setup:
         self.v_table = v
         self.statement = Statement(relation, oracles=[self.v])
 
-    def iop(self, **kw) -> IOP:
+    def iop(self, domain=None, **kw) -> IOP:
+        """The compiled range proof's IOP, over `domain` (the field unless
+        given)."""
         messages = BasefoldMessages(self.field_schemes)
-        iop = IOP(domain=self.field, **kw)
+        iop = IOP(domain=self.field if domain is None else domain, **kw)
         iop.register(
             Relation_Range,
             RangeDecomposition(
@@ -223,3 +234,66 @@ def test_messages_from_one_code_commit_as_codes_built_per_size(field):
     for num_vars in (2, 7):
         with pytest.raises(ValueError, match="serves tables"):
             BasefoldMessages.from_code(code, [num_vars])
+
+
+class _RangeAndSum(Relation):
+    """A range claim and a sum claim on one oracle: every coefficient below
+    `BOUND`, and the hypercube sum `value`."""
+
+    name = "range_and_sum"
+    fields = ("oracles", "value")
+
+    def check(self, statement: Statement) -> bool:
+        (v,) = statement.oracles
+        in_range = Statement(Relation_Range(BOUND, CHUNKS), oracles=[v]).check()
+        return in_range and hypercube_sum(v) == statement.value
+
+
+class _Split(Protocol):
+    """`_RangeAndSum` -> `Relation_Range` x `Relation_Sum`, on the same oracle."""
+
+    name = "split"
+    reduces_from = _RangeAndSum
+    reduces_to = (Relation_Range, Relation_Sum)
+
+    def _outputs(self, statement: Statement) -> list[Statement]:
+        (v,) = statement.oracles
+        return [
+            self.reduce([statement], Relation_Range(BOUND, CHUNKS), oracles=[v]),
+            self.reduce([statement], Relation_Sum, oracles=[v], value=statement.value),
+        ]
+
+    async def prove(self, _prover, statements):
+        return self._outputs(statements[0])
+
+    async def verify(self, _verifier, statements):
+        return self._outputs(statements[0])
+
+
+def test_a_range_proof_runs_inside_an_iop_over_the_ring(field, ring):
+    """In an IOP over `R_q`, the range proof draws its challenges in `F_p` and
+    a sumcheck on the committed `v` draws them in `R_q`, each in its oracle's
+    domain. The range proof's claims on `v` and the sumcheck's then form one
+    bundle under `v`'s scheme: one opening of `v`, one basefold run per
+    scheme in all."""
+    v = _witness(ring)
+    setup = _Setup(field, ring, v, ELL + NU)
+    statement = Statement(
+        _RangeAndSum(), oracles=[setup.v], value=hypercube_sum(TableOracle(v))
+    )
+
+    def iop(**kw):
+        out = setup.iop(domain=ring, **kw)
+        out.register(_RangeAndSum, _Split())
+        return out
+
+    run = iop()
+    assert run.run(statement)
+    runs = [
+        x
+        for x in run.transcript.order
+        if x.startswith("basefold") and x.endswith("/answers")
+    ]
+    assert len(runs) == 3
+    proof = iop(fiat_shamir=True).prove(statement)
+    assert iop(fiat_shamir=True).verify(statement, proof)

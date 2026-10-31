@@ -123,13 +123,17 @@ These are the things that are easiest to get wrong.
 
 ### The challenge domain
 
-**`iop.domain = F_p`**, a `PseudoMersenneField`. Every `challenge()` returns an
-`F_p` element, and `exceptional_set_size` is `p` itself.
+Both protocols draw every challenge of their own in their `field`
+(`challenge(label, self.field)`), an `F_p` element whose exceptional set is
+`p` itself, whatever the IOP's domain is; the sumchecks of the statements
+they reduce to draw in their oracles' domain (`Oracle.domain`), which is
+`F_p` too. So the range proof runs in an IOP over any domain, `R_q`
+included, beside reductions over that domain on the same committed `ṽ`:
+the claims on `ṽ` from both share one bundle of its scheme.
 
 `ṽ` is a table of `R_q` elements, not `F_p` elements. The two coexist because
-`iop.domain` is consulted in exactly one place — when the verifier samples a
-challenge — and the only claim ever made about `ṽ` is a terminal evaluation at
-a point with plain-integer coordinates, which a ring-backed table can bind.
+the only claim ever made about `ṽ` is a terminal evaluation at a point with
+plain-integer coordinates, which a ring-backed table can bind.
 
 The small-integer challenges `r_η ∈ Σ^{ℓ+ν}` are **not** domain challenges.
 They come from `verifier.challenge_bits(label, bits)` — raw published coins
