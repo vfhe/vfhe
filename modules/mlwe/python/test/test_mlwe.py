@@ -634,6 +634,88 @@ def test_tensor_product_slot_layout(r, N_r):
     assert ext_decryption == expected
 
 
+def _extended_case(r, N_r):
+    """A rank-``r`` scheme with its key and relinearization key, two samples
+    and their extended product."""
+    Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    key = _rank_key(scheme, N_r, r)
+    rlk = scheme.gen_rlk(key, key)
+    m1 = Polynomial(Rp).from_array(_ternary(N_r))
+    m2 = Polynomial(Rp).from_array(_ternary(N_r))
+    c1, c2 = enc(scheme, Rp, m1, key), enc(scheme, Rp, m2, key)
+    return Rq, Rp, scheme, key, rlk, (m1, m2, c1, c2)
+
+
+@pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])
+def test_extended_product_decrypts(r, N_r):
+    """``linear_decrypt`` of an unrelinearized product is exactly the product of
+    its factors' linear decryptions, over its ring or a quotient of it, and
+    agrees with the relinearized product up to its noise."""
+    Rq, Rp, scheme, key, rlk, (m1, m2, c1, c2) = _extended_case(r, N_r)
+    ext = scheme.multiply(c1, c2, None)
+    assert ext.r == scheme.extended_rank
+
+    expected = scheme.linear_decrypt(c1, key) * scheme.linear_decrypt(c2, key)
+    assert scheme.linear_decrypt(ext, key) == expected
+    lower = scheme.rings[1]
+    got = scheme.linear_decrypt(ext, key, ring=lower)
+    assert got.ring == lower
+    assert got == scheme.linear_decrypt(c1, key, ring=lower) * scheme.linear_decrypt(
+        c2, key, ring=lower
+    )
+
+    m_ext = scheme.linear_decrypt(ext, key).round_division(Rp)
+    m_relin = scheme.linear_decrypt(scheme.relinearize(ext, rlk), key).round_division(
+        Rp
+    )
+    assert _mul_error(Rq, Rp, scheme, m_ext, m1, m2) < 1000
+    assert _mul_error(Rq, Rp, scheme, m_relin, m1, m2) < 1000
+    # The extended key is built once per key.
+    assert key.extended_key_obj() == key.extended_key_obj()
+
+
+@pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])
+def test_operations_on_extended_products(r, N_r):
+    """Plaintext linear combinations of extended products, the in-place sum of
+    two, and the in-place sum with a plaintext are linear in the extended
+    decryption, exactly, and relinearize to the expected product."""
+    Rq, Rp, scheme, key, rlk, (m1, m2, c1, c2) = _extended_case(r, N_r)
+    ext_a = scheme.multiply(c1.copy(), c2.copy(), None)
+    ext_b = scheme.multiply(c2.copy(), c2.copy(), None)
+    dec_a = scheme.linear_decrypt(ext_a, key)
+    dec_b = scheme.linear_decrypt(ext_b, key)
+    ring = scheme.rings[0]
+
+    small = [Polynomial(ring).from_array(_ternary(N_r)) for _ in range(3)]
+    rows = [[small[0], small[1]], [None, small[2]]]
+    outs = scheme.linear_combinations([ext_a, ext_b], rows)
+    assert all(out.r == scheme.extended_rank and out.is_extended for out in outs)
+    assert scheme.linear_decrypt(outs[0], key) == small[0] * dec_a + small[1] * dec_b
+    assert scheme.linear_decrypt(outs[1], key) == small[2] * dec_b
+
+    total = ext_a.copy()
+    total += ext_b
+    assert total.r == scheme.extended_rank
+    assert scheme.linear_decrypt(total, key) == dec_a + dec_b
+    m_total = scheme.linear_decrypt(scheme.relinearize(total, rlk), key).round_division(
+        Rp
+    )
+    # As in _mul_error: a product of two scaled plaintexts carries the primes
+    # above the plaintext ring once more.
+    P = math.prod(Rq.primes[Rp.ell : Rq.ell - scheme.special_primes])
+    P_poly = Polynomial(Rp).from_bigint_array([P] + [0] * (Rp.N - 1))
+    diff = (m_total - (m1 * m2 + m2 * m2) * P_poly).get_polynomial(signed=True)
+    assert max(abs(c) for c in diff) < 2000
+
+    pt = Polynomial(ring).from_array(_ternary(N_r))
+    shifted = ext_a.copy()
+    shifted += pt
+    assert scheme.linear_decrypt(shifted, key) == dec_a + pt
+    shifted.to_coeff()
+    shifted += pt
+    assert scheme.linear_decrypt(shifted, key) == dec_a + pt + pt
+
+
 @pytest.mark.parametrize("r, N_r", RANK_DIMS)
 def test_encrypt_decrypt_add_sub_mul_module_rank(r, N_r):
     _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=0)
@@ -2614,6 +2696,112 @@ def test_batches_do_not_depend_on_the_thread_count(gadget, r):
     for x in single:
         x.to_coeff()
     assert _digests(single) == [runs[0][0], runs[0][6]]
+
+
+@pytest.mark.parametrize("gadget", [GadgetParams(), GadgetParams(9)])
+@pytest.mark.parametrize("r", [1, 2])
+def test_relinearize_batch_is_relinearize(gadget, r):
+    """A batch of extended products, inputs in both domains, relinearizes to
+    the samples :meth:`relinearize` gives one at a time, on 1, 3 and 32
+    threads -- per sample and by rows."""
+    n = 4096
+    Rq = Ring(n, prime_size=[45] * 5 + [50, 50], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=2, module_rank=r)
+    with entropy.deterministic(0x2E11):
+        key = scheme.key_gen_sparse(n * r // 8, 3.2)
+        rlk = scheme.gen_rlk(key, key, gadget_params=gadget)
+        cs = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    exts = [scheme.multiply(cs[i], cs[(i + 1) % 3], None) for i in range(3)]
+
+    def inputs():
+        copies = [x.copy() for x in exts]
+        copies[1].to_coeff()
+        return copies
+
+    single = [scheme.relinearize(x, rlk) for x in inputs()]
+    parallel.set_num_threads(32)
+    try:
+        runs = [
+            scheme.relinearize_batch(inputs(), rlk, n_threads)
+            for n_threads in (1, 3, 0)
+        ]
+    finally:
+        parallel.set_num_threads()
+    for out in runs[0]:
+        assert out.r == r and not out.is_extended and out.repr == repr.coeff
+    assert all(_digests(run) == _digests(single) for run in runs)
+
+
+@pytest.mark.parametrize("fixture", ["bv", "ghs"])
+def test_relinearize_batch_on_small_rings(fixture, request):
+    """Below the ring size that splits work by rows, and with a key switch
+    without special primes, the batch is still :meth:`relinearize`, and it
+    refuses what it cannot do."""
+    _Rq, Rp, scheme = request.getfixturevalue(fixture)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    rlk = scheme.gen_rlk(key, key)
+    cs = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(2)]
+    exts = [scheme.multiply(cs[0], cs[1], None), scheme.multiply(cs[1], cs[1], None)]
+    single = [scheme.relinearize(x.copy(), rlk) for x in exts]
+    batch = scheme.relinearize_batch([x.copy() for x in exts], rlk)
+    assert _digests(batch) == _digests(single)
+    assert scheme.relinearize_batch([], rlk) == []
+    with pytest.raises(ValueError, match="distinct"):
+        scheme.relinearize_batch([exts[0], exts[0]], rlk)
+    with pytest.raises(ValueError, match="one component per"):
+        scheme.relinearize_batch(cs, rlk)
+
+
+@pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])
+@pytest.mark.usefixtures("threads")
+def test_sample_batch(r, N_r):
+    """Each sample of a batch decrypts to its message at its level, has a mask
+    seed of its own, and the batch does not depend on the thread count."""
+    _Rq, Rp, scheme = _rank_scheme(N_r, r, special_primes=1)
+    key = _rank_key(scheme, N_r, r)
+    for lvl in (0, 1):
+        ring = scheme.rings[lvl]
+        delta = ring.modulus_ratio(Rp, return_pointer=True)
+        ms = [Rp.random_element() for _ in range(5)]
+        lifted = [m.scaled_lift(ring, delta=delta) for m in ms]
+        cs = scheme.sample_batch(lifted, key, lvl)
+        assert len({c.seed for c in cs}) == len(cs)
+        for c, m in zip(cs, ms, strict=True):
+            assert type(c) is MLWE and c.lvl == lvl and c.ring == ring and c.r == r
+            assert c.repr == repr.ntt
+            assert scheme.linear_decrypt(c, key).round_division(Rp) == m
+
+    lifted = [m.scaled_lift(scheme.rings[0], delta=delta) for m in ms]
+
+    def run(n_threads):
+        with entropy.deterministic(0x5A3B):
+            return _digests(scheme.sample_batch(lifted, key, 0, n_threads))
+
+    assert run(1) == run(3) == run(0)
+    assert scheme.sample_batch([], key) == []
+    with pytest.raises(ValueError, match="key's ring"):
+        scheme.sample_batch(lifted, key, 1)
+
+
+def test_sample_batch_noise_matches_sample(ghs):
+    """The noise of a batch sample has the spread of :meth:`sample`'s."""
+    _Rq, _Rp, scheme = ghs
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    zero = Polynomial(scheme.rings[0]).from_array([0] * N)
+
+    def deviation(samples):
+        noise = []
+        for c in samples:
+            phase = scheme.linear_decrypt(c, key)
+            phase.to_coeff()
+            noise += phase.get_polynomial(signed=True)
+        return math.sqrt(sum(e * e for e in noise) / len(noise))
+
+    batch = deviation(scheme.sample_batch([zero] * 16, key))
+    single = deviation([scheme.sample(zero.copy(), key) for _ in range(16)])
+    # 4096 draws each of sigma 3.2: both within a few percent of it.
+    assert abs(batch - 3.2) < 0.3 and abs(single - 3.2) < 0.3
 
 
 @pytest.mark.parametrize("r, N_r", [(1, 256), *RANK_DIMS])

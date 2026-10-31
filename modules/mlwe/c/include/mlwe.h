@@ -256,6 +256,13 @@ extern "C"
     void free_mlwe_RNS_ks_key(RNS_MLWE_KS_Key key);
     void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key ksk,
                                         uint64_t lvl);
+    // out[i] gets the key switch of in[i] with `ksk`, as
+    // mlwe_RNSc_GHS_hybrid_keyswitch computes it, for i < n: canonical, and
+    // the same whatever the number of the up to `n_threads` threads (0: the
+    // library limit). Inputs in the mul domain are converted to the canonical
+    // one in place, so each must appear only once, and none may be an output.
+    void mlwe_RNSc_GHS_hybrid_keyswitch_batch(RNSc_MLWE *out, RNSc_MLWE *in, RNS_MLWE_KS_Key ksk,
+                                              uint64_t n, uint64_t n_threads);
     void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                     uint64_t lvl);
     // Hoisted automorphisms: several automorphisms of one sample, decomposing

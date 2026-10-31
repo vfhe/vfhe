@@ -697,6 +697,54 @@ class RNSRing(Ring):
             "use larger primes or a smaller ring"
         )
 
+    @staticmethod
+    def gen_primes_near(
+        rou_order: int,
+        prime_size: int,
+        count: int,
+        exclude_list: list[int] | None = None,
+        *,
+        split_degree: int,
+    ) -> list[int]:
+        """``count`` primes ``p = a * rou_order + 1`` nearest ``2^prime_size``,
+        alternately above and below it: the nearest above, the nearest below,
+        the next above, and so on, none in ``exclude_list``.
+
+        The ones above have ``prime_size + 1`` bits. As in `gen_prime`, ``a``
+        is odd when ``split_degree > 1``; with ``split_degree`` 1 any ``a``
+        will do, and the nearest is taken. Alternating keeps the product of
+        consecutive primes close to the matching power of ``2^prime_size``.
+        """
+        excluded = set(exclude_list) if exclude_list is not None else set()
+        step = 2 if split_degree > 1 else 1
+        target = 1 << prime_size
+        # The smallest a with a * rou_order + 1 above the target, and the
+        # largest below it, moved onto the allowed parity.
+        up = (target - 1) // rou_order + 1
+        down = (target - 2) // rou_order
+        if step == 2:
+            up |= 1
+            down -= 1 - (down & 1)
+        primes: list[int] = []
+        while len(primes) < count:
+            from_above = len(primes) % 2 == 0
+            while True:
+                a = up if from_above else down
+                if a < 1:
+                    raise ValueError(
+                        f"no prime p = 1 (mod {rou_order}) below 2^{prime_size} "
+                        "is left; use larger primes or a smaller ring"
+                    )
+                candidate = a * rou_order + 1
+                if from_above:
+                    up += step
+                else:
+                    down -= step
+                if candidate not in excluded and is_prime(candidate):
+                    primes.append(candidate)
+                    break
+        return primes
+
     def gen_primes(self):
         primes = []
         for p_size in self.prime_size:

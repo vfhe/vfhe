@@ -65,6 +65,43 @@ void mlwe_RNSc_GHS_hybrid_keyswitch(RNSc_MLWE out, RNSc_MLWE in, RNS_MLWE_KS_Key
     free_mlwe_RNS_sample(acc);
 }
 
+typedef struct
+{
+    RNSc_MLWE *out;
+    RNSc_MLWE *in;
+    RNS_MLWE_KS_Key ksk;
+} KeySwitchJobs;
+
+static void to_coeff_domain_job(void *ctx, uint64_t i)
+{
+    RNSc_MLWE in = ((KeySwitchJobs *)ctx)->in[i];
+    if (mlwe_domain(in) == ARITH_DOMAIN_MUL)
+        mlwe_RNS_to_RNSc(in, in);
+}
+
+static void keyswitch_job(void *ctx, uint64_t i)
+{
+    KeySwitchJobs *jobs = (KeySwitchJobs *)ctx;
+    mlwe_RNSc_GHS_hybrid_keyswitch(jobs->out[i], jobs->in[i], jobs->ksk, 0);
+}
+
+void mlwe_RNSc_GHS_hybrid_keyswitch_batch(RNSc_MLWE *out, RNSc_MLWE *in, RNS_MLWE_KS_Key ksk,
+                                          uint64_t n, uint64_t n_threads)
+{
+    KeySwitchJobs jobs = {out, in, ksk};
+    vfhe_parallel_for(n, one_thread_on_generic_path(n_threads), to_coeff_domain_job, &jobs);
+    if (n > 0 && mlwe_is_rns_hybrid_keyswitch(out[0], ksk) && !ARITH_GENERIC_PATH())
+    {
+        KeySwitch *ks = (KeySwitch *)safe_malloc(n * sizeof(KeySwitch));
+        for (uint64_t i = 0; i < n; i++)
+            ks[i] = (KeySwitch){out[i], in[i], ksk, NULL, false};
+        mlwe_rns_hybrid_keyswitch_batch(ks, n, n_threads);
+        free(ks);
+        return;
+    }
+    vfhe_parallel_for(n, one_thread_on_generic_path(n_threads), keyswitch_job, &jobs);
+}
+
 void mlwe_automorphism_RNSc_GHS(RNSc_MLWE out, RNSc_MLWE in, uint64_t gen, RNS_MLWE_KS_Key ksk,
                                 uint64_t lvl)
 {
