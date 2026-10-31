@@ -56,10 +56,10 @@ import copy
 import math
 from typing import TYPE_CHECKING, TypeVar
 
-from vfhe.arith import Polynomial, RNSPolynomial, RNSRing
+from vfhe.arith import Polynomial, RNSPolynomial, RNSRing, repr
 from vfhe.arith.mle import element_array, mark_ntt
 from vfhe.crypto import hash_bytes, leaf_digest, seeded
-from vfhe.util.bindings import lib
+from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -293,6 +293,13 @@ def pair_digest(pair: tuple[RNSPolynomial, RNSPolynomial]) -> bytes:
     """
     lo, hi = pair
     return _fiber_digest((lo, hi))
+
+
+def check_whole_fibers(length: int, size: int) -> None:
+    """Raises `ValueError` unless a word of `length` symbols is a whole number
+    of `size`-symbol Merkle leaves."""
+    if size < 1 or length % size:
+        raise ValueError(f"{length} symbols are not whole leaves of {size}")
 
 
 def _fiber_digest(fiber) -> bytes:
@@ -895,11 +902,11 @@ class FoldableRS:
         reads, and the Merkle leaf (see `pair_leaves`)."""
         return word[2 * i], word[2 * i + 1]
 
-    def leaf_digests_of(self, pairs) -> bytes:
-        """The leaf digests of `pairs`, packed; see `FieldFoldableRS`, which
-        digests them together. Here a pair is digested at a time, as
-        `leaf_digests` does for a whole codeword of ring elements."""
-        return b"".join(self.leaf_digest(pair) for pair in pairs)
+    def leaf_digests_of(self, pairs) -> bytes | memoryview:
+        """The leaf digests of `pairs`, packed: entry `k` is
+        `leaf_digest(pairs[k])`. The pairs are digested together, as
+        `leaf_digests` digests a codeword's."""
+        return self.leaf_digests([e for pair in pairs for e in pair])
 
     def pair_leaves(self, word: list) -> list[tuple[RNSPolynomial, RNSPolynomial]]:
         """`word` as the leaf vector its Merkle tree commits to: one leaf per
@@ -913,18 +920,24 @@ class FoldableRS:
 
     def leaf_digests(self, word: list, size: int = 2) -> bytes | memoryview:
         """The leaf digests of every adjacent pair of `word`, packed: leaf `i`
-        is ``digests[32 * i : 32 * (i + 1)]``. With `size`, the leaves are the
-        fibers of that many symbols instead, `fiber_at(word, i, size)`.
+        is ``digests[32 * i : 32 * (i + 1)]``, and equals `leaf_digest` of
+        `pair_at(word, i)`. With `size`, the leaves are the fibers of that
+        many symbols instead, `fiber_at(word, i, size)`. Raises `ValueError`
+        when `size` does not divide the length of `word`.
 
-        This family digests a pair at a time -- the entries are ring elements
-        with their own hash -- so the leaves still cost an object each here,
-        unlike the field codes, where a kernel writes the whole buffer. What
-        the packing saves is the tree builder's half of that: it reads the
-        buffer rather than walking a sequence.
+        One native call (`rs_leaf_digests`). The entries are hashed in NTT
+        form, as `get_hash` hashes them, and are left in the form they are
+        in. The result is a read-only view of the kernel's buffer.
         """
-        return b"".join(
-            _fiber_digest(word[i : i + size]) for i in range(0, len(word), size)
-        )
+        check_whole_fibers(len(word), size)
+        if not word:
+            return memoryview(b"")
+        # The views own the rows the kernel reads, so they stay bound until
+        # it returns.
+        views = [p._viewed_as(repr.ntt) for p in word]
+        out = ffi.new("uint8_t[]", 32 * (len(word) // size))
+        lib.rs_leaf_digests(out, element_array(views), len(word), size)
+        return memoryview(ffi.buffer(out)).toreadonly()
 
     def fold_at(
         self, word: list, r: RNSPolynomial, level: int, i: int

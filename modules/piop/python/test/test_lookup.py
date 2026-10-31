@@ -10,6 +10,7 @@ Lemma I.4), the reduction's shape, and which branch rejects which kind of
 lie."""
 
 import random
+from array import array
 from collections import Counter
 
 import pytest
@@ -125,6 +126,17 @@ def test_counters_are_the_occurrence_counts():
     read_ts, final_cts = counters(values, 4)
     assert read_ts == [0, 0, 1, 2, 0]  # occurrences strictly before each index
     assert final_cts == [1, 1, 0, 3]  # totals per table entry
+
+
+@pytest.mark.parametrize("out_of_range", [False, True])
+def test_counters_of_an_array_are_those_of_the_list(out_of_range):
+    """An ``array('Q')`` is counted natively, and a value out of range sends
+    it back to the loop: the counters are the same either way."""
+    values = _bounded(seed=3)
+    if out_of_range:
+        values = [*values[:-1], BETA + 1]
+    read_ts, final_cts = counters(array("Q", values), BETA)
+    assert (list(read_ts), list(final_cts)) == counters(values, BETA)
 
 
 def test_counters_cannot_balance_an_out_of_range_value():

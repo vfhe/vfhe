@@ -18,6 +18,11 @@ extern "C"
     // the MSB variable (_halves), and stride-computed indices for any position
     // (the generic fallback taking eval_var_idx) — mirroring the mle.h binding
     // kernels. Defined in piop/c/src/sumcheck.c.
+    //
+    // Every round runs on up to the library's thread limit (parallel.h) once
+    // its tables are large enough, and on the calling thread while the
+    // execution tape records (arith_trace.h). The message is the same at any
+    // number of threads.
 
     // Round message for one multilinear table: g0 = sum over the pairs' low
     // entries = g(0) and g1 = sum over the high entries = g(1) (the round
@@ -54,6 +59,20 @@ extern "C"
     void sumcheck_prod3_round(ArithRing ring, ArithElement *g_out, ArithElement *tf,
                               ArithElement *tg, ArithElement *th, uint64_t size,
                               uint64_t eval_var_idx);
+
+    // Round message for the product of any number of tables, at any number
+    // of nodes: g_out[t] = sum over the pairs of prod_j (lo_j + t (hi_j -
+    // lo_j)) for t in {0, ..., nodes - 1}, the values at t >= 2 extrapolated
+    // division-free by adding hi_j - lo_j once per node. `tables` holds
+    // `factors` >= 1 tables sharing their variable layout (a table may
+    // appear more than once) and g_out `nodes` >= 1 elements.
+    void sumcheck_prod_round_pairs(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                                   ArithElement *const *tables, uint64_t factors, uint64_t size);
+    void sumcheck_prod_round_halves(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                                    ArithElement *const *tables, uint64_t factors, uint64_t size);
+    void sumcheck_prod_round(ArithRing ring, ArithElement *g_out, uint64_t nodes,
+                             ArithElement *const *tables, uint64_t factors, uint64_t size,
+                             uint64_t eval_var_idx);
 
 #ifdef __cplusplus
 }

@@ -150,6 +150,10 @@ void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial
                                    uint64_t count);
 void polynomial_RNS_get_natural(uint64_t *out, void *p);
 int64_t polynomial_RNS_set_natural(void *p, const uint64_t *in);
+void polynomial_RNS_get_natural_array(uint64_t *out, RNS_Polynomial *p, uint64_t count,
+                                      bool to_canonical);
+int64_t polynomial_RNS_set_natural_array(RNS_Polynomial *p, const uint64_t *in, uint64_t count,
+                                         bool to_mul);
 
 // --- negacyclic FFT ---
 typedef struct _FFT_Plan *FFT_Plan;
@@ -388,6 +392,8 @@ void pmf_vec_get_range(uint64_t *out, const PMFVector a, uint64_t start, uint64_
 void pmf_vec_set_uint64(PMFVector out, uint64_t start, const uint64_t *low, const uint64_t *high,
                         uint64_t count, uint32_t shift, uint32_t width);
 bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a);
+void pmf_vec_set_radix_decomposition(PMFVector out, const uint64_t *low, const uint64_t *high, uint64_t rows,
+                        uint64_t columns, uint32_t width, uint64_t digits);
 void pmf_vec_copy(PMFVector out, const PMFVector a);
 void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a);
 void pmf_vec_interleave(PMFVector out, const PMFVector even, const PMFVector odd);
@@ -432,6 +438,10 @@ void pmf_ntt_to_interleaved(PMFVector out, const PMFVector in, uint64_t blocks);
 void pmf_ntt_to_blocks(PMFVector out, const PMFVector in, uint64_t blocks);
 void pmf_vec_ntt_encode_blocks(PMFVector out, const PMFVector msg, uint64_t blocks,
                                PMFNTTPlan plan);
+
+// --- counting ---
+bool vec_occurrence_counts(uint64_t *prior, uint64_t *totals, const uint64_t *values,
+                           uint64_t count, uint64_t bound);
 
 // --- the execution tape ---
 typedef enum

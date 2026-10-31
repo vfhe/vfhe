@@ -8,6 +8,7 @@
 
 #include "crypto.h"
 #include "alloc.h"
+#include "parallel.h"
 
 // -------------------------------------------------------------
 // Binary Merkle tree over BLAKE3 digests
@@ -35,10 +36,19 @@ void merkle_hash(uint8_t *out, const uint8_t *in, uint64_t len)
     blake3_hasher_finalize(&hasher, out, MERKLE_DIGEST_LEN);
 }
 
-void merkle_join_digests(uint8_t *out, const uint8_t *const *parts, uint64_t part_count,
-                         uint64_t count)
+// Input bytes a chunk of joined digests hashes at least when the join runs on
+// several threads: with one hasher per digest this is over a hundred
+// microseconds of hashing, so a join under two of these stays on the calling
+// thread.
+#define JOIN_PARALLEL_BYTES (256u << 10)
+// Chunks per thread, so that threads finishing early take another one.
+#define JOIN_CHUNKS_PER_THREAD 4
+
+// Joined digests [first, last).
+static void join_digests_range(uint8_t *out, const uint8_t *const *parts, uint64_t part_count,
+                               uint64_t first, uint64_t last)
 {
-    for (uint64_t i = 0; i < count; i++)
+    for (uint64_t i = first; i < last; i++)
     {
         blake3_hasher hasher;
         blake3_hasher_init(&hasher);
@@ -46,6 +56,39 @@ void merkle_join_digests(uint8_t *out, const uint8_t *const *parts, uint64_t par
             blake3_hasher_update(&hasher, parts[p] + i * MERKLE_DIGEST_LEN, MERKLE_DIGEST_LEN);
         blake3_hasher_finalize(&hasher, out + i * MERKLE_DIGEST_LEN, MERKLE_DIGEST_LEN);
     }
+}
+
+typedef struct
+{
+    uint8_t *out;
+    const uint8_t *const *parts;
+    uint64_t part_count, count, per_chunk;
+} JoinJob;
+
+static void join_digests_chunk(void *ctx, uint64_t c)
+{
+    const JoinJob *job = (const JoinJob *)ctx;
+    const uint64_t first = c * job->per_chunk;
+    const uint64_t last = first + job->per_chunk < job->count ? first + job->per_chunk : job->count;
+    join_digests_range(job->out, job->parts, job->part_count, first, last);
+}
+
+void merkle_join_digests(uint8_t *out, const uint8_t *const *parts, uint64_t part_count,
+                         uint64_t count)
+{
+    const uint64_t most_chunks = count * part_count * MERKLE_DIGEST_LEN / JOIN_PARALLEL_BYTES;
+    const uint64_t threads = vfhe_threads_for(0, most_chunks);
+    if (threads <= 1)
+    {
+        join_digests_range(out, parts, part_count, 0, count);
+        return;
+    }
+    uint64_t chunks = threads * JOIN_CHUNKS_PER_THREAD;
+    if (chunks > most_chunks)
+        chunks = most_chunks;
+    const uint64_t per_chunk = (count + chunks - 1) / chunks;
+    JoinJob job = {out, parts, part_count, count, per_chunk};
+    vfhe_parallel_for((count + per_chunk - 1) / per_chunk, 0, join_digests_chunk, &job);
 }
 
 Merkle merkle_new(uint64_t size)
@@ -87,7 +130,8 @@ void merkle_commit(Merkle mk, const uint8_t *leaf_digests)
     // adjacent -- so the level below *is* the batch, one 64-byte input per
     // node, with nothing to gather. hash_batch fills the SIMD lanes with them,
     // which is an order of magnitude over a hasher per node and is most of
-    // what building a large tree costs.
+    // what building a large tree costs. hash_batch spreads a large level
+    // across threads by itself and keeps a small one on the calling thread.
     for (int64_t i = (int64_t)mk->log_size - 1; i >= 0; i--)
         hash_batch(mk->levels[i], mk->levels[i + 1], 1ULL << i, 2 * MERKLE_DIGEST_LEN);
 }

@@ -30,7 +30,7 @@ from typing import Any, cast
 from vfhe.arith import Polynomial, RNSPolynomial
 from vfhe.arith.mle import MLE, element_array, mark_ntt, native_table, vector_table
 from vfhe.piop.relation import hypercube
-from vfhe.util.bindings import lib
+from vfhe.util.bindings import ffi, lib
 
 
 def interpolate_evals(evals: tuple, r):
@@ -174,7 +174,9 @@ def prod_round_evals(factors: list, var=None) -> tuple:
 
     The native/pure-Python decision is made here: exactly two native
     tables, or three over the same variables, delegate to the C kernels
-    (prod2_round_evals_native, prod3_round_evals_native), two
+    (prod2_round_evals_native, prod3_round_evals_native), any other
+    number of native tables over one ring and the same variables to the
+    kernel for any product (prod_round_evals_native), two
     field-backed tables over their first variable run as whole-vector
     operations (prod2_round_evals_vector), anything else runs the
     pure-Python path — identical messages either way. This is the round
@@ -189,6 +191,8 @@ def prod_round_evals(factors: list, var=None) -> tuple:
         and all(f.variables == factors[0].variables for f in factors[1:])
     ):
         return prod3_round_evals_native(factors[0], factors[1], factors[2], var)
+    if native_tables(factors):
+        return prod_round_evals_native(factors, len(factors) + 1, var)
     if (
         len(factors) == 2
         and all(vector_table(f) for f in factors)
@@ -196,6 +200,20 @@ def prod_round_evals(factors: list, var=None) -> tuple:
     ):
         return prod2_round_evals_vector(factors[0], factors[1])
     return _prod_round_evals_python(factors, var)
+
+
+def native_tables(tables: list) -> bool:
+    """Whether the kernel for any product (`prod_round_evals_native`) takes
+    `tables` as they are: native tables (`mle.native_table`) over one ring
+    and the same variables, in the same order."""
+    return (
+        len(tables) > 0
+        and all(native_table(t) for t in tables)
+        and all(
+            t.ring == tables[0].ring and t.variables == tables[0].variables
+            for t in tables[1:]
+        )
+    )
 
 
 def prod2_round_evals_vector(f: MLE, g: MLE) -> tuple:
@@ -333,6 +351,40 @@ def prod3_round_evals_native(f: MLE, g: MLE, h: MLE, var=None) -> tuple:
             h.table_ptr,
             size,
             idx,
+        )
+    mark_ntt(evals)
+    return tuple(evals)
+
+
+def prod_round_evals_native(tables: list, nodes: int, var=None) -> tuple:
+    """The C-kernel path for a product of any number of tables: the
+    evaluations at t = 0..nodes-1 of sum_b prod_j f_j(t, b), each factor's
+    value at t extrapolated from its pair as lo + t*(hi - lo), over native
+    tables over one ring and the same variables (`native_tables`). The
+    kernel is chosen by the round variable's position, as in
+    prod2_round_evals_native."""
+    f = tables[0]
+    idx = 0 if var is None else f.variables.index(var)
+    for table in tables:
+        table.to_NTT()  # the kernels read RNS form; see MLE.to_NTT
+    ring = f.ring
+    if ring is None:
+        raise ValueError("a native round needs a ring-backed MLE")
+    evals = [Polynomial(ring) for _ in range(nodes)]
+    handles = element_array(evals)
+    factors = ffi.new("ArithElement *[]", [t.table_ptr for t in tables])
+    size = 1 << f.num_vars
+    if idx == 0:
+        lib.sumcheck_prod_round_pairs(
+            ring.arith_ring, handles, nodes, factors, len(tables), size
+        )
+    elif idx == f.num_vars - 1:
+        lib.sumcheck_prod_round_halves(
+            ring.arith_ring, handles, nodes, factors, len(tables), size
+        )
+    else:
+        lib.sumcheck_prod_round(
+            ring.arith_ring, handles, nodes, factors, len(tables), size, idx
         )
     mark_ntt(evals)
     return tuple(evals)

@@ -204,6 +204,11 @@ def test_entropy_from_several_threads_never_repeats():
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
+# Earlier tests may leave the library's idle worker threads in the process,
+# which Python warns about at a fork; the library handles them across a fork.
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded:DeprecationWarning"
+)
 def test_a_forked_child_does_not_repeat_its_parent():
     """The child inherits the parent's pool and must not serve it again."""
     entropy.bytes(16)

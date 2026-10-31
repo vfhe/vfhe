@@ -22,6 +22,7 @@ from vfhe.arith.base import (
     FieldVector,
     _check_bit_field,
     _check_fold_product_sums,
+    _check_radix_decomposition,
     index_buffer,
 )
 from vfhe.util.bindings import ffi, lib
@@ -189,6 +190,24 @@ class PseudoMersenneVector(FieldVector):
                 count,
                 shift,
                 width,
+            )
+
+    def set_radix_decomposition(
+        self, values, width: int, digits: int, high=None, columns: int = 1
+    ) -> None:
+        """See `FieldVector.set_radix_decomposition`; one call for all the digits."""
+        count = _check_radix_decomposition(
+            self._n, values, width, digits, high, columns
+        )
+        if count and digits:
+            lib.pmf_vec_set_radix_decomposition(
+                self._struct,
+                ffi.from_buffer("uint64_t[]", values),
+                ffi.NULL if high is None else ffi.from_buffer("uint64_t[]", high),
+                count // columns,
+                columns,
+                width,
+                digits,
             )
 
     def to_uint64(self) -> array | None:
