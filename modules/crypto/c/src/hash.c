@@ -41,9 +41,8 @@
 #define HASH_BATCH_POINTERS 256
 
 // Input bytes a chunk of a batch hashes at least when the batch runs on
-// several threads: at the lane-parallel rate this is tens of microseconds of
-// hashing, above what handing a chunk to a thread costs, so a batch under two
-// of these stays on the calling thread.
+// several threads, so that a chunk's hashing outweighs handing it to a thread;
+// a batch under two of these stays on the calling thread.
 #define HASH_PARALLEL_BYTES (256u << 10)
 // Chunks per thread, so that threads finishing early take another one.
 #define HASH_CHUNKS_PER_THREAD 4

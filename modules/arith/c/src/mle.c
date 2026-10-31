@@ -103,7 +103,7 @@ static bool mle_reads_its_output(const MleJob *job)
 static void mle_for(MleJob *job)
 {
     uint64_t chunks = 1;
-    if (!ARITH_GENERIC_PATH() && !mle_reads_its_output(job))
+    if (!ARITH_GENERIC_PATH())
     {
         const uint64_t bytes = job->size * mle_entry_bytes(job->ring);
         if (bytes >= MLE_PARALLEL_BYTES)
@@ -113,7 +113,7 @@ static void mle_for(MleJob *job)
         }
     }
     const uint64_t threads = vfhe_threads_for(0, chunks);
-    if (threads == 1)
+    if (threads == 1 || mle_reads_its_output(job))
     {
         job->range(job, 0, job->size);
         return;

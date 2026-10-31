@@ -74,8 +74,9 @@ extern "C"
     // polynomial_RNS_get_hash digests of word[size i .. size (i + 1)),
     // concatenated in order. Writes count / size digests; elements past the
     // last whole leaf are not read. The elements belong to one ring. Their
-    // rows are hashed as stored, so, as for polynomial_RNS_get_hash, the
-    // caller pins the domain.
+    // rows are hashed as stored, so a digest depends on each element's
+    // domain: the caller passes every element in the domain the digests are
+    // defined over.
     void rs_leaf_digests(uint8_t *out, ArithElement *word, uint64_t count, uint64_t size);
 
     // The same code over an extension field F_p[x]/(x^d - w), on FieldVector

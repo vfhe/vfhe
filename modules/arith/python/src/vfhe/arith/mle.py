@@ -118,6 +118,14 @@ def mark_ntt(polys: list) -> None:
         p.repr = repr.ntt
 
 
+def _check_entries_over(ring: RNSRing, entries: list) -> None:
+    """Raises `ValueError` unless every entry is an element of `ring`: the
+    native table calls size and walk their rows by the table's ring."""
+    for e in entries:
+        if e.ring is not ring and e.ring != ring:
+            raise ValueError("a table entry is not over the table's ring")
+
+
 def _ring_coefficient(ring: RNSRing, value) -> RNSPolynomial:
     """A coefficient of a ring-backed linear combination: an element of
     `ring` as it is, or an integer as a constant of `ring`."""
@@ -443,6 +451,7 @@ class MLE:
             raise ValueError(
                 f"cannot write values in {repr}: not a data representation"
             )
+        _check_entries_over(ring, self._polys)
         # The native call reads NTT rows; an entry held otherwise is read
         # through a converted copy.
         views = [p._viewed_as(Representation.ntt) for p in self._polys]
@@ -612,6 +621,8 @@ class MLE:
             return cls._like(first, entries)
         ring = first._ring
         coeffs = [_ring_coefficient(ring, c) for c in coefficients]
+        for t in tables:
+            _check_entries_over(ring, t._polys)
         for t in tables:
             t.to_NTT()
         for c in coeffs:
