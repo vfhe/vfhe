@@ -117,6 +117,32 @@ def test_encrypt_decrypt_add_sub_mul(bv):
     assert scheme.linear_decrypt(c0 * z, key).round_division(Rp) == m0 * z
 
 
+@pytest.mark.parametrize("module_rank", [1, 2])
+@pytest.mark.parametrize("ntt", [False, True])
+def test_add_sub_polynomial_out_of_place(module_rank, ntt):
+    Rq = Ring(N, prime_size=[45, 45, 45], split_degree=1)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=module_rank)
+    key = scheme.key_gen(3.2)
+    m0 = Rp.random_element()
+    m1 = Rp.random_element()
+    c0 = enc(scheme, Rp, m0, key)
+    delta = scheme.rings[0].modulus_ratio(Rp, return_pointer=True)
+    p1 = m1.scaled_lift(scheme.rings[0], delta=delta)
+    if ntt:
+        c0.to_NTT()
+        p1.to_NTT()
+    else:
+        c0.to_coeff()
+        p1.to_coeff()
+
+    total = c0 + p1
+    difference = c0 - p1
+    assert scheme.linear_decrypt(total, key).round_division(Rp) == m0 + m1
+    assert scheme.linear_decrypt(difference, key).round_division(Rp) == m0 - m1
+    assert scheme.linear_decrypt(c0, key).round_division(Rp) == m0
+
+
 def test_bv_keyswitch(bv):
     _Rq, Rp, scheme = bv
     key = scheme.key_gen_sparse(N // 8, 3.2)

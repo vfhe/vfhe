@@ -14,6 +14,12 @@ versions may contain breaking changes.
 
 ### Added
 
+- `RNSRing.scalar(value)` and `vfhe.arith.RNSScalar`: an integer, or one
+  integer per prime, held natively as an `ArithScalar` and applied by
+  `p * scalar` and `p *= scalar` through `arith_scale_by`, with no
+  allocation per product, to the elements of the ring and of its quotients.
+  `arith_scale_by`, `arith_scalar_new` and `arith_scalar_free` are declared
+  to Python.
 - The execution tape, `vfhe.util.trace`: while a trace is enabled, every
   whole-element ring operation the native code makes over an RNS ring
   leaves an event with its kind, the versions of its operands, its
@@ -1081,6 +1087,18 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix `ct + p` and `ct - p` for an MLWE sample and a polynomial returning a
+  sample with an uninitialized mask: the native `mlwe_add_RNSc_polynomial`,
+  `mlwe_sub_RNSc_polynomial`, `mlwe_RNS_add_polynomial` and
+  `mlwe_RNS_sub_polynomial` wrote only `b`. They now copy the mask of their
+  first operand when the output is another sample; the in-place forms are
+  unchanged.
+- Fix the product of an RNS `Polynomial` by an integer outside `[0, 2^64)`
+  raising `OverflowError`, and by a numpy integer raising
+  `NotImplementedError`: `*` and `*=` take any integral value, reduced by
+  each prime. A value outside a word, and one integer per prime (a list,
+  now also accepted by `*=`), become an `RNSScalar`, so these products are
+  on the execution tape as `"scale_by"` events.
 - Correct `Polynomial.base_extend`'s documented contract: it returns a value
   congruent to this element modulo the ring's modulus, not the element
   itself. Behaviour is unchanged; the docstring claimed exactness the fast

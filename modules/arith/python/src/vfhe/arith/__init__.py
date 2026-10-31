@@ -14,6 +14,7 @@ from .impl.rns.polynomial import (
     Representation,
     RNSPolynomial,
     RNSRing,
+    RNSScalar,
     domain_of,
     repr,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "PseudoMersenneVector",
     "RNSPolynomial",
     "RNSRing",
+    "RNSScalar",
     "Representation",
     "Ring",
     "SparseMLE",

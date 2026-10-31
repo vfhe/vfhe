@@ -8,6 +8,7 @@ import dataclasses
 import itertools
 import math
 from enum import Enum
+from numbers import Integral
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith.base import FieldVector, Polynomial, Ring, check_spec_keywords
@@ -696,6 +697,16 @@ class RNSRing(Ring):
                 scale_arr[idx] = vals[k]
         return ffi.new("uint64_t[]", scale_arr)
 
+    def scalar(self, value) -> RNSScalar:
+        """``value`` as a multiplier of this ring's elements: an integer, or
+        one integer per prime in `primes` order, each reduced by its prime.
+
+        It is built once and applied without allocating, by ``p * scalar`` or
+        ``p *= scalar`` for any element ``p`` of this ring or of a quotient of
+        it.
+        """
+        return RNSScalar(self, value)
+
     def random_element(self, ntt=True):
         return Polynomial(self).sample_uniform(ntt)
 
@@ -749,6 +760,46 @@ def _check_status(status: int, operation: str) -> None:
     """Raises when a call of the generic interface reports a failure."""
     if status != 0:
         raise ValueError(f"arith_{operation} failed with {status}")
+
+
+class RNSScalar:
+    """A multiplier of the elements of `ring` and of its quotients: one
+    residue per prime, held natively as an ``ArithScalar``. Built by
+    `RNSRing.scalar`."""
+
+    def __init__(self, ring: RNSRing, value) -> None:
+        if isinstance(value, Integral):
+            residues = [int(value) % p for p in ring.primes]
+        else:
+            residues = [int(v) for v in value]
+            if len(residues) != ring.ell:
+                raise ValueError(f"expected {ring.ell} values, got {len(residues)}")
+            residues = [v % p for v, p in zip(residues, ring.primes, strict=True)]
+        self.ring = ring
+        self.residues = tuple(residues)
+        native = ffi.new("ArithScalar *")
+        _check_status(
+            ring.lib.arith_scalar_new(
+                ring.arith_ring, ring.scalar_array(residues), native
+            ),
+            "scalar_new",
+        )
+        self._native = native
+
+    def serves(self, ring: RNSRing) -> bool:
+        """Whether this scalar multiplies the elements of `ring`: a quotient
+        of its own ring, over the same base."""
+        return ring.base == self.ring.base and ring.is_quotient_ring(self.ring)
+
+    def __del__(self) -> None:
+        native = getattr(self, "_native", None)
+        if native is not None and native.handle != ffi.NULL:
+            # interpreter shutdown may already have torn the lib down
+            with contextlib.suppress(Exception):
+                self.ring.lib.arith_scalar_free(self.ring.arith_ring, native)
+
+    def __repr__(self) -> str:
+        return f"RNSScalar({list(self.residues)})"
 
 
 class RNSPolynomial(Polynomial):
@@ -1314,25 +1365,17 @@ class RNSPolynomial(Polynomial):
             other.to_NTT()
             res = Polynomial(self.ring.intersec(other.ring))
             res.multiply(self, other)
-        elif type(other) is int:
+        elif isinstance(other, Integral):
             if other == 1:
                 return self.copy()
             res = Polynomial(self.ring)
-            _check_status(
-                self.ring.lib.arith_scale_int(
-                    self.ring.arith_ring, res.as_element(), self.as_element(), other
-                ),
-                "scale_int",
-            )
-            res.repr = self.repr
+            self._scale_integer(res, int(other))
+        elif isinstance(other, RNSScalar):
+            res = Polynomial(self.ring)
+            self._scale_by(res, other)
         elif type(other) is list:
             res = Polynomial(self.ring)
-            if len(other) != self.ring.ell:
-                raise ValueError("failed: len(other) != self.ring.ell")
-            self.ring.lib.polynomial_scale_RNS_polynomial_RNS(
-                res.obj, self.obj, self.ring.scalar_array(other)
-            )
-            res.repr = self.repr
+            self._scale_by(res, RNSScalar(self.ring, other))
         else:
             raise NotImplementedError(f"cannot multiply by {type(other).__name__}")
         return res
@@ -1351,22 +1394,54 @@ class RNSPolynomial(Polynomial):
             self.to_NTT()
             other.to_NTT()
             self.ring.lib.polynomial_multo_RNS_polynomial(self.obj, other.obj)
-        elif type(other) is int:
+        elif isinstance(other, Integral):
             if other == 1:
                 return self
-            if other >= 2**self.ring.smallest_prime:
-                raise ValueError(
-                    "failed: other >= 2**self.ring.smallest_prime"
-                )  # large scaling not implemented
-            _check_status(
-                self.ring.lib.arith_scale_int(
-                    self.ring.arith_ring, self.as_element(), self.as_element(), other
-                ),
-                "scale_int",
-            )
+            self._scale_integer(self, int(other))
+        elif isinstance(other, RNSScalar):
+            self._scale_by(self, other)
+        elif type(other) is list:
+            self._scale_by(self, RNSScalar(self.ring, other))
         else:
             raise NotImplementedError(f"cannot scale by {type(other).__name__}")
         return self
+
+    def _scale_integer(self, out: RNSPolynomial, k: int) -> RNSPolynomial:
+        """``out = k * self`` for any integer ``k``, in whichever representation
+        ``self`` is in; ``out`` may be ``self``.
+
+        A ``k`` in ``[0, 2^64)`` goes to the native kernel as it is, which
+        reduces it by each prime; any other ``k`` becomes an `RNSScalar`.
+        """
+        if not 0 <= k < 2**64:
+            return self._scale_by(out, RNSScalar(self.ring, k))
+        _check_status(
+            self.ring.lib.arith_scale_int(
+                self.ring.arith_ring, out.as_element(), self.as_element(), k
+            ),
+            "scale_int",
+        )
+        out.repr = self.repr
+        return out
+
+    def _scale_by(self, out: RNSPolynomial, scalar: RNSScalar) -> RNSPolynomial:
+        """``out = scalar * self``, in whichever representation ``self`` is
+        in; ``out`` may be ``self``."""
+        if not scalar.serves(self.ring):
+            raise ValueError(
+                "the scalar is not over this ring or a ring it is a quotient of"
+            )
+        _check_status(
+            self.ring.lib.arith_scale_by(
+                self.ring.arith_ring,
+                out.as_element(),
+                self.as_element(),
+                scalar._native[0],
+            ),
+            "scale_by",
+        )
+        out.repr = self.repr
+        return out
 
     def _add_integer(self, out: RNSPolynomial, other: int) -> RNSPolynomial:
         """``out = self + other``, in whichever representation ``self`` is in.

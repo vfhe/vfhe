@@ -73,3 +73,33 @@ def test_each_front_operation_is_recorded_with_its_operands(ring):
     assert (gaussian.value, gaussian.secret, gaussian.sigma) == (noise, True, 3.2)
     assert t.version_of(total) == add.sequence
     assert t.version_of(scaled_in_place) == in_place.sequence
+
+
+def test_a_product_by_scalars_outside_a_word_is_recorded(ring):
+    x = ring.random_element(ntt=False)
+    factors = [5, -1, 2**65]
+    scalar = ring.scalar(11)
+    with trace.recording() as t:
+        negated = x * -3
+        wide = x.copy()
+        wide *= 2**70 + 1
+        per_prime = x * factors
+        reused = x * scalar
+    events = [e for e in t.events() if e.kind not in ("mark", "input")]
+    assert [e.kind for e in events] == [
+        "scale_by",
+        "copy",
+        "scale_by",
+        "scale_by",
+        "scale_by",
+    ]
+    negative, _, in_place, listed, prebuilt = events
+    assert negative.value == negated
+    assert negative.scalar == tuple((-3) % p for p in ring.primes)
+    assert in_place.value == wide
+    assert in_place.scalar == tuple((2**70 + 1) % p for p in ring.primes)
+    assert listed.value == per_prime
+    assert listed.scalar == tuple(
+        f % p for f, p in zip(factors, ring.primes, strict=True)
+    )
+    assert (prebuilt.value, prebuilt.scalar) == (reused, scalar.residues)

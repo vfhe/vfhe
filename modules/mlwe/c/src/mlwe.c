@@ -379,23 +379,35 @@ void mlwe_add_RNS_sample(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2)
     arith_add(out->ring, &out->b, &in1->b, &in2->b);
 }
 
+static void mlwe_copy_mask(RNS_MLWE out, RNS_MLWE in)
+{
+    if (out == in)
+        return;
+    for (size_t i = 0; i < out->r; i++)
+        arith_copy(out->ring, &out->a[i], &in->a[i]);
+}
+
 void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2)
 {
+    mlwe_copy_mask(out, in1);
     arith_add(out->ring, &out->b, &in1->b, in2);
 }
 
 void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2)
 {
+    mlwe_copy_mask(out, in1);
     arith_sub(out->ring, &out->b, &in1->b, in2);
 }
 
 void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2)
 {
+    mlwe_copy_mask(out, in1);
     arith_add(out->ring, &out->b, &in1->b, in2);
 }
 
 void mlwe_RNS_sub_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2)
 {
+    mlwe_copy_mask(out, in1);
     arith_sub(out->ring, &out->b, &in1->b, in2);
 }
 
