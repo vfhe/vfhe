@@ -19,8 +19,8 @@ void rs_field_free_plan(NTT_Plan plan) { ntt_free_plan(plan); }
 uint64_t rs_field_plan_root(NTT_Plan plan) { return plan->root_of_unity; }
 
 // Codeword words a chunk of planes transforms at least when a transform runs
-// on several threads: a few hundred microseconds of transform per chunk, well
-// above what handing a chunk to a thread costs.
+// on several threads, so that a chunk's transform outweighs handing it to a
+// thread.
 #define RS_FIELD_PARALLEL_WORDS (1u << 16)
 
 // Plane j of the codeword of `in`; `scratch` holds out->n words.

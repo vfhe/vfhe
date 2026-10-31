@@ -50,10 +50,10 @@ uint64_t pmf_vec_padded_length(uint64_t n)
 // canonical, so the total is the serial one, representation included.
 
 // The fewest elements a chunk covers, by what an element costs.
-// One addition or subtraction an element, bounded by memory traffic.
+// One addition or subtraction per element, bounded by memory traffic.
 #define PMF_VEC_ADD_GRAIN (1u << 15)
-// A field product or more an element: products, folds, sums of products and
-// the inversion's sweeps.
+// At least one field product per element: products, folds, sums of products
+// and the inversion's sweeps.
 #define PMF_VEC_PRODUCT_GRAIN (1u << 13)
 // Copies and layout changes, in bytes of planes written: bandwidth-bound and
 // cheap per byte, so a chunk is large.
@@ -1284,6 +1284,21 @@ static void pmf_vec_fold_twisted_range(const PMFVecJob *job, uint64_t begin, uin
                                                           begin, end, &P_));
 }
 
+// Whether a plane of `out` shares memory with a plane of `in`. A fold
+// written over its own word reads, at each group, pairs past the positions
+// earlier groups wrote, so it is correct only one group after another.
+static bool pmf_vec_planes_overlap(const PMFVector out, const PMFVector in)
+{
+    for (uint64_t i = 0; i < out->params->limbs; i++)
+        for (uint64_t j = 0; j < in->params->limbs; j++)
+        {
+            const uint64_t *o = out->limbs[i], *w = in->limbs[j];
+            if (o < w + in->allocated_n && w < o + out->allocated_n)
+                return true;
+        }
+    return false;
+}
+
 void pmf_vec_fold_twisted(PMFVector out, const PMFVector word, const PMFVector untwist,
                           const uint64_t *r)
 {
@@ -1297,7 +1312,10 @@ void pmf_vec_fold_twisted(PMFVector out, const PMFVector word, const PMFVector u
                      .t = untwist,
                      .s = r,
                      .s2 = half};
-    pmf_vec_run(&job, out->allocated_n, PMF_VEC_PRODUCT_GRAIN);
+    if (pmf_vec_planes_overlap(out, word))
+        pmf_vec_fold_twisted_range(&job, 0, out->allocated_n, 0);
+    else
+        pmf_vec_run(&job, out->allocated_n, PMF_VEC_PRODUCT_GRAIN);
 }
 
 // The table entries for the group at i, read cyclically from a table of

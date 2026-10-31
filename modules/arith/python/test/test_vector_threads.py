@@ -140,6 +140,26 @@ class TestPseudoMersenne:
         o = SimpleNamespace(a=a, b=b, c=c, d=d, s=pmf(123456789), r=pmf(987654321))
         same_on_one_and_many(lambda: compute(o))
 
+    def test_fold_twisted_over_its_own_word(self, pmf, pmf_operands):
+        """A fold written over the low half of its word reads pairs that
+        earlier groups' outputs overwrite, so it must run group after group
+        on any number of threads."""
+        # A view's length is a whole number of lane groups.
+        half = len(pmf_operands[0]) // 2 // 8 * 8
+        a = pmf_operands[0].query(range(2 * half))
+        untwist = pmf_operands[1].query(range(half))
+        r = pmf(987654321)
+        expected = a.fold_twisted(untwist, r)
+
+        def fold_in_place() -> FieldVector:
+            word = a.copy()
+            word.fold_twisted(untwist, r, out=word.view(0, half))
+            return word.query(range(half))
+
+        serial, threaded = at_one_and_many(fold_in_place)
+        assert serial == expected
+        assert threaded == expected
+
     @pytest.mark.parametrize(
         ("shift", "width", "with_high"),
         [(0, 64, False), (5, 13, False), (60, 30, True)],
@@ -333,6 +353,10 @@ class TestOccurrenceCounts:
     def test_rejects_other_buffers(self):
         with pytest.raises(TypeError):
             occurrence_counts(array("i", [1, 2]), 4)
+        # Two rows of 64-bit words: counting them as one row would be wrong.
+        rows = memoryview(array("Q", [0, 1, 2, 3])).cast("B").cast("Q", (2, 2))
+        with pytest.raises(TypeError):
+            occurrence_counts(rows, 4)
 
 
 _FUSED_PRIME = 562949953421201

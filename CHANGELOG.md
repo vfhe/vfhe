@@ -14,29 +14,20 @@ versions may contain breaking changes.
 
 ### Added
 
-- `MLE.linear_combination(tables, coefficients)`: the table
-  `sum_i c_i T_i`, entry by entry, for tables sharing their variables (in the
-  same order), ring or field and basis; coefficients are elements of that
-  ring or field, or integers. Over a ring it is one native call
-  (`mle_dense_poly_linear_combination`), which over RNS sums each entry's
-  products with one reduction per coefficient where the kernel family allows.
+- `MLE.linear_combination(tables, coefficients)`: the table `sum_i c_i T_i`
+  for tables over the same variables (in the same order), the same ring or
+  field and the same basis; coefficients are elements of that ring or field,
+  or integers. Ring tables and coefficients are put in NTT form in place.
+  Over a ring it is one native call, `mle_dense_poly_linear_combination`.
 - `MLE.from_uint64(ring, variables, values, repr=repr.coeff)` and
   `MLE.to_uint64(repr=repr.coeff)`: a ring table from and to one buffer of
   64-bit words, entry after entry, each laid out as
-  `RNSPolynomial.from_uint64` / `to_uint64` lay out one element (a
-  `numpy.uint64` array of shape `(2^n, ell, N)` works). One native call
-  for the whole table, on the library's threads for large tables, with the
-  transforms between the coefficient rows and the table's NTT form inside
-  it (`polynomial_RNS_get_natural_array`,
-  `polynomial_RNS_set_natural_array`).
+  `RNSPolynomial.to_uint64` lays out one element (a `numpy.uint64` array of
+  shape `(2^n, ell, N)` works), in one native call.
+- `polynomial_RNS_get_natural_array` / `polynomial_RNS_set_natural_array`:
+  the natural-order rows of many polynomials, read or written in one call.
 - `sumcheck_prod_round{,_pairs,_halves}`: one sumcheck round message for a
   product of any number of `R_q` tables at any number of nodes.
-  `prod_round_evals` sends native tables over one ring and the same
-  variables there when no two- or three-factor kernel applies, and the
-  dense prover view of a virtual oracle sends every such term there, so
-  terms of one, two, four or more tables, or at more nodes than their
-  degree, no longer run per entry in Python. Messages and transcripts are
-  unchanged.
 - `docs/USAGE.md` "Threads, processes and memory": the thread limit, Python
   threads and the GIL, what a forked child may use, and memory placement on
   machines with several NUMA nodes.
@@ -731,39 +722,25 @@ versions may contain breaking changes.
 
 ### Changed
 
-- The dense ring-table kernels (`mle_dense_poly_*`: add, sub, scale and the
-  variable bindings) use the library's threads on large tables; the results
-  do not depend on the thread count. A product on a ring with split degree
-  above 1 takes its scratch from the memory pool.
-- piop's sumcheck round kernels (`sumcheck.c`) use the library's threads
-  when the tables are large enough; the messages are the same at any
-  thread count.
+- The proof-side kernels use the library's threads on large inputs: the
+  dense ring-table operations (`mle_dense_poly_*`), the sumcheck rounds,
+  the Reed-Solomon transforms and leaf digests, `hash_batch`, Merkle trees,
+  and the pseudo-Mersenne and extension-field vector kernels. Results are
+  the same at any thread count, and at the default limit of one thread the
+  single-threaded code runs.
+- Sumcheck rounds over products of native ring tables of any number of
+  factors, at any number of nodes, run natively (`sumcheck_prod_round*`)
+  instead of entry by entry in Python; messages are unchanged.
 - `FoldableRS.leaf_digests` and `leaf_digests_of` digest every leaf in one
-  native call, `rs_leaf_digests` (`rscode.h`), instead of hashing each ring
-  element and each leaf from Python. The digests are the same bytes, so
-  roots, openings and transcripts do not change; `leaf_digests` returns a
-  read-only view of the kernel's buffer. `FoldableRS.leaf_digests` and
-  `FieldFoldableRS.leaf_digests` raise `ValueError` for a word that is not a
-  whole number of leaves; the ring code hashed a shorter last leaf and the
-  field code dropped it.
-- polycom's Reed-Solomon transforms (`rs_encode`, `rs_decode`,
-  `rs_field_encode`, `rs_field_decode`) and ring leaf digests, and crypto's
-  `hash_batch`, Merkle tree levels and `join_digests`, use the library's
-  threads when the input is large. Results do not depend on the number of
-  threads.
-- The field vector kernels use the library's threads when the vector is
-  long enough. Pseudo-Mersenne: elementwise arithmetic, folds, twisted folds
-  and lifts, sums and the sums of products of folds, batch inversion, the
-  data movements, `hash_elements`, the batch transforms and
-  `encode_blocks`. Extension fields: elementwise arithmetic, products,
-  `fma`, the twisted folds and lifts, `fma_interleave`, `hash_elements` and
-  `hash_fibers`. Results are the
-  same at any thread count; at the default limit of one thread the code
-  that runs is the single-threaded one.
-- The range prover writes its digit table with one `set_radix_decomposition` call, and
-  the lookup prover counts `read_ts` and `final_cts` with
-  `occurrence_counts` when every value is in the table (the per-value loop
-  remains for the others). Proofs are unchanged.
+  native call, `rs_leaf_digests`, with the same bytes, so roots, openings
+  and transcripts do not change. Both return a read-only `memoryview` of the
+  digests (`leaf_digests_of` returned `bytes`). `FoldableRS.leaf_digests`
+  and `FieldFoldableRS.leaf_digests` raise `ValueError` for a word that is
+  not a whole number of leaves; the ring code hashed a shorter last leaf and
+  the field code dropped it.
+- `vfhe.piop.protocols.lookup.counters` returns `array('Q')`s for an
+  `array('Q')` whose values are all in the table (counted natively by
+  `occurrence_counts`), and lists otherwise.
 - `FoldableRS`'s twists default to the residue fields `F_(p^d)` of the
   ring's primes (`twist_field="field"`) on a ring whose split degree is above
   1, and stay the per-prime integers (`"prime"`) on an unsplit ring, where
@@ -1258,9 +1235,9 @@ versions may contain breaking changes.
 
 ### Fixed
 
-- Fix a process forked while another thread looked up a shared ring (as
-  every MLWE sample allocation does) leaving the child blocked on its first
-  such lookup: arith's ring caches are now locked across a fork.
+- Fix a forked child hanging on its first ring lookup when another thread
+  of the parent was looking up a ring at the fork (every MLWE sample
+  allocation does): arith's ring caches are now locked across `fork`.
 - Fix `Basefold.commit` with a prover also recording the opening (the
   codeword and its Merkle tree) on the scheme, for the scheme's lifetime: a
   scheme reused across proofs, such as the ones `BasefoldMessages` commits a

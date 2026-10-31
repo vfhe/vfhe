@@ -40,9 +40,9 @@ void field_vec_clear_padding(FieldVector a)
 // 64-byte aligned and the eltwise kernels keep their no-tail contract.
 
 // The fewest positions a chunk covers, by what a position costs.
-// One addition or subtraction a coefficient, bounded by memory traffic.
+// One addition or subtraction per coefficient, bounded by memory traffic.
 #define FIELD_VEC_ADD_GRAIN (1u << 15)
-// An extension product or more a position.
+// At least one extension-field product per position.
 #define FIELD_VEC_PRODUCT_GRAIN (1u << 13)
 // Hashing, in bytes of elements hashed: a gather and a compression per 64
 // bytes.
@@ -490,8 +490,6 @@ static uint64_t field_vec_scratch_window(uint64_t planes, uint64_t d, uint64_t p
     return window;
 }
 
-// Windows are independent and each carries its own scratch, so the windowed
-// kernels split by runs of whole windows.
 // Whether a plane of `out` shares memory with a plane of `in`. A fold
 // written over its own word reads, at each window, pairs past the positions
 // earlier windows wrote, so it is correct only one window after another.
@@ -507,6 +505,8 @@ static bool field_vec_planes_overlap(const FieldVector out, const FieldVector in
     return false;
 }
 
+// Windows are independent and each carries its own scratch, so the windowed
+// kernels split by runs of whole windows.
 static void field_vec_run_windows(FieldVecJob *job, uint64_t total)
 {
     const uint64_t grain =
