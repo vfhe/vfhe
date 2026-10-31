@@ -217,9 +217,10 @@ class Basefold:
     commitment, the variables and this scheme, what a statement names) and
     the opening.
     `openings` is the *prover-side* map (commitment -> `BasefoldOpening`)
-    `BasefoldEval` falls back to; a verifier's copy of a scheme simply never
-    holds one, and the in-process sharing of this object is the same
-    convention that lets a verifier hold table oracles it may only query.
+    `BasefoldEval` falls back to, filled by the commits made without a
+    prover; a verifier's copy of a scheme simply never holds one, and the
+    in-process sharing of this object is the same convention that lets a
+    verifier hold table oracles it may only query.
 
     `schedule` groups the code's `d` folds into layers: `schedule[i]` folds
     make layer `i`, and only the codeword each layer starts from is committed,
@@ -293,22 +294,26 @@ class Basefold:
         oracle -- the root as the commitment, with the variables and this
         scheme -- and the codeword plus tree as the prover's opening data.
 
-        Both costs are paid here, once. The opening is recorded on the scheme
-        and, with `prover` given, installed on it: `witnesses[commitment] =
-        opening` is what the evaluation protocol proves against, and
+        Both costs are paid here, once. With `prover` given, the opening is
+        installed on it and nowhere else: `witnesses[commitment] = opening`
+        is what the evaluation protocol proves against, and
         `witnesses[oracle] = f` is the table a sumcheck prover folds when
-        the oracle is one of its factors (`piop.resolve_table`). Without a
-        prover, store them yourself on whichever provers will run. Mutating
-        the table after the commit breaks the binding.
+        the oracle is one of its factors (`piop.resolve_table`); both live
+        as long as that prover. Without one, the opening is recorded on the
+        scheme (`openings`), where the evaluation protocol of any prover
+        finds it, for as long as the scheme lives -- or store it yourself on
+        whichever provers will run. Mutating the table after the commit
+        breaks the binding.
         """
         self._check_polynomial(f)
         word = self.code.encode(_coefficients(f))
         tree = self.merkle_commit(word)
         commitment = BasefoldCommitment(f.variables, tree.root)
         opening = BasefoldOpening(f, word, tree)
-        self.openings[commitment] = opening
         oracle = CommittedOracle(f.variables, commitment, self)
-        if prover is not None:
+        if prover is None:
+            self.openings[commitment] = opening
+        else:
             prover.witnesses[oracle] = f
             prover.witnesses[commitment] = opening
         return oracle, opening

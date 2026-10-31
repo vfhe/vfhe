@@ -955,6 +955,16 @@ int field_vec_inv(FieldVector out, const FieldVector a)
     struct _FieldVector last = field_vec_window(&prefix, (rows - 1) * width, width, p_planes);
     int status = field_vec_inv_serial(&running, &last);
 
+    // Whatever did not fit into whole rows is its own chain. It is inverted
+    // before any row of `out` is written, so that a zero there leaves `out`
+    // untouched; the backward sweep below reads only the whole rows of `a`.
+    if (status && body < n)
+    {
+        struct _FieldVector tail_in = field_vec_window(a, body, n - body, a_planes);
+        struct _FieldVector tail_out = field_vec_window(out, body, n - body, o_planes);
+        status = field_vec_inv_serial(&tail_out, &tail_in);
+    }
+
     if (status)
     {
         // Backward: out row t is the running product times prefix row t-1, and
@@ -974,14 +984,6 @@ int field_vec_inv(FieldVector out, const FieldVector a)
         }
         struct _FieldVector first = field_vec_window(out, 0, width, o_planes);
         field_vec_copy(&first, &running);
-
-        // Whatever did not fit into whole rows is its own chain.
-        if (body < n)
-        {
-            struct _FieldVector tail_in = field_vec_window(a, body, n - body, a_planes);
-            struct _FieldVector tail_out = field_vec_window(out, body, n - body, o_planes);
-            status = field_vec_inv_serial(&tail_out, &tail_in);
-        }
     }
 
     free(prefix_block);
