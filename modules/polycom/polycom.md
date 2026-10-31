@@ -169,9 +169,10 @@ The family is instantiated in one of two ways, chosen by the constructor's
   the codeword stay in `F_(p^d)`, and [ZCF24, Rmk. 1] is what carries the
   `F_p` bound to the extension message space.
 
-  **Over a ring** the same choice is `FoldableRS(..., twist_field=)`, with
-  ``"prime"`` the default: the per-prime integer tables of §2's
-  interleaved code. With ``"field"`` the twists live in the residue fields
+  **Over a ring** the same choice is `FoldableRS(..., twist_field=)`:
+  ``"prime"`` gives the per-prime integer tables of §2's interleaved code,
+  and with ``"field"``, the default on a ring whose split degree is above 1,
+  the twists live in the residue fields
   `R_q/P = F_(p^d)` of the ring's primes, which is what a ring that splits
   only partially is for -- its primes are small, and `p^d` is the field the
   soundness needs. Such a code is defined by one `FieldFoldableRS` per
@@ -188,7 +189,11 @@ The family is instantiated in one of two ways, chosen by the constructor's
   the distance bound runs on `d·log2 p` bits. At 30-bit primes and `d = 4`
   that is the difference between a bound of 0.52 and 0.80 at
   `k_d = 2^20, c = 8, k0 = 256` -- about 96 against 44 queries for 100
-  bits from the proximity term.
+  bits from the proximity term. The base code stays in `F_p` either way:
+  each residue code's base transform has its root in `F_p` (`root_field`
+  ``"prime"``), which exists when `n0 <= N/d`. On an unsplit ring the
+  residue fields are the `F_p`, the two choices give the same distance, and
+  the default is ``"prime"``.
 - **`"rs"` — every level a Reed-Solomon code on roots of unity**, the FRI
   folding structure [BBHR18], with one transform per level from the same
   providers. With `psi` the `2n`-th root of unity `ntt_new_plan` picks,
@@ -208,8 +213,8 @@ The family is instantiated in one of two ways, chosen by the constructor's
   codes, so this is a legitimate member of the family — what differs is the
   distance argument, not the fold.
 
-**Distance** (`relative_distance(security_bits, bound)`, the `delta` of
-`BasefoldEval.soundness_error`): for the option, the exact Reed-Solomon
+**Distance** (`relative_distance(security_bits, bound)`, the `Delta` that
+bounds the proximity parameter `delta` of `BasefoldEval.soundness_error`): for the option, the exact Reed-Solomon
 value at the longest level. For the general code, a probabilistic lower
 bound over the choice of twists (`foldable_relative_distance`), of the
 shape [ZCF24, Thm. 2] gives it — `t_0 = k_0`, `t_i = 2·t_{i-1} + l_i`,
@@ -242,6 +247,15 @@ the twists are drawn from — `twists_domain` over `FieldFoldableRS` (the
 whole extension field, or `F_p` with `twist_field="prime"`), the smallest
 residue field over `FoldableRS` (the bound is per RNS-prime component). The value is 0 where the theorem gives
 nothing (a rate-one code, or too few field bits for the depth).
+
+**Codes of smaller depth.** Level `l` of a foldable code is defined by the
+levels below it and level `l`'s twists, and the twists of level `l` are drawn
+from the seed, `l` and `n_l` alone (the base points from the seed and `n0`, a
+transform's root from its length). So the depth-`d'` code with the same seed,
+`k0`, `c` and options is the first `d' + 1` levels of a depth-`d` one, and
+`truncated(d')` returns it sharing their tables, transforms and plans (a ring
+code's plans stay owned, and freed, by the code that built them).
+`BasefoldMessages.from_code` builds one scheme per table size this way.
 
 Three conventions to keep in mind:
 
@@ -409,6 +423,27 @@ soundness error is `2d/(gamma^3·|A|) + (1 - delta + gamma·d)^rep` for
 admissible `(gamma, delta)` [ZCF24], with `|A|` the per-prime residue field
 size (`BasefoldEval.soundness_error`).
 
+**Parameters for a target soundness** (`parameters.py`,
+`basefold_parameters`). As [CCCFGS26] states [ZCF24]'s theorem, `(gamma,
+delta)` is admissible when `delta < J_gamma(J_gamma(Delta))` and
+`3·delta - d·gamma < Delta`, with `J_gamma(x) = 1 - sqrt(1 - x·(1 - gamma))`
+and `Delta` the code's relative distance (`relative_distance`): `delta` is a
+proximity parameter, about a third of the distance, not the distance.
+`basefold_parameters` is [CCCFGS26]'s estimator on the library's bounds: for
+every `k0 = 2^i` up to `max_k0` and inverse rate `c` in `inverse_rates`
+(`2^8` and `{2, 4}` by default, the estimator's space), `Delta` from
+`foldable_relative_distance` on the field the twists come from, `gamma` just
+above the value that spends the whole budget on `2d/(gamma^3·|A|)`, the
+largest admissible `delta`, and the fewest queries below `n0` for which the
+expression above is at most `2^-lambda`; the candidate with the smallest
+opening wins, counted as the messages the default schedule sends. At
+`lambda = 128` it gives the estimator's `k0 = 2^8`, `n0 = 2^10` and its query
+counts for 11 to 24 variables over 180- and 260-bit fields. Over `R_q` the
+twist field decides the distance: integer twists (`twist_field="prime"`)
+run the bound on `log2 p` bits and need about a quarter more queries than
+twists in the residue fields (`"field"`, `log2 p^d` bits, the default on a
+split ring) at 45-bit primes and `d = 4`.
+
 Every challenge of `BasefoldEval` is drawn in its scheme's ring or field
 (`BasefoldEval.domain`), not in the IOP's domain, so an IOP over a field
 can open claims committed with ring Basefold, and the other way round.
@@ -513,7 +548,8 @@ The soundness error is one prime's,
 `2d/(gamma^3·|F|) + (2l + kM - 1)/|F| + (kC - 1)/|F| + (1 - delta + gamma·d)^rep`
 (`BatchFoldEval.soundness_error`), with `|F|` the size of the smallest
 `F_i` (also the size of the set the shared challenges come from), `delta`
-the smallest residue code distance and `d` the code's depth -- not `L`
+the proximity parameter admissible for the smallest residue code distance
+and `d` the code's depth -- not `L`
 times it, as the paper's `L + 1` independent runs are stated. The ring
 commitment and the statement fix, before any challenge, at which primes the
 components fail to be codewords satisfying the component claims; a false

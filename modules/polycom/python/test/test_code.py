@@ -35,6 +35,9 @@ def instantiation(request):
 
 
 def _code(ring: RNSRing, k0: int = 4, c: int = 4, d: int = 2, **kwargs) -> FoldableRS:
+    """The code with the per-prime integer twists this file tests, unless
+    `twist_field` is given (`test_residue_code.py` covers ``"field"``)."""
+    kwargs.setdefault("twist_field", "prime")
     return FoldableRS(ring, k0=k0, c=c, d=d, **kwargs)  # n0 = 16, n_d = 64, k_d = 16
 
 
@@ -174,6 +177,16 @@ def test_the_default_is_the_general_code():
     assert len(code.roots) == 1  # the base transform's, and no other
     with pytest.raises(ValueError, match="instantiation"):
         _code(ring, instantiation="fri")
+
+
+@pytest.mark.parametrize(("split_degree", "twist_field"), [(4, "field"), (1, "prime")])
+def test_the_default_twists_live_in_the_residue_fields(split_degree, twist_field):
+    ring = Ring(1024, prime_size=[49], split_degree=split_degree)
+    code = FoldableRS(ring, k0=4, c=4, d=2)
+    assert code.twist_field == twist_field
+    assert bool(code.residue_codes) == (twist_field == "field")
+    # The residue codes' base transform has its root in F_p.
+    assert all(residue.roots for residue in code.residue_codes)
 
 
 def test_twist_tables_are_nonzero_negated_and_seeded():
@@ -318,3 +331,80 @@ def test_plans_freed_with_their_allocation_length(monkeypatch):
     levels = code.d + 1  # one plan array per level
     del code
     assert freed == [allocated_l] * levels
+
+
+# --- truncation ---
+
+# (instantiation, k0, c, d, twist_field) over N = 64 and split degree 4, so
+# k = 16 slots: n0 = 8 has a base transform, n0 = 32 a Vandermonde base, and
+# the "rs" code needs n_d <= 16.
+_TRUNCATED = [
+    ("general", 2, 4, 3, "prime"),
+    ("general", 8, 4, 2, "prime"),
+    ("rs", 2, 2, 2, "prime"),
+    ("general", 2, 4, 3, "field"),
+]
+
+
+@pytest.mark.parametrize(
+    ("instantiation", "k0", "c", "d", "twist_field"), _TRUNCATED, ids=str
+)
+def test_truncated_is_the_code_built_with_that_depth(
+    instantiation, k0, c, d, twist_field
+):
+    ring = Ring(64, prime_size=[28, 50], split_degree=4)
+    options = {"instantiation": instantiation, "twist_field": twist_field}
+    deep = FoldableRS(ring, k0=k0, c=c, d=d, **options)
+    for depth in range(1, d + 1):
+        code = deep.truncated(depth)
+        built = FoldableRS(ring, k0=k0, c=c, d=depth, **options)
+        assert (code.d, code.k_d, code.n_d) == (built.d, built.k_d, built.n_d)
+        assert code.twists == built.twists and code.roots == built.roots
+        assert code.base_points == built.base_points
+        assert code.relative_distance() == built.relative_distance()
+        for level in range(depth + 1):
+            message = [ring.random_element() for _ in range(k0 << level)]
+            word = code.encode(message)
+            assert _equal(word, built.encode(message))
+            assert code.leaf_digests(word) == built.leaf_digests(word)
+            ok, decoded = code.decode(word)
+            assert ok and _equal(decoded, message)
+            if level:
+                r = ring.random_exceptional()
+                assert _equal(code.fold(word, r, level), built.fold(word, r, level))
+        with pytest.raises(ValueError, match="exceeds"):
+            code.encode([ring.random_element() for _ in range(k0 << (depth + 1))])
+    for depth in (0, d + 1):
+        with pytest.raises(ValueError, match="depth"):
+            deep.truncated(depth)
+
+
+def test_truncated_code_borrows_its_plans(monkeypatch):
+    """The plans of a truncated code are its parent's: freed once, by the
+    parent, after both are gone, however deep the chain."""
+    ring = Ring(512, prime_size=[49], split_degree=2)
+    code = FoldableRS(ring, k0=4, c=4, d=3, instantiation="rs")
+    rows = ring.rns_rows
+    freed: list[int] = []
+    module_lib = code_module.lib
+
+    class _RecordingLib:
+        def __getattr__(self, name):
+            return getattr(module_lib, name)
+
+        def rs_free_plans(self, plans, count):
+            freed.append(count)
+            return module_lib.rs_free_plans(plans, count)
+
+    monkeypatch.setattr(code_module, "lib", _RecordingLib())
+    shorter = code.truncated(2)
+    shortest = shorter.truncated(1)
+    del code, shorter
+    assert freed == []
+    message = [ring.random_element() for _ in range(8)]
+    built = FoldableRS(ring, k0=4, c=4, d=1, instantiation="rs")
+    assert _equal(shortest.encode(message), built.encode(message))
+    del built
+    freed.clear()
+    del shortest
+    assert freed == [rows] * 4  # the four levels of the depth-3 code

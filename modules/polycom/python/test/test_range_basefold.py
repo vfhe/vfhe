@@ -173,3 +173,24 @@ def test_messages_need_one_scheme_per_table_size(field):
     )
     with pytest.raises(ValueError, match="no scheme for tables of 2\\^4"):
         BasefoldMessages([small]).send(IOP(domain=field).prover, "t", table)
+
+
+def test_messages_from_one_code_commit_as_codes_built_per_size(field):
+    """`from_code` serves every size from one code's tables, and a table
+    sent through it gets the root the code built for its size gives."""
+    code = FieldFoldableRS(field, k0=4, c=4, d=4)
+    messages = BasefoldMessages.from_code(code, [3, 6, 4])
+    assert sorted(messages.schemes) == [3, 4, 6]
+    for num_vars, scheme in messages.schemes.items():
+        assert scheme.code.d == num_vars - 2 and scheme.schedule == [1] * (num_vars - 2)
+        table = MLE(
+            field=field,
+            variables=[MLE_Variable(f"y{i}") for i in range(num_vars)],
+            evaluations=[field(3 * i + 1) for i in range(1 << num_vars)],
+        )
+        oracle = messages.send(IOP(domain=field).prover, "t", table)
+        built = Basefold(FieldFoldableRS(field, k0=4, c=4, d=num_vars - 2))
+        assert oracle.commitment.root == built.commit(table)[0].commitment.root
+    for num_vars in (2, 7):
+        with pytest.raises(ValueError, match="serves tables"):
+            BasefoldMessages.from_code(code, [num_vars])

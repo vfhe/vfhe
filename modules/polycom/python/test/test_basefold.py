@@ -606,3 +606,33 @@ def test_layer_schedules_over_the_ring(schedule):
     assert _replay_with_tamper(honest, ring, scheme, fields, lambda _l, v: v)
     for tamper in (first_leaf(bump), first_leaf(lambda leaf: leaf[:-1])):
         assert not _replay_with_tamper(honest, ring, scheme, fields, tamper)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{}, {"twist_field": "field"}, {"instantiation": "rs"}],
+    ids=["prime-twists", "field-twists", "rs"],
+)
+def test_a_truncated_code_commits_and_proves_as_the_code_of_its_depth(options):
+    """A depth-2 code taken from a depth-4 one gives the commitment and the
+    Fiat-Shamir proof, message for message, of the depth-2 code built
+    directly."""
+    from vfhe.piop import element_digest
+
+    ring, _, f = _setup(num_vars=4, k0=4, c=4, d=2)
+    deep = FoldableRS(ring, k0=4, c=4, d=4, **options)
+    built = FoldableRS(ring, k0=4, c=4, d=2, **options)
+    point, value = _claim(f, ring)
+    runs = []
+    for code in (deep.truncated(2), built):
+        scheme = Basefold(code)
+        oracle, opening = scheme.commit(f)
+        iop = IOP(domain=ring, fiat_shamir=True)
+        iop.register(Relation_Eval, BasefoldEval(scheme, rep=4))
+        iop.prover.witnesses[oracle.commitment] = opening
+        proof = iop.prove(
+            Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
+        )
+        messages = [(label, element_digest(m)) for label, m in proof.messages]
+        runs.append((oracle.commitment.root, messages))
+    assert runs[0] == runs[1]

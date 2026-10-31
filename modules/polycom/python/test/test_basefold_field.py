@@ -24,7 +24,7 @@ from vfhe.piop import (
 )
 from vfhe.piop.protocols import Sumcheck
 from vfhe.piop.relations import Relation_Sum
-from vfhe.polycom import Basefold, BasefoldEval, FieldFoldableRS
+from vfhe.polycom import INSTANTIATIONS, Basefold, BasefoldEval, FieldFoldableRS
 from vfhe.polycom.basefold import Word  # noqa: TC002
 
 _PRIME, _W = 562949948178433, 5  # 50 bits, 2-adicity 20; x^2 - 5 irreducible
@@ -521,3 +521,27 @@ def test_layer_schedule_fiat_shamir_with_two_claims(field):
     assert "basefold/0/point/q" in labels
     assert fresh().verify(statement([v0, v1]), proof)
     assert not fresh().verify(statement([v0, v1 + field.one]), proof)
+
+
+@pytest.mark.parametrize("instantiation", INSTANTIATIONS)
+def test_a_truncated_code_commits_and_proves_as_the_code_of_its_depth(
+    field, instantiation
+):
+    """A depth-2 code taken from a depth-4 one gives the commitment and the
+    Fiat-Shamir proof, message for message, of the depth-2 code built
+    directly."""
+    deep = FieldFoldableRS(field, k0=4, c=4, d=4, instantiation=instantiation)
+    built = FieldFoldableRS(field, k0=4, c=4, d=2, instantiation=instantiation)
+    _, f = _setup(field, num_vars=4, k0=4, c=4, d=2)
+    point, value = _claim(f, field)
+    runs = []
+    for code in (deep.truncated(2), built):
+        scheme = Basefold(code)
+        oracle, opening = scheme.commit(f)
+        iop = _iop(field, scheme, oracle, opening, fiat_shamir=True)
+        proof = iop.prove(
+            Statement(Relation_Eval(), oracles=(oracle,), point=point, value=value)
+        )
+        messages = [(label, element_digest(m)) for label, m in proof.messages]
+        runs.append((oracle.commitment.root, messages))
+    assert runs[0] == runs[1]

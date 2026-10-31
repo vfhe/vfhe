@@ -399,6 +399,53 @@ def test_fold_batch_is_each_codeword_folded_with_its_challenge(field, instantiat
         code.fold_batch(FieldVector.concat(words), challenges[:2], code.d)
 
 
+def _same_code(code: FieldFoldableRS, built: FieldFoldableRS, seed: bytes) -> None:
+    """`code` encodes, decodes, folds and hashes as `built` does, at every
+    level, and reports the same parameters, tables and distance."""
+    field = code.field
+    assert (code.d, code.k_d, code.n_d) == (built.d, built.k_d, built.n_d)
+    assert code.twists == built.twists and code.roots == built.roots
+    assert code.base_points == built.base_points
+    assert code.relative_distance() == built.relative_distance()
+    for level in range(code.d + 1):
+        message = _random(field, code.k0 << level, seed + bytes([level]))
+        word = code.encode(message)
+        assert word == built.encode(message)
+        assert bytes(code.leaf_digests(word)) == bytes(built.leaf_digests(word))
+        assert code.decode(word) == (True, message)
+        batch = FieldVector.concat([message, message])
+        assert code.encode_batch(batch, 2) == built.encode_batch(batch, 2)
+        if level:
+            r = field.random_element(seed + bytes([level, 1]))
+            assert code.fold(word, r, level) == built.fold(word, r, level)
+            fibers = word.query(range(1 << level))
+            assert code.fold_fibers(
+                fibers, [r] * level, level, [0]
+            ) == built.fold_fibers(fibers, [r] * level, level, [0])
+    with pytest.raises(ValueError, match="exceeds"):
+        code.encode(_random(field, code.k0 << (code.d + 1), seed))
+
+
+@pytest.mark.parametrize("twist_field", ["field", "prime"])
+def test_truncated_is_the_code_built_with_that_depth(field, instantiation, twist_field):
+    options = {"instantiation": instantiation, "twist_field": twist_field}
+    deep = _code(field, d=3, **options)
+    for depth in range(1, 4):
+        _same_code(deep.truncated(depth), _code(field, d=depth, **options), b"t")
+    for depth in (0, 4):
+        with pytest.raises(ValueError, match="depth"):
+            deep.truncated(depth)
+    # A truncation of a truncation is the same code again.
+    _same_code(deep.truncated(2).truncated(1), _code(field, d=1, **options), b"u")
+
+
+def test_truncated_on_a_vandermonde_base():
+    field = Field(*_MERSENNE[:1], 2, _MERSENNE[1])
+    deep = _code(field, d=3)
+    assert deep._batched is None
+    _same_code(deep.truncated(2), _code(field, d=2), b"v")
+
+
 def test_a_field_whose_root_is_off_the_prime_subfield_transforms():
     """2^61 - 1 has 2-adicity 1, but F_(p^2) has roots of unity of every
     two-power order up to 2^61: with ``root_field="field"`` the base
