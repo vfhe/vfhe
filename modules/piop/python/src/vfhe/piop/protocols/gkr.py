@@ -56,7 +56,11 @@ class OutputTest(Protocol):
     reduces_from: type[Relation] = Relation_Equal
     reduces_to: tuple[type[Relation], ...] = (Relation_Eval,)
 
-    def soundness_error(self, statement: Statement, domain) -> float | None:
+    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+        """s / |A|; the domain defaults to the output oracle's
+        (`Oracle.domain`)."""
+        if domain is None:
+            domain = statement.oracles[0].domain
         size = exceptional_set_size(domain)
         if size is None:
             return None
@@ -66,7 +70,8 @@ class OutputTest(Protocol):
         label = f"{self.name}{statement.path}"
         out, _ = statement.oracles
         return [
-            await iop.verifier.challenge(f"{label}/r{i}") for i in range(out.num_vars)
+            await iop.verifier.challenge(f"{label}/r{i}", out.domain)
+            for i in range(out.num_vars)
         ]
 
     def _outputs(self, statement: Statement, point: list, value) -> list[Statement]:
@@ -133,8 +138,11 @@ class GKR(Composed):
     def __init__(self) -> None:
         super().__init__(None, self.name)
 
-    def soundness_error(self, statement: Statement, domain) -> float | None:
-        """The output test's own error; the layers' is the sumchecks'."""
+    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+        """The output test's own error; the layers' is the sumchecks'. The
+        domain defaults to the output oracle's (`Oracle.domain`)."""
+        if domain is None:
+            domain = statement.oracles[0].domain
         size = exceptional_set_size(domain)
         if size is None:
             return None
@@ -158,7 +166,7 @@ class GKR_Start(GKR):
     name = "gkr_start"
     reduces_from: type[Relation] = Relation_CircuitSparseIndex.Start
 
-    def soundness_error(self, statement: Statement, domain) -> float | None:
+    def soundness_error(self, statement: Statement, domain=None) -> float | None:
         """No random evaluation of its own: the layers' errors only."""
         return 0
 

@@ -418,6 +418,22 @@ transcript.
   `challenge(label, domain)` samples from another domain's exceptional set
   instead, for a protocol whose challenges live in another ring or field
   than the IOP's (e.g. a residue field of the IOP's ring).
+  **Every protocol draws in the domain of the oracle it works on**:
+  `Oracle.domain` is the ring or field of an oracle's values -- a table's
+  `ring` or `field`, an `EqOracle`'s, a `ClosedFormOracle`'s or an
+  `ImplicitOracle`'s when given, a `CommittedOracle`'s scheme's (`Basefold`:
+  its code's), a `VirtualOracle`'s constituents' (one domain; constituents
+  over two raise) -- and None when it is unknown (a table of plain
+  integers), in which case the IOP's domain applies. The generic protocols
+  pass their subject oracle's (`Sumcheck` / `SumcheckProd`: the first
+  oracle; `SumDefStart`: the definition's body; `OutputTest`: the output
+  oracle); the range proof and the lookup pass their `field`, `BasefoldEval`
+  and `BatchFoldEval` their scheme's. So one IOP can hold protocols over
+  several domains -- a range proof over `F_p` beside an `R_q` reduction on
+  the same committed oracle, whose claims on it then share one opening.
+  Claims are only ever combined within one domain: a bundle is one scheme's
+  or one head's, and a cross-domain step (integer challenges, CRT
+  components) is a protocol's own.
   Challenge generation is a property of the *verifier*, not of a protocol —
   public coin means a challenge is fresh randomness and nothing else — so
   protocols call this method and never sample themselves. *Either party*
@@ -834,12 +850,13 @@ factors are large enough, and `Ring.random_exceptional(seed=None)` /
 `Polynomial.sample_exceptional(seed=None)` sample challenges, from a fresh
 seed or the given one. For `vfhe.arith.Field` the whole field is
 exceptional and uniform sampling suffices, under the same name,
-`random_exceptional(seed=None)`. The `IOP` object holds the domain and delegates; no
-`sampling_set` is ever carried by statements. Sampling happens in exactly one
-place — `Verifier.challenge`, which calls `domain.random_exceptional()`
-(the name both `Ring` and `Field` have) on the IOP's domain, or on the
-domain the caller passes — and per-protocol soundness accounting is a
-protocol method —
+`random_exceptional(seed=None)`. The `IOP` object holds the default domain
+and delegates; no `sampling_set` is ever carried by statements. Sampling
+happens in exactly one place — `Verifier.challenge`, which calls
+`domain.random_exceptional()` (the name both `Ring` and `Field` have) on the
+domain the caller passes, the oracle's (§4, Challenges), or on the IOP's when
+none is — and per-protocol soundness accounting is a protocol method, over
+the oracle's domain unless one is given —
 `Sumcheck.soundness_error` reports `d·n/|A|`, with `|A| =
 min(p_i)^split_degree` for a `Ring` and `p^d` for a `Field`, read from the
 domain by `exceptional_set_size(domain)` (`protocol.py`).

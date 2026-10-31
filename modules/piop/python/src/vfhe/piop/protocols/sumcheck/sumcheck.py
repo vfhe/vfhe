@@ -106,13 +106,14 @@ class _SumcheckRounds(Protocol):
         ]
         originals = tuple(factors)
         label = self._label(statement)
+        domain = statement.oracles[0].domain
         point = {}
         message = None
         for i, var in enumerate(list(factors[0].variables)):
             if message is None:
                 message = self._round_message(factors, var)
             iop.transcript.write(f"{label}/g{i}", message)
-            r = await iop.verifier.challenge(f"{label}/r{i}")
+            r = await iop.verifier.challenge(f"{label}/r{i}", domain)
             point[var] = r
             # Out of place while a factor is still the table of the
             # statement's own oracle; a prover view (`owned`) brings fresh
@@ -131,12 +132,13 @@ class _SumcheckRounds(Protocol):
         iop = verifier.iop
         label = self._label(statement)
         claim = value_of(statement.value)
+        domain = statement.oracles[0].domain
         point = {}
         for i, var in enumerate(list(statement.oracles[0].variables)):
             evals = await iop.transcript.read(f"{label}/g{i}")
             if not (evals[0] + evals[1] == claim):
                 raise Rejection(f"{label} round {i}: g(0) + g(1) != claim")
-            r = await verifier.challenge(f"{label}/r{i}")
+            r = await verifier.challenge(f"{label}/r{i}", domain)
             point[var] = r
             claim = interpolate_evals(evals, r)
         return await self._verify_tail(iop, statement, label, point, claim)
@@ -163,11 +165,14 @@ class Sumcheck(_SumcheckRounds):
     supported_domains: tuple[type, ...] = (Ring, Field)
 
     def soundness_error(
-        self, statement: Statement, domain, degree: int | None = None
+        self, statement: Statement, domain=None, degree: int | None = None
     ) -> float | None:
         """degree * num_vars / |A| (piop.md §6); None if |A| is unknown. The
-        degree defaults to the oracle's (`degree` attribute of a defined
-        oracle in products form), else 1 (a multilinear table)."""
+        domain defaults to the oracle's (`Oracle.domain`), the degree to the
+        oracle's (`degree` attribute of a defined oracle in products form),
+        else 1 (a multilinear table)."""
+        if domain is None:
+            domain = statement.oracles[0].domain
         size = exceptional_set_size(domain)
         if size is None:
             return None
@@ -229,8 +234,11 @@ class SumcheckProd(_SumcheckRounds):
     reduces_to: tuple[type[Relation], ...] = (Relation_Eval,)
     supported_domains: tuple[type, ...] = (Ring, Field)
 
-    def soundness_error(self, statement: Statement, domain) -> float | None:
-        """k * num_vars / |A| (piop.md §6); None if |A| is unknown."""
+    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+        """k * num_vars / |A| (piop.md §6); None if |A| is unknown. The
+        domain defaults to the first factor's (`Oracle.domain`)."""
+        if domain is None:
+            domain = statement.oracles[0].domain
         size = exceptional_set_size(domain)
         if size is None:
             return None

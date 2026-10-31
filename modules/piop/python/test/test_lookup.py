@@ -13,7 +13,7 @@ import random
 from collections import Counter
 
 import pytest
-from vfhe.arith import MLE, Field, FieldVector, MLE_Variable, PseudoMersenneField
+from vfhe.arith import MLE, Field, FieldVector, MLE_Variable, PseudoMersenneField, Ring
 from vfhe.piop import (
     IOP,
     EqOracle,
@@ -73,6 +73,35 @@ def _iop(field, protocol=None, **kw):
 
 def _statement(field, values, beta=BETA):
     return Statement(Relation_Lookup(beta), oracles=[_oracle(field, values)])
+
+
+class _Record(Protocol):
+    """Leaves the claims of `relation` terminal, keeping them in `seen`."""
+
+    def __init__(self, relation, seen):
+        self.reduces_from = relation
+        self.seen = seen
+
+    async def prove(self, _prover, _statements):
+        return []
+
+    async def verify(self, _verifier, statements):
+        self.seen.extend(statements)
+        return []
+
+
+def test_the_lookup_draws_in_its_field_inside_a_ring_iop(field):
+    """In an IOP over `R_q` every challenge of the lookup is still an element
+    of its field, so the claims it reduces to are true."""
+    ring = Ring(64, prime_size=[30, 30], split_degree=1)
+    seen = []
+    iop = IOP(domain=ring)
+    iop.register(Relation_Lookup, Lookup(field))
+    iop.register(Relation_Sum, _Record(Relation_Sum, seen))
+    iop.register(Relation_Eval, _Record(Relation_Eval, seen))
+    assert iop.run(_statement(field, _bounded(seed=9)))
+    assert len(seen) == 6
+    assert all(s.check() for s in seen)
 
 
 # --- Lemma I.3: the memory-checking identity --------------------------------

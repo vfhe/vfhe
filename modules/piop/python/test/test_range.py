@@ -409,6 +409,32 @@ def test_lookup_claim_is_terminal_and_true(ring, field):
     assert claim.check()
 
 
+def test_the_decomposition_draws_in_its_field_inside_a_ring_iop(ring, field):
+    """In an IOP over `R_q` the spot-check point is still drawn in `F_p`, so
+    the claims the decomposition reduces to are true."""
+    v = _witness(ring, seed=5)
+    seen = []
+
+    class _Record(Protocol):
+        def __init__(self, relation):
+            self.reduces_from = relation
+
+        async def prove(self, _prover, _statements):
+            return []
+
+        async def verify(self, _verifier, statements):
+            seen.extend(statements)
+            return []
+
+    iop = IOP(domain=ring)
+    iop.register(Relation_Range, _protocol(field, ring))
+    iop.register(Relation_Eval, _Record(Relation_Eval))
+    iop.register(Relation_Lookup, _Record(Relation_Lookup))
+    assert iop.run(_statement(v))
+    assert len(seen) == 2 * KAPPA + 1
+    assert all(s.check() for s in seen)
+
+
 # --- a top digit shorter than the others -----------------------------------
 
 #: log2(B) = 7 in c = 2 digits: the low one of 4 bits, the top one of 3.

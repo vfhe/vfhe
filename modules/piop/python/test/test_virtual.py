@@ -12,6 +12,7 @@ from vfhe.piop import (
     IOP,
     ClosedFormOracle,
     CommittedOracle,
+    EqOracle,
     ImplicitOracle,
     OracleKind,
     Protocol,
@@ -583,3 +584,45 @@ def test_restriction_form_and_resolution():
         VirtualOracle.restriction(P, r[:1], {t[0]: 1})
     # The sparse table is never materialized by resolve_table.
     assert resolve_table(P) is sparse
+
+
+# --- the domain an oracle names -----------------------------------------------
+
+
+def test_every_oracle_kind_names_its_domain():
+    """`Oracle.domain`: the table's ring or field, an eq~ oracle's, a closed
+    form's (without building its table), a committed oracle's scheme's, an
+    implicit head's when given; None where it is unknown, which leaves the
+    IOP's domain."""
+    ring = Ring(64, prime_size=[30, 30], split_degree=1)
+    other = Ring(32, prime_size=[30], split_degree=1)
+    x = [MLE_Variable(f"x{i}") for i in range(2)]
+    table = TableOracle(MLE(ring=ring, variables=x, evaluations=[1, 2, 3, 4]))
+    plain = TableOracle(MLE(variables=x, evaluations=[1, 2, 3, 4]))
+    assert table.domain is ring
+    assert plain.domain is None
+    assert EqOracle(ring, [1, 0], x).domain is ring
+
+    built = []
+
+    def build():
+        built.append(True)
+        return MLE(ring=ring, variables=x, evaluations=[0, 0, 0, 0])
+
+    closed = ClosedFormOracle(x, lambda _: 0, build, b"zero", domain=ring)
+    assert closed.domain is ring and not built
+    assert ClosedFormOracle(x, lambda _: 0, build, b"zero").domain is None
+
+    class _Scheme:
+        domain = ring
+
+    assert CommittedOracle(x, object(), _Scheme()).domain is ring
+    assert CommittedOracle(x, object(), object()).domain is None
+    assert ImplicitOracle(x).domain is None
+    assert ImplicitOracle(x, ring).domain is ring
+
+    assert VirtualOracle.product([table, ImplicitOracle(x)]).domain is ring
+    assert VirtualOracle.product([plain, ImplicitOracle(x)]).domain is None
+    foreign = TableOracle(MLE(ring=other, variables=x, evaluations=[1, 2, 3, 4]))
+    with pytest.raises(ValueError, match="different domains"):
+        _ = VirtualOracle.product([table, foreign]).domain

@@ -251,6 +251,13 @@ class Basefold:
             self.levels.append(self.levels[-1] - folds)
         self.openings: dict[BasefoldCommitment, BasefoldOpening] = {}
 
+    @property
+    def domain(self):
+        """The ring or field of the committed tables' coefficients: the
+        code's."""
+        code = self.code
+        return code.ring if isinstance(code, FoldableRS) else code.field
+
     def _check_polynomial(self, f) -> None:
         if not _committed_table(f):
             raise TypeError(
@@ -452,8 +459,7 @@ class BasefoldEval(Protocol):
         #: The ring or field of the committed tables' coefficients, where
         #: every challenge of this protocol is drawn, whatever the IOP's
         #: domain is.
-        code = scheme.code
-        self.domain = code.ring if isinstance(code, FoldableRS) else code.field
+        self.domain = scheme.domain
 
     def soundness_error(
         self,

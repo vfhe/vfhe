@@ -146,6 +146,15 @@ def test_sumcheck_soundness_error():
     assert sc.soundness_error(stmt, _IntDomain()) is None
 
 
+def test_soundness_error_defaults_to_the_oracle_domain():
+    ring = Ring(64, prime_size=[30, 30], split_degree=1)
+    x = [MLE_Variable(f"x{i}") for i in range(3)]
+    f = MLE(ring=ring, variables=x, evaluations=list(range(8)))
+    stmt = Statement(Relation_Sum(), oracles=[TableOracle(f)], value=28)
+    sc = Sumcheck()
+    assert sc.soundness_error(stmt) == sc.soundness_error(stmt, ring)
+
+
 def _prod_setup(domain) -> IOP:
     iop = IOP(domain=domain)
     iop.register(Relation_SumProd, SumcheckProd())
