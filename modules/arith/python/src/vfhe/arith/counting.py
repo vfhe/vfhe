@@ -10,7 +10,8 @@ from vfhe.util.bindings import ffi, lib
 
 
 def occurrence_counts(values, bound: int) -> tuple[array, array] | None:
-    """For `values`, a buffer of 64-bit unsigned integers (``array('Q')``),
+    """For `values`, a one-dimensional buffer of 64-bit unsigned integers
+    (``array('Q')``),
     the pair ``(prior, totals)`` of ``array('Q')``s: ``prior[i]`` is how many
     of ``values[:i]`` equal ``values[i]``, and ``totals[x]`` how many of the
     values equal `x`, for ``x < bound``.
@@ -18,8 +19,10 @@ def occurrence_counts(values, bound: int) -> tuple[array, array] | None:
     None when a value is `bound` or more.
     """
     view = memoryview(values)
-    if view.itemsize != 8 or view.format not in ("Q", "L"):
-        raise TypeError("values must be a buffer of 64-bit unsigned integers")
+    if view.ndim != 1 or view.itemsize != 8 or view.format not in ("Q", "L"):
+        raise TypeError(
+            "values must be a one-dimensional buffer of 64-bit unsigned integers"
+        )
     if bound < 0:
         raise ValueError(f"bound {bound} is negative")
     count = len(view)

@@ -37,9 +37,8 @@ void merkle_hash(uint8_t *out, const uint8_t *in, uint64_t len)
 }
 
 // Input bytes a chunk of joined digests hashes at least when the join runs on
-// several threads: with one hasher per digest this is over a hundred
-// microseconds of hashing, so a join under two of these stays on the calling
-// thread.
+// several threads, so that a chunk's hashing outweighs handing it to a thread;
+// a join under two of these stays on the calling thread.
 #define JOIN_PARALLEL_BYTES (256u << 10)
 // Chunks per thread, so that threads finishing early take another one.
 #define JOIN_CHUNKS_PER_THREAD 4

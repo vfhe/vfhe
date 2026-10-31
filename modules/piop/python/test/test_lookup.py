@@ -139,6 +139,14 @@ def test_counters_of_an_array_are_those_of_the_list(out_of_range):
     assert (list(read_ts), list(final_cts)) == counters(values, BETA)
 
 
+def test_counters_of_another_integer_array_are_those_of_the_list():
+    """Only an ``array('Q')`` is counted natively; any other integer array is
+    counted as a sequence."""
+    values = _bounded(seed=4)
+    read_ts, final_cts = counters(array("l", values), BETA)
+    assert (list(read_ts), list(final_cts)) == counters(values, BETA)
+
+
 def test_counters_cannot_balance_an_out_of_range_value():
     """The identity fails for a value with no table slot to be counted into
     -- which is why no choice of counters rescues an unbounded oracle."""

@@ -54,9 +54,8 @@ uint64_t rs_plans_root(NTT_Plan *plans, uint64_t index)
 }
 
 // Codeword words a chunk of columns transforms at least when a transform runs
-// on several threads: at a few nanoseconds a word for the strided gather, the
-// transform and the scatter, a few hundred microseconds per chunk, well above
-// what handing a chunk to a thread costs.
+// on several threads, so that a chunk's gather, transform and scatter outweigh
+// handing it to a thread.
 #define RS_PARALLEL_WORDS (1u << 16)
 // Chunks per thread, so that threads finishing early take another one.
 #define RS_CHUNKS_PER_THREAD 4
@@ -287,8 +286,7 @@ int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degre
 // Symbols whose digests a block stages: 128 KiB of digests.
 #define LEAF_BLOCK_SYMBOLS 4096
 // Symbol bytes a chunk of leaves hashes at least when the digests run on
-// several threads: over a hundred microseconds of hashing, well above what
-// handing a chunk to a thread costs.
+// several threads, so that a chunk's hashing outweighs handing it to a thread.
 #define LEAF_PARALLEL_BYTES (256u << 10)
 // Chunks per thread, so that threads finishing early take another one.
 #define LEAF_CHUNKS_PER_THREAD 4

@@ -676,6 +676,23 @@ def test_table_from_uint64_takes_a_numpy_array():
         MLE.from_uint64(ring, table.variables, np.asfortranarray(cube))
 
 
+def test_native_table_calls_refuse_entries_over_another_ring():
+    """A table may hold entries of another ring; the calls that size their
+    work by the table's ring refuse it rather than walk the wrong rows."""
+    ring = Ring(64, prime_size=[30, 49], split_degree=1)
+    wider = Ring(64, prime_size=[30, 49, 55], split_degree=1)
+    v = [MLE_Variable(f"x{i}") for i in range(2)]
+    mixed = MLE(
+        ring=ring,
+        variables=v,
+        evaluations=[wider.random_element() for _ in range(4)],
+    )
+    with pytest.raises(ValueError, match="table's ring"):
+        mixed.to_uint64()
+    with pytest.raises(ValueError, match="table's ring"):
+        MLE.linear_combination([_random_ring_table(ring, v), mixed], [1, 1])
+
+
 def test_table_from_uint64_refuses_a_value_above_its_prime():
     from array import array
 

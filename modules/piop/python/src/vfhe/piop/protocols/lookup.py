@@ -55,7 +55,7 @@ def counters(values: Sequence[int], beta: int) -> tuple[Sequence[int], Sequence[
     Values given as an ``array('Q')`` and all in range are counted natively
     (`occurrence_counts`), and the counters come back as arrays.
     """
-    if isinstance(values, array):
+    if isinstance(values, array) and values.typecode == "Q":
         counts = occurrence_counts(values, beta)
         if counts is not None:
             return counts
