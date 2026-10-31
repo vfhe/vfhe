@@ -9,6 +9,7 @@ from .fs import FS_Verifier
 from .iop import IOP
 from .messages import OracleMessages
 from .oracle import (
+    ClosedFormOracle,
     CommittedOracle,
     EqOracle,
     ImplicitOracle,
@@ -24,6 +25,7 @@ from .virtual import VirtualOracle
 
 __all__ = [
     "IOP",
+    "ClosedFormOracle",
     "CommittedOracle",
     "Composed",
     "EqOracle",

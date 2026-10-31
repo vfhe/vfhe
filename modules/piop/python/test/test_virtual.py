@@ -10,6 +10,7 @@ import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
 from vfhe.piop import (
     IOP,
+    ClosedFormOracle,
     CommittedOracle,
     ImplicitOracle,
     OracleKind,
@@ -22,6 +23,8 @@ from vfhe.piop import (
     element_digest,
 )
 from vfhe.piop.protocols import Sumcheck, VirtualEval
+from vfhe.piop.protocols.sumcheck import prover_view as view_module
+from vfhe.piop.protocols.sumcheck import rounds as rounds_module
 from vfhe.piop.relations import Relation_Sum, Relation_Zero
 from vfhe.piop.virtual import resolve_table
 
@@ -387,6 +390,123 @@ def test_fiat_shamir_over_defined_oracles():
     assert any(label.startswith("sumcheck") for label in proofs[0].labels)
     bad = Statement(Relation_Sum(), oracles=[G], value=total + 1)
     assert not _iop(domain=ring, fiat_shamir=True).verify(bad, proofs[0])
+
+
+def test_dense_view_three_ring_factors_take_the_native_round(monkeypatch):
+    # A products form with a three-factor term over ring tables: the dense
+    # prover view sends that term's node sums through the three-factor
+    # kernel, every variable position, with the pure-Python sums' values.
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    x = _vars("x0", "x1", "x2")
+    f, g, h = (
+        TableOracle(
+            MLE(
+                ring=ring,
+                variables=x,
+                evaluations=[ring.random_element() for _ in range(8)],
+            )
+        )
+        for _ in range(3)
+    )
+    G = VirtualOracle(x, [f, g, h], terms=[(1, (0, 1, 2)), (5, (0, 1))])
+
+    def messages():
+        view = view_module.prover_view(G, {}, strategy="dense")
+        return [view.round_evals(var) for var in x]
+
+    calls = []
+    native_kernel = view_module.prod3_round_evals_native
+
+    def counted(*args):
+        calls.append(args[-1])
+        return native_kernel(*args)
+
+    monkeypatch.setattr(view_module, "prod3_round_evals_native", counted)
+    native = messages()
+    assert calls == x
+    monkeypatch.setattr(
+        view_module,
+        "prod3_round_evals_native",
+        lambda a, b, c, var: rounds_module._prod_round_evals_python([a, b, c], var),
+    )
+    python = messages()
+    for a, b in zip(native, python, strict=True):
+        assert len(a) == 4
+        assert all(u == w for u, w in zip(a, b, strict=True))
+
+
+def _index_oracle(ring, x, identity=b"index-weights"):
+    """P(x) = sum_i 2^i x_i, the MLE of b -> the integer b, as a closed-form
+    oracle, with a record of every table build."""
+    built = []
+
+    def table():
+        built.append(True)
+        return MLE(ring=ring, variables=x, evaluations=list(range(1 << len(x))))
+
+    def evaluate(coordinates):
+        terms = [c * (1 << i) for i, c in enumerate(coordinates)]
+        return sum(terms[1:], terms[0])
+
+    return ClosedFormOracle(x, evaluate, table, identity), built
+
+
+def test_closed_form_oracle_decides_as_the_table_oracle():
+    # sum_b P(b) f(b) with P in closed form: a Fiat-Shamir sumcheck accepts
+    # the true sum and rejects a false one exactly as with P as a public
+    # table; the verifier never builds P's table, the prover does.
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    x = _vars("x0", "x1", "x2")
+    f = TableOracle(MLE(ring=ring, variables=x, evaluations=[3, 1, 4, 1, 5, 9, 2, 6]))
+    total = sum(i * e for i, e in enumerate([3, 1, 4, 1, 5, 9, 2, 6]))
+    table = TableOracle(
+        MLE(ring=ring, variables=x, evaluations=list(range(8))), public=True
+    )
+    closed, built = _index_oracle(ring, x)
+    assert closed.kind is OracleKind.public and closed.public
+    point = {x[0]: 7, x[1]: 11, x[2]: 13}
+    assert closed.query(point) == table.query(point)
+    assert built == []
+
+    def decide(prover_public, verifier_public, value):
+        def statement(public):
+            G = VirtualOracle.product([public, f])
+            return Statement(Relation_Sum(), oracles=[G], value=value)
+
+        proof = _iop(domain=ring, fiat_shamir=True).prove(statement(prover_public))
+        return _iop(domain=ring, fiat_shamir=True).verify(
+            statement(verifier_public), proof
+        )
+
+    for value in (total, total + 1):
+        on_prover, built_by_prover = _index_oracle(ring, x)
+        on_verifier, built_by_verifier = _index_oracle(ring, x)
+        accepted = decide(on_prover, on_verifier, value)
+        assert accepted == decide(table, table, value) == (value == total)
+        assert built_by_prover == [True] and built_by_verifier == []
+
+
+def test_closed_form_oracle_digest_binds_identity_and_variables():
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    x = _vars("x0", "x1")
+    a, _ = _index_oracle(ring, x)
+    b, _ = _index_oracle(ring, x)
+    c, _ = _index_oracle(ring, x, identity=b"index-weights/2")
+    d, _ = _index_oracle(ring, _vars("y0", "y1"))
+    assert a.digest() == b.digest()
+    assert len({a.digest(), c.digest(), d.digest()}) == 3
+    with pytest.raises(TypeError):
+        _index_oracle(ring, x, identity=b"")
+    with pytest.raises(TypeError):
+        _index_oracle(ring, x, identity="index-weights")  # pyright: ignore[reportArgumentType]
+    wrong = ClosedFormOracle(
+        x,
+        lambda _coordinates: 0,
+        lambda: MLE(ring=ring, variables=x[::-1], evaluations=[0] * 4),
+        b"w",
+    )
+    with pytest.raises(ValueError, match="variables"):
+        _ = wrong.polynomial
 
 
 # --- restrictions ------------------------------------------------------------

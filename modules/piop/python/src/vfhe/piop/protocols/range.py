@@ -8,7 +8,9 @@ oracle over a large prime field `F_p`, and what remains is
 
 - that the digits *recompose* to the coefficients (checked here, `kappa` times
   at small integer points, over `Z` and then modulo `q`), and
-- that every digit is a member of `t_beta` (emitted as a `Relation_Lookup`).
+- that every digit is a member of `t_beta` (emitted as a `Relation_Lookup`),
+  and, when the most significant digit is the shorter one, that every such
+  digit is a member of `t_top_beta` too (a second `Relation_Lookup`).
 
 The trick that makes it cheap is that the digits are indexed by the
 *unpacked* polynomial `u = unpack(v)` -- one variable block for the `R_q`
@@ -34,7 +36,7 @@ from vfhe.piop.evaluation import Relation_Eval
 from vfhe.piop.messages import OracleMessages
 from vfhe.piop.protocol import Protocol, Rejection
 from vfhe.piop.relations import Relation_Lookup, Relation_Range
-from vfhe.piop.virtual import resolve_table
+from vfhe.piop.virtual import VirtualOracle, resolve_table
 
 if TYPE_CHECKING:
     from vfhe.piop.oracle import Oracle
@@ -111,7 +113,8 @@ class _Shape:
     ell: int  # variables of v
     nu: int  # log2 N, the R_q coefficient block
     gamma: int  # log2 c, the digit block
-    beta: int  # the digit alphabet, B ** (1/c)
+    beta: int  # the digit alphabet, 2^ceil(log2(B) / c)
+    top_beta: int  # the most significant digit's alphabet, B / beta^(c-1)
     chunks: int  # c, the number of digits per coefficient
     ring: Any
     variables: list  # the ell_star variables of mu', in X | Z | Z' order
@@ -152,6 +155,13 @@ class RangeDecomposition(Protocol):
     at `(r'_eta, s')`), that each `v(x_eta)` really is an evaluation of `v`
     (one `Relation_Eval` on `v` per repetition), and that every digit is in
     `t_beta` (one `Relation_Lookup`).
+
+    When `c` does not divide `log2(B)`, the digits are `c - 1` of
+    `log2(beta)` bits and a most significant one of fewer, and a
+    `Relation_Lookup(top_beta)` on the restriction of `mu'` to the last
+    digit (`Z'` all ones) follows the first: with it, the integer the
+    digits rebuild is below `beta^(c-1) * top_beta = B`, not only below
+    `beta^c`.
     """
 
     name = "range"
@@ -206,6 +216,7 @@ class RangeDecomposition(Protocol):
             nu=nu,
             gamma=gamma,
             beta=relation.beta,
+            top_beta=relation.top_beta,
             chunks=relation.chunks,
             ring=ring,
             variables=[MLE_Variable(f"mu{i}") for i in range(ell + nu + gamma)],
@@ -495,4 +506,14 @@ class RangeDecomposition(Protocol):
                 )
             )
         out.append(self.reduce([statement], Relation_Lookup(shape.beta), oracles=[mu]))
+        if shape.top_beta != shape.beta:
+            block = shape.ell + shape.nu
+            top = VirtualOracle.restriction(
+                mu,
+                shape.variables[:block],
+                dict.fromkeys(shape.variables[block:], 1),
+            )
+            out.append(
+                self.reduce([statement], Relation_Lookup(shape.top_beta), oracles=[top])
+            )
         return out

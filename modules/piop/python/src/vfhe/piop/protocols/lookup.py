@@ -366,13 +366,20 @@ class Lookup(Protocol):
         f1 = {}
         for a in FINGERPRINTS:
             half = 1 << parts["sizes"][a]
+            tree = trees[a]
+            # A view starts at a multiple of the padding unit; a tree smaller
+            # than that has its internal nodes gathered instead.
+            if half % tree.padding_unit:
+                internal = tree.query(range(half, 2 * half))
+            else:
+                internal = tree.view(half).copy()
             f1[a] = self.messages.send(
                 prover,
                 f"{label}/f1_{a}",
                 MLE(
                     field=field,
                     variables=self._names(f"f{a}", parts["sizes"][a]),
-                    evaluations=trees[a].view(half).copy(),
+                    evaluations=internal,
                 ),
             )
         products = tuple(trees[a][-2] for a in FINGERPRINTS)

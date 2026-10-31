@@ -80,6 +80,10 @@ Relation_Range(B, c) on ṽ
     └── 4 × Relation_Eval on f^(1)_α at (0,1,…,1) [terminal]
 ```
 
+(When `c` does not divide `b`, a second `Relation_Lookup(β_top)` follows,
+on the top digits of `µ̃'`, with the same subtree; see "A shorter top
+digit".)
+
 The framework's vocabulary used below — relations, statements, protocols,
 oracle kinds, `VirtualOracle`, `VirtualEval` — is that of `piop.md` §3–§5.
 
@@ -92,7 +96,8 @@ Paper notation, all of it used below:
 | `R_q = Z_q[Y]/(Y^N+1)`, `q = Π p_l` | the ring `ṽ` lives in; `N = 2^ν` |
 | `ṽ` | the oracle under test: `ℓ`-variate multilinear over `R_q` |
 | `B = 2^b` | the coefficient bound; `T_B` is the paper's table of in-range ring elements |
-| `c = 2^γ`, `β = B^{1/c} = 2^{b*}` | number of digits per coefficient, and the digit alphabet |
+| `c = 2^γ`, `β = 2^{⌈b/c⌉} = 2^{b*}` | number of digits per coefficient, and the digit alphabet (`B^{1/c}` when `c` divides `b`) |
+| `β_top = B / β^{c−1}` | the alphabet of the most significant digit: `β` when `c` divides `b`, smaller otherwise (`top_beta`) |
 | `t_β = {0,…,β−1}`, `t̃β` | the lookup table and its MLE (a *public* oracle) |
 | `ℓ* = ℓ + ν + γ` | variables of the digit polynomial |
 | `ũ = unpack(ṽ)` | `ũ(x, k) = ṽ(x)[k]`: the `Z_q` coefficients spread over `ν` extra variables (§3.1). Never committed — queried through Lemma 3.1 |
@@ -410,7 +415,34 @@ committed one has no table on the verifier's side), `ℓ` from `ṽ.num_vars`.
    easiest way to get this wrong.
 6. Emit `κ` `Relation_Eval` on `µ̃'` at `(r'_η, s')` with value `ψ̃'_η(s')`
    (both parties compute it from the `ψ` message), `κ` `Relation_Eval` on `ṽ`
-   at `x_η` with value `w_η`, and one `Relation_Lookup(β)` on `µ̃'`.
+   at `x_η` with value `w_η`, and one `Relation_Lookup(β)` on `µ̃'`; when
+   `β_top < β`, then one `Relation_Lookup(β_top)` on the restriction of `µ̃'`
+   to the top digit (below).
+
+### A shorter top digit
+
+When `c` does not divide `b`, the digits are `c − 1` of `b* = ⌈b/c⌉` bits
+and a top one of `b − (c−1)b*` bits, at least one (`Relation_Range`
+refuses a `(B, c)` that leaves none). The prover's digit table, the
+recomposition check and its eq. (38) bound are those of a `β^c` bound: an
+honest coefficient below `B` simply has a top digit below `β_top`. What the
+first lookup and the recomposition prove together is a coefficient in
+`[0, β^c)`, so a last claim bounds the top digits:
+`Relation_Lookup(β_top)` on `µ̃'(X, Z, 1…1)`, the
+`VirtualOracle.restriction` of `µ̃'` to `Z' = (1, …, 1)`, whose hypercube
+is exactly the top digit of every coefficient. Its claims end, through
+`VirtualEval`, in claims on `µ̃'` itself.
+
+Soundness: with every digit in `[0, β)` and every top digit in `[0, β_top)`,
+the integer the digits rebuild is at most
+`(β^{c−1} − 1) + (β_top − 1)β^{c−1} = B − 1`, and the recomposition makes it
+congruent to the coefficient mod `q`; for `B ≤ q` both are representatives
+in `[0, q)`, so the coefficient is that integer, below `B`. The extra error
+is the second lookup's, `(2^{ℓ+ν} + β_top)/p`. Looking up `2^s · d` for the
+top digit `d` in `t_β` instead (`s = c·b* − b`) would not do on its own: the
+digit is a field element, and `2^s · d` in `[0, β)` holds as well for
+`d = e / 2^s` with `e` not a multiple of `2^s`, a field element far outside
+any small range.
 
 ## Soundness bookkeeping (both protocols)
 
@@ -449,8 +481,9 @@ plain data. Each party then names its table through a plain `TableOracle`.
 The compiled variant is `vfhe.polycom.BasefoldMessages`, built from one
 field `Basefold` scheme per table size (`2^{ℓ*}` for `µ̃'`, `read_ts`,
 `f^{(1)}_WSµ`, `f^{(1)}_RS`; `2^{b*}` for `final_cts`, `f^{(1)}_WSt`,
-`f^{(1)}_S`): the prover commits and the message is the Merkle root; both
-parties name a `CommittedOracle`. Each scheme's `BasefoldEval`, registered
+`f^{(1)}_S`; with a shorter top digit also `2^{ℓ+ν}` and `β_top` for the
+second lookup's): the prover commits and the message is the Merkle root;
+both parties name a `CommittedOracle`. Each scheme's `BasefoldEval`, registered
 for `Relation_Eval`, opens every claim on its oracles in one batched
 opening. Once a scheme is registered, claims on plain oracles are refused,
 so `ṽ` must be committed too (ring Basefold, say, with its own
