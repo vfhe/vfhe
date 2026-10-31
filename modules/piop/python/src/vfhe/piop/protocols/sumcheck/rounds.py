@@ -375,15 +375,15 @@ def prod_round_evals_native(tables: list, nodes: int, var=None) -> tuple:
     factors = ffi.new("ArithElement *[]", [t.table_ptr for t in tables])
     size = 1 << f.num_vars
     if idx == 0:
-        lib.sumcheck_prod_round_pairs(
+        lib.sumcheck_product_round_pairs(
             ring.arith_ring, handles, nodes, factors, len(tables), size
         )
     elif idx == f.num_vars - 1:
-        lib.sumcheck_prod_round_halves(
+        lib.sumcheck_product_round_halves(
             ring.arith_ring, handles, nodes, factors, len(tables), size
         )
     else:
-        lib.sumcheck_prod_round(
+        lib.sumcheck_product_round(
             ring.arith_ring, handles, nodes, factors, len(tables), size, idx
         )
     mark_ntt(evals)

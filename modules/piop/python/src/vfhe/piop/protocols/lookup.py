@@ -11,7 +11,7 @@ from __future__ import annotations
 from array import array
 from typing import TYPE_CHECKING, Any, cast
 
-from vfhe.arith import MLE, FieldVector, MLE_Variable, occurrence_counts
+from vfhe.arith import MLE, FieldVector, MLE_Variable, count_occurrences
 from vfhe.arith.mle import vector_table
 from vfhe.piop.evaluation import Relation_Eval
 from vfhe.piop.messages import OracleMessages
@@ -53,10 +53,10 @@ def counters(values: Sequence[int], beta: int) -> tuple[Sequence[int], Sequence[
     the verifier then rejects, instead of an exception from the prover.
 
     Values given as an ``array('Q')`` and all in range are counted natively
-    (`occurrence_counts`), and the counters come back as arrays.
+    (`count_occurrences`), and the counters come back as arrays.
     """
     if isinstance(values, array) and values.typecode == "Q":
-        counts = occurrence_counts(values, beta)
+        counts = count_occurrences(values, beta)
         if counts is not None:
             return counts
     seen: dict[int, int] = {}

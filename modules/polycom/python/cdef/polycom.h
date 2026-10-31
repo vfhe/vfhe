@@ -10,7 +10,7 @@ void rs_free_plans(void *plans, uint64_t count);
 uint64_t rs_plans_root(void *plans, uint64_t index);
 void rs_encode(void *out, void *in, uint64_t size, uint64_t degree, void *plans);
 int rs_decode(void *out, void *in, uint64_t size, uint64_t degree, void *plans);
-void rs_leaf_digests(uint8_t *out, void *word, uint64_t count, uint64_t size);
+void rs_leaf_digests(uint8_t *out, void *word, uint64_t length, uint64_t leaf_size);
 
 void *rs_field_new_plan(uint64_t size, void *mod);
 void rs_field_free_plan(void *plan);
