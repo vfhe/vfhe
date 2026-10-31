@@ -311,20 +311,6 @@ class TestFallbackTier:
         with pytest.raises(ValueError, match="negative exponent"):
             _ = FieldVector(field, 4) ** -1
 
-    def test_batch_inverse(self, field):
-        p = field.prime
-        values = [1, 2, field.c, p - 1, *random_values(field, 9, 8)]
-        vector = FieldVector(field, values)
-        inverses = vector.inverse()
-        assert_vector(inverses, [pow(x, p - 2, p) for x in values], field)
-        assert_vector(vector * inverses, [1] * len(values), field)
-
-    def test_batch_inverse_rejects_a_zero(self, field):
-        values = random_values(field, 6, 9)
-        values[3] = 0
-        with pytest.raises(ZeroDivisionError):
-            FieldVector(field, values).inverse()
-
     def test_concat(self, field):
         first, second = random_values(field, 5, 10), random_values(field, 3, 11)
         joined = FieldVector.concat(
@@ -336,6 +322,67 @@ class TestFallbackTier:
         values = random_values(field, 8, 12)
         gathered = FieldVector(field, values).query([5, 0, 5, 2])
         assert_vector(gathered, [values[i] for i in (5, 0, 5, 2)], field)
+
+
+#: Around the group width, and around the 2048 elements from which the kernel
+#: cuts the vector into rows: exactly whole rows, one element of tail, more
+#: than 256 rows (4095), and rows wider than one block (6149).
+INVERSE_LENGTHS = [0, 1, 5, 8, 13, 2048, 2049, 4095, 6149]
+
+
+class TestInverse:
+    """`pmf_vec_inv`, against big ints and against the front's element loop."""
+
+    def test_batch_inverse(self, field):
+        p = field.prime
+        values = [1, 2, field.c, p - 1, *random_values(field, 9, 8)]
+        vector = FieldVector(field, values)
+        inverses = vector.inverse()
+        assert_vector(inverses, [pow(x, p - 2, p) for x in values], field)
+        assert_vector(vector * inverses, [1] * len(values), field)
+
+    @pytest.mark.parametrize("n", INVERSE_LENGTHS)
+    def test_agrees_with_the_front(self, field, n):
+        p = field.prime
+        values = [x or 1 for x in random_values(field, n, n)]
+        vector = FieldVector(field, values)
+        inverses = vector.inverse()
+        assert type(inverses) is PseudoMersenneVector
+        assert inverses == FieldVector.inverse(vector)
+        assert_vector(inverses, [pow(x, -1, p) for x in values], field)
+        assert_vector(vector, values, field)
+
+    @pytest.mark.parametrize("n", [13, 2049, 6149])
+    def test_in_place(self, field, n):
+        values = [x or 1 for x in random_values(field, n, n + 1)]
+        vector = FieldVector(field, values)
+        expected = vector.inverse()
+        assert lib.pmf_vec_inv(vector._struct, vector._struct) == 1
+        assert vector == expected
+
+    def test_dirty_padding_is_not_read(self, field):
+        values = [x or 1 for x in random_values(field, 2053, 3)]
+        expected = FieldVector(field, values).inverse()
+        assert _dirty(FieldVector(field, values)).inverse() == expected
+
+    @pytest.mark.parametrize(
+        ("n", "position"),
+        [(6, 3), (2049, 0), (2049, 1500), (2049, 2047), (2049, 2048), (6149, 6100)],
+    )
+    def test_a_zero_is_rejected(self, field, n, position):
+        values = [x or 1 for x in random_values(field, n, 9)]
+        values[position] = 0
+        vector = FieldVector(field, values)
+        with pytest.raises(ValueError, match="not invertible"):
+            vector.inverse()
+        out = FieldVector(field, [7] * n)
+        assert lib.pmf_vec_inv(out._struct, vector._struct) == 0
+        assert out == FieldVector(field, [7] * n), "out was written"
+
+    def test_empty(self, field):
+        result = FieldVector(field, 0).inverse()
+        assert type(result) is PseudoMersenneVector
+        assert len(result) == 0
 
 
 class TestMovement:

@@ -399,3 +399,75 @@ void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial
     const bool wide = count * L * base->N * sizeof(uint64_t) >= EXPAND_PARALLEL_BYTES;
     vfhe_parallel_for(count, wide ? 0 : 1, lift_polynomial, &job);
 }
+
+// --- rows in natural order ---------------------------------------------------
+
+typedef struct
+{
+    RNS_Polynomial p;
+    uint64_t *words;      // N words per active row
+    const uint64_t *rows; // the active base indices
+} NaturalJob;
+
+static void get_natural_row(void *ctx, uint64_t r)
+{
+    const NaturalJob *job = (const NaturalJob *)ctx;
+    natural_row(job->words + r * job->p->base->N, job->p, job->rows[r]);
+}
+
+// The inverse of natural_row: word u + s t of the input goes to u * block + t.
+static void set_natural_row(void *ctx, uint64_t r)
+{
+    const NaturalJob *job = (const NaturalJob *)ctx;
+    const RNS_Polynomial p = job->p;
+    const uint64_t i = job->rows[r];
+    const uint64_t N = p->base->N, s = p->base->split_degree, block = N / s;
+    const uint64_t *in = job->words + r * N;
+    if (rns_row_is_narrow(p->base, i))
+    {
+        uint32_t *row = rns_row32(p, i);
+        for (uint64_t u = 0; u < s; u++)
+            for (uint64_t t = 0; t < block; t++)
+                row[u * block + t] = (uint32_t)in[u + s * t];
+    }
+    else if (s == 1)
+        memcpy(rns_row64(p, i), in, N * sizeof(uint64_t));
+    else
+    {
+        uint64_t *row = rns_row64(p, i);
+        for (uint64_t u = 0; u < s; u++)
+            for (uint64_t t = 0; t < block; t++)
+                row[u * block + t] = in[u + s * t];
+    }
+}
+
+void polynomial_RNS_get_natural(uint64_t *out, RNS_Polynomial p)
+{
+    uint64_t rows[64];
+    const uint64_t count = active_rows(rows, p);
+    NaturalJob job = {p, out, rows};
+    const bool wide = count * p->base->N * sizeof(uint64_t) >= COPY_PARALLEL_BYTES;
+    vfhe_parallel_for(count, wide ? 0 : 1, get_natural_row, &job);
+}
+
+int64_t polynomial_RNS_set_natural(RNS_Polynomial p, const uint64_t *in)
+{
+    uint64_t rows[64];
+    const uint64_t count = active_rows(rows, p), N = p->base->N;
+    // Every row is checked before any is written, so a rejected input leaves
+    // `p` as it was.
+    for (uint64_t r = 0; r < count; r++)
+    {
+        const uint64_t q = p->base->mods[rows[r]]->q;
+        const uint64_t *row = in + r * N;
+        uint64_t above = 0;
+        for (uint64_t k = 0; k < N; k++)
+            above |= row[k] >= q;
+        if (above)
+            return (int64_t)r;
+    }
+    NaturalJob job = {p, (uint64_t *)in, rows};
+    const bool wide = count * N * sizeof(uint64_t) >= COPY_PARALLEL_BYTES;
+    vfhe_parallel_for(count, wide ? 0 : 1, set_natural_row, &job);
+    return -1;
+}
