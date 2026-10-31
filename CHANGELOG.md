@@ -627,9 +627,38 @@ versions may contain breaking changes.
   prime, leaving the polynomial unchanged.
 - Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix` on a split
   ring: a row is reordered by slices instead of one coefficient at a time.
+- Add `MLWE_Scheme.sample_batch(msgs, key, lvl=0, n_threads=0)` and
+  `CKKS_Scheme.encrypt_batch(messages, key, n_threads=0)`: fresh samples of
+  many messages in one native call, through `mlwe_RNS_sample_scaled_batch`.
+  Each has a mask seed (kept as `MLWE.seed`) and a secret noise seed of its
+  own, drawn in order on the calling thread, so a batch does not depend on
+  the thread count; the samples come back in the NTT domain.
+  `CKKS_Ciphertext` takes `obj=` like `MLWE`.
+- Add `MLWE_Scheme.relinearize_batch(cts, ksk, n_threads=0)`: the
+  relinearization of many extended products at one level in one native
+  call (`mlwe_RNSc_GHS_hybrid_keyswitch_batch`, which runs hybrid key
+  switches over RNS rings row by row over the whole batch), bit for bit
+  what `relinearize` gives one at a time, on any number of threads.
+- Add `CKKS_Scheme.rational_rescale_batch(cts, n_threads=0)`: the rational
+  rescales of many ciphertexts at one level, each lifted to the union of
+  the two levels' rings in place of a polynomial at a time, and all
+  divided in one native call (`mlwe_round_division_batch`).
+  `rescale_batch` takes it on a non-nested level.
+- `MLWE_Scheme.linear_decrypt`, and with it `CKKS_Scheme.decrypt`, decrypts
+  an extended product (rank `extended_rank`, from `multiply` without a
+  key) under the extended key of the tensor product's slot order, which
+  gives the product of its factors' linear decryptions;
+  `MLWE_Key.extended_key_obj()` builds that key once per key.
+- Add `RNSRing.gen_primes_near(rou_order, prime_size, count, exclude_list,
+  split_degree=)`: the primes of the ring's form nearest `2^prime_size`,
+  alternately above and below it, with an odd multiplier when the ring is
+  split. Opt-in: the primes a ring draws by default do not change.
 
 ### Changed
 
+- `CKKS_Scheme.rational_rescale` takes `n_threads` and leaves its input in
+  the coefficient domain; it is one `rational_rescale_batch`, with the same
+  results as before.
 - The range and lookup provers build their tables with whole-vector
   operations: the digit table from `lift_mod_2_128` of `v` (unless its
   digits reach past bit 128 and `q` exceeds `2^128`), the counters with

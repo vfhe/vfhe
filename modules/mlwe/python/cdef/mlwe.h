@@ -127,6 +127,8 @@ void mlwe_full_packing_keyswitch(void *out, void *in, uint64_t size, void *ksk);
 void mlwe_trace_pack(void *vec, uint64_t ell, void *ksks, uint64_t n_threads);
 void mlwe_ring_switch(void *out, void *in, uint64_t count, void *ksk);
 void mlwe_RNSc_GHS_hybrid_keyswitch(void *out, void *in, void *ksk, uint64_t lvl);
+void mlwe_RNSc_GHS_hybrid_keyswitch_batch(void *out, void *in, void *ksk, uint64_t n,
+                                          uint64_t n_threads);
 void mlwe_automorphism_RNSc_GHS(void *out, void *in, uint64_t gen, void *ksk, uint64_t lvl);
 void *mlwe_hoist(void *in, void *ksk);
 void free_mlwe_hoisted(void *h);

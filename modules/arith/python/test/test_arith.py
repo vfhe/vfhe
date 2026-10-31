@@ -867,6 +867,72 @@ def test_a_partially_split_ring_refuses_an_even_multiplier_prime():
         Ring(N, primes=[odd, 40961], split_degree=2)
 
 
+@pytest.mark.parametrize("split_degree", [1, 2, 4])
+def test_primes_near_a_size_alternate_around_it(split_degree):
+    """`gen_primes_near` takes the nearest primes of the ring's form on either
+    side of ``2^bits`` in turn, skipping none and none excluded, with an odd
+    multiplier when the ring is split; a ring takes them as they are."""
+    from vfhe.arith.impl.rns.polynomial import RNSRing
+    from vfhe.arith.number_theory import is_prime
+
+    n, bits = 1 << 10, 40
+    order = 2 * n // split_degree
+    excluded = RNSRing.gen_primes_near(order, bits, 1, split_degree=split_degree)
+    primes = RNSRing.gen_primes_near(
+        order, bits, 6, excluded, split_degree=split_degree
+    )
+    above, below = primes[0::2], primes[1::2]
+    assert excluded[0] not in primes and excluded[0] > 1 << bits
+    assert all(p > 1 << bits for p in above) and above == sorted(above)
+    assert all(p < 1 << bits for p in below) and below == sorted(below, reverse=True)
+
+    def allowed(p):
+        a, rest = divmod(p - 1, order)
+        return rest == 0 and (split_degree == 1 or a % 2 == 1)
+
+    assert all(allowed(p) for p in primes)
+    # Nothing of the ring's form between the extremes was skipped.
+    skipped = [
+        p
+        for p in range(min(below) + order, max(above), order)
+        if allowed(p) and is_prime(p) and p not in primes + excluded
+    ]
+    assert skipped == []
+    ring = Ring(n, primes=primes, split_degree=split_degree)
+    assert ring.primes == primes
+
+
+def test_default_primes_do_not_change():
+    """The primes a ring draws by default are pinned: `gen_primes_near` is
+    opt-in and leaves `gen_prime` as it was."""
+    assert Ring(256, prime_size=[45, 45, 45, 50], split_degree=1).primes == [
+        35184372080129,
+        35184372067841,
+        35184372042241,
+        1125899906822657,
+    ]
+    assert Ring(256, prime_size=[60, 40, 40, 40, 60], split_degree=2).primes == [
+        1152921504606823681,
+        1099511619841,
+        1099511607041,
+        1099511600897,
+        1152921504606811393,
+    ]
+    ring = Ring(1 << 13, 300)
+    assert (ring.split_degree, ring.primes) == (
+        4,
+        [
+            562949953392641,
+            562949953318913,
+            562949953253377,
+            562949953105921,
+            562949953097729,
+            562949953032193,
+            562949952925697,
+        ],
+    )
+
+
 def _cross_base_rings(n, plaintext_bits, other_bits, aux_bits):
     """A source and a destination ring sharing only their first prime.
 

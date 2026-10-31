@@ -729,3 +729,183 @@ def test_multiply_by_monomial_keeps_the_ciphertext():
     expected.to_coeff()
     got.to_coeff()
     assert not any((got - expected).get_polynomial(signed=True))
+
+
+def _digests(cts):
+    """Every component of every ciphertext by digest."""
+    return [
+        [c.get_a_poly(j).get_hash() for j in range(c.r)] + [c.get_b_poly().get_hash()]
+        for c in cts
+    ]
+
+
+@pytest.mark.parametrize("split_degree", [1, 2])
+@pytest.mark.usefixtures("threads")
+def test_encrypt_batch(split_degree):
+    """Each ciphertext of a batch decrypts to its values at the scheme's scale,
+    has a mask of its own, and the batch does not depend on the thread
+    count."""
+    scheme = CKKS_Scheme(
+        Ring(N, 300, split_degree=split_degree),
+        scaling_factor=2**25,
+        special_primes=1,
+    )
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    values = [rand_values(N // 2) for _ in range(5)]
+    polys = scheme.encode_batch(values)
+    cts = scheme.encrypt_batch(polys, key)
+    assert len({c.seed for c in cts}) == len(cts)
+    for ct, v in zip(cts, values, strict=True):
+        assert isinstance(ct, CKKS_Ciphertext)
+        assert (ct.lvl, ct.delta) == (0, scheme.scaling_factor)
+        dec = scheme.decode(scheme.decrypt(ct, key))
+        assert all(abs(a - d) < 0.05 for a, d in zip(v, dec, strict=True))
+
+    def run(n_threads):
+        with entropy.deterministic(0xE5C):
+            return _digests(scheme.encrypt_batch(polys, key, n_threads))
+
+    assert run(1) == run(3) == run(0)
+    assert scheme.encrypt_batch([], key) == []
+
+
+def _shared_primes_chain():
+    Rq = Ring(N, split_degree=1, prime_size=[50, 50, 50, 30, 50])
+    rings = [_subring(Rq, 0, 1, 2), _subring(Rq, 0, 1, 3)]
+    special_rings = [_subring(Rq, 0, 1, 2, 4), _subring(Rq, 0, 1, 3, 4)]
+    return CKKS_Scheme(
+        rings, scaling_factor=2**50, special_primes=1, special_rings=special_rings
+    )
+
+
+def _disjoint_primes_chain():
+    Rq = Ring(N, split_degree=1, prime_size=[40, 40, 51, 58, 50])
+    rings = [_subring(Rq, 2, 3), _subring(Rq, 0, 1), _subring(Rq, 2)]
+    special_rings = [_subring(Rq, 2, 3, 4), _subring(Rq, 0, 1, 4), _subring(Rq, 2, 4)]
+    return CKKS_Scheme(
+        rings, scaling_factor=2**50, special_primes=1, special_rings=special_rings
+    )
+
+
+def _rational_rescale_by_component(scheme, ct):
+    """The rational rescale computed one polynomial at a time: each component
+    lifted to the union of the two levels' rings, scaled, and round-divided to
+    the next level."""
+    end_ring = scheme.rings[ct.lvl + 1]
+    union_ring = ct.ring.union(end_ring)
+    parts = [ct.get_a_poly(i) for i in range(ct.r)] + [ct.get_b_poly()]
+    divided = [p.scaled_lift(union_ring).round_division(end_ring) for p in parts]
+    for p in divided:
+        p.to_coeff()
+    return [p.get_hash() for p in divided]
+
+
+@pytest.mark.parametrize("chain", [_shared_primes_chain, _disjoint_primes_chain])
+@pytest.mark.usefixtures("threads")
+def test_rational_rescale_batch_is_rational_rescale(chain):
+    """A batch of rational rescales, inputs in both domains, gives the
+    ciphertexts one rescale at a time gives, which are those of the rescale
+    computed polynomial by polynomial, on any thread count."""
+    scheme = chain()
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    values = [rand_values(N // 2) for _ in range(3)]
+    cts = [scheme.encrypt(scheme.encode(v), key) for v in values]
+    cts[1].to_NTT()
+    expected = [_rational_rescale_by_component(scheme, c) for c in cts]
+
+    singles = [scheme.rational_rescale(c.copy()) for c in cts]
+    assert _digests(singles) == expected
+    for n_threads in (1, 3, 0):
+        batch = scheme.rational_rescale_batch([c.copy() for c in cts], n_threads)
+        assert _digests(batch) == expected
+        for out, ct in zip(batch, cts, strict=True):
+            assert isinstance(out, CKKS_Ciphertext)
+            assert out.lvl == 1 and out.ring == scheme.rings[1]
+            assert out.delta == singles[0].delta != ct.delta
+    for out, v in zip(singles, values, strict=True):
+        dec = scheme.decode(scheme.decrypt(out, key), scaling_factor=out.delta)
+        assert all(abs(a - d) < 0.05 for a, d in zip(v, dec, strict=True))
+    assert _digests(scheme.rescale_batch([c.copy() for c in cts])) == expected
+    with pytest.raises(ValueError, match="share a level"):
+        scheme.rational_rescale_batch([cts[0], singles[0]])
+
+
+@pytest.mark.parametrize("r, N_r", [(1, N), *RANK_DIMS])
+def test_relinearize_batch_keeps_the_scale(r, N_r):
+    """Relinearized as a batch, unrelinearized products are what
+    :meth:`relinearize` makes of them, and keep their scale."""
+    scheme = _rank_scheme(N_r, r, 2**40)
+    key = scheme.key_gen_sparse(N_r * r // 8, 3.2)
+    scheme.rlk = scheme.gen_rlk(key, key)
+    x, y = rand_values(N_r // 2), rand_values(N_r // 2)
+    cx, cy = (scheme.encrypt(scheme.encode(v), key) for v in (x, y))
+    exts = [scheme.multiply(cx, cy), scheme.multiply(cx, cx)]
+    assert all(e.r == scheme.extended_rank for e in exts)
+    singles = [scheme.relinearize(e.copy(), scheme.rlk) for e in exts]
+    outs = scheme.relinearize_batch(exts, scheme.rlk)
+    assert _digests(outs) == _digests(singles)
+    for out, expected in zip(
+        outs,
+        ([a * b for a, b in zip(x, y, strict=True)], [a * a for a in x]),
+        strict=True,
+    ):
+        assert isinstance(out, CKKS_Ciphertext) and out.delta == 2.0**80
+        out = scheme.rescale(out)
+        dec = scheme.decode(scheme.decrypt(out, key), scaling_factor=out.delta)
+        assert all(abs(e - d) < 0.05 for e, d in zip(expected, dec, strict=True))
+
+
+@pytest.mark.parametrize("r, N_r", [(1, N), *RANK_DIMS])
+def test_decrypt_an_unrelinearized_product(r, N_r):
+    """An unrelinearized product decrypts and decodes to the product of the
+    values, as its relinearization does, before and after more operations on
+    it: a sum with another product and with a plaintext."""
+    scheme = _rank_scheme(N_r, r, 2**25)
+    key = scheme.key_gen_sparse(N_r * r // 8, 3.2)
+    scheme.rlk = scheme.gen_rlk(key, key)
+    x, y, z = (rand_values(N_r // 2) for _ in range(3))
+    cx, cy = (scheme.encrypt(scheme.encode(v), key) for v in (x, y))
+    ext = scheme.multiply(cx, cy)
+    assert ext.r == scheme.extended_rank and ext.delta == 2.0**50
+
+    def decoded(ct):
+        return scheme.decode(scheme.decrypt(ct, key), scaling_factor=ct.delta)
+
+    xy = [a * b for a, b in zip(x, y, strict=True)]
+    for got in (decoded(ext), decoded(scheme.relinearize(ext.copy(), scheme.rlk))):
+        assert all(abs(e - d) < 0.05 for e, d in zip(xy, got, strict=True))
+
+    ext += scheme.multiply(cx, cx)
+    ext += scheme.encode(z, scale=2.0**50)
+    expected = [a * b + a * a + c for a, b, c in zip(x, y, z, strict=True)]
+    for got in (decoded(ext), decoded(scheme.relinearize(ext, scheme.rlk))):
+        assert all(abs(e - d) < 0.05 for e, d in zip(expected, got, strict=True))
+
+
+@pytest.mark.parametrize("split_degree", [1, 2])
+def test_rescaling_primes_near_the_scale(split_degree):
+    """A level chain whose rescaling primes alternate around the scale, drawn
+    by `gen_primes_near`, multiplies and rescales, and its scale stays at
+    about the scaling factor."""
+    from vfhe.arith.impl.rns.polynomial import RNSRing
+
+    order = 2 * N // split_degree
+    top = RNSRing.gen_prime(order, 60, split_degree=split_degree)
+    near = RNSRing.gen_primes_near(order, 30, 3, [top], split_degree=split_degree)
+    special = RNSRing.gen_prime(order, 60, [top, *near], split_degree=split_degree)
+    scheme = CKKS_Scheme(
+        Ring(N, primes=[top, *near, special], split_degree=split_degree),
+        scaling_factor=2**30,
+        special_primes=1,
+    )
+    assert scheme.rings[0].primes == [top, *near]
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    scheme.rlk = scheme.gen_rlk(key, key)
+    x = _unit_values(N // 2)
+    ct = scheme.encrypt(scheme.encode(x), key)
+    for k in range(3):
+        ct = ct * ct
+        assert ct.lvl == k + 1
+        assert abs(math.log2(ct.delta) - 30) < 1e-3
+    dec = scheme.decode(scheme.decrypt(ct, key), scaling_factor=ct.delta)
+    assert all(abs(a**8 - d) < 1e-2 for a, d in zip(x, dec, strict=True))

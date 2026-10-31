@@ -108,8 +108,9 @@ class SchemeParameters:
 class MLWE_Scheme:
     # Concrete ciphertext class this scheme allocates when it has no input
     # ciphertext to derive the type from (see :meth:`sample`). Subclasses set it
-    # to their own ciphertext class; operations that transform an existing
-    # ciphertext use ``MLWE.new_like`` instead. Bound after MLWE is defined.
+    # to their own ciphertext class, which takes MLWE's ``obj`` argument (see
+    # :meth:`sample_batch`); operations that transform an existing ciphertext
+    # use ``MLWE.new_like`` instead. Bound after MLWE is defined.
     ciphertext_type: type[MLWE]
     #: Whether `sample` draws masks from fresh seeds by default (`MLWE.seed`).
     seeded_encryption: bool = True
@@ -1280,6 +1281,28 @@ class MLWE_Scheme:
         out.repr = repr.coeff
         return out
 
+    def sample_batch(
+        self,
+        msgs: Sequence[RNSPolynomial],
+        key: MLWE_Key,
+        lvl: int = 0,
+        n_threads: int = 0,
+    ) -> list[MLWE]:
+        """:meth:`sample` of each of ``msgs``, at level ``lvl``, in one native
+        call.
+
+        The messages must be over the level's ring. Each sample is drawn as
+        :meth:`sample_scaled` draws one: from a fresh mask seed, kept as
+        `MLWE.seed`, and a fresh secret noise seed, all drawn in order on the
+        calling thread, so the samples do not depend on the thread count. They
+        come back in the NTT domain, as :attr:`ciphertext_type`.
+        """
+        ring = self.rings[lvl]
+        ones = [[1] * ring.ell]
+        return self._sample_scaled(
+            msgs, ones, key.at_ring(ring), lvl, n_threads, self.ciphertext_type
+        )
+
     def sample_scaled(
         self,
         msgs: Sequence[RNSPolynomial],
@@ -1301,6 +1324,18 @@ class MLWE_Scheme:
         ``entropy.deterministic`` any count gives the same keys. They come back in
         NTT form, where keys are used.
         """
+        return self._sample_scaled(msgs, scalars, key, lvl, n_threads, MLWE)
+
+    def _sample_scaled(
+        self,
+        msgs: Sequence[RNSPolynomial],
+        scalars: Sequence[Sequence[int]],
+        key: MLWE_Key,
+        lvl: int | None,
+        n_threads: int,
+        sample_type: type[MLWE],
+    ) -> list[MLWE]:
+        """:meth:`sample_scaled`, with the samples as ``sample_type``."""
         ring = key.ring
         if ffi.cast("RNS_MLWE_Key", key.obj).r != self.r:
             raise ValueError("the key is not of the scheme's rank")
@@ -1346,7 +1381,7 @@ class MLWE_Scheme:
         seed_bytes = ffi.buffer(seeds)[:]
         out = []
         for i, handle in enumerate(handles):
-            c = MLWE(self, lvl=lvl, ring=ring, obj=handle)
+            c = sample_type(self, lvl=lvl, ring=ring, obj=handle)
             c.repr = repr.ntt
             c.seed = seed_bytes[i * SEED_BYTES : (i + 1) * SEED_BYTES]
             out.append(c)
@@ -1366,6 +1401,12 @@ class MLWE_Scheme:
 
         With ``ring`` (a quotient of the ciphertext's ring), it is computed modulo
         that smaller modulus only.
+
+        An extended product (rank :attr:`extended_rank`, see :meth:`multiply`)
+        is decrypted under the extended key of :meth:`tensor_product`'s slot
+        order, ``-(s_i * s_j)`` for the quadratic components and ``s_i`` for the
+        linear ones, which gives the product of its factors' linear
+        decryptions.
         """
         target = rlwe.ring if ring is None else ring
         if not target.is_quotient_ring(rlwe.ring):
@@ -1378,10 +1419,12 @@ class MLWE_Scheme:
             key_at_ring = key
         else:
             key_at_ring = key.at_ring(target)
+        if rlwe.r == self.extended_rank:
+            native_key = key_at_ring.extended_key_obj()
+        else:
+            native_key = key_at_ring.obj
         rlwe.to_NTT()
-        lib_rlwe.lib.mlwe_RNS_linear_decrypt(
-            out.as_element(), rlwe.obj, key_at_ring.obj
-        )
+        lib_rlwe.lib.mlwe_RNS_linear_decrypt(out.as_element(), rlwe.obj, native_key)
         out.repr = repr.ntt
         return out
 
@@ -1597,6 +1640,40 @@ class MLWE_Scheme:
         out.repr = repr.coeff
         return out
 
+    def relinearize_batch(
+        self,
+        cts: Sequence[CtT],
+        ksk: MLWE_Set | list[MLWE_Set],
+        n_threads: int = 0,
+    ) -> list[CtT]:
+        """:meth:`relinearize` of each (distinct) extended product, all at one
+        level, in one native call. The products are left in the coefficient
+        domain, as :meth:`relinearize` leaves its input.
+        """
+        if not cts:
+            return []
+        lvl, ring = cts[0].lvl, cts[0].ring
+        if any(c.lvl != lvl or c.ring != ring for c in cts):
+            raise ValueError("the products must share one ring and level")
+        if len({id(c) for c in cts}) != len(cts):
+            raise ValueError("the products must be distinct")
+        ksk = ksk if isinstance(ksk, MLWE_Set) else ksk[lvl]
+        if any(c.r != len(ksk.mlwe) for c in cts):
+            raise ValueError("the key needs one component per product component")
+        outs = [c.new_like(lvl=lvl, ring=self.rings[lvl]) for c in cts]
+        lib_rlwe.lib.mlwe_RNSc_GHS_hybrid_keyswitch_batch(
+            ffi.new("void *[]", [out.obj for out in outs]),
+            ffi.new("void *[]", [c.obj for c in cts]),
+            ksk.obj,
+            len(cts),
+            n_threads,
+        )
+        for c in cts:
+            c.repr = repr.coeff
+        for out in outs:
+            out.repr = repr.coeff
+        return outs
+
 
 class PlaintextMatrix:
     """Plaintext coefficients for :meth:`MLWE_Scheme.linear_combinations`,
@@ -1669,6 +1746,9 @@ class MLWE_Key:
     def __del__(self) -> None:
         if hasattr(self, "obj") and self.obj:
             lib_rlwe.lib.free_mlwe_RNS_key(self.obj)
+        extended = self.__dict__.get("_extended_key_obj")
+        if extended is not None:
+            lib_rlwe.lib.free_mlwe_RNS_key(extended)
 
     def at_ring(self, ring: RNSRing) -> MLWE_Key:
         """This key over ``ring``, built on first use and cached on the key."""
@@ -1680,6 +1760,30 @@ class MLWE_Key:
                 self.key, self.sigma_err, self.scheme, ring=ring
             )
         return cache[ring.mask]
+
+    def extended_key_obj(self):
+        """The native key an extended product decrypts under, over this key's
+        ring: :meth:`MLWE_Scheme.quadratic_key_polys`, then the ``s_i``. Built
+        on first use and cached on the key."""
+        native = self.__dict__.get("_extended_key_obj")
+        if native is None:
+            polys = self.scheme.quadratic_key_polys(self) + self.poly
+            ring = self.ring
+            native = lib_rlwe.lib.mlwe_new_RNS_key_from_array(
+                ffi.new("uint64_t[]", ring.N * len(polys)),
+                ring.N,
+                len(polys),
+                ring.ell,
+                ring.base,
+                self.sigma_err,
+            )
+            struct = ffi.cast("RNS_MLWE_Key", native)
+            for i, p in enumerate(polys):
+                ring.lib.arith_copy(
+                    struct.ring, ffi.addressof(struct.s[i]), p.as_element()
+                )
+            self._extended_key_obj = native
+        return native
 
     def extract_lwe_key(self) -> LWE_Key:
         from .lwe import LWE_Key
