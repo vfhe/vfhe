@@ -218,9 +218,10 @@ class SumcheckProd(_SumcheckRounds):
     verifier checks prod_j v_j against the final claim and each (f_j, r,
     v_j) becomes an output Relation_Eval statement.
 
-    The native (C) path covers exactly two native tables over a Ring —
-    the reference Libra shape; other arities or representations use the
-    pure-Python path. Both paths produce identical transcripts.
+    The native (C) path covers two native tables over a Ring — the
+    reference Libra shape — and three over the same variables; other
+    arities or representations use the pure-Python path. Both paths
+    produce identical transcripts.
     """
 
     name = "sumcheckprod"

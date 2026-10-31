@@ -59,20 +59,25 @@ def _witness(ring, bound=BOUND, tweak=None):
 
 
 class _Setup:
-    """The schemes, the committed `v` and the range claim on it."""
+    """The schemes, the committed `v` and the range claim on it. A bound
+    whose bit count `CHUNKS` does not divide adds the table sizes of the
+    lookup on the top digits: `ell + nu` variables on its oracle's side,
+    `log2(top_beta)` on the table's."""
 
-    def __init__(self, field, ring, v, m):
+    def __init__(self, field, ring, v, m, bound=BOUND):
         self.field, self.ring, self.m = field, ring, m
+        relation = Relation_Range(bound, CHUNKS)
         ell_star = ELL + NU + (CHUNKS.bit_length() - 1)
-        b_star = (BOUND.bit_length() - 1) // CHUNKS
+        sizes = [ell_star, relation.beta.bit_length() - 1]
+        if relation.top_beta != relation.beta:
+            sizes += [ELL + NU, relation.top_beta.bit_length() - 1]
         self.field_schemes = [
-            Basefold(FieldFoldableRS(field, k0=4, c=4, d=ell_star - 2)),
-            Basefold(FieldFoldableRS(field, k0=4, c=4, d=b_star - 2)),
+            Basefold(FieldFoldableRS(field, k0=4, c=4, d=size - 2)) for size in sizes
         ]
         self.ring_scheme = Basefold(FoldableRS(ring, k0=2, c=4, d=ELL - 1))
         self.v, self.v_opening = self.ring_scheme.commit(v)
         self.v_table = v
-        self.statement = Statement(Relation_Range(BOUND, CHUNKS), oracles=[self.v])
+        self.statement = Statement(relation, oracles=[self.v])
 
     def iop(self, **kw) -> IOP:
         messages = BasefoldMessages(self.field_schemes)
@@ -160,6 +165,30 @@ def test_an_out_of_range_coefficient_is_rejected(field, ring):
     runs = 16
     accepted = sum(bool(setup.iop().run(setup.statement)) for _ in range(runs))
     assert accepted <= _most_acceptances(runs, error)
+
+
+def test_compiled_range_proof_with_a_short_top_digit(field, ring):
+    """log2(B) = 7 in two digits, the top one of 3 bits: the lookup on the
+    top digits is compiled too, and ends in claims on the committed `mu'`.
+    An honest run accepts, interactively and as an argument string; a
+    coefficient of `B`, whose digits recompose and sit in `t_beta`, is
+    rejected (the lookup's soundness error is negligible here)."""
+    bound = 1 << 7
+    setup = _Setup(field, ring, _witness(ring, bound=bound), ELL + NU, bound=bound)
+    iop = setup.iop()
+    assert iop.run(setup.statement)
+    runs = [
+        x
+        for x in iop.transcript.order
+        if x.startswith("basefold") and x.endswith("/answers")
+    ]
+    assert len(runs) == 5
+    proof = setup.iop(fiat_shamir=True).prove(setup.statement)
+    assert setup.iop(fiat_shamir=True).verify(setup.statement, proof)
+
+    bad = _witness(ring, bound=bound, tweak=lambda c: c.__setitem__(1, bound))
+    setup = _Setup(field, ring, bad, ELL + NU, bound=bound)
+    assert not setup.iop().run(setup.statement)
 
 
 def test_messages_need_one_scheme_per_table_size(field):

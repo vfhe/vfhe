@@ -173,7 +173,8 @@ def prod_round_evals(factors: list, var=None) -> tuple:
     lo + t*(hi - lo)).
 
     The native/pure-Python decision is made here: exactly two native
-    tables delegate to the C kernels (prod2_round_evals_native), two
+    tables, or three over the same variables, delegate to the C kernels
+    (prod2_round_evals_native, prod3_round_evals_native), two
     field-backed tables over their first variable run as whole-vector
     operations (prod2_round_evals_vector), anything else runs the
     pure-Python path — identical messages either way. This is the round
@@ -182,6 +183,12 @@ def prod_round_evals(factors: list, var=None) -> tuple:
     """
     if len(factors) == 2 and all(native_table(f) for f in factors):
         return prod2_round_evals_native(factors[0], factors[1], var)
+    if (
+        len(factors) == 3
+        and all(native_table(f) for f in factors)
+        and all(f.variables == factors[0].variables for f in factors[1:])
+    ):
+        return prod3_round_evals_native(factors[0], factors[1], factors[2], var)
     if (
         len(factors) == 2
         and all(vector_table(f) for f in factors)
@@ -290,6 +297,42 @@ def prod2_round_evals_native(f: MLE, g: MLE, var=None) -> tuple:
     else:
         lib.sumcheck_prod2_round(
             ring.arith_ring, handles, f.table_ptr, g.table_ptr, size, idx
+        )
+    mark_ntt(evals)
+    return tuple(evals)
+
+
+def prod3_round_evals_native(f: MLE, g: MLE, h: MLE, var=None) -> tuple:
+    """The C-kernel path of prod_round_evals for three factors: one
+    degree-3 round message at t = 0..3 over MLE tables over the same
+    variables, in the same order. The kernel is chosen by the round
+    variable's position, as in prod2_round_evals_native."""
+    idx = 0 if var is None else f.variables.index(var)
+    for table in (f, g, h):
+        table.to_NTT()  # the kernels read RNS form; see MLE.to_NTT
+    ring = f.ring
+    if ring is None:
+        raise ValueError("a native round needs a ring-backed MLE")
+    evals = [Polynomial(ring) for _ in range(4)]
+    handles = element_array(evals)
+    size = 1 << f.num_vars
+    if idx == 0:
+        lib.sumcheck_prod3_round_pairs(
+            ring.arith_ring, handles, f.table_ptr, g.table_ptr, h.table_ptr, size
+        )
+    elif idx == f.num_vars - 1:
+        lib.sumcheck_prod3_round_halves(
+            ring.arith_ring, handles, f.table_ptr, g.table_ptr, h.table_ptr, size
+        )
+    else:
+        lib.sumcheck_prod3_round(
+            ring.arith_ring,
+            handles,
+            f.table_ptr,
+            g.table_ptr,
+            h.table_ptr,
+            size,
+            idx,
         )
     mark_ntt(evals)
     return tuple(evals)

@@ -21,10 +21,13 @@ class Relation_Range(Relation):
     lies in `[0, B)`: the table `T_B` of [CCCFGS26] §4.
 
     The index is `(B, c)`: the bound, and the number of base-`beta` digits the
-    protocol splits each coefficient into (`beta = B ** (1/c)`). Both are
-    public, reusable, preprocessable data, which is what an index is for.
-    `c` is a pure efficiency knob -- it trades the digit alphabet against the
-    size of the digit oracle -- and does not change the language.
+    protocol splits each coefficient into (`beta = 2^ceil(log2(B) / c)`).
+    Both are public, reusable, preprocessable data, which is what an index
+    is for. `c` is a pure efficiency knob -- it trades the digit alphabet
+    against the size of the digit oracle -- and does not change the
+    language. When `c` does not divide `log2(B)` the most significant digit
+    is the shorter one, with the alphabet `top_beta = B / beta^(c-1)`; it
+    must keep at least one bit.
     """
 
     name = "range"
@@ -36,10 +39,12 @@ class Relation_Range(Relation):
             raise ValueError(f"bound B must be a power of two > 1, got {bound}")
         if chunks <= 0 or chunks & (chunks - 1):
             raise ValueError(f"chunks c must be a power of two, got {chunks}")
-        if (bound.bit_length() - 1) % chunks:
+        bits = bound.bit_length() - 1
+        width = -(-bits // chunks)
+        if bits - (chunks - 1) * width < 1:
             raise ValueError(
-                f"c must divide log2(B): log2({bound}) = {bound.bit_length() - 1} "
-                f"is not a multiple of {chunks}"
+                f"c = {chunks} digits of {width} bits leave no bit for the most "
+                f"significant digit of log2(B) = {bits} bits"
             )
         super().__init__(index={"bound": bound, "chunks": chunks})
 
@@ -55,8 +60,16 @@ class Relation_Range(Relation):
 
     @property
     def beta(self) -> int:
-        """The digit alphabet `B ** (1/c)`."""
-        return 1 << ((self.bound.bit_length() - 1) // self.chunks)
+        """The digit alphabet `2^ceil(log2(B) / c)`: `B ** (1/c)` when `c`
+        divides `log2(B)`."""
+        return 1 << -(-(self.bound.bit_length() - 1) // self.chunks)
+
+    @property
+    def top_beta(self) -> int:
+        """The alphabet of the most significant digit, `B / beta^(c-1)`:
+        `beta` when `c` divides `log2(B)`, smaller otherwise."""
+        width = self.beta.bit_length() - 1
+        return 1 << (self.bound.bit_length() - 1 - (self.chunks - 1) * width)
 
     def check(self, statement: Statement) -> bool:
         (v,) = statement.oracles

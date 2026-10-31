@@ -8,13 +8,16 @@ consistently for a different polynomial is caught by the terminal oracle
 query.
 """
 
+import pytest
 from vfhe.arith import MLE, MLE_Variable, Ring
-from vfhe.piop import IOP, Statement, TableOracle
+from vfhe.piop import IOP, Proof, Statement, TableOracle
 from vfhe.piop.protocols import Sumcheck, SumcheckProd
+from vfhe.piop.protocols.sumcheck import rounds
 from vfhe.piop.protocols.sumcheck.rounds import (
     _prod_round_evals_python,
     _round_evals_python,
     prod2_round_evals_native,
+    prod3_round_evals_native,
     prod_round_evals,
     round_evals,
     round_evals_native,
@@ -345,6 +348,99 @@ def test_round_evals_any_variable_position():
             strict=True,
         )
     )
+
+
+def _random_tables(ring, variables, count):
+    return [
+        MLE(
+            ring=ring,
+            variables=variables,
+            evaluations=[ring.random_element() for _ in range(1 << len(variables))],
+        )
+        for _ in range(count)
+    ]
+
+
+@pytest.mark.parametrize("num_vars", [1, 2, 3, 5])
+def test_prod3_round_evals_match_python_every_position(num_vars):
+    # The three-factor kernels (pairs for the first variable, halves for the
+    # last, the strided one in between) give the pure-Python path's message,
+    # four nodes, for distinct factors and for a factor repeated.
+    ring = Ring(1024, prime_size=[49, 49], split_degree=4)
+    v = [MLE_Variable(f"x{i}") for i in range(num_vars)]
+    f, g, h = _random_tables(ring, v, 3)
+    for factors in ([f, g, h], [f, g, g]):
+        for var in v:
+            native = prod3_round_evals_native(factors[0], factors[1], factors[2], var)
+            python = _prod_round_evals_python(factors, var)
+            assert len(native) == 4
+            assert all(a == b for a, b in zip(native, python, strict=True))
+            dispatched = prod_round_evals(factors, var)
+            assert all(a == b for a, b in zip(dispatched, python, strict=True))
+
+
+def test_prod3_dispatch_needs_the_same_variables():
+    # Three native tables over the variables in different orders are not one
+    # layout: the dispatch leaves them to the pure-Python path.
+    ring = Ring(1024, prime_size=[49], split_degree=4)
+    v = [MLE_Variable(f"x{i}") for i in range(3)]
+    f, g, h = _random_tables(ring, v, 3)
+    h_reversed = MLE(ring=ring, variables=v[::-1], evaluations=list(h.table))
+    factors = [f, g, h_reversed]
+    expected = _prod_round_evals_python(factors, v[1])
+    assert all(
+        a == b for a, b in zip(prod_round_evals(factors, v[1]), expected, strict=True)
+    )
+
+
+def _prod3_proof(ring, factors, value) -> Proof:
+    iop = IOP(domain=ring, fiat_shamir=True)
+    iop.register(Relation_SumProd, SumcheckProd())
+    oracles = [TableOracle(f) for f in factors]
+    return iop.prove(Statement(Relation_SumProd(), oracles=oracles, value=value))
+
+
+def test_sumcheckprod_three_ring_factors_native_matches_python(monkeypatch):
+    # A full degree-3 product sumcheck over R_q, sum_b W(b) l(b)^2: the
+    # native rounds write the same proof as the pure-Python ones, and it
+    # verifies; a false claim does not.
+    ring = Ring(1024, prime_size=[49, 49], split_degree=4)
+    v = [MLE_Variable(f"x{i}") for i in range(4)]
+    w, lc = _random_tables(ring, v, 2)
+    factors = [w, lc, lc]
+    products = [a * b * b for a, b in zip(w.table, lc.table, strict=True)]
+    total = sum(products[1:], products[0])
+
+    calls = []
+
+    def counted(f, g, h, var=None):
+        calls.append(var)
+        return prod3_round_evals_native(f, g, h, var)
+
+    monkeypatch.setattr(rounds, "prod3_round_evals_native", counted)
+    native = _prod3_proof(ring, factors, total)
+    assert len(calls) == len(v)  # every round took the kernel
+    monkeypatch.setattr(
+        rounds,
+        "prod3_round_evals_native",
+        lambda f, g, h, var=None: _prod_round_evals_python([f, g, h], var),
+    )
+    python = _prod3_proof(ring, factors, total)
+    monkeypatch.undo()
+    assert native.labels == python.labels
+    assert native.digest() == python.digest()
+
+    def verify(value, proof):
+        iop = IOP(domain=ring, fiat_shamir=True)
+        iop.register(Relation_SumProd, SumcheckProd())
+        oracles = [TableOracle(f) for f in factors]
+        return iop.verify(
+            Statement(Relation_SumProd(), oracles=oracles, value=value), proof
+        )
+
+    assert verify(total, native)
+    false = total + 1
+    assert not verify(false, _prod3_proof(ring, factors, false))
 
 
 def test_mixed_representation_factors_agree_with_native():

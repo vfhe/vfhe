@@ -37,7 +37,7 @@ from vfhe.piop.virtual import (
     table_like,
 )
 
-from .rounds import prod2_round_evals_native, round_evals
+from .rounds import prod2_round_evals_native, prod3_round_evals_native, round_evals
 
 
 def _one_of(tables) -> Any:
@@ -240,13 +240,16 @@ class _ProverVirtual:
     @staticmethod
     def _term_round_evals(tables: list, var, idx: int, nodes: int) -> list:
         """One product's node sums; the native kernels for the shapes they
-        cover (one table, or two ring tables at three nodes), Python pairs
-        otherwise. Every factor is multilinear, so its value at node t is
-        `lo + t * (hi - lo)` from the pair."""
+        cover (one table, two ring tables at three nodes, or three at four),
+        Python pairs otherwise. Every factor is multilinear, so its value at
+        node t is `lo + t * (hi - lo)` from the pair."""
         if len(tables) == 1 and nodes == 2:
             return list(round_evals(tables[0], var))
         if len(tables) == 2 and nodes == 3 and all(native_table(t) for t in tables):
             return list(prod2_round_evals_native(tables[0], tables[1], var))
+        if len(tables) == 3 and nodes == 4 and all(native_table(t) for t in tables):
+            f, g, h = tables
+            return list(prod3_round_evals_native(f, g, h, var))
         size = 1 << tables[0].num_vars
         evals = []
         for t in range(nodes):

@@ -13,15 +13,19 @@ from vfhe.arith import MLE, MLE_Variable, Polynomial, PseudoMersenneField, Ring
 from vfhe.piop import (
     IOP,
     CommittedOracle,
+    OracleKind,
     Protocol,
+    Rejection,
     Relation_Eval,
     Statement,
     TableOracle,
+    VirtualOracle,
     element_digest,
 )
-from vfhe.piop.protocols import RangeDecomposition
+from vfhe.piop.protocols import Lookup, RangeDecomposition, Sumcheck, VirtualEval
 from vfhe.piop.protocols.range import balanced, base_digits, eq_int, uEval
-from vfhe.piop.relations import Relation_Lookup, Relation_Range
+from vfhe.piop.relations import Relation_Lookup, Relation_Range, Relation_Sum
+from vfhe.piop.virtual import resolve_table
 
 # ell = 2, nu = 5, gamma = 1 -> ell* = 8, so mu' is a 256-entry table.
 BOUND = 1 << 6
@@ -111,8 +115,27 @@ def test_relation_range_check(ring):
 def test_relation_range_rejects_bad_parameters():
     with pytest.raises(ValueError, match="power of two"):
         Relation_Range(100, 2)
-    with pytest.raises(ValueError, match="must divide"):
-        Relation_Range(1 << 5, 2)  # log2(B) = 5 is not a multiple of c = 2
+    # Four digits of two bits leave nothing for the top one of a 5-bit bound.
+    with pytest.raises(ValueError, match="no bit"):
+        Relation_Range(1 << 5, 4)
+
+
+@pytest.mark.parametrize(
+    ("bits", "chunks", "beta", "top_beta"),
+    [
+        (6, 2, 8, 8),
+        (8, 4, 4, 4),
+        (8, 1, 256, 256),
+        (5, 2, 8, 4),
+        (49, 4, 1 << 13, 1 << 10),
+    ],
+)
+def test_relation_range_digit_alphabets(bits, chunks, beta, top_beta):
+    """`c - 1` digits of `ceil(log2(B) / c)` bits and a top digit of what is
+    left: the same alphabet when `c` divides `log2(B)`."""
+    relation = Relation_Range(1 << bits, chunks)
+    assert (relation.beta, relation.top_beta) == (beta, top_beta)
+    assert relation.beta ** (chunks - 1) * relation.top_beta == relation.bound
 
 
 def test_relation_lookup_check(field):
@@ -384,6 +407,225 @@ def test_lookup_claim_is_terminal_and_true(ring, field):
     (claim,) = seen
     assert claim.relation.beta == Relation_Range(BOUND, CHUNKS).beta
     assert claim.check()
+
+
+# --- a top digit shorter than the others -----------------------------------
+
+#: log2(B) = 7 in c = 2 digits: the low one of 4 bits, the top one of 3.
+SHORT = 1 << 7
+
+
+def _short_statement(v, bound=SHORT, chunks=CHUNKS):
+    return Statement(Relation_Range(bound, chunks), oracles=[TableOracle(v)])
+
+
+def _full_iop(ring, field, protocol=None, **kw):
+    """The range proof with the lookup argument run, not left terminal."""
+    iop = _iop(ring, field, protocol, **kw)
+    iop.register(Relation_Lookup, Lookup(field))
+    iop.register(Relation_Sum, Sumcheck())
+    iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+    return iop
+
+
+#: The statement and argument-string digests of the range proof at bounds
+#: whose bit count `c` divides, for `_witness(ring, seed=7, bound=B)`, with
+#: the lookup claims left terminal; `_PINNED_WITH_LOOKUP` is the first one's
+#: argument string with the lookup argument run.
+_PINNED = {
+    (6, 2): (
+        "9826470160748f699b923b056d0c5928ee41b0ac94901abd63dd3e871c70202d",
+        "7630a1ccc25f46b94c218eaaa6d1295127ea4a7a342cd4dfba03eb9baf070304",
+    ),
+    (8, 4): (
+        "b145dcabcd12fb79baabe78f564b4f9d4411d485777e156c6c6b14239e2ab20d",
+        "d5052714878882cdb45aa65ee75fe1a32784a41289f4371411b48b01962cc0e9",
+    ),
+    (8, 1): (
+        "e0f60eac34727bd2f1d5647d753485173d2bff39996dcefa2eb653bc3ecab9d9",
+        "37de1d4367de4c13be883334250e598d607e6929fbbdf30aea8e9447df17f6f6",
+    ),
+}
+_PINNED_WITH_LOOKUP = "f9d3c831eec59c8d828147285f17caf6b9eaf85bb4ff55f62fdc282fbff81ba1"
+
+
+@pytest.mark.parametrize(("bits", "chunks"), list(_PINNED))
+def test_divisible_bounds_are_pinned(ring, field, bits, chunks):
+    v = _witness(ring, seed=7, bound=1 << bits)
+    statement = _short_statement(v, 1 << bits, chunks)
+    proof = _iop(ring, field, fiat_shamir=True).prove(statement)
+    assert (statement.digest().hex(), proof.digest().hex()) == _PINNED[bits, chunks]
+    if (bits, chunks) == (6, 2):
+        proof = _full_iop(ring, field, fiat_shamir=True).prove(statement)
+        assert proof.digest().hex() == _PINNED_WITH_LOOKUP
+
+
+def _short_bundle(ring, field, v, bound=SHORT):
+    """The lookup claims a run on `v` reduces to, recorded, not run."""
+    seen = []
+
+    class _Record(Protocol):
+        reduces_from = Relation_Lookup
+
+        async def prove(self, _prover, _statements):
+            return []
+
+        async def verify(self, _verifier, statements):
+            seen.extend(statements)
+            return []
+
+    iop = _iop(ring, field)
+    iop.register(Relation_Lookup, _Record())
+    accepted = iop.run(_short_statement(v, bound))
+    return accepted, seen
+
+
+def test_a_short_top_digit_adds_a_lookup_on_the_top_digits(ring, field):
+    """With `c` not dividing `log2(B)`, the bundle carries a second lookup,
+    into `t_top_beta`, on the restriction of `mu'` to the top digit: its
+    hypercube is exactly the top digits of every coefficient."""
+    v = _witness(ring, seed=14, bound=SHORT)
+    accepted, (low, top) = _short_bundle(ring, field, v)
+    assert accepted
+    relation = Relation_Range(SHORT, CHUNKS)
+    assert (relation.beta, relation.top_beta) == (16, 8)
+    assert (low.relation.beta, top.relation.beta) == (16, 8)
+    (mu,) = low.oracles
+    (restricted,) = top.oracles
+    assert isinstance(restricted, VirtualOracle) and restricted.is_restriction()
+    assert restricted.constituents == [mu]
+    assert restricted.num_vars == ELL + NU
+    width = 4
+    top_digits = [
+        coefficient >> width
+        for element in v.table
+        for coefficient in element.get_polynomial()
+    ]
+    table = resolve_table(restricted)
+    assert sorted(int(e) for e in table.table) == sorted(top_digits)
+    assert low.check() and top.check()
+
+
+@pytest.mark.parametrize(
+    ("bits", "chunks", "m", "kappa"),
+    [
+        (7, 2, M, KAPPA),
+        (7, 2, 0, 1),
+        (7, 2, ELL + NU, 2),
+        (11, 4, M, KAPPA),
+        (9, 2, ELL + 1, 2),
+    ],
+)
+def test_short_top_digit_across_the_parameter_knobs(
+    ring, field, bits, chunks, m, kappa
+):
+    """Honest runs accept; a coefficient of `B` -- a top digit of exactly
+    `top_beta`, inside `t_beta` -- is rejected. Its digits recompose and sit
+    in `t_beta`, so the top digits' lookup is the only check that can, and
+    with the lookups decided by their ideal deciders it does every time."""
+    bound = 1 << bits
+    statement = _short_statement(_witness(ring, seed=15, bound=bound), bound, chunks)
+    protocol = RangeDecomposition(field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa)
+    assert _iop(ring, field, protocol).run(statement)
+
+    bad = _witness(ring, seed=15, bound=bound, tweak=lambda c: c.__setitem__(1, bound))
+    cheating = _short_statement(bad, bound, chunks)
+    assert not cheating.check()
+    for _ in range(4):
+        protocol = RangeDecomposition(
+            field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa
+        )
+        assert not _iop(ring, field, protocol).run(cheating)
+
+
+class _SwallowTop(Protocol):
+    """Decides the lookup claims by their ideal deciders, except the one into
+    `t_top_beta`, which it accepts unread."""
+
+    reduces_from = Relation_Lookup
+
+    def __init__(self, top_beta):
+        self.top_beta = top_beta
+
+    async def prove(self, _prover, _statements):
+        return []
+
+    async def verify(self, _verifier, statements):
+        for statement in statements:
+            if statement.relation.beta != self.top_beta and not statement.check():
+                raise Rejection("lookup")
+        return []
+
+
+@pytest.mark.parametrize("excess", [0, 5, 15])
+def test_a_digit_just_above_the_short_width_is_rejected(ring, field, excess):
+    """A coefficient `B + excess`, below `beta^c`: the top digit is
+    `top_beta`, one past the short alphabet. Rejected by the top digits'
+    lookup -- with it accepted unread, the same run passes -- and by the
+    lookup argument run in full (one run: its soundness error is about
+    `2^ell* / p`, negligible at a 260-bit `p`)."""
+    bad = _witness(
+        ring, seed=16, bound=SHORT, tweak=lambda c: c.__setitem__(2, SHORT + excess)
+    )
+    statement = _short_statement(bad)
+    assert not statement.check()
+    assert not _iop(ring, field).run(statement)
+
+    iop = _iop(ring, field)
+    iop.register(Relation_Lookup, _SwallowTop(Relation_Range(SHORT, CHUNKS).top_beta))
+    assert iop.run(statement)
+
+    assert _full_iop(ring, field).run(
+        _short_statement(_witness(ring, seed=16, bound=SHORT))
+    )
+    assert not _full_iop(ring, field).run(statement)
+
+
+def test_short_top_digit_with_fiat_shamir(ring, field):
+    v = _witness(ring, seed=17, bound=SHORT)
+    statement = _short_statement(v)
+    proof = _full_iop(ring, field, fiat_shamir=True).prove(statement)
+    assert _full_iop(ring, field, fiat_shamir=True).verify(statement, proof)
+
+
+def _borrow_one(table, shape):
+    """Move one unit of digit 1 into digit 0 as `beta`: the value is kept,
+    digit 0 leaves `t_beta`."""
+    stride = 1 << (shape.ell + shape.nu)
+    for i in range(stride):
+        if table[i + stride]:
+            table[i] += shape.beta
+            table[i + stride] -= 1
+            return
+    raise AssertionError("no digit 1 to borrow from")
+
+
+@pytest.mark.parametrize(
+    ("bits", "chunks"),
+    [(8, 4), (8, 8), (7, 4), (5, 2)],
+    ids=["beta-4", "beta-2", "top-1-bit", "top-2-bits"],
+)
+def test_lookup_argument_over_tables_below_the_padding_unit(ring, field, bits, chunks):
+    """The lookup argument run in full over tables of 2 and 4 entries, as the
+    digit table and as the top digits' table: an honest witness is accepted;
+    a borrowed digit (outside `t_beta`, value kept) and, with a short top
+    digit, a coefficient of `B` (top digit `top_beta`) are rejected. Each
+    rejection is the lookup argument's, of error about `2^ell* / p`."""
+    bound = 1 << bits
+    relation = Relation_Range(bound, chunks)
+    assert min(relation.beta, relation.top_beta) < 8
+    statement = _short_statement(_witness(ring, seed=18, bound=bound), bound, chunks)
+    assert _full_iop(ring, field).run(statement)
+    proof = _full_iop(ring, field, fiat_shamir=True).prove(statement)
+    assert _full_iop(ring, field, fiat_shamir=True).verify(statement, proof)
+
+    borrowed = _full_iop(ring, field, _cheat(ring, field, _borrow_one))
+    assert not borrowed.run(statement)
+    if relation.top_beta != relation.beta:
+        bad = _witness(
+            ring, seed=18, bound=bound, tweak=lambda c: c.__setitem__(1, bound)
+        )
+        assert not _full_iop(ring, field).run(_short_statement(bad, bound, chunks))
 
 
 # --- the three ways to cheat -----------------------------------------------

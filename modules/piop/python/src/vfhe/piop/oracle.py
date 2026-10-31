@@ -11,7 +11,7 @@ an evaluation claim on it is discharged. The kinds are classes:
   that a claim on it is terminal; `plain` otherwise, the oracle of the ideal
   model, which the verifier may query while no commitment scheme is
   registered; `EqOracle` is the public one of eq~(point, .), held as its
-  point;
+  point, and `ClosedFormOracle` a public one evaluated by a function;
 - `CommittedOracle`, a commitment, the scheme it was committed under and
   the variables, nothing else: the verifier's view of a committed polynomial
   ("the commitment to f is simply the oracle pi_f" [ZCF24, section 4]);
@@ -173,6 +173,66 @@ class EqOracle(TableOracle):
 
     def __repr__(self) -> str:
         return f"EqOracle(vars={self.num_vars})"
+
+
+class ClosedFormOracle(TableOracle):
+    """A public oracle to a polynomial over `variables` that the verifier
+    evaluates in closed form: `evaluate(coordinates)` is its value at the
+    coordinates, given in the order of `variables`, and `table()` builds its
+    dense `MLE` over `variables`, called only when something reads
+    `polynomial` (a prover that folds it as a table, or the ideal decider).
+
+    The digest is that of `identity` and of the variables, never of a table,
+    so `identity` must determine the polynomial: two oracles whose
+    identities are equal are taken to be the same polynomial by a
+    Fiat-Shamir chain. Choosing bytes that do -- a name of the family and
+    every parameter of the member -- is the caller's responsibility.
+
+    The verifier's cost on this oracle is what `evaluate` costs: nothing
+    bounds it. For a succinct verifier it must run in time polylogarithmic in
+    the table size, `2^len(variables)`; a protocol whose verifier may be
+    linear can use a linear one. `table()` is never needed by a verifier."""
+
+    def __init__(
+        self,
+        variables: list,
+        evaluate: Callable[[list], Any],
+        table: Callable[[], MLE],
+        identity: bytes,
+    ) -> None:
+        if not isinstance(identity, bytes) or not identity:
+            raise TypeError("a ClosedFormOracle needs non-empty identity bytes")
+        self._variables = list(variables)
+        self._evaluate = evaluate
+        self._build = table
+        self.identity = identity
+        self._public = True
+        self._table: MLE | None = None
+
+    @property
+    def polynomial(self) -> MLE:  # pyright: ignore[reportIncompatibleVariableOverride]
+        """The table, built on first use; it must be over `variables`."""
+        if self._table is None:
+            table = self._build()
+            if list(table.variables) != self._variables:
+                raise ValueError("the built table is not over the oracle's variables")
+            self._table = table
+        return self._table
+
+    @property
+    def variables(self) -> list:  # pyright: ignore[reportIncompatibleVariableOverride]
+        return self._variables
+
+    def query(self, point: dict) -> Any:
+        return self._evaluate([point[v] for v in self._variables])
+
+    def digest(self) -> bytes:
+        parts = [b"closed_form", element_digest(self.identity)]
+        parts += [element_digest(v) for v in self._variables]
+        return chain_digest(parts)
+
+    def __repr__(self) -> str:
+        return f"ClosedFormOracle(vars={self.num_vars})"
 
 
 class CommittedOracle(Oracle):

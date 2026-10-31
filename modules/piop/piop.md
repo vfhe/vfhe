@@ -799,10 +799,13 @@ outputs).
 The prover kernels (`piop/c/src/sumcheck.c`) only *accumulate round
 messages* from the table pairs of the round variable — which, like MLE
 binding (§7), may sit at any position: each message has a kernel per pair
-layout (`sumcheck_round_pairs` / `_halves` and `sumcheck_prod2_round_pairs`
-/ `_halves` for the LSB and MSB variables, plus the stride-computed
-`sumcheck_round` / `sumcheck_prod2_round` generic fallbacks), chosen by the
-round-eval helpers from the variable's position. Over a `Field` the table
+layout (`sumcheck_round_pairs` / `_halves`, `sumcheck_prod2_round_pairs`
+/ `_halves` and `sumcheck_prod3_round_pairs` / `_halves` for the LSB and
+MSB variables, plus the stride-computed `sumcheck_round` /
+`sumcheck_prod2_round` / `sumcheck_prod3_round` generic fallbacks), chosen
+by the round-eval helpers from the variable's position. The product kernels
+cover two factors, and three over the same variables; other arities take
+the pure-Python path. Over a `Field` the table
 is a single `vfhe.arith.FieldVector` and the same messages are a fixed
 number of whole-vector operations (`round_evals_vector`,
 `prod2_round_evals_vector`, gated on `mle.vector_table`) — arith's kernels
@@ -988,7 +991,11 @@ protocol mark, the oracle says what the verifier has of it (§4's kinds).
 `Oracle` is the contract — `variables`, `kind`, `query(point)` (the ideal
 decider's one query, at a full point; it raises for an oracle the verifier
 has no table of), `dependencies()`, `digest()` — and the four kinds are
-classes: `TableOracle(table, public=...)` wraps a dense or sparse table,
+classes: `TableOracle(table, public=...)` wraps a dense or sparse table
+(its public subclasses `EqOracle` and `ClosedFormOracle` are evaluated in
+closed form, the table built only when something reads it as one; a
+`ClosedFormOracle` is digested by the identifying bytes its caller gives,
+which must determine the polynomial),
 `CommittedOracle(variables, commitment, scheme)` holds the commitment, the
 scheme it was committed under (which routes its claims, §5) and the
 variables, nothing else, `ImplicitOracle(variables)` is a handle,
