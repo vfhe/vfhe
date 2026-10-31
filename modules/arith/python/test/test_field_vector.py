@@ -296,12 +296,18 @@ class TestArithmetic:
         """The chains are independent, so a zero has to be caught whichever
         one it lands in -- including the leftover the whole rows leave over,
         which is a chain of its own."""
+        from vfhe.util.bindings import lib
+
         field = make_field()
         a = FieldVector(field, n)
         a.sample_random(b"row-split")
         a[{"middle": n // 2, "last": n - 1}.get(where, where)] = 0
         with pytest.raises(ValueError, match="not invertible"):
             a.inverse()
+        # The C entry returns 0 without writing `out`, wherever the zero is.
+        out = FieldVector(field, [7] * n)
+        assert lib.field_vec_inv(out._struct, a._struct) == 0
+        assert out.to_list() == [field(7)] * n, "out was written"
 
     def test_batch_inverse_result_may_be_its_input(self):
         """The C entry allows `out == a`. The row sweep has to read a row
