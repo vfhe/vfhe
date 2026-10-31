@@ -96,7 +96,11 @@ class SumDefStart(Protocol):
     reduces_from: type[Relation] = Relation_SumDef.Start
     reduces_to: tuple[type[Relation], ...] = (Relation_Sum,)
 
-    def soundness_error(self, statement: Statement, domain) -> float | None:
+    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+        """(k - 1) / |A|; the domain defaults to the definition's
+        (`Oracle.domain` of its body)."""
+        if domain is None:
+            domain = Relation_SumDef.definition(statement)[1].domain
         size = exceptional_set_size(domain)
         if size is None:
             return None
@@ -115,7 +119,7 @@ class SumDefStart(Protocol):
             alphas = [1]
         else:
             alphas = [
-                await iop.verifier.challenge(f"{label}/a{i}")
+                await iop.verifier.challenge(f"{label}/a{i}", G.domain)
                 for i in range(len(points))
             ]
         bodies = [

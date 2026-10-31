@@ -355,8 +355,8 @@ class Lookup(Protocol):
         final_cts = self.messages.send(
             prover, f"{label}/final_cts", tables["final_cts"]
         )
-        zeta = await iop.verifier.challenge(f"{label}/zeta")
-        tau = await iop.verifier.challenge(f"{label}/tau")
+        zeta = await iop.verifier.challenge(f"{label}/zeta", self.field)
+        tau = await iop.verifier.challenge(f"{label}/tau", self.field)
 
         parts = self._scaffold(statement, read_ts, final_cts)
         trees = {
@@ -413,8 +413,8 @@ class Lookup(Protocol):
             self._names("c", beta.bit_length() - 1),
             self.field,
         )
-        zeta = await iop.verifier.challenge(f"{label}/zeta")
-        tau = await iop.verifier.challenge(f"{label}/tau")
+        zeta = await iop.verifier.challenge(f"{label}/zeta", self.field)
+        tau = await iop.verifier.challenge(f"{label}/tau", self.field)
 
         parts = self._scaffold(statement, read_ts, final_cts)
         f1 = {
@@ -450,14 +450,14 @@ class Lookup(Protocol):
     async def _draw(self, iop: Any, label: str, parts: dict) -> tuple:
         """`chi` and the two zerocheck points, in one place so the two halves
         cannot draw them in different orders."""
-        chi = await iop.verifier.challenge(f"{label}/chi")
+        chi = await iop.verifier.challenge(f"{label}/chi", self.field)
         points = {
             "mu": [
-                await iop.verifier.challenge(f"{label}/rho{i}")
+                await iop.verifier.challenge(f"{label}/rho{i}", self.field)
                 for i in range(parts["sizes"]["WSmu"])
             ],
             "t": [
-                await iop.verifier.challenge(f"{label}/xi{i}")
+                await iop.verifier.challenge(f"{label}/xi{i}", self.field)
                 for i in range(parts["sizes"]["WSt"])
             ],
         }

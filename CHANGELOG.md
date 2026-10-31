@@ -14,6 +14,17 @@ versions may contain breaking changes.
 
 ### Added
 
+- `Oracle.domain`: the ring or field of an oracle's values -- a table's, an
+  `EqOracle`'s, a `ClosedFormOracle`'s or an `ImplicitOracle`'s when given
+  (both take `domain=`), a `CommittedOracle`'s scheme's (`Basefold.domain`,
+  its code's), a `VirtualOracle`'s constituents' -- or None. `Sumcheck`,
+  `SumcheckProd`, `SumDefStart` and `OutputTest` draw their challenges in
+  the domain of the oracle they work on, and fall back to the IOP's when it
+  is None; their `soundness_error` takes that domain by default. One IOP
+  can then run protocols over several domains: a range proof over `F_p`
+  beside an `R_q` reduction on the same committed oracle, whose claims on
+  it share one opening. Transcripts are unchanged when every oracle is over
+  the IOP's domain.
 - `RNSRing.scalar(value)` and `vfhe.arith.RNSScalar`: an integer, or one
   integer per prime, held natively as an `ArithScalar` and applied by
   `p * scalar` and `p *= scalar` through `arith_scale_by`, with no
@@ -1179,6 +1190,11 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix `RangeDecomposition` and `Lookup` drawing their challenges in the
+  IOP's domain instead of their own field: in an IOP over another ring or
+  field they handed ring elements to field code. Their own challenges are
+  now drawn in their `field`, which changes nothing when it is the IOP's
+  domain.
 - Fix `ct + p` and `ct - p` for an MLWE sample and a polynomial returning a
   sample with an uninitialized mask: the native `mlwe_add_RNSc_polynomial`,
   `mlwe_sub_RNSc_polynomial`, `mlwe_RNS_add_polynomial` and

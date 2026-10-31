@@ -78,6 +78,13 @@ class Oracle:
         return len(self.variables)
 
     @property
+    def domain(self) -> Any:
+        """The ring or field of the oracle's values, in which a protocol on
+        the oracle draws its challenges; None when the oracle does not know
+        it, and the challenges are drawn in the IOP's domain."""
+        return None
+
+    @property
     def public(self) -> bool:
         """Whether the verifier holds the oracle's table."""
         return self.kind is OracleKind.public
@@ -116,6 +123,12 @@ class TableOracle(Oracle):
     def variables(self) -> list:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self.polynomial.variables
 
+    @property
+    def domain(self) -> Any:
+        """The table's ring or field; None for a table of plain integers."""
+        table = self.polynomial
+        return table.ring if table.ring is not None else table.field
+
     def query(self, point: dict) -> Any:
         return self.polynomial.evaluate(dict(point), in_place=False).constant()
 
@@ -138,17 +151,21 @@ class EqOracle(TableOracle):
     def __init__(self, domain, point: list, variables: list) -> None:
         if len(point) != len(variables):
             raise ValueError(f"{len(point)} coordinates for {len(variables)} variables")
-        self.domain = domain
+        self._domain = domain
         self.point = list(point)
         self._variables = list(variables)
         self._public = True
         self._table: MLE | None = None
 
     @property
+    def domain(self) -> Any:
+        return self._domain
+
+    @property
     def polynomial(self) -> MLE:  # pyright: ignore[reportIncompatibleVariableOverride]
         """The table of eq~(point, .), built on first use."""
         if self._table is None:
-            self._table = MLE.eq(self.domain, self.point, variables=self._variables)
+            self._table = MLE.eq(self._domain, self.point, variables=self._variables)
         return self._table
 
     @property
@@ -191,7 +208,10 @@ class ClosedFormOracle(TableOracle):
     The verifier's cost on this oracle is what `evaluate` costs: nothing
     bounds it. For a succinct verifier it must run in time polylogarithmic in
     the table size, `2^len(variables)`; a protocol whose verifier may be
-    linear can use a linear one. `table()` is never needed by a verifier."""
+    linear can use a linear one. `table()` is never needed by a verifier.
+
+    `domain` is the ring or field of its values (`Oracle.domain`), given
+    because reading it from the table would build it."""
 
     def __init__(
         self,
@@ -199,6 +219,7 @@ class ClosedFormOracle(TableOracle):
         evaluate: Callable[[list], Any],
         table: Callable[[], MLE],
         identity: bytes,
+        domain: Any = None,
     ) -> None:
         if not isinstance(identity, bytes) or not identity:
             raise TypeError("a ClosedFormOracle needs non-empty identity bytes")
@@ -206,8 +227,13 @@ class ClosedFormOracle(TableOracle):
         self._evaluate = evaluate
         self._build = table
         self.identity = identity
+        self._domain = domain
         self._public = True
         self._table: MLE | None = None
+
+    @property
+    def domain(self) -> Any:
+        return self._domain
 
     @property
     def polynomial(self) -> MLE:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -255,6 +281,12 @@ class CommittedOracle(Oracle):
         self.commitment = commitment
         self.scheme = scheme
 
+    @property
+    def domain(self) -> Any:
+        """The domain of the scheme's committed tables, when the scheme
+        names one (a `domain` attribute)."""
+        return getattr(self.scheme, "domain", None)
+
     def query(self, point: dict) -> Any:
         raise NotImplementedError(
             "a committed oracle has no table on the verifier's side; register "
@@ -281,13 +313,19 @@ class ImplicitOracle(Oracle):
     a protocol (`IOP.protocol_for` refuses one that gets through). `kind`
     exists only for that refusal; `digest()` lets a statement carrying the
     handle seed a Fiat-Shamir chain in tests, the handle's identity being its
-    variables.
+    variables. `domain` is the domain of the table it stands for, when the
+    statement's builder knows it (`Oracle.domain`).
     """
 
     kind = OracleKind.implicit
 
-    def __init__(self, variables: list) -> None:
+    def __init__(self, variables: list, domain: Any = None) -> None:
         self.variables = list(variables)
+        self._domain = domain
+
+    @property
+    def domain(self) -> Any:
+        return self._domain
 
     def query(self, point: dict) -> Any:
         raise NotImplementedError(

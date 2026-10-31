@@ -434,7 +434,7 @@ class RangeDecomposition(Protocol):
     async def _draw_spot(self, iop: Any, label: str, shape: _Shape) -> list:
         """`s'`, one exceptional-set element of `F_p` per free variable."""
         return [
-            await iop.verifier.challenge(f"{label}/s{i}")
+            await iop.verifier.challenge(f"{label}/s{i}", self.field)
             for i in range(shape.ell_star - self.m)
         ]
 

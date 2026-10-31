@@ -250,6 +250,23 @@ class VirtualOracle(Oracle):
         multilinear oracle; 0 with no variables)."""
         return max((self.degree_in(v) for v in self.variables), default=0)
 
+    @property
+    def domain(self):
+        """The one domain of the constituents that know theirs (`Oracle.domain`);
+        None when none does. Constituents over different domains raise."""
+        found = None
+        for c in self.constituents:
+            domain = c.domain
+            if domain is None:
+                continue
+            if found is None:
+                found = domain
+            elif domain != found:
+                raise ValueError(
+                    f"the constituents of {self!r} are over different domains"
+                )
+        return found
+
     def dependencies(self) -> list:
         return list(self.constituents)
 

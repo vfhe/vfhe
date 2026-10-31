@@ -26,8 +26,10 @@ class IOP:
     """One protocol execution: event loop, coefficient domain, transcript,
     parties, and the relation -> protocol registry.
 
-    `domain` is the Ring or Field the oracle coefficients live in; it defines
-    the exceptional set challenges are drawn from (piop.md §6). The
+    `domain` is the Ring or Field challenges are drawn from (its exceptional
+    set, piop.md §6) when the oracle a protocol works on does not name its
+    own (`Oracle.domain`): every protocol draws in its oracle's domain, so
+    one IOP may hold protocols over several. The
     constructor instantiates the two parties — pass `prover` / `verifier`
     subclasses to customize them, or set `fiat_shamir=True` to get the
     non-interactive verifier (`fs.FS_Verifier`: challenges derived from the
