@@ -341,6 +341,25 @@ class BasefoldMessages(OracleMessages):
                 raise ValueError(f"two schemes for tables of 2^{num_vars} entries")
             self.schemes[num_vars] = scheme
 
+    @classmethod
+    def from_code(
+        cls, code: FoldableRS | FieldFoldableRS, num_vars: list[int]
+    ) -> BasefoldMessages:
+        """One scheme per table size `2^n`, for `n` in `num_vars`, each under
+        the default schedule over `code` truncated to the depth that size
+        needs (`truncated`): one code's tables serve every size. Each `n` is
+        at least ``log2(k0) + 1`` and at most ``log2(k_d)``."""
+        log_k0 = code.k0.bit_length() - 1
+        log_k_d = code.k_d.bit_length() - 1
+        for n in num_vars:
+            if not log_k0 < n <= log_k_d:
+                raise ValueError(
+                    f"a code with k0 = 2^{log_k0} and depth {code.d} serves "
+                    f"tables of 2^n entries for n in [{log_k0 + 1}, {log_k_d}], "
+                    f"got n = {n}"
+                )
+        return cls([Basefold(code.truncated(n - log_k0)) for n in num_vars])
+
     def _scheme(self, num_vars: int) -> Basefold:
         scheme = self.schemes.get(num_vars)
         if scheme is None:
@@ -363,6 +382,26 @@ class BasefoldMessages(OracleMessages):
         if not isinstance(root, bytes) or len(root) != DIGEST_LEN:
             raise Rejection(f"{label}: expected a {DIGEST_LEN}-byte commitment root")
         return CommittedOracle(variables, BasefoldCommitment(variables, root), scheme)
+
+
+def basefold_soundness_error(
+    size: int,
+    d: int,
+    num_vars: int,
+    rep: int,
+    gamma: float,
+    delta: float,
+    claims: int = 1,
+    polynomials: int = 1,
+) -> float:
+    """`BasefoldEval.soundness_error` from the quantities it depends on: a
+    code of depth `d`, tables of `2^num_vars` entries, `rep` queries and
+    challenges from a set of `size` elements; that method has the expression
+    and its terms."""
+    error = 2 * d / (gamma**3 * size) + (1 - delta + gamma * d) ** rep
+    if claims > 1:
+        error += (2 * num_vars + claims - 1) / size
+    return error + (polynomials - 1) / size
 
 
 class BasefoldEval(Protocol):
@@ -427,10 +466,12 @@ class BasefoldEval(Protocol):
     ) -> float | None:
         """The information-theoretic part,
         2d / (gamma^3 |A|) + (1 - delta + gamma * d)^rep [ZCF24], per
-        RNS-prime component (|A| = the residue field size). `delta` is the
-        code's relative distance -- `self.code.relative_distance()` reports
-        it -- and `gamma` is the caller's, subject to the theorem's
-        conditions (polycom.md). None if |A| is unknown.
+        RNS-prime component (|A| = the residue field size). `gamma` and
+        `delta` are the caller's, subject to the theorem's conditions
+        (polycom.md): `delta` is the proximity parameter, which must satisfy
+        delta < J_gamma(J_gamma(Delta)) and 3 delta - d gamma < Delta for the
+        code's relative distance Delta (`self.code.relative_distance()`);
+        `basefold_parameters` gives the largest one. None if |A| is unknown.
 
         For a bundle of `claims` evaluation claims on `polynomials` distinct
         polynomials, opened together, the batching adds
@@ -455,12 +496,16 @@ class BasefoldEval(Protocol):
         size = exceptional_set_size(domain)
         if size is None:
             return None
-        d = self.code.d
-        error = 2 * d / (gamma**3 * size) + (1 - delta + gamma * d) ** self.rep
-        if claims > 1:
-            num_vars = self.code.k_d.bit_length() - 1
-            error += (2 * num_vars + claims - 1) / size
-        return error + (polynomials - 1) / size
+        return basefold_soundness_error(
+            size,
+            self.code.d,
+            self.code.k_d.bit_length() - 1,
+            self.rep,
+            gamma,
+            delta,
+            claims,
+            polynomials,
+        )
 
     def _check_statement(self, statement: Statement) -> BasefoldCommitment:
         """The commitment this claim is proved against: the one its oracle

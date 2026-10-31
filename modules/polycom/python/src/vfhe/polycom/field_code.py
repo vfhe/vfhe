@@ -37,6 +37,7 @@ P(psi^(2*brv(p)+1)), so the pairs are `(P(x), P(-x))` and the twists are
 from __future__ import annotations
 
 import contextlib
+import copy
 import math
 import operator
 from array import array
@@ -577,6 +578,31 @@ class FieldFoldableRS:
             self._twist_vectors.append(x)
             self._fold_scale_vectors.append(x.scale(2).inverse())
 
+    def truncated(self, depth: int) -> FieldFoldableRS:
+        """The depth-`depth` code with this code's field, `k0`, `c`, seed and
+        options: its levels 0 to `depth`.
+
+        A foldable code's level `l` is defined by the levels below it and
+        level `l`'s twists [ZCF24, Def. 5], and here a level's twists are
+        drawn from the seed, the level and its length alone, as the base
+        code is from the seed and `n0`. So the code of a smaller depth is
+        this one's first levels, and it is returned sharing their tables and
+        transforms rather than sampling them again; it encodes, folds and
+        hashes exactly as the code built with `depth` does.
+        """
+        if not 1 <= depth <= self.d:
+            raise ValueError(f"depth must be in [1, {self.d}], got {depth}")
+        out = copy.copy(self)
+        out.d = depth
+        out.k_d = self.k0 << depth
+        out.n_d = self.n0 << depth
+        out._twist_vectors = self._twist_vectors[:depth]
+        out._fold_scale_vectors = self._fold_scale_vectors[:depth]
+        out._twist_elements = [None, None]
+        if self.instantiation == "rs":
+            out.roots = self.roots[: depth + 1]
+        return out
+
     def _level_transforms(self):
         """The per-level transforms of the ``"rs"`` instantiation."""
         if self._transforms is None:
@@ -650,9 +676,9 @@ class FieldFoldableRS:
         self, security_bits: int = 128, bound: str = "cccfgs26"
     ) -> float:
         """A lower bound on the relative minimum distance at every level: the
-        `delta` a soundness bound needs, which is a property of the code
-        rather than of the protocol, which is why `Basefold.soundness_error`
-        takes one instead of deriving it.
+        distance Delta that bounds the proximity parameter `delta` of
+        `BasefoldEval.soundness_error`. It is a property of the code rather
+        than of the protocol.
 
         For the ``"rs"`` instantiation every level is a Reed-Solomon code on
         distinct points, so level `l` has distance exactly

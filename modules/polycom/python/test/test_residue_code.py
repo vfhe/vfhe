@@ -116,7 +116,7 @@ def test_tables_live_where_the_twist_field_says(code):
 
 def test_field_twists_raise_the_distance_bound(field_twisted):
     code = field_twisted
-    prime = FoldableRS(code.ring, k0=code.k0, c=code.c, d=code.d)
+    prime = FoldableRS(code.ring, k0=code.k0, c=code.c, d=code.d, twist_field="prime")
     assert code.relative_distance() > prime.relative_distance()
 
 

@@ -52,6 +52,7 @@ Two instantiations share the class, selected by `instantiation`:
 from __future__ import annotations
 
 import contextlib
+import copy
 import math
 from typing import TYPE_CHECKING, TypeVar
 
@@ -326,10 +327,12 @@ class FoldableRS:
     `seed` is the public parameter every table of the general code is
     derived from; the ``"rs"`` instantiation ignores it.
 
-    `twist_field` says where the general code's twists live: ``"prime"``
-    (the default), the per-prime integers above; or ``"field"``, the residue
-    fields `R_q/P` of the ring's primes (`RNSRing.residue_field`, `F_(p^d)`
-    with d the split degree). With ``"field"`` the code is defined by one
+    `twist_field` says where the general code's twists live: ``"prime"``,
+    the per-prime integers above; or ``"field"``, the residue fields `R_q/P`
+    of the ring's primes (`RNSRing.residue_field`, `F_(p^d)` with d the split
+    degree). Left as None, it is ``"field"`` when the ring's split degree is
+    above 1 and ``"prime"`` otherwise, where the residue fields are the `F_p`
+    and the two give the same distance. With ``"field"`` the code is defined by one
     code per prime -- `FieldFoldableRS` over that residue field with
     full-field twists, its own seeded tables and base, built from `seed` and
     the prime -- and a codeword of `R_q` is the element-wise CRT lift of their
@@ -338,8 +341,10 @@ class FoldableRS:
     folding run in the residue fields, so a twist multiply costs an
     `F_(p^d)` product, d `F_p` products per coefficient where an integer twist
     costs one; the distance bound runs on `log2 p^d` bits instead of
-    `log2 p`. The ``"rs"`` instantiation's twists are roots of unity in `F_p`
-    whatever is asked.
+    `log2 p`. Either way the base code's transform has its root in `F_p`
+    when the primes carry one of order `2 n0`, i.e. when `n0 <= N/d`. The
+    ``"rs"`` instantiation's twists are roots of unity in `F_p` whatever is
+    asked.
     """
 
     def __init__(
@@ -351,13 +356,15 @@ class FoldableRS:
         *,
         instantiation: str = "general",
         seed: bytes = DEFAULT_SEED,
-        twist_field: str = "prime",
+        twist_field: str | None = None,
     ):
         for name, value in (("k0", k0), ("c", c)):
             if value < 1 or value & (value - 1):
                 raise ValueError(f"{name} must be a power of two, got {value}")
         if d < 1:
             raise ValueError(f"d must be at least 1, got {d}")
+        if twist_field is None:
+            twist_field = "field" if ring.split_degree > 1 else "prime"
         if twist_field not in ("field", "prime"):
             raise ValueError(
                 f"twist_field must be 'field' or 'prime', got {twist_field!r}"
@@ -389,6 +396,10 @@ class FoldableRS:
         # unlike the shared RNS base's prime count, which grows whenever another
         # ring of the same (N, split_degree) introduces a prime.
         self._plans: list = []
+        # The code that owns `_plans` when they are another code's (see
+        # `truncated`): that code frees them, and this reference keeps it
+        # alive while they are in use here.
+        self._plans_owner: FoldableRS | None = None
         #: With full-field twists, the code over each prime's residue field
         #: that defines this one (in `ring.primes` order); empty otherwise.
         self.residue_codes: list[FieldFoldableRS] = []
@@ -527,13 +538,43 @@ class FoldableRS:
                 return points
         raise RuntimeError(f"no {self.n0} distinct base points found")
 
+    def truncated(self, depth: int) -> FoldableRS:
+        """The depth-`depth` code with this code's ring, `k0`, `c`, seed and
+        options: its levels 0 to `depth`.
+
+        A foldable code's level `l` is defined by the levels below it and
+        level `l`'s twists [ZCF24, Def. 5], and here a level's twists are
+        drawn from the seed, the level and its length alone, as the base
+        code is from the seed and `n0` (and a transform's root from its
+        length). So the code of a smaller depth is this one's first levels,
+        and it is returned sharing their tables, plans and residue codes
+        rather than building them again; it encodes, folds and hashes
+        exactly as the code built with `depth` does.
+        """
+        if not 1 <= depth <= self.d:
+            raise ValueError(f"depth must be in [1, {self.d}], got {depth}")
+        out = copy.copy(self)
+        out.d = depth
+        out.k_d = self.k0 << depth
+        out.n_d = self.n0 << depth
+        out.twists = self.twists[:depth]
+        out._fold_scale = self._fold_scale[:depth]
+        out.residue_codes = [code.truncated(depth) for code in self.residue_codes]
+        if self.instantiation == "rs":
+            out.roots = self.roots[: depth + 1]
+            out._plans = self._plans[: depth + 1]
+        else:
+            out._plans = list(self._plans)
+        out._plans_owner = self if self._plans_owner is None else self._plans_owner
+        return out
+
     def relative_distance(
         self, security_bits: int = 128, bound: str = "cccfgs26"
     ) -> float:
         """A lower bound on the relative minimum distance at every level, per
-        RNS-prime component: the `delta` a soundness bound needs, which is a
-        property of the code rather than of the protocol, which is why
-        `Basefold.soundness_error` takes one instead of deriving it.
+        RNS-prime component: the distance Delta that bounds the proximity
+        parameter `delta` of `BasefoldEval.soundness_error`. It is a property
+        of the code rather than of the protocol.
 
         For the ``"rs"`` instantiation every level is a Reed-Solomon code on
         distinct points, so level `l` has distance exactly
@@ -557,6 +598,8 @@ class FoldableRS:
     def __del__(self) -> None:
         # interpreter shutdown may already have torn the lib down
         with contextlib.suppress(Exception):
+            if self._plans_owner is not None:
+                return
             for plans in self._plans:
                 lib.rs_free_plans(plans, self.ring.rns_rows)
 
