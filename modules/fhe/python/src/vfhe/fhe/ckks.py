@@ -150,6 +150,19 @@ class CKKS_Scheme(MLWE_Scheme):
         self.sample(message, key, out=out)
         return out
 
+    def encrypt_batch(
+        self, messages: Sequence[RNSPolynomial], key: MLWE_Key, n_threads: int = 0
+    ) -> list[CKKS_Ciphertext]:
+        """:meth:`encrypt` of each of ``messages``, in one native call.
+
+        Every ciphertext has a fresh mask and noise of its own, as from
+        :meth:`encrypt`, and they do not depend on the thread count (see
+        :meth:`MLWE_Scheme.sample_batch`). They come back in the NTT domain.
+        """
+        return cast(
+            "list[CKKS_Ciphertext]", self.sample_batch(messages, key, 0, n_threads)
+        )
+
     def decrypt(
         self,
         ciphertext: MLWE,
@@ -311,7 +324,7 @@ class CKKS_Scheme(MLWE_Scheme):
         current_ring = ciphertext.ring
         next_ring = self.rings[next_lvl]
         if not next_ring.is_quotient_ring(current_ring):
-            return self.rational_rescale(ciphertext)
+            return self.rational_rescale(ciphertext, n_threads)
 
         dropped = math.prod(p for p in current_ring.primes if p not in next_ring.primes)
         ciphertext.round_division(lvl=next_lvl, n_threads=n_threads)
@@ -324,7 +337,7 @@ class CKKS_Scheme(MLWE_Scheme):
         """:meth:`rescale` of each ciphertext (distinct, at one level).
 
         In place like :meth:`rescale`, except on non-nested chains, where
-        :meth:`rational_rescale` returns new ciphertexts one at a time.
+        :meth:`rational_rescale_batch` returns new ciphertexts.
         """
         if not cts:
             return []
@@ -335,7 +348,7 @@ class CKKS_Scheme(MLWE_Scheme):
             raise ValueError("no lower level to rescale into")
         current_ring, next_ring = cts[0].ring, self.rings[lvl + 1]
         if not next_ring.is_quotient_ring(current_ring):
-            return [self.rational_rescale(c) for c in cts]
+            return self.rational_rescale_batch(cts, n_threads)
         dropped = math.prod(p for p in current_ring.primes if p not in next_ring.primes)
         self.round_division_batch(cts, lvl + 1, n_threads)
         for c in cts:
@@ -423,47 +436,55 @@ class CKKS_Scheme(MLWE_Scheme):
                 layer.append(carry.copy().mod_reduce(lvl=layer[0].lvl))
         return layer[0]
 
-    def rational_rescale(self, ct: CKKS_Ciphertext) -> CKKS_Ciphertext:
+    def rational_rescale(
+        self, ct: CKKS_Ciphertext, n_threads: int = 0
+    ) -> CKKS_Ciphertext:
         """
         Rescale from level (lvl) to (lvl+1) as planned in the residue system.
+
+        Returns a new ciphertext, and leaves ``ct`` in the coefficient domain.
         """
-        level = ct.lvl
+        return self.rational_rescale_batch([ct], n_threads)[0]
+
+    def rational_rescale_batch(
+        self, cts: Sequence[CKKS_Ciphertext], n_threads: int = 0
+    ) -> list[CKKS_Ciphertext]:
+        """:meth:`rational_rescale` of each ciphertext, all at one level, with
+        one native call for the divisions."""
+        if not cts:
+            return []
+        level, start_ring = cts[0].lvl, cts[0].ring
+        if any(c.lvl != level or c.ring != start_ring for c in cts):
+            raise ValueError("the ciphertexts must share a level")
         if not (level < len(self.rings) - 1):
             raise ValueError("Cannot rescale a ciphertext at the last level")
-
-        start_ring = ct.ring
         end_ring = self.rings[level + 1]
 
         # Rescaling to a ring that is not a quotient of the current one needs a
-        # ring holding both sets of primes to move through.
+        # ring holding both sets of primes to move through: each ciphertext is
+        # lifted there, scaled by the primes it gains, then divided by the
+        # primes the next level does not keep.
         union_ring = start_ring.union(end_ring)
-
-        # Allocate new ciphertext at the next level
-        res = CKKS_Ciphertext(self, lvl=level + 1)
-
-        # Scale & lift, then round & divide for each 'a' polynomial
-        for i in range(self.r):
-            a_poly = ct.get_a_poly(i)
-            a_lifted = a_poly.scaled_lift(union_ring)
-            a_divided = a_lifted.round_division(end_ring)
-            self.ring.lib.polynomial_copy_RNS_polynomial(res.obj_a_i(i), a_divided.obj)
-
-        # Scale & lift, then round & divide for 'b' polynomial
-        b_poly = ct.get_b_poly()
-        b_lifted = b_poly.scaled_lift(union_ring)
-        b_divided = b_lifted.round_division(end_ring)
-        self.ring.lib.polynomial_copy_RNS_polynomial(res.obj_b(), b_divided.obj)
+        lib = self.ring.lib
+        lifted = []
+        for ct in cts:
+            ct.to_coeff()
+            res = ct.new_like(lvl=-1, ring=union_ring)
+            for i in range(self.r):
+                lib.polynomial_RNSc_scaled_lift(res.obj_a_i(i), ct.obj_a_i(i), ffi.NULL)
+            lib.polynomial_RNSc_scaled_lift(res.obj_b(), ct.obj_b(), ffi.NULL)
+            res.repr = repr.coeff
+            lifted.append(res)
+        self.round_division_batch(lifted, level + 1, n_threads)
 
         # Calculate scaling factor change
         primes_start = start_ring.primes
         primes_end = end_ring.primes
         p_val = math.prod([p for p in primes_end if p not in primes_start])
         q_val = math.prod([q for q in primes_start if q not in primes_end])
-
-        res.delta = ct.delta * p_val / q_val
-        res.repr = repr.coeff
-
-        return res
+        for res, ct in zip(lifted, cts, strict=True):
+            res.delta = ct.delta * p_val / q_val
+        return lifted
 
 
 class CKKS_Ciphertext(MLWE):
@@ -475,8 +496,9 @@ class CKKS_Ciphertext(MLWE):
         lvl: int | None = None,
         ring: RNSRing | None = None,
         rank: int | None = None,
+        obj=None,
     ):
-        super().__init__(scheme, lvl=lvl, ring=ring, rank=rank)
+        super().__init__(scheme, lvl=lvl, ring=ring, rank=rank, obj=obj)
         self.delta = scheme.scaling_factor
 
     def _inherit(self, other: MLWE) -> None:
