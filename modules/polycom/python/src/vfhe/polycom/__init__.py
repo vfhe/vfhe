@@ -21,7 +21,7 @@ from .code import (
     foldable_relative_distance,
 )
 from .field_code import ROOT_FIELDS, TWIST_FIELDS, FieldFoldableRS
-from .parameters import BasefoldParameters, basefold_parameters
+from .parameters import BasefoldParameters, basefold_messages, basefold_parameters
 from .queries import query_positions
 
 __all__ = [
@@ -39,6 +39,7 @@ __all__ = [
     "BatchFoldEval",
     "FieldFoldableRS",
     "FoldableRS",
+    "basefold_messages",
     "basefold_parameters",
     "batch_inverse",
     "bit_reverse",

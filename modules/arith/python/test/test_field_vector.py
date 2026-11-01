@@ -1731,18 +1731,107 @@ class TestDigestsReachATreeUntouched:
 
 
 def test_uint64_transfer_has_a_generic_default():
-    """`set_uint64` / `to_uint64` on an implementation without kernels for
-    them: the defaults on `FieldVector`, element by element."""
+    """`set_uint64` / `to_uint64` for an implementation without kernels for
+    them: the defaults on `FieldVector`, element by element, called
+    directly."""
     field = ExtensionField(PRIME, 1)
     values = array("Q", [0, 1, 5 << 11, PRIME - 1, (PRIME - 1) << 2])
     vector = FieldVector(field, len(values))
-    vector.set_uint64(values, shift=2, width=61)
+    FieldVector.set_uint64(vector, values, shift=2, width=61)
     expected = [((v >> 2) & ((1 << 61) - 1)) % PRIME for v in values]
     assert [int(e) for e in vector] == expected
-    assert vector.to_uint64() == array("Q", expected)
-    vector.set_uint64(array("Q", [9, 8]), start=1)
+    assert FieldVector.to_uint64(vector) == array("Q", expected)
+    FieldVector.set_uint64(vector, array("Q", [9, 8]), start=1)
     assert [int(e) for e in vector] == [expected[0], 9, 8, *expected[3:]]
     with pytest.raises(ValueError, match="width"):
-        vector.set_uint64(values, width=65)
-    vector.set_uint64(array("Q", [0, 0]), shift=64, width=61, high=array("Q", [7, 9]))
+        FieldVector.set_uint64(vector, values, width=65)
+    FieldVector.set_uint64(
+        vector, array("Q", [0, 0]), shift=64, width=61, high=array("Q", [7, 9])
+    )
     assert [int(e) for e in vector][:2] == [7, 9]
+
+
+class TestUint64AndCoefficients:
+    """`set_uint64`, `to_uint64`, `coefficients` and `set_coefficients` on
+    extension-field vectors, against the elements written one at a time."""
+
+    @pytest.mark.parametrize("d", DEGREES)
+    @pytest.mark.parametrize("n", LENGTHS)
+    @pytest.mark.parametrize(
+        ("shift", "width", "with_high"),
+        [(0, 64, False), (3, 61, False), (0, 64, True), (60, 40, True), (70, 50, True)],
+    )
+    def test_set_uint64(self, d, n, shift, width, with_high):
+        field = make_field(d)
+        rng = random.Random(n * 1000 + shift)  # noqa: S311 - test data, not a key
+        low = array("Q", (rng.getrandbits(64) for _ in range(n)))
+        high = array("Q", (rng.getrandbits(64) for _ in range(n)))
+        start = 2
+        vector = FieldVector(field, random_elements(field, n + 3, seed=n))
+        before = vector.to_list()
+        vector.set_uint64(
+            low, start=start, shift=shift, width=width, high=high if with_high else None
+        )
+        expected = list(before)
+        for i in range(n):
+            value = low[i] | (high[i] << 64 if with_high else 0)
+            expected[start + i] = field((value >> shift) % (1 << width) % PRIME)
+        assert vector.to_list() == expected
+
+    @pytest.mark.parametrize("d", DEGREES)
+    def test_to_uint64(self, d):
+        field = make_field(d)
+        values = array("Q", [0, 1, 7 << 40, PRIME - 1, 12345, 99, 3, 4, 5])
+        vector = FieldVector(field, len(values))
+        vector.set_uint64(values)
+        assert vector.to_uint64() == values
+        if d > 1:
+            vector[len(values) - 1] = field([5, 1] + [0] * (d - 2))
+            assert vector.to_uint64() is None
+
+    @pytest.mark.parametrize("d", DEGREES)
+    @pytest.mark.parametrize("n", LENGTHS)
+    def test_coefficients_are_the_elements_coordinates(self, d, n):
+        field = make_field(d)
+        rng = random.Random(n + d)  # noqa: S311 - test data, not a key
+        rows = [[rng.randrange(PRIME) for _ in range(d)] for _ in range(n)]
+        vector = FieldVector(field, [FieldElement(field, row) for row in rows])
+        coefficients = vector.coefficients()
+        assert len(coefficients) == d
+        for j in range(d):
+            assert coefficients[j] == array("Q", (row[j] for row in rows))
+
+    @pytest.mark.parametrize("d", DEGREES)
+    @pytest.mark.parametrize("n", LENGTHS)
+    def test_set_coefficients_reduces_and_writes_a_range(self, d, n):
+        field = make_field(d)
+        rng = random.Random(n + 7 * d)  # noqa: S311 - test data, not a key
+        coefficients = [
+            array("Q", (rng.getrandbits(64) for _ in range(n))) for _ in range(d)
+        ]
+        vector = FieldVector(field, random_elements(field, n + 4, seed=d))
+        before = vector.to_list()
+        vector.set_coefficients(coefficients, start=3)
+        expected = list(before)
+        for i in range(n):
+            expected[3 + i] = FieldElement(
+                field, [coefficients[j][i] % PRIME for j in range(d)]
+            )
+        assert vector.to_list() == expected
+        back = vector.coefficients()
+        for j in range(d):
+            assert back[j][3 : 3 + n] == array(
+                "Q", (c % PRIME for c in coefficients[j])
+            )
+
+    def test_set_coefficients_checks_its_buffers(self):
+        field = make_field(4)
+        vector = FieldVector(field, 8)
+        with pytest.raises(ValueError, match="4 coefficient buffers"):
+            vector.set_coefficients([array("Q", [1])] * 3)
+        with pytest.raises(ValueError, match="differ in length"):
+            vector.set_coefficients([array("Q", [1, 2])] * 3 + [array("Q", [1])])
+        with pytest.raises(ValueError, match="into 8 elements"):
+            vector.set_coefficients([array("Q", [1, 2])] * 4, start=7)
+        with pytest.raises(TypeError, match="64-bit"):
+            vector.set_coefficients([array("I", [1, 2])] * 4)

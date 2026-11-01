@@ -134,7 +134,7 @@ class _ProverVirtual:
     variable in the original definition (`reads`), not the tables that now
     span it. `evaluate` folds every table by the challenge."""
 
-    owned = True  # fresh tables: the round loop may fold them in place
+    owned = True  # its own table objects: the round loop may bind them in place
 
     def __init__(self, variables: list, factors: list, terms: list):
         self.variables = list(variables)

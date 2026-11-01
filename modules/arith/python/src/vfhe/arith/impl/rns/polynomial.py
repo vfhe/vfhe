@@ -578,6 +578,38 @@ class RNSRing(Ring):
             p.repr = repr.ntt
         return out
 
+    def from_diagonal(self, vectors: Sequence[FieldVector]) -> list[RNSPolynomial]:
+        """The elements whose ``N / split_degree`` components at each
+        ``primes[i]`` are all equal: element ``b`` has every component at
+        ``primes[i]`` equal to ``vectors[i][b]``. The same elements as
+        `from_crt_components` with every entry of ``vectors[i]`` repeated
+        once per component, without forming the repetitions. Returned in the
+        mul domain.
+
+        These elements form a subring, which contains the integers and the
+        elements `random_exceptional` draws.
+        """
+        if len(vectors) != self.ell:
+            raise ValueError(
+                f"expected one vector per prime ({self.ell}), got {len(vectors)}"
+            )
+        count = len(vectors[0])
+        out = [Polynomial(self) for _ in range(count)]
+        handles = ffi.new(
+            "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", p.obj) for p in out]
+        )
+        for index, vector in enumerate(vectors):
+            if vector.field is not self.residue_field(index):
+                raise ValueError(f"vector {index} is not over residue_field({index})")
+            if len(vector) != count:
+                raise ValueError("the vectors hold different numbers of elements")
+            self.lib.polynomial_RNS_from_diagonal(
+                handles, vector._struct, count, self._crt_maps(index, False)
+            )
+        for p in out:
+            p.repr = repr.ntt
+        return out
+
     def quotient_ring(self, mod_size=None, ell=None, mask=None):
         if not ((mod_size is not None) ^ (ell is not None) ^ (mask is not None)):
             raise ValueError("must provide mod_size, ell, or mask")

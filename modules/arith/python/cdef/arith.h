@@ -281,6 +281,8 @@ void polynomial_RNS_crt_linear_combination(FieldVector out, RNS_Polynomial *cons
                                            const FieldVector coefficients, RNS_CrtMaps maps);
 void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uint64_t count,
                                         RNS_CrtMaps maps);
+void polynomial_RNS_from_diagonal(RNS_Polynomial *out, FieldVector in, uint64_t count,
+                                  RNS_CrtMaps maps);
 void field_vec_add(FieldVector out, const FieldVector a, const FieldVector b);
 void field_vec_sub(FieldVector out, const FieldVector a, const FieldVector b);
 void field_vec_neg(FieldVector out, const FieldVector a);
@@ -301,6 +303,11 @@ void field_vec_get_element(uint64_t *out, const FieldVector a, uint64_t index);
 void field_vec_set_element(FieldVector out, uint64_t index, const uint64_t *value);
 void field_vec_set_range(FieldVector out, uint64_t start, const uint64_t *values, uint64_t count);
 void field_vec_get_range(uint64_t *out, const FieldVector a, uint64_t start, uint64_t count);
+void field_vec_set_uint64(FieldVector out, uint64_t start, const uint64_t *low,
+                          const uint64_t *high, uint64_t count, uint32_t shift, uint32_t width);
+void field_vec_set_coefficient(FieldVector out, uint64_t j, uint64_t start, const uint64_t *values,
+                               uint64_t count);
+bool field_vec_get_uint64(uint64_t *out, const FieldVector a);
 void field_vec_copy(FieldVector out, const FieldVector a);
 void field_vec_split_even_odd(FieldVector even, FieldVector odd, const FieldVector a);
 void field_vec_fma_interleave(FieldVector out, const FieldVector a, const FieldVector b,

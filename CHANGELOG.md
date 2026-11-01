@@ -14,6 +14,22 @@ versions may contain breaking changes.
 
 ### Added
 
+- `FieldVector.coefficients()` and `FieldVector.set_coefficients(coefficients,
+  start=0)`: the coordinates of extension-field elements over the prime
+  subfield, one `array('Q')` per coefficient of `x^j`, read with one copy
+  and written (reduced mod `p`) with one native call per coefficient,
+  `field_vec_set_coefficient`.
+- `RNSRing.from_diagonal(vectors)` and `polynomial_RNS_from_diagonal`: the
+  elements whose CRT components at each prime are all one given element of
+  the residue field, which `from_crt_components` gives from as many copies
+  of it as there are components, written without forming the copies.
+- `BasefoldMessages(schemes, sent=...)`: the table sizes in `sent` are sent
+  as their entries and named by a public `TableOracle` on both sides, so
+  their evaluation claims are decided by the verifier.
+  `basefold_messages(domain, sizes, security_bits)` builds the messages and
+  the `BasefoldEval` protocols for a target soundness: one scheme per size
+  from `basefold_parameters`, the sizes below the smallest that has
+  parameters sent.
 - `MLE.linear_combination(tables, coefficients)`: the table `sum_i c_i T_i`
   for tables over the same variables (in the same order), the same ring or
   field and the same basis; coefficients are elements of that ring or field,
@@ -722,6 +738,15 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `ExtensionFieldVector.set_uint64` and `to_uint64` are one native call each
+  (`field_vec_set_uint64`, `field_vec_get_uint64`) instead of one Python
+  call per element.
+- A sumcheck prover view no longer copies a constituent read through a
+  renaming: `VirtualOracle.dense_constituent`, `expand_table` and the
+  resolution of a restriction with no fixed coordinate return a new table
+  object over the same entries (`table_view`), whose binds install new
+  tables and leave the shared entries alone. A ring table shared this way is
+  put in NTT form first.
 - The proof-side kernels use the library's threads on large inputs: the
   dense ring-table operations (`mle_dense_poly_*`), the sumcheck rounds,
   the Reed-Solomon transforms and leaf digests, `hash_batch`, Merkle trees,

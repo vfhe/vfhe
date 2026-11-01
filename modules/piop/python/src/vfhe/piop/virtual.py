@@ -107,7 +107,7 @@ def resolve_table(oracle, witnesses: dict | None = None) -> Any:
             sliced.variables = [renames[v] for v in sliced.variables]
             return sliced
         if not fixed:
-            return table.rename(renames)
+            return table_view(table, [renames[v] for v in table.variables])
         table = table.evaluate(fixed, in_place=False)
         table.variables = [renames[v] for v in table.variables]
         return table
@@ -342,9 +342,10 @@ class VirtualOracle(Oracle):
         return out
 
     def dense_constituent(self, j: int, table):
-        """Constituent j as the prover reads it: fixed coordinates bound
-        (out of place), variables renamed to this oracle's. Not yet a copy
-        of its own: the strategies expand every factor into a fresh table."""
+        """Constituent j as the prover reads it, a table object of its own:
+        fixed coordinates bound (out of place), variables renamed to this
+        oracle's. With no fixed coordinate it shares `table`'s entries
+        (`table_view`)."""
         m = self.maps[j]
         fixed = {
             cv: src for cv, src in m.items() if not is_variable(src, self.variables)
@@ -354,7 +355,7 @@ class VirtualOracle(Oracle):
             table = table.evaluate(fixed, in_place=False)
             table.variables = [renames.get(v, v) for v in table.variables]
             return table
-        return table.rename(renames)
+        return table_view(table, [renames.get(v, v) for v in table.variables])
 
     def digest(self) -> bytes:
         parts = [b"virtual"]
@@ -390,18 +391,41 @@ def gather_bits(k: int, bits: list[int]) -> int:
 
 
 def expand_table(table, variables: list) -> MLE:
-    """`table` as a fresh dense table over `variables` — a superset of its
+    """`table` as a new dense table over `variables` — a superset of its
     own, in any order — holding the same polynomial (constant in the added
-    variables). Evaluation basis only: the entries are read as values."""
+    variables). When `variables` are the table's own, in order, the new
+    table shares its entries (`table_view`). Evaluation basis only: the
+    entries are read as values."""
     if getattr(table, "basis", MLE_Basis.eval) is not MLE_Basis.eval:
         raise NotImplementedError("defined oracles need evaluation-basis tables")
     own = [variables.index(v) for v in table.variables]
     if own == list(range(len(variables))):  # the same variables, in order
-        same = table.copy()
-        same.variables = list(variables)
-        return same
+        return table_view(table, variables)
     entries = [table.table[gather_bits(idx, own)] for idx in range(1 << len(variables))]
     return table_like([table], variables, entries)
+
+
+def table_view(table: MLE, variables: list) -> MLE:
+    """A view of `table` under `variables` (position for position): a new
+    table object over the same entries, not a copy of them. Binding a variable of a
+    table installs a new table and never writes the old entries, so either
+    table can be bound, in place or not, without changing the other.
+    Nothing may write their entries in place. A ring table is put in NTT
+    form first, so that a bind of the new table, which needs that form,
+    changes the representation of neither."""
+    if len(set(map(id, variables))) != len(variables):
+        raise ValueError("a table cannot have one variable twice")
+    table.to_NTT()
+    if table.basis is MLE_Basis.coeff:
+        return MLE(
+            ring=table.ring,
+            field=table.field,
+            variables=variables,
+            coefficients=table.table,
+        )
+    return MLE(
+        ring=table.ring, field=table.field, variables=variables, evaluations=table.table
+    )
 
 
 def table_like(tables: list, variables: list, evaluations: list) -> MLE:
@@ -414,8 +438,8 @@ def table_like(tables: list, variables: list, evaluations: list) -> MLE:
 
 
 def expanded_tables(oracle: VirtualOracle, witnesses: dict | None = None) -> list:
-    """Every constituent of `oracle` as a fresh dense table over all of the
-    oracle's variables, in its order: resolved on the prover's side
+    """Every constituent of `oracle` as a dense table object of its own over
+    all of the oracle's variables, in its order: resolved on the prover's side
     (`resolve_table`, a sparse table materialized), fixed coordinates bound
     and variables renamed (`dense_constituent`), then expanded (`expand_table`).
     The definition is then a products form over equal-length tables, read
