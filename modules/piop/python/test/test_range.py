@@ -930,3 +930,25 @@ def test_the_paper_parameter_sets_are_accepted(bits, alphabet, m, kappa):
     protocol = RangeDecomposition(field, m, alphabet, kappa, ring)
     assert protocol._shape(statement).ell_star == 24
     assert protocol.soundness_error(statement) <= 2.0**-128
+
+
+@pytest.mark.parametrize(
+    ("N", "prime_size", "split_degree"),
+    [(32, [30, 30], 1), (64, [50], 1), (256, [28, 60, 45], 4), (2, [40], 1)],
+)
+def test_the_verifier_evaluates_unpack_modulo_q(field, N, prime_size, split_degree):
+    """`_unpacked_evaluation` is `uEval` modulo `q`, on one prime or several,
+    on a split ring, and at points whose coordinates exceed the primes."""
+    ring = Ring(N, prime_size=prime_size, split_degree=split_degree)
+    protocol = RangeDecomposition(field, 0, ALPHABET, KAPPA, ring)
+    rng = random.Random(N)
+    nu = N.bit_length() - 1
+    for trial in range(3):
+        element = ring.random_element()
+        point = [rng.randrange(ALPHABET) for _ in range(nu)]
+        if trial == 2:
+            point = [p + ring.primes[0] for p in point]
+        expected = uEval(element, point) % ring.q_l
+        assert protocol._unpacked_evaluation(element, point) == expected
+    with pytest.raises(ValueError, match="coefficients"):
+        protocol._unpacked_evaluation(ring.random_element(), [1] * (nu + 1))

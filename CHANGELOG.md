@@ -738,6 +738,10 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `RangeDecomposition`'s verifier evaluates `unpack(v)` at its point modulo
+  `q` from the element's rows: per prime, the coefficients folded once per
+  coordinate as an `F_p` vector, then one CRT. It no longer rebuilds every
+  coefficient as an integer; `uEval` stays as the exact value.
 - `Lookup` is a bundle protocol: the claims into one table `t_beta` on
   oracles with the same number of variables run as one argument over the
   oracles laid end to end (padded with zero blocks to a power of two), so
