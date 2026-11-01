@@ -128,11 +128,23 @@ class Lookup(Protocol):
     spelled out over the oracles the verifier already has -- so the sumcheck
     ends on claims about `mu`, `read_ts`, `final_cts` and the `f^(1)_a`, and
     never on anything the verifier has to take on trust.
+
+    The driver hands the protocol every frontier `Relation_Lookup` claim at
+    once. Claims into the same table `t_beta` on oracles with the same number
+    of variables `n` form a group, and a group of `k > 1` claims is one run
+    over their concatenation: the oracles laid end to end, block `i` holding
+    `mu_i`, over `n + s` variables with `s = ceil(log2 k)`, and the blocks
+    past `k` holding zeros, an entry of every table. The counters, the
+    `f^(1)_a` and the products are then those of that one oracle, and in
+    `f^(0)_a` the term of `mu` becomes `sum_i sel_i * mu_i`, `sel_i` the
+    public `eq~` table of block `i` over the last `s` variables, which keeps
+    `f_a` multilinear. A group of one is the run above, unchanged.
     """
 
     name = "lookup"
     reduces_from: type[Relation] = Relation_Lookup
     reduces_to: tuple[type[Relation], ...] = (Relation_Sum, Relation_Eval)
+    batching = True
 
     def __init__(self, field: Any, messages: OracleMessages | None = None) -> None:
         self.field = field
@@ -144,7 +156,10 @@ class Lookup(Protocol):
         """`(2^ell* + 2^b*) / p` (Theorem I.5).
 
         The degree of the polynomial `P(Z, Z')` whose vanishing the
-        fingerprint challenges test, over the field they are drawn from.
+        fingerprint challenges test, over the field they are drawn from. A
+        group of `k` claims is one run with `(2^(ell* + s) + 2^b*) / p`,
+        `s = ceil(log2 k)`, at most the sum of its claims' errors when `k` is
+        a power of two.
         """
         (mu,) = statement.oracles
         beta = cast("Relation_Lookup", statement.relation).beta
@@ -171,11 +186,13 @@ class Lookup(Protocol):
         """`f_a = (1 - W_n) * sum(parts) + W_n * f^(1)_a`, as a virtual
         oracle over `W`.
 
-        `parts` is the affine form of the leaves: `(coefficient, oracle)`
-        pairs, with `oracle=None` for a constant. A constant needs the
-        indicator anyway -- a term must index at least one constituent, and
-        the constant is only there on the `W_n = 0` half -- so riding it on
-        `1 - W_n` is the correct algebra.
+        `parts` is the affine form of the leaves: `(coefficient, factors)`
+        pairs, `factors` a list of `(oracle, offset)` whose product is the
+        part, each oracle read over the variables of `W` from `offset` on;
+        an empty list is a constant. A constant needs the indicator anyway --
+        a term must index at least one constituent, and the constant is only
+        there on the `W_n = 0` half -- so riding it on `1 - W_n` is the
+        correct algebra.
         """
         last = W[-1]
         low = MLE.eq(self.field, [self.field.zero], variables=[last])  # 1 - W_n
@@ -191,13 +208,13 @@ class Lookup(Protocol):
             {v: W[i] for i, v in enumerate(f1.variables)},
         ]
         terms: list[tuple[Any, tuple[int, ...]]] = [(self.field.one, (1, 2))]
-        for coefficient, oracle in parts:
-            if oracle is None:
-                terms.append((coefficient, (0,)))
-                continue
-            constituents.append(oracle)
-            maps.append({v: W[i] for i, v in enumerate(oracle.variables)})
-            terms.append((coefficient, (0, len(constituents) - 1)))
+        for coefficient, factors in parts:
+            indices = [0]
+            for oracle, offset in factors:
+                constituents.append(oracle)
+                maps.append({v: W[offset + i] for i, v in enumerate(oracle.variables)})
+                indices.append(len(constituents) - 1)
+            terms.append((coefficient, tuple(indices)))
         return VirtualOracle(W, constituents, terms, maps)
 
     def _summand(self, X: list, point: list, chi: Any, pairs: list) -> VirtualOracle:
@@ -233,16 +250,21 @@ class Lookup(Protocol):
         return VirtualOracle(X, constituents, terms, maps)
 
     def _scaffold(
-        self, statement: Statement, read_ts: Oracle, final_cts: Oracle
+        self, group: list[Statement], read_ts: Oracle, final_cts: Oracle
     ) -> dict:
         """Everything downstream of the round-1 messages that does not depend
-        on a challenge: the public table, and the variable lists the two
-        sides are built over. Both parties derive it the same way."""
-        (mu,) = statement.oracles
-        beta = cast("Relation_Lookup", statement.relation).beta
-        n, b = mu.num_vars, beta.bit_length() - 1
+        on a challenge: the public table, the group's oracles with the
+        selectors of their blocks, and the variable lists the two sides are
+        built over. Both parties derive it the same way."""
+        mus = [statement.oracles[0] for statement in group]
+        beta = cast("Relation_Lookup", group[0].relation).beta
+        m, b = mus[0].num_vars, beta.bit_length() - 1
+        s = (len(mus) - 1).bit_length()
+        n = m + s
         return {
-            "mu": mu,
+            "mus": mus,
+            "selectors": self._selectors(s, len(mus)),
+            "block": m,
             "beta": beta,
             "sizes": {"WSmu": n, "RS": n, "WSt": b, "S": b},
             "table": self._table(b),
@@ -251,6 +273,24 @@ class Lookup(Protocol):
             "X": {"mu": self._names("x", n), "t": self._names("y", b)},
             "W": {"mu": self._names("w", n + 1), "t": self._names("u", b + 1)},
         }
+
+    def _selectors(self, s: int, k: int) -> list:
+        """`sel_i`, `eq~` of block `i` over `s` variables, as public oracles,
+        for the `k` blocks of a group; none when `s = 0`."""
+        if s == 0:
+            return []
+        field = self.field
+        return [
+            TableOracle(
+                MLE.eq(
+                    field,
+                    [field.one if i >> j & 1 else field.zero for j in range(s)],
+                    variables=self._names("z", s),
+                ),
+                public=True,
+            )
+            for i in range(k)
+        ]
 
     def _leaves(self, tables: dict, parts: dict, zeta: Any, tau: Any) -> dict:
         """The four fingerprint leaf tables, equations (41)-(43), from the
@@ -274,14 +314,24 @@ class Lookup(Protocol):
 
     def _virtuals(self, parts: dict, f1: dict, zeta: Any, tau: Any) -> dict:
         """The four layered oracles, each over its side's `W`."""
-        mu, table = parts["mu"], parts["table"]
+        table = parts["table"]
         read_ts, final_cts = parts["read_ts"], parts["final_cts"]
         one = self.field.one
+        if parts["selectors"]:
+            block = parts["block"]
+            mu = [
+                (one, [(selector, block), (oracle, 0)])
+                for selector, oracle in zip(
+                    parts["selectors"], parts["mus"], strict=True
+                )
+            ]
+        else:
+            mu = [(one, [(parts["mus"][0], 0)])]
         affine = {
-            "WSmu": [(one, mu), (zeta, read_ts), (zeta - tau, None)],
-            "RS": [(one, mu), (zeta, read_ts), (-tau, None)],
-            "WSt": [(one, table), (-tau, None)],
-            "S": [(one, table), (zeta, final_cts), (-tau, None)],
+            "WSmu": [*mu, (zeta, [(read_ts, 0)]), (zeta - tau, [])],
+            "RS": [*mu, (zeta, [(read_ts, 0)]), (-tau, [])],
+            "WSt": [(one, [(table, 0)]), (-tau, [])],
+            "S": [(one, [(table, 0)]), (zeta, [(final_cts, 0)]), (-tau, [])],
         }
         return {
             a: self._layered(parts["W"][_SIDE[a]], f1[a], affine[a])
@@ -290,7 +340,7 @@ class Lookup(Protocol):
 
     def _outputs(
         self,
-        statement: Statement,
+        group: list[Statement],
         parts: dict,
         f1: dict,
         virtual: dict,
@@ -304,7 +354,7 @@ class Lookup(Protocol):
         same bundle in the same sequence."""
         out = [
             self.reduce(
-                [statement],
+                group,
                 Relation_Sum,
                 oracles=[
                     self._summand(
@@ -325,7 +375,7 @@ class Lookup(Protocol):
             }
             out.append(
                 self.reduce(
-                    [statement],
+                    group,
                     Relation_Eval,
                     oracles=[f1[a]],
                     point=point,
@@ -336,17 +386,64 @@ class Lookup(Protocol):
 
     # --- the two halves ----------------------------------------------------
 
+    def _groups(self, statements: list[Statement]) -> list[list[Statement]]:
+        """The claims run together: same `beta` and same number of variables,
+        in order of first appearance, each group in the order given (both
+        parties receive the bundle in path order)."""
+        groups: dict[tuple[int, int], list[Statement]] = {}
+        for statement in statements:
+            beta = cast("Relation_Lookup", statement.relation).beta
+            key = (beta, statement.oracles[0].num_vars)
+            groups.setdefault(key, []).append(statement)
+        return list(groups.values())
+
     async def prove(
         self, prover: Prover, statements: list[Statement]
     ) -> list[Statement]:
-        (statement,) = statements
+        out = []
+        for group in self._groups(statements):
+            out += await self._prove_group(prover, group)
+        return out
+
+    async def verify(
+        self, verifier: Verifier, statements: list[Statement]
+    ) -> list[Statement]:
+        out = []
+        for group in self._groups(statements):
+            out += await self._verify_group(verifier, group)
+        return out
+
+    def _concatenation(self, prover: Prover, group: list[Statement]) -> MLE:
+        """The group's oracles end to end on the prover's side, padded with
+        zero blocks to a power of two; the table itself for a group of one."""
+        tables = [resolve_table(s.oracles[0], prover.witnesses) for s in group]
+        if len(tables) == 1:
+            return tables[0]
+        size = 1 << tables[0].num_vars
+        blocks = 1 << (len(tables) - 1).bit_length()
+        variables = self._names("m", tables[0].num_vars + (blocks.bit_length() - 1))
+        if all(vector_table(t) for t in tables):
+            vectors = [t.table for t in tables]
+            if blocks > len(tables):
+                vectors.append(FieldVector(self.field, (blocks - len(tables)) * size))
+            return MLE(
+                field=self.field,
+                variables=variables,
+                evaluations=FieldVector.concat(vectors),
+            )
+        entries = [e for t in tables for e in t.table]
+        entries += [self.field.zero] * ((blocks - len(tables)) * size)
+        return MLE(field=self.field, variables=variables, evaluations=entries)
+
+    async def _prove_group(
+        self, prover: Prover, group: list[Statement]
+    ) -> list[Statement]:
         iop = prover.iop
-        (mu,) = statement.oracles
-        beta = cast("Relation_Lookup", statement.relation).beta
-        label = f"{self.name}{statement.path}"
+        beta = cast("Relation_Lookup", group[0].relation).beta
+        label = f"{self.name}{group[0].path}"
         field = self.field
 
-        mu_table = resolve_table(mu, prover.witnesses)
+        mu_table = self._concatenation(prover, group)
         # `to_uint64` is None when an entry is 2^64 or more: such an entry is
         # outside the table, and `counters` still counts it.
         values = mu_table.table.to_uint64() if vector_table(mu_table) else None
@@ -355,7 +452,9 @@ class Lookup(Protocol):
         read_counts, final_counts = counters(values, beta)
         tables = {
             "mu": mu_table,
-            "read_ts": self._counter_table(self._names("r", mu.num_vars), read_counts),
+            "read_ts": self._counter_table(
+                self._names("r", mu_table.num_vars), read_counts
+            ),
             "final_cts": self._counter_table(
                 self._names("c", beta.bit_length() - 1), final_counts
             ),
@@ -367,7 +466,7 @@ class Lookup(Protocol):
         zeta = await iop.verifier.challenge(f"{label}/zeta", self.field)
         tau = await iop.verifier.challenge(f"{label}/tau", self.field)
 
-        parts = self._scaffold(statement, read_ts, final_cts)
+        parts = self._scaffold(group, read_ts, final_cts)
         trees = {
             a: product_tree_vector(leaves)
             for a, leaves in self._leaves(tables, parts, zeta, tau).items()
@@ -402,19 +501,19 @@ class Lookup(Protocol):
             prover.witnesses[virtual[a]] = MLE(
                 field=field, variables=parts["W"][_SIDE[a]], evaluations=trees[a]
             )
-        return self._outputs(statement, parts, f1, virtual, chi, points, products)
+        return self._outputs(group, parts, f1, virtual, chi, points, products)
 
-    async def verify(
-        self, verifier: Verifier, statements: list[Statement]
+    async def _verify_group(
+        self, verifier: Verifier, group: list[Statement]
     ) -> list[Statement]:
-        (statement,) = statements
         iop = verifier.iop
-        (mu,) = statement.oracles
-        beta = cast("Relation_Lookup", statement.relation).beta
-        label = f"{self.name}{statement.path}"
+        mu = group[0].oracles[0]
+        beta = cast("Relation_Lookup", group[0].relation).beta
+        label = f"{self.name}{group[0].path}"
+        n = mu.num_vars + (len(group) - 1).bit_length()
 
         read_ts = await self.messages.receive(
-            verifier, f"{label}/read_ts", self._names("r", mu.num_vars), self.field
+            verifier, f"{label}/read_ts", self._names("r", n), self.field
         )
         final_cts = await self.messages.receive(
             verifier,
@@ -425,7 +524,7 @@ class Lookup(Protocol):
         zeta = await iop.verifier.challenge(f"{label}/zeta", self.field)
         tau = await iop.verifier.challenge(f"{label}/tau", self.field)
 
-        parts = self._scaffold(statement, read_ts, final_cts)
+        parts = self._scaffold(group, read_ts, final_cts)
         f1 = {
             a: await self.messages.receive(
                 verifier,
@@ -452,7 +551,7 @@ class Lookup(Protocol):
             )
 
         virtual = self._virtuals(parts, f1, zeta, tau)
-        return self._outputs(statement, parts, f1, virtual, chi, points, products)
+        return self._outputs(group, parts, f1, virtual, chi, points, products)
 
     # --- helpers shared by the halves --------------------------------------
 
