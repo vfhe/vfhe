@@ -58,6 +58,7 @@ struct FieldVecJob
     VecChunks chunks;
     FieldVector out, a, b, c, c2;
     const uint64_t *s, *s2;
+    uint64_t *words;
     uint64_t window, period;
     uint64_t group, window_step, element_step;
     uint8_t *bytes;
@@ -964,6 +965,142 @@ void field_vec_get_range(uint64_t *out, const FieldVector a, uint64_t start, uin
         for (uint64_t i = 0; i < count; i++)
             out[i * d + j] = plane[i];
     }
+}
+
+// Words a load writes and then reduces while they are in L1: 4 KiB.
+#define FIELD_VEC_LOAD_BLOCK 512
+
+// Bit field `shift`, `shift + log2(mask + 1)` of v_i = low[i] + 2^64 high[i]
+// (high may be NULL, for zero), into out[i] for i < count. One loop per case,
+// so none of them branches per element.
+static void field_vec_bit_fields(uint64_t *out, const uint64_t *low, const uint64_t *high,
+                                 uint64_t count, uint64_t shift, uint64_t mask)
+{
+    if (!high || shift == 0)
+        for (uint64_t i = 0; i < count; i++)
+            out[i] = (low[i] >> shift) & mask;
+    else if (shift >= 64)
+        for (uint64_t i = 0; i < count; i++)
+            out[i] = (high[i] >> (shift - 64)) & mask;
+    else
+        for (uint64_t i = 0; i < count; i++)
+            out[i] = ((low[i] >> shift) | (high[i] << (64 - shift))) & mask;
+}
+
+// words[i] = (bit field of v_i, as in field_vec_bit_fields) mod q, for
+// i < count. Each block is written, then reduced while it is in L1; no
+// reduction is needed when mask < q. The reductions run on 64-byte aligned
+// words only, which the eltwise kernels need: the words before the first
+// boundary, fewer than eight, are reduced one at a time.
+static void field_vec_load_words(uint64_t *words, const uint64_t *low, const uint64_t *high,
+                                 uint64_t count, uint64_t shift, uint64_t mask, Modulus mod)
+{
+    const bool reduce = mask >= mod->q;
+    uint64_t head = (8 - ((uintptr_t)words / sizeof(uint64_t)) % 8) % 8;
+    if (head > count)
+        head = count;
+    field_vec_bit_fields(words, low, high, head, shift, mask);
+    if (reduce)
+        for (uint64_t i = 0; i < head; i++)
+            words[i] = modq(words[i], mod);
+    for (uint64_t b = head; b < count; b += FIELD_VEC_LOAD_BLOCK)
+    {
+        const uint64_t n = count - b < FIELD_VEC_LOAD_BLOCK ? count - b : FIELD_VEC_LOAD_BLOCK;
+        field_vec_bit_fields(words + b, low + b, high ? high + b : NULL, n, shift, mask);
+        if (reduce)
+            mod_eltwise_reduce(words + b, words + b, n, mod);
+    }
+}
+
+// Positions [begin, end) of a load into plane job->window: the positions are
+// counted from job->group, the 64-byte aligned position at or below the first
+// one written, and the values start at job->element_step, the first position
+// written. job->s and job->s2 are `low` and `high`, job->window_step the shift
+// and job->period the mask. A load into plane 0 zeroes the other planes.
+static void field_vec_load_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    const uint64_t first = job->element_step;
+    if (begin < first)
+        begin = first;
+    if (begin >= end)
+        return;
+    const uint64_t at = job->group + begin, from = begin - first, count = end - begin;
+    field_vec_load_words(job->out->coeffs[job->window] + at, job->s + from,
+                         job->s2 ? job->s2 + from : NULL, count, job->window_step, job->period,
+                         job->out->mod);
+    if (job->window == 0)
+        for (uint64_t j = 1; j < job->out->d; j++)
+            memset(job->out->coeffs[j] + at, 0, count * sizeof(uint64_t));
+}
+
+// Loads `count` values into plane j from position `start`, split across
+// threads at positions that are 64-byte aligned in the plane.
+static void field_vec_load(FieldVector out, uint64_t j, uint64_t start, const uint64_t *low,
+                           const uint64_t *high, uint64_t count, uint64_t shift, uint64_t mask)
+{
+    const uint64_t skew = start % MOD_MIN_VECTOR_LEN;
+    FieldVecJob job = {.range = field_vec_load_range,
+                       .out = out,
+                       .s = low,
+                       .s2 = high,
+                       .group = start - skew,
+                       .element_step = skew,
+                       .window = j,
+                       .window_step = shift,
+                       .period = mask};
+    field_vec_run(&job, skew + count, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN);
+}
+
+void field_vec_set_uint64(FieldVector out, uint64_t start, const uint64_t *low,
+                          const uint64_t *high, uint64_t count, uint32_t shift, uint32_t width)
+{
+    assert(start + count <= out->n && shift < (high ? 128u : 64u) && width >= 1 && width <= 64);
+    field_vec_load(out, 0, start, low, high, count, shift,
+                   width == 64 ? ~0ULL : (1ULL << width) - 1);
+}
+
+void field_vec_set_coefficient(FieldVector out, uint64_t j, uint64_t start, const uint64_t *values,
+                               uint64_t count)
+{
+    assert(j < out->d && start + count <= out->n);
+    field_vec_load(out, j, start, values, NULL, count, 0, ~0ULL);
+}
+
+// Positions [begin, end) of field_vec_get_uint64: plane 0 copied to
+// job->words, and job->bytes[begin / job->window] set when a higher plane is
+// nonzero there.
+static void field_vec_get_uint64_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    const FieldVector a = job->a;
+    uint64_t any = 0;
+    for (uint64_t j = 1; j < a->d; j++)
+    {
+        const uint64_t *plane = a->coeffs[j];
+        for (uint64_t i = begin; i < end; i++)
+            any |= plane[i];
+    }
+    job->bytes[begin / job->window] = any != 0;
+    memcpy(job->words + begin, a->coeffs[0] + begin, (end - begin) * sizeof(uint64_t));
+}
+
+bool field_vec_get_uint64(uint64_t *out, const FieldVector a)
+{
+    FieldVecJob job = {.range = field_vec_get_uint64_range, .a = a, .words = out};
+    uint8_t nonzero = 0;
+    if (!field_vec_split(&job, a->n, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN))
+    {
+        job.window = a->n ? a->n : 1;
+        job.bytes = &nonzero;
+        job.range(&job, 0, a->n);
+        return !nonzero;
+    }
+    job.window = job.chunks.length;
+    job.bytes = (uint8_t *)safe_malloc(job.chunks.count);
+    field_vec_run_chunks(&job);
+    for (uint64_t c = 0; c < job.chunks.count; c++)
+        nonzero |= job.bytes[c];
+    free(job.bytes);
+    return !nonzero;
 }
 
 void field_vec_copy(FieldVector out, const FieldVector a)

@@ -4,6 +4,7 @@
 #include <arith_trace.h>
 #include "alloc.h"
 #include "memory_pool.h"
+#include <parallel.h>
 #include <crypto.h>
 #include <blake3.h>
 
@@ -2627,6 +2628,61 @@ void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uin
         }
     }
     free(tile);
+}
+
+// Calls below this size of output rows run on one thread.
+#define FROM_DIAGONAL_PARALLEL_BYTES (1u << 20)
+
+typedef struct
+{
+    RNS_Polynomial *out;
+    FieldVector in;
+    RNS_CrtMaps maps;
+} FromDiagonalJob;
+
+/* Row maps->row of out[b] from element b of `in`. Every component is the
+   same beta = sum_j beta_j x^j, so slot s of the row holds the image of beta
+   under the inverse map of slot s: the coefficient of x^dest_s(j) is
+   factor[j * k + s] * beta_j. On a run of slots dest_s(j) is one index, so
+   each (run, j) is one scaled copy of a run of factors. */
+static void from_diagonal_element(void *ctx, uint64_t b)
+{
+    const FromDiagonalJob *job = (const FromDiagonalJob *)ctx;
+    const RNS_CrtMaps maps = job->maps;
+    const RNS_Base base = maps->base;
+    const uint64_t row = maps->row;
+    const uint64_t d = base->split_degree, k = base->N / d;
+    const Modulus mod = base->mods[row];
+    const bool narrow = rns_row_is_narrow(base, row);
+    for (uint64_t j = 0; j < d; j++)
+    {
+        const uint64_t beta = job->in->coeffs[j][b];
+        for (uint64_t r = 0; r < maps->runs; r++)
+        {
+            const uint64_t lo = maps->run_start[r], hi = maps->run_start[r + 1];
+            const uint64_t at = maps->run_dest[r * d + j] * k + lo;
+            if (narrow)
+                mod_eltwise_scale_w32(rns_row32(job->out[b], row) + at, maps->factor32 + j * k + lo,
+                                      beta, hi - lo, mod);
+            else
+                mod_eltwise_scale(rns_row64(job->out[b], row) + at, maps->factor + j * k + lo, beta,
+                                  hi - lo, mod);
+        }
+    }
+}
+
+void polynomial_RNS_from_diagonal(RNS_Polynomial *out, FieldVector in, uint64_t count,
+                                  RNS_CrtMaps maps)
+{
+    assert(!maps->to_slot_zero);
+    const RNS_Base base = maps->base;
+    assert(in->d == base->split_degree && in->n == count);
+    assert(in->mod->q == base->mods[maps->row]->q && in->w == base->w[maps->row][0]);
+    for (uint64_t b = 0; b < count; b++)
+        assert(out[b]->base == base);
+    FromDiagonalJob job = {out, in, maps};
+    const bool wide = count * base->N * sizeof(uint64_t) >= FROM_DIAGONAL_PARALLEL_BYTES;
+    vfhe_parallel_for(count, wide ? 0 : 1, from_diagonal_element, &job);
 }
 
 int polynomial_RNS_inverse_generic(RNS_Polynomial out, RNS_Polynomial in)

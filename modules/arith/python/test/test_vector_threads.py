@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from vfhe.arith import (
     ExtensionField,
+    FieldElement,
     FieldVector,
     PseudoMersenneField,
     PseudoMersenneNTT,
@@ -501,6 +502,45 @@ class TestExtension:
         serial, threaded = at_one_and_many(fold_in_place)
         assert serial == expected
         assert threaded == expected
+
+    @pytest.mark.parametrize(
+        ("shift", "width", "with_high"),
+        [(0, 64, False), (5, 13, False), (60, 30, True)],
+    )
+    def test_set_uint64(self, extension, shift, width, with_high):
+        low, high = words(N_ARITH, 1), words(N_ARITH, 2)
+
+        def loaded() -> FieldVector:
+            vector = sampled(extension, N_ARITH + 3, b"before")
+            vector.set_uint64(
+                low, start=3, shift=shift, width=width, high=high if with_high else None
+            )
+            return vector
+
+        same_on_one_and_many(loaded)
+
+    def test_to_uint64(self, extension):
+        """Every chunk checks its own positions: an element outside the prime
+        subfield is found in the last chunk as in the first."""
+        values = words(N_ARITH, 5)
+        vector = FieldVector(extension, N_ARITH)
+        vector.set_uint64(values)
+        expected = array("Q", (v % extension.prime for v in values))
+        assert at_one_and_many(vector.to_uint64) == (expected, expected)
+        for where in (0, N_ARITH - 1):
+            other = vector.copy()
+            other[where] = FieldElement(extension, [1, 1] + [0] * (extension.d - 2))
+            assert at_one_and_many(other.to_uint64) == (None, None)
+
+    def test_set_coefficients(self, extension):
+        coefficients = [words(N_ARITH, 3 + j) for j in range(extension.d)]
+
+        def loaded() -> FieldVector:
+            vector = sampled(extension, N_ARITH + 5, b"before")
+            vector.set_coefficients(coefficients, start=5)
+            return vector
+
+        same_on_one_and_many(loaded)
 
     @pytest.mark.parametrize(("group", "stride"), [(1, 1), (2, 2), (5, 1), (40, 40)])
     def test_hash_elements(self, ext_operands, group, stride):

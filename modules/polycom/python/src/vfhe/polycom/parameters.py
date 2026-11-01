@@ -24,13 +24,22 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from vfhe.arith import ExtensionField, Field, RNSRing
 from vfhe.crypto import DIGEST_LEN
 
-from .basefold import basefold_soundness_error
-from .code import foldable_relative_distance
-from .field_code import TWIST_FIELDS
+from .basefold import (
+    Basefold,
+    BasefoldEval,
+    BasefoldMessages,
+    basefold_soundness_error,
+)
+from .code import FoldableRS, foldable_relative_distance
+from .field_code import TWIST_FIELDS, FieldFoldableRS
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # The offsets of gamma above its least admissible value that the search tries:
 # a half-decade grid, 10^-2 to 10^-7.5.
@@ -182,7 +191,11 @@ def basefold_parameters(
     domain's `exceptional_set_size`, the set the challenges come from.
 
     `claims` and `polynomials` describe a bundle opened together, as
-    `soundness_error` takes them. `max_k0` bounds the base table the
+    `soundness_error` takes them. They enter the bound only through its
+    batching terms, ``(2 num_vars + claims - 1) / |A|`` when ``claims > 1``
+    and ``(polynomials - 1) / |A|``: the parameters chosen for one claim,
+    opened as a bundle, have the error reported plus those terms. `max_k0`
+    bounds the base table the
     verifier re-encodes in full; with `inverse_rates`, its default is the
     estimator's search space.
 
@@ -279,3 +292,60 @@ def basefold_parameters(
             f"challenges from 2^{math.log2(size):.1f}"
         )
     return best
+
+
+def basefold_messages(
+    domain: Field | RNSRing,
+    sizes: Iterable[int],
+    security_bits: int = 128,
+    *,
+    twist_field: str | None = None,
+    **options,
+) -> tuple[BasefoldMessages, list[BasefoldEval]]:
+    """Oracle messages for tables of ``2^n`` entries over `domain`, for `n`
+    in `sizes`, at soundness error ``2^-security_bits``, and the evaluation
+    protocols of their schemes, which the caller registers for
+    `Relation_Eval`.
+
+    Each size gets the scheme and the query count `basefold_parameters`
+    chooses for it (with `twist_field` and `options` passed on), over the
+    general foldable code. The sizes below the smallest one that has
+    parameters are sent as their entries (`BasefoldMessages` `sent`). An
+    opening needs fewer queries than its base codeword has positions, which
+    small tables do not allow.
+
+    Raises `ValueError` when no size has parameters, giving
+    `basefold_parameters`' reason for the largest, and when a size above
+    one that has parameters has none.
+    """
+    sizes = sorted(set(sizes))
+    chosen: dict[int, BasefoldParameters] = {}
+    failures: dict[int, ValueError] = {}
+    for n in sizes:
+        try:
+            chosen[n] = basefold_parameters(
+                domain, n, security_bits, twist_field=twist_field, **options
+            )
+        except ValueError as error:
+            failures[n] = error
+    if not chosen:
+        raise failures[sizes[-1]] if sizes else ValueError("no table sizes given")
+    smallest = min(chosen)
+    above = [n for n in failures if n > smallest]
+    if above:
+        raise failures[above[0]]
+    schemes, evals = [], []
+    for parameters in chosen.values():
+        shape = (parameters.k0, parameters.c, parameters.d)
+        if isinstance(domain, Field):
+            code = (
+                FieldFoldableRS(domain, *shape)
+                if twist_field is None
+                else FieldFoldableRS(domain, *shape, twist_field=twist_field)
+            )
+        else:
+            code = FoldableRS(domain, *shape, twist_field=twist_field)
+        scheme = Basefold(code, list(parameters.schedule))
+        schemes.append(scheme)
+        evals.append(BasefoldEval(scheme, rep=parameters.rep))
+    return BasefoldMessages(schemes, sent=failures), evals

@@ -60,7 +60,7 @@ changing any message here.
 from __future__ import annotations
 
 from array import array
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from vfhe.arith import MLE, Field, FieldElement, FieldVector, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
@@ -94,7 +94,9 @@ from .code import pair_digest as pair_digest
 from .queries import query_positions
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterable
+
+    from vfhe.piop import Oracle
 
     from .field_code import FieldFoldableRS
 
@@ -343,15 +345,30 @@ class BasefoldMessages(OracleMessages):
     and `receive` reads the root and names the `CommittedOracle`. The
     evaluation claims on those oracles are discharged by each scheme's
     `BasefoldEval`, which the caller registers for `Relation_Eval`.
+
+    Tables of ``2^n`` entries for `n` in `sent` are not committed: their
+    message is the entries, as in `OracleMessages`, and both parties name
+    the table by a public `TableOracle`, since the verifier holds it whole;
+    an evaluation claim on it is then decided by the verifier's own
+    evaluation. `basefold_messages` sends the sizes that have no basefold
+    parameters for a target soundness this way.
     """
 
-    def __init__(self, schemes: list[Basefold]) -> None:
+    def __init__(self, schemes: list[Basefold], sent: Iterable[int] = ()) -> None:
         self.schemes: dict[int, Basefold] = {}
         for scheme in schemes:
             num_vars = scheme.code.k_d.bit_length() - 1
             if num_vars in self.schemes:
                 raise ValueError(f"two schemes for tables of 2^{num_vars} entries")
             self.schemes[num_vars] = scheme
+        #: The table sizes, as variable counts, whose entries are the message.
+        self.sent = frozenset(sent)
+        both = self.sent & self.schemes.keys()
+        if both:
+            raise ValueError(
+                f"tables of 2^n entries for n in {sorted(both)} are both sent and "
+                "committed"
+            )
 
     @classmethod
     def from_code(
@@ -378,17 +395,28 @@ class BasefoldMessages(OracleMessages):
             raise ValueError(
                 f"no scheme for tables of 2^{num_vars} entries; there are "
                 f"schemes for 2^n entries with n in {sorted(self.schemes)}"
+                + (
+                    f" and tables sent for n in {sorted(self.sent)}"
+                    if self.sent
+                    else ""
+                )
             )
         return scheme
 
-    def send(self, prover: Prover, label: str, table: MLE) -> CommittedOracle:
+    def send(self, prover: Prover, label: str, table: MLE) -> Oracle:
+        if table.num_vars in self.sent:
+            prover.iop.transcript.write(label, tuple(table.table))
+            return TableOracle(table, public=True)
         oracle, _ = self._scheme(table.num_vars).commit(table, prover=prover)
         prover.iop.transcript.write(label, oracle.commitment.root)
         return oracle
 
     async def receive(
         self, verifier: Verifier, label: str, variables: list, field: Any
-    ) -> CommittedOracle:
+    ) -> Oracle:
+        if len(variables) in self.sent:
+            oracle = await super().receive(verifier, label, variables, field)
+            return TableOracle(cast("TableOracle", oracle).polynomial, public=True)
         scheme = self._scheme(len(variables))
         root = await verifier.iop.transcript.read(label)
         if not isinstance(root, bytes) or len(root) != DIGEST_LEN:

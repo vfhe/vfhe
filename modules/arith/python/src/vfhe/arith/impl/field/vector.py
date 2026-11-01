@@ -11,10 +11,16 @@ declaration in ``arith.h``; this module is what allocates buffers meeting it.
 
 from __future__ import annotations
 
+from array import array
 from typing import TYPE_CHECKING
 
 from vfhe.arith._alloc import aligned64, aligned64_unset
-from vfhe.arith.base import FieldVector, _sample_positions, index_buffer
+from vfhe.arith.base import (
+    FieldVector,
+    _check_bit_field,
+    _sample_positions,
+    index_buffer,
+)
 from vfhe.util.bindings import ffi, lib
 
 from .field import ExtensionFieldElement
@@ -23,6 +29,26 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .field import ExtensionField
+
+
+def _check_coefficients(n: int, d: int, coefficients, start: int) -> int:
+    """The preconditions of `FieldVector.set_coefficients` on a vector of `n`
+    elements of a degree-`d` extension; returns the number of elements."""
+    if len(coefficients) != d:
+        raise ValueError(f"expected {d} coefficient buffers, got {len(coefficients)}")
+    count = None
+    for buffer in coefficients:
+        view = memoryview(buffer)
+        if view.itemsize != 8 or view.format not in ("Q", "L"):
+            raise TypeError("coefficients must be buffers of 64-bit unsigned integers")
+        if count is None:
+            count = len(view)
+        elif len(view) != count:
+            raise ValueError("the coefficient buffers differ in length")
+    count = count or 0
+    if not 0 <= start <= start + count <= n:
+        raise ValueError(f"{count} elements from {start} into {n} elements")
+    return count
 
 
 class ExtensionFieldVector(FieldVector):
@@ -196,6 +222,49 @@ class ExtensionFieldVector(FieldVector):
         result = self._like()
         lib.field_vec_copy(result._struct, self._struct)
         return result
+
+    def set_uint64(
+        self, values, start: int = 0, shift: int = 0, width: int = 64, high=None
+    ) -> None:
+        """See `FieldVector.set_uint64`; one call for all the values."""
+        count = _check_bit_field(self._n, values, start, shift, width, high)
+        if count:
+            lib.field_vec_set_uint64(
+                self._struct,
+                start,
+                ffi.from_buffer("uint64_t[]", values),
+                ffi.NULL if high is None else ffi.from_buffer("uint64_t[]", high),
+                count,
+                shift,
+                width,
+            )
+
+    def to_uint64(self) -> array | None:
+        """See `FieldVector.to_uint64`; one call for the whole vector."""
+        out = array("Q", bytes(8 * self._n))
+        if self._n and not lib.field_vec_get_uint64(
+            ffi.from_buffer("uint64_t[]", out), self._struct
+        ):
+            return None
+        return out
+
+    def coefficients(self) -> list[array]:
+        """See `FieldVector.coefficients`; one copy per coefficient."""
+        out = []
+        for plane in self._planes:
+            values = array("Q")
+            values.frombytes(ffi.buffer(plane, 8 * self._n))
+            out.append(values)
+        return out
+
+    def set_coefficients(self, coefficients, start: int = 0) -> None:
+        """See `FieldVector.set_coefficients`; one call per coefficient."""
+        count = _check_coefficients(self._n, self.field.d, coefficients, start)
+        if count:
+            for j, values in enumerate(coefficients):
+                lib.field_vec_set_coefficient(
+                    self._struct, j, start, ffi.from_buffer("uint64_t[]", values), count
+                )
 
     def _destinations(
         self, out, n: int
