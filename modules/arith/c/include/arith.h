@@ -427,6 +427,20 @@ extern "C"
     void field_vec_set_range(FieldVector out, uint64_t start, const uint64_t *values,
                              uint64_t count);
     void field_vec_get_range(uint64_t *out, const FieldVector a, uint64_t start, uint64_t count);
+    // out[start + i] = ((v_i >> shift) mod 2^width) mod p, an element of the
+    // prime subfield, for i < count, with v_i = low[i] + 2^64 high[i] (high
+    // may be NULL, for zero). Needs start + count <= out->n, shift < 128
+    // (< 64 without high) and 1 <= width <= 64.
+    void field_vec_set_uint64(FieldVector out, uint64_t start, const uint64_t *low,
+                              const uint64_t *high, uint64_t count, uint32_t shift, uint32_t width);
+    // Coefficient j of out[start + i] (the coefficient of x^j) becomes
+    // values[i] mod p, for i < count; the other coefficients are left alone.
+    // Needs j < out->d and start + count <= out->n.
+    void field_vec_set_coefficient(FieldVector out, uint64_t j, uint64_t start,
+                                   const uint64_t *values, uint64_t count);
+    // out[i] = a[i] for i < a->n when every element is in the prime subfield;
+    // false, with `out` partly written, when one is not.
+    bool field_vec_get_uint64(uint64_t *out, const FieldVector a);
     void field_vec_copy(FieldVector out, const FieldVector a);
     // Deinterleave: even gets elements 0, 2, 4, ... and odd gets 1, 3, 5, ....
     // `a->n` must be even and each output must hold a->n / 2 elements.
@@ -1367,6 +1381,15 @@ extern "C"
        other rows and the masks of out[b] are left alone. */
     void polynomial_RNS_from_crt_components(RNS_Polynomial *out, FieldVector in, uint64_t count,
                                             RNS_CrtMaps maps);
+    /* The elements whose components are all equal (notation of
+       polynomial_RNS_crt_components): row `row` of out[b] is set, in the mul
+       domain, to the residues modulo P_0, ..., P_(k-1) of the element whose
+       k components are all in[b], for b < count = in->n. It is what
+       polynomial_RNS_from_crt_components gives from k copies of each in[b].
+       `maps` is rns_crt_maps_new(base, row, false). The other rows and the
+       masks of out[b] are left alone. */
+    void polynomial_RNS_from_diagonal(RNS_Polynomial *out, FieldVector in, uint64_t count,
+                                      RNS_CrtMaps maps);
     /* Tables for the isomorphisms R_q/P_s -> R_q/P_0, s < k, at the prime of
        base row `row` of `base` (P_s and k as in polynomial_RNS_crt_components)
        if `to_slot_zero`, and for their inverses otherwise: what

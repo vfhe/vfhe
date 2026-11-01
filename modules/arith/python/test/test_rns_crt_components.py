@@ -11,7 +11,7 @@ slot's coefficients (`test_matches_the_definition`).
 """
 
 import pytest
-from vfhe.arith import Polynomial, Ring, repr
+from vfhe.arith import FieldVector, Polynomial, Ring, repr
 
 # (N, split_degree, prime sizes): narrow and wide rows, and d = 1, 2, 4.
 SHAPES = [(16, 4, [28, 30]), (32, 2, [40, 30]), (64, 1, [50, 28]), (256, 4, [28, 60])]
@@ -126,6 +126,34 @@ def test_from_crt_components_inverts_crt_components(ring):
     back = ring.from_crt_components(vectors)
     assert len(back) == len(elements)
     assert all(x == y for x, y in zip(back, elements, strict=True))
+
+
+def test_from_diagonal_repeats_each_entry_in_every_component(ring):
+    k = ring.N // ring.split_degree
+    count = 7
+    vectors = []
+    for index in range(ring.ell):
+        vector = FieldVector(ring.residue_field(index), count)
+        vector.sample_random(b"diagonal %d" % index)
+        vectors.append(vector)
+    repeated = [
+        FieldVector.concat([vector] * k) if count > 0 else vector for vector in vectors
+    ]
+    assert ring.from_diagonal(vectors) == ring.from_crt_components(repeated)
+    for index, element in enumerate(ring.from_diagonal(vectors)):
+        for i in range(ring.ell):
+            components = ring.crt_components([element], i)
+            assert all(c == vectors[i][index] for c in components)
+
+
+def test_from_diagonal_holds_the_integers_and_the_exceptional_set(ring):
+    a = ring.random_exceptional(seed=b"diagonal")
+    seven = Polynomial(ring).from_array([7])
+    for element in (a, seven):
+        vectors = [
+            ring.crt_components([element], i).query([0]) for i in range(ring.ell)
+        ]
+        assert ring.from_diagonal(vectors) == [element]
 
 
 def test_crt_components_reads_the_canonical_domain_without_converting_it(ring):

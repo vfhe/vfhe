@@ -33,8 +33,10 @@ from vfhe.polycom import (
     BasefoldEval,
     FieldFoldableRS,
     FoldableRS,
+    basefold_messages,
     basefold_parameters,
 )
+from vfhe.polycom import parameters as parameters_module
 from vfhe.polycom.basefold import basefold_soundness_error
 from vfhe.polycom.parameters import _proof_bits
 
@@ -270,3 +272,46 @@ def test_proof_bits_counts_the_messages_of_an_opening(kind, bundle):
         polynomials,
     )
     assert elements * element_bits + digests * 8 * DIGEST_LEN == pytest.approx(expected)
+
+
+def _pmf_208() -> Field:
+    return PseudoMersenneField.generate(208, two_adicity=8)
+
+
+def test_messages_commit_the_sizes_with_parameters_and_send_the_rest():
+    field = _pmf_208()
+    messages, evals = basefold_messages(field, [3, 9, 6, 8], 128)
+    assert sorted(messages.schemes) == [8, 9]
+    assert messages.sent == {3, 6}
+    assert [e.scheme for e in evals] == [messages.schemes[8], messages.schemes[9]]
+    for n, protocol in zip([8, 9], evals, strict=True):
+        chosen = basefold_parameters(field, n, 128)
+        code = protocol.scheme.code
+        assert (code.k0, code.c, code.d) == (chosen.k0, chosen.c, chosen.d)
+        assert protocol.rep == chosen.rep
+        assert protocol.scheme.schedule == list(chosen.schedule)
+
+
+def test_messages_over_the_ring_use_the_ring_code():
+    ring = _ring_180()
+    messages, evals = basefold_messages(ring, [9], 100)
+    assert isinstance(messages.schemes[9].code, FoldableRS)
+    assert evals[0].rep == basefold_parameters(ring, 9, 100).rep
+
+
+def test_messages_raise_when_no_size_has_parameters():
+    with pytest.raises(ValueError, match="no basefold parameters"):
+        basefold_messages(_pmf_208(), [3, 6], 128)
+
+
+def test_messages_raise_on_a_size_without_parameters_above_one_with(monkeypatch):
+    real = parameters_module.basefold_parameters
+
+    def missing_ten(domain, num_vars, *args, **kwargs):
+        if num_vars == 10:
+            raise ValueError("no basefold parameters for 10")
+        return real(domain, num_vars, *args, **kwargs)
+
+    monkeypatch.setattr(parameters_module, "basefold_parameters", missing_ten)
+    with pytest.raises(ValueError, match="for 10"):
+        basefold_messages(_pmf_208(), [9, 10], 128)

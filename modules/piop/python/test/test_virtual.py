@@ -7,7 +7,14 @@ them. Sum definitions and the Composer are in test_composition.py."""
 import random
 
 import pytest
-from vfhe.arith import MLE, MLE_Variable, Ring, SparseMLE
+from vfhe.arith import (
+    MLE,
+    ExtensionField,
+    FieldElement,
+    MLE_Variable,
+    Ring,
+    SparseMLE,
+)
 from vfhe.piop import (
     IOP,
     ClosedFormOracle,
@@ -434,6 +441,40 @@ def test_dense_view_three_ring_factors_take_the_native_round(monkeypatch):
     for a, b in zip(native, python, strict=True):
         assert len(a) == 4
         assert all(u == w for u, w in zip(a, b, strict=True))
+
+
+@pytest.mark.parametrize("domain", ["ring", "field"])
+def test_dense_view_shares_its_constituents_entries(domain):
+    # A constituent read through a renaming is not copied: the view's table
+    # holds the witness's entries. Binding the view in place, as the round
+    # loop does, leaves the witness's table as it was.
+    if domain == "ring":
+        ring = Ring(64, prime_size=[49], split_degree=4)
+        entries = [ring.random_element() for _ in range(8)]
+        table = MLE(ring=ring, variables=_vars("a0", "a1", "a2"), evaluations=entries)
+        r = ring.random_exceptional()
+    else:
+        field = ExtensionField((1 << 61) - 1, 4, 3)
+        entries = [FieldElement(field, [i, i + 1, 0, 0]) for i in range(8)]
+        table = MLE(field=field, variables=_vars("a0", "a1", "a2"), evaluations=entries)
+        r = FieldElement(field, [3, 1, 4, 1])
+    before = table.copy()
+    x = _vars("x0", "x1", "x2")
+    W = TableOracle(table)
+    renaming = dict(zip(W.variables, x, strict=True))
+    G = VirtualOracle(x, [W, W], [(1, (0, 1))], maps=[renaming, renaming])
+    view = view_module.prover_view(G, {}, strategy="dense")
+    for t in view.tables:
+        assert t.table is table.table or all(
+            a is b for a, b in zip(t.table, table.table, strict=True)
+        )
+    point = [r, 2, 5]
+    value = before.evaluate(point, in_place=False).constant()
+    for var, coordinate in zip(x, point, strict=True):
+        view = view.evaluate({var: coordinate})
+    assert view.constant() == value * value
+    assert table.variables == before.variables
+    assert all(a == b for a, b in zip(table.table, before.table, strict=True))
 
 
 def test_dense_view_any_product_takes_the_native_round(monkeypatch):

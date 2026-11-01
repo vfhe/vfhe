@@ -14,7 +14,9 @@ from vfhe.arith import MLE, MLE_Variable, Polynomial, PseudoMersenneField, Ring
 from vfhe.crypto import DIGEST_LEN
 from vfhe.piop import (
     IOP,
+    CommittedOracle,
     OracleKind,
+    Proof,
     Protocol,
     Relation,
     Relation_Eval,
@@ -73,15 +75,17 @@ class _Setup:
     lookup on the top digits: `ell + nu` variables on its oracle's side,
     `log2(top_beta)` on the table's."""
 
-    def __init__(self, field, ring, v, m, bound=BOUND):
-        self.field, self.ring, self.m = field, ring, m
+    def __init__(self, field, ring, v, m, bound=BOUND, sent=()):
+        self.field, self.ring, self.m, self.sent = field, ring, m, sent
         relation = Relation_Range(bound, CHUNKS)
         ell_star = ELL + NU + (CHUNKS.bit_length() - 1)
         sizes = [ell_star, relation.beta.bit_length() - 1]
         if relation.top_beta != relation.beta:
             sizes += [ELL + NU, relation.top_beta.bit_length() - 1]
         self.field_schemes = [
-            Basefold(FieldFoldableRS(field, k0=4, c=4, d=size - 2)) for size in sizes
+            Basefold(FieldFoldableRS(field, k0=4, c=4, d=size - 2))
+            for size in sizes
+            if size not in sent
         ]
         self.ring_scheme = Basefold(FoldableRS(ring, k0=2, c=4, d=ELL - 1))
         self.v, self.v_opening = self.ring_scheme.commit(v)
@@ -91,7 +95,7 @@ class _Setup:
     def iop(self, domain=None, **kw) -> IOP:
         """The compiled range proof's IOP, over `domain` (the field unless
         given)."""
-        messages = BasefoldMessages(self.field_schemes)
+        messages = BasefoldMessages(self.field_schemes, sent=self.sent)
         iop = IOP(domain=self.field if domain is None else domain, **kw)
         iop.register(
             Relation_Range,
@@ -213,6 +217,38 @@ def test_compiled_range_proof_with_a_short_top_digit(field, ring):
     assert not setup.iop().run(setup.statement)
 
 
+def test_sizes_without_a_scheme_can_be_sent_as_their_entries(field, ring):
+    """The digit table of 2^3 entries is sent as its entries and read as a
+    table; the larger tables are still committed. The proof accepts,
+    interactively and as an argument string, and a wrong digit table is
+    rejected."""
+    setup = _Setup(field, ring, _witness(ring), ELL + NU, sent=[3])
+    iop = setup.iop()
+    assert iop.run(setup.statement)
+    sizes = {name: _sent(iop, name) for name in SENT}
+    assert all(isinstance(sizes[name], bytes) for name in ("range/mu", "read_ts"))
+    tables = [entry for entry in sizes.values() if isinstance(entry, tuple)]
+    assert tables and all(len(entry) == 1 << 3 for entry in tables)
+    proof = setup.iop(fiat_shamir=True).prove(setup.statement)
+    assert setup.iop(fiat_shamir=True).verify(setup.statement, proof)
+    messages = list(proof.messages)
+    at = next(
+        i
+        for i, (label, _) in enumerate(messages)
+        if any(label.endswith(name) for name in SENT)
+        and isinstance(messages[i][1], tuple)
+    )
+    label, table = messages[at]
+    messages[at] = (label, (table[0] + 1, *table[1:]))
+    assert not setup.iop(fiat_shamir=True).verify(setup.statement, Proof(messages))
+
+
+def test_a_size_is_either_sent_or_committed(field):
+    scheme = Basefold(FieldFoldableRS(field, k0=4, c=4, d=1))
+    with pytest.raises(ValueError, match="both sent and committed"):
+        BasefoldMessages([scheme], sent=[3])
+
+
 def test_messages_need_one_scheme_per_table_size(field):
     small = Basefold(FieldFoldableRS(field, k0=4, c=4, d=1))
     with pytest.raises(ValueError, match="two schemes"):
@@ -240,6 +276,7 @@ def test_messages_from_one_code_commit_as_codes_built_per_size(field):
             evaluations=[field(3 * i + 1) for i in range(1 << num_vars)],
         )
         oracle = messages.send(IOP(domain=field).prover, "t", table)
+        assert isinstance(oracle, CommittedOracle)
         built = Basefold(FieldFoldableRS(field, k0=4, c=4, d=num_vars - 2))
         assert oracle.commitment.root == built.commit(table)[0].commitment.root
     for num_vars in (2, 7):

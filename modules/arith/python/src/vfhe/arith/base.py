@@ -1365,6 +1365,26 @@ class FieldVector(metaclass=_ImplementationDispatch):
             out.append(value)
         return out
 
+    def coefficients(self) -> list[array]:
+        """The coordinates of the elements over the prime subfield: over
+        ``F_p[x] / (x^d - w)``, entry ``i`` of the ``j``-th ``array('Q')`` is
+        the coefficient of ``x^j`` in element ``i``, for ``j < d``. Defined
+        for the extension fields of word-sized primes (`ExtensionField`,
+        including ``d = 1``)."""
+        raise NotImplementedError(
+            f"{type(self.field).__name__} elements have no coefficients of 64 bits"
+        )
+
+    def set_coefficients(self, coefficients, start: int = 0) -> None:
+        """Element ``start + i`` becomes ``sum_j (coefficients[j][i] mod p)
+        x^j``, for every ``i`` below the common length of the ``d`` buffers
+        of 64-bit unsigned integers in `coefficients` (``array('Q')``s, say),
+        which must fit from `start`. The inverse of `coefficients`, with the
+        same domain."""
+        raise NotImplementedError(
+            f"{type(self.field).__name__} elements have no coefficients of 64 bits"
+        )
+
     # --- arithmetic ---
 
     def __add__(self, other) -> FieldVector:
