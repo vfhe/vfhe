@@ -367,6 +367,31 @@ out:
    `µ̃'`, `read_ts`, `final_cts` and `f^{(1)}_α` at the shifted points.
 5. Those claims are `plain`, hence terminal: one oracle query each.
 
+### Several claims into one table
+
+`Lookup` is a bundle protocol (`batching = True`): the driver hands it every
+frontier `Relation_Lookup` claim at once, and it groups them by `(β, ℓ*)`,
+in order of first appearance. A group of `k > 1` claims on `µ̃'_0, …, µ̃'_{k-1}`
+is one run of the steps above over their concatenation `µ̃'`, with
+`s = ⌈log₂ k⌉` more variables, the last `s` selecting the block: block `i` is
+`µ̃'_i`, and the blocks past `k` are zeros, which are in `t_β` and which the
+counters count like any entry.
+
+- `read_ts`, the products and `f^{(1)}_{WSµ}`, `f^{(1)}_{RS}` are over
+  `ℓ* + s` variables; the table side is unchanged.
+- In `f^{(0)}_α` the term `µ̃'` becomes `Σ_i sel_i · µ̃'_i`, with `sel_i` the
+  public `eq~` table of block `i` over the selector variables. Each product
+  reads disjoint variables, so `f_α` stays multilinear and the zerochecks keep
+  degree 3.
+- The claims on `µ̃'` at the end become one claim on each `µ̃'_i` at the data
+  coordinates; the selector factors are evaluated by the verifier.
+- Soundness: `(2^{ℓ*+s} + β)/p` for the group, at most the sum of the
+  members' bounds when `k` is a power of two.
+
+A group of one is the single run, under the same labels. Claims join a group
+only when they are on the frontier together, as the lookup claims of range
+statements that are on the frontier together are.
+
 ## The decomposition protocol — Figure 13
 
 The relation is `relations/range.py`, the protocol `protocols/range.py`.

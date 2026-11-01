@@ -738,6 +738,13 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `Lookup` is a bundle protocol: the claims into one table `t_beta` on
+  oracles with the same number of variables run as one argument over the
+  oracles laid end to end (padded with zero blocks to a power of two), so
+  the counters and the `f^(1)` tables are committed once for the group, at
+  `ceil(log2 k)` more variables. A claim alone in its group runs as before.
+  A compiled run of a group of two needs a scheme for tables of one more
+  variable.
 - `ExtensionFieldVector.set_uint64` and `to_uint64` are one native call each
   (`field_vec_set_uint64`, `field_vec_get_uint64`) instead of one Python
   call per element.
