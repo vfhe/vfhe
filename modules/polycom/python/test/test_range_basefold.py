@@ -345,3 +345,90 @@ def test_a_range_proof_runs_inside_an_iop_over_the_ring(field, ring):
     assert len(runs) == 3
     proof = iop(fiat_shamir=True).prove(statement)
     assert iop(fiat_shamir=True).verify(statement, proof)
+
+
+class _TwoRanges(Relation):
+    """Two oracles, every coefficient of each below `BOUND`."""
+
+    name = "two_ranges"
+    fields = ("oracles",)
+
+    def check(self, statement: Statement) -> bool:
+        return all(
+            Statement(Relation_Range(BOUND, CHUNKS), oracles=[v]).check()
+            for v in statement.oracles
+        )
+
+
+class _Both(Protocol):
+    """`_TwoRanges` -> one `Relation_Range` per oracle."""
+
+    name = "both"
+    reduces_from = _TwoRanges
+    reduces_to = (Relation_Range,)
+
+    def _outputs(self, statement: Statement) -> list[Statement]:
+        return [
+            self.reduce([statement], Relation_Range(BOUND, CHUNKS), oracles=[v])
+            for v in statement.oracles
+        ]
+
+    async def prove(self, _prover, statements):
+        return self._outputs(statements[0])
+
+    async def verify(self, _verifier, statements):
+        return self._outputs(statements[0])
+
+
+def test_two_range_claims_share_one_lookup(field, ring):
+    """Two range claims with one digit table and one `mu'` size: one lookup
+    run over both digit tables, so the counters and the four f^(1) tables
+    are committed once, at one variable more. Accepted interactively and as
+    an argument string; a coefficient out of range in either claim
+    rejects."""
+    ell_star = ELL + NU + (CHUNKS.bit_length() - 1)
+    beta_bits = Relation_Range(BOUND, CHUNKS).beta.bit_length() - 1
+    field_schemes = [
+        Basefold(FieldFoldableRS(field, k0=4, c=4, d=size - 2))
+        for size in (ell_star, ell_star + 1, beta_bits)
+    ]
+    ring_scheme = Basefold(FoldableRS(ring, k0=2, c=4, d=ELL - 1))
+
+    def setup(tweak_second=None, fiat_shamir=False):
+        """The two-range statement and a factory of IOPs proving it."""
+        tables = [_witness(ring), _witness(ring, tweak=tweak_second)]
+        committed = [ring_scheme.commit(t) for t in tables]
+
+        def iop() -> IOP:
+            messages = BasefoldMessages(field_schemes)
+            iop = IOP(domain=field, fiat_shamir=fiat_shamir)
+            iop.register(_TwoRanges, _Both())
+            iop.register(
+                Relation_Range,
+                RangeDecomposition(
+                    field, ELL + NU, ALPHABET, KAPPA, ring, messages=messages
+                ),
+            )
+            iop.register(Relation_Lookup, Lookup(field, messages=messages))
+            iop.register(Relation_Sum, Sumcheck())
+            iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+            for scheme in [*field_schemes, ring_scheme]:
+                iop.register(Relation_Eval, BasefoldEval(scheme, rep=REP))
+            for table, (oracle, opening) in zip(tables, committed, strict=True):
+                iop.prover.witnesses[oracle] = table
+                iop.prover.witnesses[oracle.commitment] = opening
+            return iop
+
+        return Statement(_TwoRanges(), oracles=[o for o, _ in committed]), iop
+
+    statement, make = setup()
+    iop = make()
+    assert iop.run(statement)
+    lookups = [x for x in iop.transcript.order if x.endswith("/read_ts")]
+    assert len(lookups) == 1
+    sent = [x for x in iop.transcript.order if "lookup" in x and "/f1_" in x]
+    assert len(sent) == 4
+    statement, make = setup(fiat_shamir=True)
+    assert make().verify(statement, make().prove(statement))
+    statement, make = setup(tweak_second=lambda c: c.__setitem__(1, BOUND))
+    assert not make().run(statement)

@@ -20,6 +20,7 @@ from vfhe.piop import (
     EqOracle,
     OracleKind,
     Protocol,
+    Relation,
     Relation_Eval,
     Statement,
     TableOracle,
@@ -631,3 +632,148 @@ def test_range_proof_end_to_end(field, bounded):
     statement = Statement(Relation_Range(bound, chunks), oracles=[v])
     assert statement.check() is bounded
     assert _range_iop(field, ring).run(statement) is bounded
+
+
+# --- several claims run together ---------------------------------------------
+
+
+class _AllInTable(Relation):
+    """Every oracle's entries in `t_beta`, beta given per oracle."""
+
+    name = "all_in_table"
+    fields = ("oracles",)
+    index_fields = ("betas",)
+
+    def __init__(self, betas):
+        super().__init__(index={"betas": tuple(betas)})
+        self.betas = tuple(betas)
+
+    def check(self, statement):
+        return all(
+            Statement(Relation_Lookup(beta), oracles=[o]).check()
+            for beta, o in zip(self.betas, statement.oracles, strict=True)
+        )
+
+
+class _Each(Protocol):
+    """`_AllInTable` -> one `Relation_Lookup` per oracle, all on the frontier
+    at once."""
+
+    name = "each"
+    reduces_from = _AllInTable
+    reduces_to = (Relation_Lookup,)
+
+    def _outputs(self, statement):
+        return [
+            self.reduce([statement], Relation_Lookup(beta), oracles=[o])
+            for beta, o in zip(statement.relation.betas, statement.oracles, strict=True)
+        ]
+
+    async def prove(self, _prover, statements):
+        return self._outputs(statements[0])
+
+    async def verify(self, _verifier, statements):
+        return self._outputs(statements[0])
+
+
+def _several(field, tables, betas, num_vars=None):
+    oracles = []
+    for k, values in enumerate(tables):
+        n = (len(values) - 1).bit_length() if num_vars is None else num_vars
+        variables = [MLE_Variable(f"o{k}_{i}") for i in range(n)]
+        oracles.append(
+            TableOracle(
+                MLE(
+                    field=field,
+                    variables=variables,
+                    evaluations=[field(v) for v in values],
+                )
+            )
+        )
+    return Statement(_AllInTable(betas), oracles=oracles)
+
+
+def _several_iop(field, **kw):
+    iop = _iop(field, **kw)
+    iop.register(_AllInTable, _Each())
+    return iop
+
+
+def _runs(iop):
+    return [x for x in iop.transcript.order if x.endswith("/read_ts")]
+
+
+@pytest.mark.parametrize("k", [2, 3, 4])
+def test_claims_into_one_table_of_one_size_are_one_run(field, k):
+    """k claims with the same beta and size: one run over their
+    concatenation (padded to a power of two), with counters and f^(1)
+    tables of the concatenated size, accepted interactively and as an
+    argument string."""
+    tables = [_bounded(seed=10 + i) for i in range(k)]
+    statement = _several(field, tables, [BETA] * k)
+    iop = _several_iop(field)
+    assert iop.run(statement)
+    assert len(_runs(iop)) == 1
+    (label,) = _runs(iop)
+    s = (k - 1).bit_length()
+    assert len(iop.transcript.entries[label].result()) == 1 << (NUM_VARS + s)
+    proof = _several_iop(field, fiat_shamir=True).prove(statement)
+    assert _several_iop(field, fiat_shamir=True).verify(statement, proof)
+
+
+@pytest.mark.parametrize("where", [0, 1, 2])
+def test_an_unbounded_entry_in_any_member_rejects(field, where):
+    tables = [_bounded(seed=20 + i) for i in range(3)]
+    tables[where][5] = BETA
+    assert not _several_iop(field).run(_several(field, tables, [BETA] * 3))
+
+
+def test_the_padding_blocks_are_zeros_the_verifier_counts(field):
+    """A group of three is padded with a block of zeros: a prover that counts
+    the zeros correctly is accepted even when no member holds a zero."""
+    tables = [[1 + (i % (BETA - 1)) for i in range(1 << NUM_VARS)] for _ in range(3)]
+    assert _several_iop(field).run(_several(field, tables, [BETA] * 3))
+
+
+def test_claims_of_other_tables_or_sizes_run_apart(field):
+    tables = [
+        _bounded(seed=30),
+        _bounded(seed=31, beta=16),
+        _bounded(seed=32)[: 1 << (NUM_VARS - 1)],
+        _bounded(seed=33),
+    ]
+    statement = _several(field, tables, [BETA, 16, BETA, BETA])
+    iop = _several_iop(field)
+    assert iop.run(statement)
+    # {0, 3} share beta and size; 1 and 2 are alone.
+    assert len(_runs(iop)) == 3
+
+
+def test_a_group_of_one_runs_as_a_single_claim(field):
+    """A claim alone in its group is the single-claim run: the same messages
+    under the same labels (below its own path), and the same counters."""
+    values = _bounded(seed=40)
+    alone = _iop(field)
+    assert alone.run(_statement(field, values))
+    grouped = _several_iop(field)
+    assert grouped.run(_several(field, [values], [BETA]))
+
+    def suffixes(iop):
+        return [
+            label.rsplit("/", 1)[-1]
+            for label in iop.transcript.order
+            if label.startswith("lookup")
+        ]
+
+    assert suffixes(grouped) == suffixes(alone)
+    for name in ("read_ts", "final_cts"):
+        (a,) = [v for k, v in alone.transcript.messages() if k.endswith(name)]
+        (b,) = [v for k, v in grouped.transcript.messages() if k.endswith(name)]
+        assert element_digest(a) == element_digest(b)
+
+
+def test_soundness_error_of_a_group_is_within_the_sum_of_its_claims(field):
+    lookup = Lookup(field)
+    one = lookup.soundness_error(_statement(field, _bounded()))
+    group = ((1 << (NUM_VARS + 1)) + BETA) / field.prime
+    assert group <= 2 * one
