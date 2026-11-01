@@ -29,8 +29,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from vfhe.arith import MLE, FieldVector, MLE_Variable
+from vfhe.arith import MLE, ExtensionField, FieldVector, MLE_Variable
 from vfhe.arith.mle import native_table
+from vfhe.arith.number_theory import crt
 from vfhe.piop.evaluation import Relation_Eval
 from vfhe.piop.messages import OracleMessages
 from vfhe.piop.protocol import Protocol, Rejection
@@ -76,9 +77,9 @@ def uEval(element: Any, point: list[int]) -> int:
     `element` is a ring element -- the answer to one query to `v` -- and
     `point` the `nu` integer coordinates of the `Z` block. The result is the
     evaluation of `unpack(v)` at that point, which is how the verifier queries
-    the unpacked oracle without it ever being committed. Kept exact so the
-    caller can compare it with the integer the field side produces through
-    `balanced`.
+    the unpacked oracle without it ever being committed. This is the exact
+    value; the verifier's check only needs it modulo `q` and computes that
+    natively (`RangeDecomposition._unpacked_evaluation`).
     """
     coefficients = element.get_polynomial()
     nu = len(point)
@@ -193,6 +194,8 @@ class RangeDecomposition(Protocol):
         self.ring = ring
         # How mu' is sent: its entries (the ideal model) by default.
         self.messages = OracleMessages() if messages is None else messages
+        # F_p for each RNS prime p the verifier has evaluated at.
+        self._prime_fields: dict[int, ExtensionField] = {}
 
     # --- shape and parameter conditions -----------------------------------
 
@@ -456,11 +459,39 @@ class RangeDecomposition(Protocol):
             delta = [(index >> t) & 1 for t in range(width)]
             digit = index >> width  # to-int of the Z' block, LSB-first
             total += balanced(value, prime) * eq_int(delta, weights) * shape.beta**digit
-        if (total - uEval(w, r[shape.ell :])) % shape.ring.q_l:
+        if (total - self._unpacked_evaluation(w, r[shape.ell :])) % shape.ring.q_l:
             raise Rejection(
                 f"{label}: repetition {eta} does not recompose -- the digits of "
                 "mu' do not rebuild the coefficients of v at this point"
             )
+
+    def _unpacked_evaluation(self, element: Any, point: list[int]) -> int:
+        """`uEval(element, point)` modulo `q`, the product of the element's
+        ring primes, in `[0, q)`.
+
+        For each prime `p`, the coefficients modulo `p` are a table over `F_p`
+        indexed LSB-first like `eq_int`'s bits, so folding it once per
+        coordinate of `point`, lowest first, leaves `uEval` modulo `p`. The
+        residues are joined by one CRT.
+        """
+        ring = element.ring
+        if 1 << len(point) != ring.N:
+            raise ValueError(
+                f"a point of {len(point)} coordinates needs {1 << len(point)} "
+                f"coefficients, got {ring.N}"
+            )
+        words = memoryview(element.to_uint64())
+        residues = []
+        for i, prime in enumerate(ring.primes):
+            field = self._prime_fields.get(prime)
+            if field is None:
+                field = self._prime_fields[prime] = ExtensionField(prime, 1)
+            table = FieldVector(field, ring.N)
+            table.set_uint64(words[i * ring.N : (i + 1) * ring.N])
+            for z in point:
+                table = table.fold(field(z % prime))
+            residues.append(int(table[0]))
+        return crt(residues, list(ring.primes))
 
     def _outputs(
         self,
