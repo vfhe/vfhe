@@ -1499,6 +1499,12 @@ extern "C"
     // `bound`; neither aliases `values`.
     bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values,
                            uint64_t count, uint64_t bound);
+    // low[j] + 2^64 high[j] = sum_t a[t][j] w_t mod 2^128 for j < n, with
+    // w_t = w_low[t] + 2^64 w_high[t], for at most 64 terms. The arrays need
+    // no alignment, and `low` and `high` alias none of the a[t].
+    void vec_combination_mod_2_128(uint64_t *low, uint64_t *high, const uint64_t *const *a,
+                                   const uint64_t *w_low, const uint64_t *w_high, uint64_t m,
+                                   uint64_t n);
 
     MPScalar mp_load(uint64_t *in, uint64_t d);
     mp_vector_t *load_m512(uint64_t in);

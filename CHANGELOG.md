@@ -14,6 +14,38 @@ versions may contain breaking changes.
 
 ### Added
 
+- `vfhe.arith.crt_lift_mod_2_128(residues, primes)`: the integers in
+  `[0, q)` given by their residues modulo up to 64 distinct primes below
+  `2^63`, one buffer of 64-bit words per prime, modulo `2^128`, as two
+  `array('Q')`s `(low, high)` -- the contract of `RNSRing.lift_mod_2_128`
+  for residues held as arrays. Garner's mixed radix as vector operations
+  over each `F_p`, then the digits' combination modulo `2^128` in one native
+  call; that kernel, `vec_combination_mod_2_128`, is declared in `arith.h`
+  and to Python.
+- `vfhe.piop.relations.Relation_ResidueRange(bound)` /
+  `vfhe.piop.protocols.ResidueRangeDecomposition(field, m, alphabet, kappa,
+  chunks, messages=None)`: the range claim on an integer table given by its
+  residues modulo the primes of `q`, one oracle per prime over a field of
+  that characteristic with entries in the prime subfield, every entry below
+  `B`; and the optimized range PIOP of [CCCFGS26] on it without the
+  `unpacked_evaluation` shortcut: the
+  verifier queries each residue oracle at the integer point and checks the
+  recomposition modulo that oracle's prime as an equality in its field,
+  which leaves `kappa` evaluation claims on each residue oracle. The primes
+  come from the oracles' domains (`Oracle.domain`); the prover's digits
+  come from the residues through `crt_lift_mod_2_128`. `RangeDecomposition`
+  and its transcripts are unchanged; `modules/piop/range.md`, "The
+  decomposition on residue oracles".
+- `VirtualOracle.partial_evaluation(constituent, variables, fixed,
+  coefficient=1)`: `coefficient * p(fixed, .)`, the constituent `p` with
+  some variables bound to constants of its domain (or integers) and the
+  others renamed, in order, to `variables`; `is_partial_evaluation()`
+  recognises the form, of which a `restriction` is the case of 0/1
+  constants and coefficient 1. `resolve_table` resolves any oracle of that
+  form to its constituent's table with the fixed variables bound, renamed
+  and scaled: a sparse table is sliced when the constants are bits and
+  materialized otherwise. `VirtualEval` reduces a claim on it to one claim
+  on the constituent at the extended point.
 - `FieldVector.coefficients()` and `FieldVector.set_coefficients(coefficients,
   start=0)`: the coordinates of extension-field elements over the prime
   subfield, one `array('Q')` per coefficient of `x^j`, read with one copy
@@ -738,10 +770,27 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: `Relation_Range(bound)` and `Relation_ResidueRange(bound)`
+  take the bound alone, any positive integer; their index is `("bound",)`,
+  so statement digests change. The digit count `c` is the `chunks`
+  parameter of `RangeDecomposition` (after `ring`) and of
+  `ResidueRangeDecomposition` (after `kappa`), and
+  `vfhe.piop.protocols.range.digit_alphabets(bound, chunks)` gives `beta`
+  and `top_beta`. The decomposition requires a power-of-two bound; the
+  relation does not.
+- `vfhe.piop.protocols.range.balanced` is `centered`: the centered
+  representative of a field element, the term the lattice and FHE
+  literature uses for the representative in `(-p/2, p/2]`.
+- `vfhe.piop.protocols.range.uEval` is `unpacked_evaluation`, and
+  `RangeDecomposition`'s mod-`q` form of it is `_unpacked_evaluation_mod_q`.
+  The range and lookup code and `modules/piop/range.md` cite [CCCFGS26] by
+  the names of its results, not by figure or lemma numbers, and place the
+  construction in the lookup-argument literature (Bulletproofs, plookup,
+  Lasso, memory checking, Quarks).
 - `RangeDecomposition`'s verifier evaluates `unpack(v)` at its point modulo
   `q` from the element's rows: per prime, the coefficients folded once per
   coordinate as an `F_p` vector, then one CRT. It no longer rebuilds every
-  coefficient as an integer; `uEval` stays as the exact value.
+  coefficient as an integer; `unpacked_evaluation` stays as the exact value.
 - `Lookup` is a bundle protocol: the claims into one table `t_beta` on
   oracles with the same number of variables run as one argument over the
   oracles laid end to end (padded with zero blocks to a power of two), so
@@ -794,7 +843,7 @@ versions may contain breaking changes.
   digits reach past bit 128 and `q` exceeds `2^128`), the counters with
   `set_uint64`, the fingerprints with `fma`, and each grand product's
   product tree in `log n` passes of `split_even_odd` and a product.
-- `Relation_Range(B, c)` no longer needs `c` to divide `log2(B)`: the
+- `RangeDecomposition` no longer needs `c` to divide `log2(B)`: the
   digits are `c - 1` of `ceil(log2(B) / c)` bits and a shorter most
   significant one (`top_beta`), and `RangeDecomposition` then adds a
   `Relation_Lookup(top_beta)` on the restriction of the digit oracle to the
@@ -909,7 +958,7 @@ versions may contain breaking changes.
   dense-index relation derived from it, proven by `compose(dense_layering)`
   registered against it and its `Start`. The `.index` of `Relation_Layer`
   (`("circuit", "layer", "lin", "xmult")`), `Relation_Lookup` (`("beta",)`)
-  and `Relation_Range` (`("bound", "chunks")`) is a mapping over those
+  and `Relation_Range` (`("bound",)`) is a mapping over those
   names. The root digest records a committed oracle by its commitment, so
   every Fiat-Shamir proof whose root has a declared index or a committed
   oracle differs from those of `9a8e0f8`. `resolve_table` returns a sparse table as it is and
@@ -1415,8 +1464,9 @@ versions may contain breaking changes.
   not open its claims.
 - `Lookup` proves over a field vector whose internal nodes do not start at
   a multiple of its padding unit (tables or looked-up oracles of fewer than
-  8 entries over a pseudo-Mersenne field, such as `Relation_Range(2^8, 4)`'s
-  digits): it gathers them instead of taking a view, which raised.
+  8 entries over a pseudo-Mersenne field, such as the range proof's
+  digits at `B = 2^8`, `c = 4`): it gathers them instead of taking a view,
+  which raised.
 
 ## [0.0.3] - 2026-09-10
 

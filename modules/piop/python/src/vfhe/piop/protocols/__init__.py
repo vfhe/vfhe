@@ -7,7 +7,7 @@ prover's forms of a virtual oracle (`sumcheck.prover_view`)."""
 
 from .gkr import GKR, GKR_Start, OutputTest
 from .lookup import Lookup
-from .range import RangeDecomposition
+from .range import RangeDecomposition, ResidueRangeDecomposition
 from .sparse import dense_layering
 from .sumcheck import Sumcheck, SumcheckProd
 from .virtual import SumDefStart, VirtualEval
@@ -18,6 +18,7 @@ __all__ = [
     "Lookup",
     "OutputTest",
     "RangeDecomposition",
+    "ResidueRangeDecomposition",
     "SumDefStart",
     "Sumcheck",
     "SumcheckProd",

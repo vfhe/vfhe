@@ -5,12 +5,23 @@
 per table size, and `v` is committed with ring basefold. Every evaluation
 claim then ends in a `BasefoldEval` bundle: one per scheme. Honest runs
 accept, interactively and as an argument string; a tampered commitment and
-an out-of-range coefficient are rejected."""
+an out-of-range coefficient are rejected. The residue form of the claim,
+one oracle per prime committed with field basefold over its own field, is
+compiled the same way."""
 
 import math
+from array import array
 
 import pytest
-from vfhe.arith import MLE, MLE_Variable, Polynomial, PseudoMersenneField, Ring
+from vfhe.arith import (
+    MLE,
+    Field,
+    FieldVector,
+    MLE_Variable,
+    Polynomial,
+    PseudoMersenneField,
+    Ring,
+)
 from vfhe.crypto import DIGEST_LEN
 from vfhe.piop import (
     IOP,
@@ -23,9 +34,21 @@ from vfhe.piop import (
     Statement,
     TableOracle,
 )
-from vfhe.piop.protocols import Lookup, RangeDecomposition, Sumcheck, VirtualEval
+from vfhe.piop.protocols import (
+    Lookup,
+    RangeDecomposition,
+    ResidueRangeDecomposition,
+    Sumcheck,
+    VirtualEval,
+)
+from vfhe.piop.protocols.range import digit_alphabets
 from vfhe.piop.relation import hypercube_sum
-from vfhe.piop.relations import Relation_Lookup, Relation_Range, Relation_Sum
+from vfhe.piop.relations import (
+    Relation_Lookup,
+    Relation_Range,
+    Relation_ResidueRange,
+    Relation_Sum,
+)
 from vfhe.polycom import (
     Basefold,
     BasefoldEval,
@@ -77,11 +100,12 @@ class _Setup:
 
     def __init__(self, field, ring, v, m, bound=BOUND, sent=()):
         self.field, self.ring, self.m, self.sent = field, ring, m, sent
-        relation = Relation_Range(bound, CHUNKS)
+        relation = Relation_Range(bound)
+        beta, top_beta = digit_alphabets(bound, CHUNKS)
         ell_star = ELL + NU + (CHUNKS.bit_length() - 1)
-        sizes = [ell_star, relation.beta.bit_length() - 1]
-        if relation.top_beta != relation.beta:
-            sizes += [ELL + NU, relation.top_beta.bit_length() - 1]
+        sizes = [ell_star, beta.bit_length() - 1]
+        if top_beta != beta:
+            sizes += [ELL + NU, top_beta.bit_length() - 1]
         self.field_schemes = [
             Basefold(FieldFoldableRS(field, k0=4, c=4, d=size - 2))
             for size in sizes
@@ -100,7 +124,13 @@ class _Setup:
         iop.register(
             Relation_Range,
             RangeDecomposition(
-                self.field, self.m, ALPHABET, KAPPA, self.ring, messages=messages
+                self.field,
+                self.m,
+                ALPHABET,
+                KAPPA,
+                self.ring,
+                CHUNKS,
+                messages=messages,
             ),
         )
         iop.register(Relation_Lookup, Lookup(self.field, messages=messages))
@@ -185,9 +215,9 @@ def test_an_out_of_range_coefficient_is_rejected(field, ring):
     are repeated and their acceptances bounded."""
     bad = _witness(ring, tweak=lambda c: c.__setitem__(1, BOUND + 1))
     setup = _Setup(field, ring, bad, ELL + NU)
-    error = RangeDecomposition(field, ELL + NU, ALPHABET, KAPPA, ring).soundness_error(
-        setup.statement
-    )
+    error = RangeDecomposition(
+        field, ELL + NU, ALPHABET, KAPPA, ring, CHUNKS
+    ).soundness_error(setup.statement)
     runs = 16
     accepted = sum(bool(setup.iop().run(setup.statement)) for _ in range(runs))
     assert accepted <= _most_acceptances(runs, error)
@@ -293,7 +323,7 @@ class _RangeAndSum(Relation):
 
     def check(self, statement: Statement) -> bool:
         (v,) = statement.oracles
-        in_range = Statement(Relation_Range(BOUND, CHUNKS), oracles=[v]).check()
+        in_range = Statement(Relation_Range(BOUND), oracles=[v]).check()
         return in_range and hypercube_sum(v) == statement.value
 
 
@@ -307,7 +337,7 @@ class _Split(Protocol):
     def _outputs(self, statement: Statement) -> list[Statement]:
         (v,) = statement.oracles
         return [
-            self.reduce([statement], Relation_Range(BOUND, CHUNKS), oracles=[v]),
+            self.reduce([statement], Relation_Range(BOUND), oracles=[v]),
             self.reduce([statement], Relation_Sum, oracles=[v], value=statement.value),
         ]
 
@@ -355,7 +385,7 @@ class _TwoRanges(Relation):
 
     def check(self, statement: Statement) -> bool:
         return all(
-            Statement(Relation_Range(BOUND, CHUNKS), oracles=[v]).check()
+            Statement(Relation_Range(BOUND), oracles=[v]).check()
             for v in statement.oracles
         )
 
@@ -369,7 +399,7 @@ class _Both(Protocol):
 
     def _outputs(self, statement: Statement) -> list[Statement]:
         return [
-            self.reduce([statement], Relation_Range(BOUND, CHUNKS), oracles=[v])
+            self.reduce([statement], Relation_Range(BOUND), oracles=[v])
             for v in statement.oracles
         ]
 
@@ -387,7 +417,7 @@ def test_two_range_claims_share_one_lookup(field, ring):
     an argument string; a coefficient out of range in either claim
     rejects."""
     ell_star = ELL + NU + (CHUNKS.bit_length() - 1)
-    beta_bits = Relation_Range(BOUND, CHUNKS).beta.bit_length() - 1
+    beta_bits = digit_alphabets(BOUND, CHUNKS)[0].bit_length() - 1
     field_schemes = [
         Basefold(FieldFoldableRS(field, k0=4, c=4, d=size - 2))
         for size in (ell_star, ell_star + 1, beta_bits)
@@ -406,7 +436,7 @@ def test_two_range_claims_share_one_lookup(field, ring):
             iop.register(
                 Relation_Range,
                 RangeDecomposition(
-                    field, ELL + NU, ALPHABET, KAPPA, ring, messages=messages
+                    field, ELL + NU, ALPHABET, KAPPA, ring, CHUNKS, messages=messages
                 ),
             )
             iop.register(Relation_Lookup, Lookup(field, messages=messages))
@@ -432,3 +462,112 @@ def test_two_range_claims_share_one_lookup(field, ring):
     assert make().verify(statement, make().prove(statement))
     statement, make = setup(tweak_second=lambda c: c.__setitem__(1, BOUND))
     assert not make().run(statement)
+
+
+# --- the residue range proof -----------------------------------------------
+
+
+def _residue_tables(fields, tweak=None):
+    """The residues of `2^(ELL + NU)` integers below `BOUND`, one table per
+    field over its own variables; `tweak(values)` may edit the integers."""
+    n = ELL + NU
+    values = [(131 * i + 5) % BOUND for i in range(1 << n)]
+    if tweak is not None:
+        tweak(values)
+    tables = []
+    for field in fields:
+        vec = FieldVector(field, 1 << n)
+        vec.set_uint64(array("Q", [x % field.prime for x in values]))
+        variables = [MLE_Variable(f"u{i}") for i in range(n)]
+        tables.append(MLE(field=field, variables=variables, evaluations=vec))
+    return tables
+
+
+class _ResidueSetup:
+    """The residue range claim with each residue table committed with field
+    basefold over its own field, and `mu'` and the lookup's tables sent
+    through `BasefoldMessages` over `F_p`, one scheme per table size."""
+
+    def __init__(self, field, tables, m=ELL + NU):
+        self.field, self.m, self.tables = field, m, tables
+        n = ELL + NU
+        relation = Relation_ResidueRange(BOUND)
+        beta, top_beta = digit_alphabets(BOUND, CHUNKS)
+        sizes = [n + (CHUNKS.bit_length() - 1), beta.bit_length() - 1]
+        if top_beta != beta:
+            sizes += [n, top_beta.bit_length() - 1]
+        self.field_schemes = [
+            Basefold(FieldFoldableRS(field, k0=4, c=4, d=size - 2)) for size in sizes
+        ]
+        self.residue_schemes = [
+            Basefold(FieldFoldableRS(table.field, k0=4, c=4, d=n - 2))
+            for table in tables
+        ]
+        self.committed = [
+            scheme.commit(table)
+            for scheme, table in zip(self.residue_schemes, tables, strict=True)
+        ]
+        self.statement = Statement(
+            relation, oracles=[oracle for oracle, _ in self.committed]
+        )
+
+    def protocol(self, messages=None) -> ResidueRangeDecomposition:
+        return ResidueRangeDecomposition(
+            self.field, self.m, ALPHABET, KAPPA, CHUNKS, messages=messages
+        )
+
+    def iop(self, **kw) -> IOP:
+        messages = BasefoldMessages(self.field_schemes)
+        iop = IOP(domain=self.field, **kw)
+        iop.register(Relation_ResidueRange, self.protocol(messages))
+        iop.register(Relation_Lookup, Lookup(self.field, messages=messages))
+        iop.register(Relation_Sum, Sumcheck())
+        iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+        for scheme in [*self.field_schemes, *self.residue_schemes]:
+            iop.register(Relation_Eval, BasefoldEval(scheme, rep=REP))
+        for table, (oracle, opening) in zip(self.tables, self.committed, strict=True):
+            iop.prover.witnesses[oracle] = table
+            iop.prover.witnesses[oracle.commitment] = opening
+        return iop
+
+
+@pytest.fixture
+def residue_fields():
+    """A 50-bit prime field of degree 2 and a 60-bit prime field; both have
+    the 2-adicity the codes need (`c k0 2^d = 128` points)."""
+    return [Field(562949948178433, 2, 5), Field(1152921504577486849)]
+
+
+def test_compiled_residue_range_proof(field, residue_fields):
+    """The residue oracles committed per prime: an honest run accepts,
+    interactively and as an argument string, with one basefold run per
+    scheme -- the claims at the integer points end in one bundle under each
+    residue oracle's scheme."""
+    setup = _ResidueSetup(field, _residue_tables(residue_fields))
+    iop = setup.iop()
+    assert iop.run(setup.statement)
+    runs = [
+        x
+        for x in iop.transcript.order
+        if x.startswith("basefold") and x.endswith("/answers")
+    ]
+    assert len(runs) == len(setup.field_schemes) + len(setup.residue_schemes) == 4
+    proof = setup.iop(fiat_shamir=True).prove(setup.statement)
+    assert setup.iop(fiat_shamir=True).verify(setup.statement, proof)
+
+
+def test_compiled_residue_range_proof_rejects_an_out_of_range_entry(
+    field, residue_fields
+):
+    """An entry above the bound; a single run may pass with the soundness
+    error, so the runs are repeated and their acceptances bounded."""
+    tables = _residue_tables(
+        residue_fields, tweak=lambda v: v.__setitem__(1, BOUND + 1)
+    )
+    claim = Relation_ResidueRange(BOUND)
+    assert not Statement(claim, oracles=[TableOracle(t) for t in tables]).check()
+    setup = _ResidueSetup(field, tables)
+    error = setup.protocol().soundness_error(setup.statement)
+    runs = 16
+    accepted = sum(bool(setup.iop().run(setup.statement)) for _ in range(runs))
+    assert accepted <= _most_acceptances(runs, error)

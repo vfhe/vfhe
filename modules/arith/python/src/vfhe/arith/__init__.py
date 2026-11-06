@@ -28,6 +28,7 @@ from .registry import (
     registered,
     resolve,
 )
+from .residues import crt_lift_mod_2_128
 from .spec import Capability, Constraints, Domain, Spec
 from .state import reset as reset_state
 
@@ -63,6 +64,7 @@ __all__ = [
     "backends",
     "count_occurrences",
     "crt",
+    "crt_lift_mod_2_128",
     "domain_of",
     "gen_pseudo_mersenne_prime",
     "generic_only",
