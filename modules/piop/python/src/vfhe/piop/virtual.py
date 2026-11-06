@@ -76,23 +76,28 @@ def resolve_table(oracle, witnesses: dict | None = None) -> Any:
     witness recorded for it (`Prover.witnesses[oracle]`: the table of a
     committed or an implicit oracle), the table a `TableOracle` holds,
     dense or sparse (a sparse table is returned as it is, never
-    materialized), or, for a *restriction* (`VirtualOracle.restriction`),
-    the restriction of its constituent's resolved table renamed to the
-    restriction's variables: the slice of a sparse table
-    (`SparseMLE.restrict`), the partial evaluation of a dense one. Any other
-    oracle has no table on this side and raises."""
+    materialized), or, for a *restriction* (`VirtualOracle.restriction`) or
+    a *scaled partial evaluation* (`VirtualOracle.partial_evaluation`), its
+    constituent's resolved table with the fixed variables bound, renamed to
+    the oracle's variables and scaled by the term's coefficient: the slice
+    of a sparse table (`SparseMLE.restrict`) when the fixed values are bits,
+    the partial evaluation of a dense one (a sparse table is materialized
+    first) otherwise. Any other oracle has no table on this side and
+    raises."""
     if witnesses is not None and oracle in witnesses:
         return witnesses[oracle]
     if isinstance(oracle, TableOracle):
         return oracle.polynomial
     if isinstance(oracle, VirtualOracle):
-        if not oracle.is_restriction():
+        if not oracle.is_partial_evaluation():
             raise TypeError(
                 f"no table for {oracle!r}: a virtual oracle resolves to a table "
-                "only when it is a restriction of one constituent"
+                "only when it is a restriction or a scaled partial evaluation "
+                "of one constituent"
             )
         (constituent,) = oracle.constituents
         (mapping,) = oracle.maps
+        ((coeff, _),) = oracle.terms
         table = resolve_table(constituent, witnesses)
         fixed = {
             cv: src
@@ -103,14 +108,17 @@ def resolve_table(oracle, witnesses: dict | None = None) -> Any:
             cv: src for cv, src in mapping.items() if is_variable(src, oracle.variables)
         }
         if isinstance(table, SparseMLE):
-            sliced = table.restrict(fixed)
-            sliced.variables = [renames[v] for v in sliced.variables]
-            return sliced
+            if all(isinstance(b, int) and b in (0, 1) for b in fixed.values()):
+                sliced = table.restrict(fixed)
+                sliced.variables = [renames[v] for v in sliced.variables]
+                return scaled(coeff, sliced)
+            table = table.materialize()
         if not fixed:
-            return table_view(table, [renames[v] for v in table.variables])
+            view = table_view(table, [renames[v] for v in table.variables])
+            return scaled(coeff, view)
         table = table.evaluate(fixed, in_place=False)
         table.variables = [renames[v] for v in table.variables]
-        return table
+        return scaled(coeff, table)
     raise TypeError(
         f"no table for {oracle!r}: not a table oracle, and no witness stored for it"
     )
@@ -205,6 +213,41 @@ class VirtualOracle(Oracle):
             is_variable(src, self.variables) or (isinstance(src, int) and src in (0, 1))
             for src in self.maps[0].values()
         )
+
+    @classmethod
+    def partial_evaluation(
+        cls, constituent, variables: list, fixed: dict, coefficient: Any = 1
+    ) -> VirtualOracle:
+        """`coefficient * p(fixed, .)`: the constituent `p` with the variables
+        in `fixed` bound to constants -- elements of its domain, or integers
+        -- the remaining ones renamed, in order, to `variables`, and the
+        value scaled by `coefficient`: the virtual oracle with the one
+        constituent, one term of that coefficient and that map. A query at
+        `x` is one query to `p` at `(x, fixed)`, scaled, which is what
+        `protocols.VirtualEval` reduces an evaluation claim on it to; on the
+        prover's side `resolve_table` resolves it to the partial evaluation
+        of `p`'s table, scaled. `restriction` is the case of bits and
+        coefficient 1; `is_partial_evaluation` recognises the form."""
+        free = [v for v in constituent.variables if v not in fixed]
+        if len(free) != len(variables):
+            raise ValueError(
+                f"the constituent has {len(free)} free variables, "
+                f"{len(variables)} names were given"
+            )
+        if any(isinstance(value, MLE_Variable) for value in fixed.values()):
+            raise ValueError("a partial evaluation fixes variables to constants")
+        renames = dict(zip(free, variables, strict=True))
+        mapping = {cv: fixed.get(cv, renames.get(cv)) for cv in constituent.variables}
+        return cls(variables, [constituent], [(coefficient, (0,))], [mapping])
+
+    def is_partial_evaluation(self) -> bool:
+        """Whether this oracle has the form `partial_evaluation` builds (and
+        so `restriction`'s): one constituent, one term over it, every map
+        source a variable of this oracle or a constant."""
+        if len(self.constituents) != 1 or len(self.terms) != 1:
+            return False
+        _, idxs = self.terms[0]
+        return idxs == (0,)
 
     @classmethod
     def linear(cls, coeffs: list, oracles: list[VirtualOracle]) -> VirtualOracle:

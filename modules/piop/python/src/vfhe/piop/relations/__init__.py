@@ -13,7 +13,7 @@ from .circuit import (
 )
 from .hypercube import Relation_Sum, Relation_SumProd, Relation_Zero
 from .lookup import Relation_Lookup
-from .range import Relation_Range
+from .range import Relation_Range, Relation_ResidueRange
 from .sparse import FamilyShape, Relation_SpEval, dense_relation
 from .sumdef import Relation_SumDef
 
@@ -26,6 +26,7 @@ __all__ = [
     "Relation_Layer",
     "Relation_Lookup",
     "Relation_Range",
+    "Relation_ResidueRange",
     "Relation_SpEval",
     "Relation_Sum",
     "Relation_SumDef",

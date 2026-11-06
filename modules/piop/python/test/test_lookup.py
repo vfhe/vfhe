@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cozzo <daniele.cozzo@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""The lookup relation and its protocol (Figure 11 of [CCCFGS26]).
+"""The lookup relation and its protocol (the lookup PIOP over a prime field
+of [CCCFGS26]).
 
 The headline property is the one the relation states: the verifier accepts
 exactly when every entry of the oracle lies in `t_beta = {0, ..., beta - 1}`.
 Around it: the two lemmas the protocol rests on tested on their own (the
-memory-checking identity of Lemma I.3 and the grand-product layering of
-Lemma I.4), the reduction's shape, and which branch rejects which kind of
+memory-checking identity [BEGKN91; Set20] and the grand-product layering
+[Tha13; SL20]), the reduction's shape, and which branch rejects which kind of
 lie."""
 
 import random
@@ -106,7 +107,7 @@ def test_the_lookup_draws_in_its_field_inside_a_ring_iop(field):
     assert all(s.check() for s in seen)
 
 
-# --- Lemma I.3: the memory-checking identity --------------------------------
+# --- the memory-checking lemma: the multiset identity -----------------------
 
 
 def test_counters_satisfy_the_multiset_identity():
@@ -161,7 +162,7 @@ def test_counters_cannot_balance_an_out_of_range_value():
     assert ws != rs + s
 
 
-# --- Lemma I.4: the grand-product layering ----------------------------------
+# --- the grand-product lemma: the layering ----------------------------------
 
 
 def test_product_tree_layering():
@@ -591,14 +592,16 @@ def test_soundness_error_is_the_theorem_bound(field):
 # --- under the range protocol, which is what produces these claims ----------
 
 
-def _range_iop(field, ring):
+def _range_iop(field, ring, chunks):
     from vfhe.piop.protocols import RangeDecomposition
     from vfhe.piop.relations import Relation_Range
 
     iop = _iop(field)
     iop.register(
         Relation_Range,
-        RangeDecomposition(field, m=2, alphabet=1 << 8, kappa=2, ring=ring),
+        RangeDecomposition(
+            field, m=2, alphabet=1 << 8, kappa=2, ring=ring, chunks=chunks
+        ),
     )
     return iop
 
@@ -629,9 +632,9 @@ def test_range_proof_end_to_end(field, bounded):
         )
     )
 
-    statement = Statement(Relation_Range(bound, chunks), oracles=[v])
+    statement = Statement(Relation_Range(bound), oracles=[v])
     assert statement.check() is bounded
-    assert _range_iop(field, ring).run(statement) is bounded
+    assert _range_iop(field, ring, chunks).run(statement) is bounded
 
 
 # --- several claims run together ---------------------------------------------

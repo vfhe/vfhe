@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cozzo <daniele.cozzo@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""The range relation and its decomposition protocol (Figure 13 of
-[CCCFGS26]): the recomposition identity on its own, the protocol end to end,
-the statements it reduces to, and the three ways a prover can cheat -- each
+"""The range relation and its decomposition protocol (the optimized range
+PIOP `Pi*_range` of [CCCFGS26]): the recomposition identity on its own, the
+protocol end to end, the statements it reduces to, and the three ways a prover can cheat -- each
 rejected by the branch that is supposed to catch it."""
 
 import math
@@ -23,7 +23,13 @@ from vfhe.piop import (
     element_digest,
 )
 from vfhe.piop.protocols import Lookup, RangeDecomposition, Sumcheck, VirtualEval
-from vfhe.piop.protocols.range import balanced, base_digits, eq_int, uEval
+from vfhe.piop.protocols.range import (
+    base_digits,
+    centered,
+    digit_alphabets,
+    eq_int,
+    unpacked_evaluation,
+)
 from vfhe.piop.relations import Relation_Lookup, Relation_Range, Relation_Sum
 from vfhe.piop.virtual import resolve_table
 
@@ -70,18 +76,19 @@ def _protocol(field, ring, **kw):
     kw.setdefault("m", M)
     kw.setdefault("alphabet", ALPHABET)
     kw.setdefault("kappa", KAPPA)
+    kw.setdefault("chunks", CHUNKS)
     return RangeDecomposition(field, ring=ring, **kw)
 
 
-def _iop(ring, field, protocol=None, **kw):
+def _iop(ring, field, protocol=None, chunks=CHUNKS, **kw):
     iop = IOP(domain=field, **kw)
-    iop.register(Relation_Range, protocol or _protocol(field, ring))
+    iop.register(Relation_Range, protocol or _protocol(field, ring, chunks=chunks))
     return iop
 
 
 def _statement(v):
     """The range claim on the table `v`, named by a fresh oracle."""
-    return Statement(Relation_Range(BOUND, CHUNKS), oracles=[TableOracle(v)])
+    return Statement(Relation_Range(BOUND), oracles=[TableOracle(v)])
 
 
 def _most_acceptances(runs, error, false_failure=1e-6):
@@ -112,12 +119,43 @@ def test_relation_range_check(ring):
     assert not _statement(over).check()
 
 
-def test_relation_range_rejects_bad_parameters():
-    with pytest.raises(ValueError, match="power of two"):
-        Relation_Range(100, 2)
+def test_relation_range_takes_any_positive_bound(ring):
+    """The index is the bound alone, any positive integer: a bound that is
+    not a power of two is still decided exactly."""
+    assert Relation_Range(100).bound == 100
+    for bad in (0, -4):
+        with pytest.raises(ValueError, match="positive integer"):
+            Relation_Range(bad)
+    below = _witness(ring, seed=3, bound=100)
+    assert Statement(Relation_Range(100), oracles=[TableOracle(below)]).check()
+    at = _witness(ring, seed=3, bound=100, tweak=lambda c: c.__setitem__(3, 100))
+    assert not Statement(Relation_Range(100), oracles=[TableOracle(at)]).check()
+
+
+def test_digit_alphabets_rejects_bad_parameters():
+    with pytest.raises(ValueError, match="B = 2\\^b"):
+        digit_alphabets(100, 2)
+    with pytest.raises(ValueError, match="B = 2\\^b"):
+        digit_alphabets(1, 1)
+    for chunks in (0, 3):
+        with pytest.raises(ValueError, match="power of two"):
+            digit_alphabets(1 << 6, chunks)
     # Four digits of two bits leave nothing for the top one of a 5-bit bound.
     with pytest.raises(ValueError, match="no bit"):
-        Relation_Range(1 << 5, 4)
+        digit_alphabets(1 << 5, 4)
+
+
+def test_the_decomposition_needs_a_power_of_two_bound(ring, field):
+    """The protocol checks `chunks` when built and the bound when it first
+    sees a statement: a bound that is not a power of two has no digit
+    decomposition."""
+    with pytest.raises(ValueError, match="power of two"):
+        _protocol(field, ring, chunks=3)
+    statement = Statement(
+        Relation_Range(100), oracles=[TableOracle(_witness(ring, bound=100))]
+    )
+    with pytest.raises(ValueError, match="B = 2\\^b"):
+        _protocol(field, ring)._shape(statement)
 
 
 @pytest.mark.parametrize(
@@ -130,12 +168,11 @@ def test_relation_range_rejects_bad_parameters():
         (49, 4, 1 << 13, 1 << 10),
     ],
 )
-def test_relation_range_digit_alphabets(bits, chunks, beta, top_beta):
+def test_digit_alphabets(bits, chunks, beta, top_beta):
     """`c - 1` digits of `ceil(log2(B) / c)` bits and a top digit of what is
     left: the same alphabet when `c` divides `log2(B)`."""
-    relation = Relation_Range(1 << bits, chunks)
-    assert (relation.beta, relation.top_beta) == (beta, top_beta)
-    assert relation.beta ** (chunks - 1) * relation.top_beta == relation.bound
+    assert digit_alphabets(1 << bits, chunks) == (beta, top_beta)
+    assert beta ** (chunks - 1) * top_beta == 1 << bits
 
 
 def test_relation_lookup_check(field):
@@ -162,12 +199,12 @@ def test_relation_lookup_check(field):
 # --- the recomposition identity, on its own --------------------------------
 
 
-def _exact_uEval(v, r, ell, nu):
+def _exact_unpacked_evaluation(v, r, ell, nu):
     """`unpack(v)` at `r`, computed over Z from v's integer coefficients.
 
     The honest witness has coefficients well below q, so this is the value
-    `uEval` would return if nothing were ever reduced -- the reference the
-    protocol's mod-q check is a shadow of.
+    `unpacked_evaluation` would return if nothing were ever reduced -- the
+    reference the protocol's mod-q check is a shadow of.
     """
     tables = [list(p.get_polynomial()) for p in v.table]
     for i in range(ell):  # bind the X block, LSB-first
@@ -185,20 +222,21 @@ def _exact_uEval(v, r, ell, nu):
 
 @pytest.mark.parametrize("m", [M, ELL + 1, ELL + NU])
 def test_recomposition_identity(ring, field, m):
-    """Figure 13's step-2 check, computed directly from an honest witness,
-    with the bound prefix inside the X block, reaching into the Z block, and
-    covering all of X|Z.
+    """The recomposition check of the optimized range PIOP, computed directly
+    from an honest witness, with the bound prefix inside the X block, reaching
+    into the Z block, and covering all of X|Z.
 
     Three separate facts, in increasing strength:
 
     1. every entry of `psi` lifts through `iota` to something well inside
-       `I_p` -- the Claim of §I.5, `|mu(r^<=m, delta, j)| < 2^m beta sigma^m`,
-       which is what makes the lift meaningful at all;
+       `I_p` -- the no-overflow bound of the optimized range PIOP,
+       `|mu(r^<=m, delta, j)| < 2^m beta sigma^m`, which is what makes the
+       lift meaningful at all;
     2. the digits rebuild the coefficients **exactly over Z**, against v's
        integer coefficients;
-    3. and hence congruently mod q against `uEval` of the ring element the
-       verifier actually queries -- the form the protocol checks, and the
-       only form available once v(x) is read out of R_q.
+    3. and hence congruently mod q against `unpacked_evaluation` of the ring
+       element the verifier actually queries -- the form the protocol checks,
+       and the only form available once v(x) is read out of R_q.
     """
     v = _witness(ring, seed=3)
     protocol = _protocol(field, ring, m=m)
@@ -209,7 +247,7 @@ def test_recomposition_identity(ring, field, m):
         field=field, variables=shape.variables, evaluations=[field(d) for d in digits]
     )
     claim_bound = (1 << m) * shape.beta * ALPHABET**m
-    assert 2 * claim_bound < field.prime  # equation (38)
+    assert 2 * claim_bound < field.prime  # p > 2*beta*(2*sigma)^m
 
     rng = random.Random(11)
     for _ in range(4):
@@ -218,17 +256,17 @@ def test_recomposition_identity(ring, field, m):
         width = shape.ell + shape.nu - m
         left = 0
         for index, value in enumerate(psi.table):
-            lifted = balanced(value, field.prime)
+            lifted = centered(value, field.prime)
             assert abs(lifted) < claim_bound  # (1)
             delta = [(index >> t) & 1 for t in range(width)]
             left += lifted * eq_int(delta, r[m:]) * shape.beta ** (index >> width)
 
-        assert left == _exact_uEval(v, r, shape.ell, shape.nu)  # (2)
+        assert left == _exact_unpacked_evaluation(v, r, shape.ell, shape.nu)  # (2)
 
         w = v.evaluate(
             {var: r[i] for i, var in enumerate(v.variables)}, in_place=False
         ).constant()
-        assert (left - uEval(w, r[shape.ell :])) % ring.q_l == 0  # (3)
+        assert (left - unpacked_evaluation(w, r[shape.ell :])) % ring.q_l == 0  # (3)
 
 
 def test_digits_round_trip():
@@ -251,8 +289,8 @@ def test_bulk_digit_table_is_the_per_coefficient_one(ring, field, bound, chunks)
     """The digit table built in whole-array steps holds exactly the digits
     of the per-coefficient table, including digits that start past bit 64."""
     v = _witness(ring, seed=7, bound=min(bound, 1 << 20))
-    statement = Statement(Relation_Range(bound, chunks), oracles=[TableOracle(v)])
-    protocol = _protocol(field, ring)
+    statement = Statement(Relation_Range(bound), oracles=[TableOracle(v)])
+    protocol = _protocol(field, ring, chunks=chunks)
     shape = protocol._shape(statement)
     bulk = protocol._digit_vector(v, shape)
     assert bulk is not None
@@ -292,8 +330,8 @@ def test_digits_past_bit_128_of_a_q_above_2_128_are_digitized_one_by_one(field):
     the lift modulo 2^128 does not have when q exceeds 2^128."""
     ring = Ring(1 << NU, prime_size=[45, 45, 45], split_degree=1)
     v = _witness(ring)
-    statement = Statement(Relation_Range(1 << 132, 4), oracles=[TableOracle(v)])
-    protocol = _protocol(field, ring)
+    statement = Statement(Relation_Range(1 << 132), oracles=[TableOracle(v)])
+    protocol = _protocol(field, ring, chunks=4)
     assert protocol._digit_vector(v, protocol._shape(statement)) is None
 
 
@@ -336,22 +374,26 @@ def test_decomposition_across_the_parameter_knobs(ring, field, bound, chunks, m,
     2% here, so a single cheating run may pass: the cheating run is repeated
     and its acceptances are held to what that error allows."""
     good = _witness(ring, seed=20 + m + chunks, bound=bound)
-    statement = Statement(Relation_Range(bound, chunks), oracles=[TableOracle(good)])
-    protocol = RangeDecomposition(field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa)
+    statement = Statement(Relation_Range(bound), oracles=[TableOracle(good)])
+    protocol = RangeDecomposition(
+        field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa, chunks=chunks
+    )
 
     iop = IOP(domain=field)
     iop.register(Relation_Range, protocol)
     assert iop.run(statement)
 
     bad = _witness(ring, bound=bound, tweak=lambda c: c.__setitem__(1, bound + 1))
-    cheating = Statement(Relation_Range(bound, chunks), oracles=[TableOracle(bad)])
+    cheating = Statement(Relation_Range(bound), oracles=[TableOracle(bad)])
     runs = 64
     accepted = 0
     for _ in range(runs):
         iop = IOP(domain=field)
         iop.register(
             Relation_Range,
-            RangeDecomposition(field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa),
+            RangeDecomposition(
+                field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa, chunks=chunks
+            ),
         )
         accepted += bool(iop.run(cheating))
     assert accepted <= _most_acceptances(runs, protocol.soundness_error(cheating))
@@ -405,7 +447,7 @@ def test_lookup_claim_is_terminal_and_true(ring, field):
     iop.register(Relation_Lookup, _Record())
     assert iop.run(_statement(v))
     (claim,) = seen
-    assert claim.relation.beta == Relation_Range(BOUND, CHUNKS).beta
+    assert claim.relation.beta == digit_alphabets(BOUND, CHUNKS)[0]
     assert claim.check()
 
 
@@ -441,8 +483,8 @@ def test_the_decomposition_draws_in_its_field_inside_a_ring_iop(ring, field):
 SHORT = 1 << 7
 
 
-def _short_statement(v, bound=SHORT, chunks=CHUNKS):
-    return Statement(Relation_Range(bound, chunks), oracles=[TableOracle(v)])
+def _short_statement(v, bound=SHORT):
+    return Statement(Relation_Range(bound), oracles=[TableOracle(v)])
 
 
 def _full_iop(ring, field, protocol=None, **kw):
@@ -457,32 +499,33 @@ def _full_iop(ring, field, protocol=None, **kw):
 #: The statement and argument-string digests of the range proof at bounds
 #: whose bit count `c` divides, for `_witness(ring, seed=7, bound=B)`, with
 #: the lookup claims left terminal; `_PINNED_WITH_LOOKUP` is the first one's
-#: argument string with the lookup argument run.
+#: argument string with the lookup argument run. The statement is the bound
+#: and the oracle, so the two `c` at `B = 2^8` share a statement digest.
 _PINNED = {
     (6, 2): (
-        "9826470160748f699b923b056d0c5928ee41b0ac94901abd63dd3e871c70202d",
-        "7630a1ccc25f46b94c218eaaa6d1295127ea4a7a342cd4dfba03eb9baf070304",
+        "b1df74e7e7c1dc262130cf0cbbd8cd2e11e9a43b8517a92580ec6db2fc7d581a",
+        "4fb457fba21b1ba42cb65520b4e6fcca9be0adee99b3d757cc5f3f6cd3d70de5",
     ),
     (8, 4): (
-        "b145dcabcd12fb79baabe78f564b4f9d4411d485777e156c6c6b14239e2ab20d",
-        "d5052714878882cdb45aa65ee75fe1a32784a41289f4371411b48b01962cc0e9",
+        "8f7897eea66213ced30d145daee1196e91b8d640629e8825ab5404df91ed2713",
+        "18a22fc1cd729a02e59a652c9452163070ea3813f4652b68ffd2b96d8cb1366d",
     ),
     (8, 1): (
-        "e0f60eac34727bd2f1d5647d753485173d2bff39996dcefa2eb653bc3ecab9d9",
-        "37de1d4367de4c13be883334250e598d607e6929fbbdf30aea8e9447df17f6f6",
+        "8f7897eea66213ced30d145daee1196e91b8d640629e8825ab5404df91ed2713",
+        "9368cb57b689ec72f179d40183c1de5f759114905d73dcb3bf31043397fa5df9",
     ),
 }
-_PINNED_WITH_LOOKUP = "f9d3c831eec59c8d828147285f17caf6b9eaf85bb4ff55f62fdc282fbff81ba1"
+_PINNED_WITH_LOOKUP = "c6db2b11fbca546434d2fdc46019c282f7daa585f43dffa0264bdee1a53c20c9"
 
 
 @pytest.mark.parametrize(("bits", "chunks"), list(_PINNED))
 def test_divisible_bounds_are_pinned(ring, field, bits, chunks):
     v = _witness(ring, seed=7, bound=1 << bits)
-    statement = _short_statement(v, 1 << bits, chunks)
-    proof = _iop(ring, field, fiat_shamir=True).prove(statement)
+    statement = _short_statement(v, 1 << bits)
+    proof = _iop(ring, field, chunks=chunks, fiat_shamir=True).prove(statement)
     assert (statement.digest().hex(), proof.digest().hex()) == _PINNED[bits, chunks]
     if (bits, chunks) == (6, 2):
-        proof = _full_iop(ring, field, fiat_shamir=True).prove(statement)
+        proof = _full_iop(ring, field, chunks=chunks, fiat_shamir=True).prove(statement)
         assert proof.digest().hex() == _PINNED_WITH_LOOKUP
 
 
@@ -513,8 +556,7 @@ def test_a_short_top_digit_adds_a_lookup_on_the_top_digits(ring, field):
     v = _witness(ring, seed=14, bound=SHORT)
     accepted, (low, top) = _short_bundle(ring, field, v)
     assert accepted
-    relation = Relation_Range(SHORT, CHUNKS)
-    assert (relation.beta, relation.top_beta) == (16, 8)
+    assert digit_alphabets(SHORT, CHUNKS) == (16, 8)
     assert (low.relation.beta, top.relation.beta) == (16, 8)
     (mu,) = low.oracles
     (restricted,) = top.oracles
@@ -550,16 +592,18 @@ def test_short_top_digit_across_the_parameter_knobs(
     in `t_beta`, so the top digits' lookup is the only check that can, and
     with the lookups decided by their ideal deciders it does every time."""
     bound = 1 << bits
-    statement = _short_statement(_witness(ring, seed=15, bound=bound), bound, chunks)
-    protocol = RangeDecomposition(field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa)
+    statement = _short_statement(_witness(ring, seed=15, bound=bound), bound)
+    protocol = RangeDecomposition(
+        field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa, chunks=chunks
+    )
     assert _iop(ring, field, protocol).run(statement)
 
     bad = _witness(ring, seed=15, bound=bound, tweak=lambda c: c.__setitem__(1, bound))
-    cheating = _short_statement(bad, bound, chunks)
+    cheating = _short_statement(bad, bound)
     assert not cheating.check()
     for _ in range(4):
         protocol = RangeDecomposition(
-            field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa
+            field, ring=ring, m=m, alphabet=ALPHABET, kappa=kappa, chunks=chunks
         )
         assert not _iop(ring, field, protocol).run(cheating)
 
@@ -598,7 +642,7 @@ def test_a_digit_just_above_the_short_width_is_rejected(ring, field, excess):
     assert not _iop(ring, field).run(statement)
 
     iop = _iop(ring, field)
-    iop.register(Relation_Lookup, _SwallowTop(Relation_Range(SHORT, CHUNKS).top_beta))
+    iop.register(Relation_Lookup, _SwallowTop(digit_alphabets(SHORT, CHUNKS)[1]))
     assert iop.run(statement)
 
     assert _full_iop(ring, field).run(
@@ -638,20 +682,24 @@ def test_lookup_argument_over_tables_below_the_padding_unit(ring, field, bits, c
     digit, a coefficient of `B` (top digit `top_beta`) are rejected. Each
     rejection is the lookup argument's, of error about `2^ell* / p`."""
     bound = 1 << bits
-    relation = Relation_Range(bound, chunks)
-    assert min(relation.beta, relation.top_beta) < 8
-    statement = _short_statement(_witness(ring, seed=18, bound=bound), bound, chunks)
-    assert _full_iop(ring, field).run(statement)
-    proof = _full_iop(ring, field, fiat_shamir=True).prove(statement)
-    assert _full_iop(ring, field, fiat_shamir=True).verify(statement, proof)
+    beta, top_beta = digit_alphabets(bound, chunks)
+    assert min(beta, top_beta) < 8
+    statement = _short_statement(_witness(ring, seed=18, bound=bound), bound)
+    assert _full_iop(ring, field, chunks=chunks).run(statement)
+    proof = _full_iop(ring, field, chunks=chunks, fiat_shamir=True).prove(statement)
+    assert _full_iop(ring, field, chunks=chunks, fiat_shamir=True).verify(
+        statement, proof
+    )
 
-    borrowed = _full_iop(ring, field, _cheat(ring, field, _borrow_one))
+    borrowed = _full_iop(ring, field, _cheat(ring, field, _borrow_one, chunks))
     assert not borrowed.run(statement)
-    if relation.top_beta != relation.beta:
+    if top_beta != beta:
         bad = _witness(
             ring, seed=18, bound=bound, tweak=lambda c: c.__setitem__(1, bound)
         )
-        assert not _full_iop(ring, field).run(_short_statement(bad, bound, chunks))
+        assert not _full_iop(ring, field, chunks=chunks).run(
+            _short_statement(bad, bound)
+        )
 
 
 # --- the three ways to cheat -----------------------------------------------
@@ -673,9 +721,15 @@ class _Tampered(RangeDecomposition):
         return table
 
 
-def _cheat(ring, field, corrupt):
+def _cheat(ring, field, corrupt, chunks=CHUNKS):
     return _Tampered(
-        field, m=M, alphabet=ALPHABET, kappa=KAPPA, ring=ring, corrupt=corrupt
+        field,
+        m=M,
+        alphabet=ALPHABET,
+        kappa=KAPPA,
+        ring=ring,
+        chunks=chunks,
+        corrupt=corrupt,
     )
 
 
@@ -865,27 +919,21 @@ def test_parameters_are_validated(ring, field):
     statement = _statement(v)
 
     with pytest.raises(ValueError, match="power of two"):
-        RangeDecomposition(field, ring=ring, m=M, alphabet=100, kappa=KAPPA)
+        _protocol(field, ring, alphabet=100)
     with pytest.raises(ValueError, match="kappa"):
-        RangeDecomposition(field, ring=ring, m=M, alphabet=ALPHABET, kappa=0)
+        _protocol(field, ring, kappa=0)
 
     # These three are conditions on the claim as well as on the constructor,
     # so they surface on first use rather than at construction.
     with pytest.raises(ValueError, match="must not exceed the variables of the X"):
-        RangeDecomposition(
-            field, ring=ring, m=ELL + NU + 1, alphabet=ALPHABET, kappa=KAPPA
-        )._shape(statement)
+        _protocol(field, ring, m=ELL + NU + 1)._shape(statement)
     # sigma so large that 2*beta*(2*sigma)^m overruns a 260-bit prime.
-    with pytest.raises(ValueError, match="equation 38"):
-        RangeDecomposition(
-            field, ring=ring, m=M, alphabet=1 << 128, kappa=KAPPA
-        )._shape(statement)
+    with pytest.raises(ValueError, match="2\\*beta"):
+        _protocol(field, ring, alphabet=1 << 128)._shape(statement)
     # sigma above the smallest RNS prime leaves the exceptional set of Z_q.
     too_wide = 1 << (min(ring.primes).bit_length() + 1)
     with pytest.raises(ValueError, match="smallest RNS prime"):
-        RangeDecomposition(
-            field, ring=ring, m=0, alphabet=too_wide, kappa=KAPPA
-        )._shape(statement)
+        _protocol(field, ring, m=0, alphabet=too_wide)._shape(statement)
 
 
 def test_soundness_error_is_the_theorem_bound(ring, field):
@@ -926,8 +974,8 @@ def test_the_paper_parameter_sets_are_accepted(bits, alphabet, m, kappa):
     field = PseudoMersenneField.generate(bits, two_adicity=8)
     ring = Ring(1 << 13, prime_size=[30, 30], split_degree=1)
     v = CommittedOracle([MLE_Variable(f"x{i}") for i in range(9)], None, None)
-    statement = Statement(Relation_Range(1 << 44, 4), oracles=[v])
-    protocol = RangeDecomposition(field, m, alphabet, kappa, ring)
+    statement = Statement(Relation_Range(1 << 44), oracles=[v])
+    protocol = RangeDecomposition(field, m, alphabet, kappa, ring, 4)
     assert protocol._shape(statement).ell_star == 24
     assert protocol.soundness_error(statement) <= 2.0**-128
 
@@ -937,10 +985,11 @@ def test_the_paper_parameter_sets_are_accepted(bits, alphabet, m, kappa):
     [(32, [30, 30], 1), (64, [50], 1), (256, [28, 60, 45], 4), (2, [40], 1)],
 )
 def test_the_verifier_evaluates_unpack_modulo_q(field, N, prime_size, split_degree):
-    """`_unpacked_evaluation` is `uEval` modulo `q`, on one prime or several,
-    on a split ring, and at points whose coordinates exceed the primes."""
+    """`_unpacked_evaluation_mod_q` is `unpacked_evaluation` modulo `q`, on
+    one prime or several, on a split ring, and at points whose coordinates
+    exceed the primes."""
     ring = Ring(N, prime_size=prime_size, split_degree=split_degree)
-    protocol = RangeDecomposition(field, 0, ALPHABET, KAPPA, ring)
+    protocol = RangeDecomposition(field, 0, ALPHABET, KAPPA, ring, CHUNKS)
     rng = random.Random(N)
     nu = N.bit_length() - 1
     for trial in range(3):
@@ -948,7 +997,7 @@ def test_the_verifier_evaluates_unpack_modulo_q(field, N, prime_size, split_degr
         point = [rng.randrange(ALPHABET) for _ in range(nu)]
         if trial == 2:
             point = [p + ring.primes[0] for p in point]
-        expected = uEval(element, point) % ring.q_l
-        assert protocol._unpacked_evaluation(element, point) == expected
+        expected = unpacked_evaluation(element, point) % ring.q_l
+        assert protocol._unpacked_evaluation_mod_q(element, point) == expected
     with pytest.raises(ValueError, match="coefficients"):
-        protocol._unpacked_evaluation(ring.random_element(), [1] * (nu + 1))
+        protocol._unpacked_evaluation_mod_q(ring.random_element(), [1] * (nu + 1))

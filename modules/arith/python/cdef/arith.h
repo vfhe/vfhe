@@ -449,6 +449,9 @@ void pmf_vec_ntt_encode_blocks(PMFVector out, const PMFVector msg, uint64_t bloc
 // --- counting ---
 bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values,
                            uint64_t count, uint64_t bound);
+void vec_combination_mod_2_128(uint64_t *low, uint64_t *high, const uint64_t *const *a,
+                               const uint64_t *w_low, const uint64_t *w_high, uint64_t m,
+                               uint64_t n);
 
 // --- the execution tape ---
 typedef enum

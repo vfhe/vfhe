@@ -2,40 +2,55 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.piop.range — the range proof
 
-> The design note for the range proof: the two protocols of Appendix I of
-> [CCCFGS26] expressed in this module's vocabulary, as implemented in
-> `relations/lookup.py`, `protocols/lookup.py`, `relations/range.py` and
-> `protocols/range.py`.
+> The design note for the range proof: the optimized range PIOP of
+> [CCCFGS26] and its lookup PIOP over a prime field, expressed in this
+> module's vocabulary, as implemented in `relations/lookup.py`,
+> `protocols/lookup.py`, `relations/range.py` and `protocols/range.py`.
 
 - [Context](#context)
 - [Notation](#notation)
 - [Conventions](#conventions-domains-and-index-order)
-- [The lookup protocol (Figure 11)](#the-lookup-protocol--figure-11)
-- [The decomposition protocol (Figure 13)](#the-decomposition-protocol--figure-13)
+- [The lookup protocol (`Π̂^F_range`)](#the-lookup-protocol)
+- [The decomposition protocol (`Π̂*_range`)](#the-decomposition-protocol)
 - [Soundness](#soundness-bookkeeping-both-protocols)
 - [Sending an oracle](#sending-an-oracle-both-protocols)
 
 ## Context
 
-[CCCFGS26], Appendix I, specifies the range proof this module implements, in
-two layers:
+A range check by base-`β` digit decomposition into lookups in the small
+table `t_β = {0, …, β−1}` is standard: bit decomposition in Bulletproofs
+[BBBPWM18], digit tables in plookup [GW20], and Lasso's decomposable tables
+[STW24], a lookup into a large table as `c` lookups into small subtables
+(Lasso's `c` is this code's `chunks`). [CCCFGS25] carried it to `R_q`.
+[CCCFGS26] adds packing: the digits are indexed by the unpacked polynomial,
+the MLE of the coefficients of `ṽ`, so no oracle larger than `ṽ` is sent.
+The recomposition check is a Schwartz–Zippel test over an exceptional set
+of integers, as in sumcheck over rings [BCS21; CCCFGS25]; the `O(N)`
+computation of all multilinear Lagrange basis values it needs is [VSBW13];
+and the residue form below is a residue number system [Gar59].
 
-- **Figure 13** (`Π̂*range`, §I.5) — the *optimized decomposition* protocol. It
-  reduces "every coefficient of every `ṽ(x)` lies in `[0, B)`" to a lookup
-  claim over a big prime field `F_p`, plus a handful of evaluation claims. It
-  replaces the older Figure 2 / Galois-ring construction.
-- **Figure 11** (`Π̂^F_range`, §I.4) — the *lookup argument* over `F_p`
-  (Spartan-style memory checking, Lemma I.3, plus Quarks grand products),
-  which reduces to two sumchecks and evaluation claims. **Figure 12** defines
-  the function `g` that builds the virtual oracle those sumchecks run on.
+[CCCFGS26] specifies the range proof this module implements, in two layers:
+
+- **The optimized range PIOP `Π̂*_range`** — the *decomposition* protocol,
+  which takes the auxiliary ring to be a large prime field `F_p`. It reduces
+  "every coefficient of every `ṽ(x)` lies in `[0, B)`" to a lookup claim over
+  `F_p`, plus a handful of evaluation claims.
+- **The lookup PIOP over a prime field `Π̂^F_range`** — offline memory
+  checking [BEGKN91] as used in Spartan [Set20], reduced to four grand
+  products proven as layered product circuits [Tha13; SL20], which reduces
+  to two sumchecks and evaluation claims. The function `g` of that PIOP
+  (the zerocheck over the layered product polynomial) builds the virtual
+  oracle those sumchecks run on.
 
 Both are expressed in the language of `vfhe.piop` — relations, statements,
 registered protocols, async prove/verify coroutines — so the range proof is a
 reduction in the framework's statement DAG rather than a standalone script.
 
-`Relation_Range` and `RangeDecomposition` (Figure 13) are
-`relations/range.py` and `protocols/range.py`, `Relation_Lookup` and
-`Lookup` (Figure 11) `relations/lookup.py` and `protocols/lookup.py`,
+`Relation_Range` and `RangeDecomposition` (`Π̂*_range`) are
+`relations/range.py` and `protocols/range.py`. The relation's index is the
+bound `B` alone; how the claim is proven, and with which digit count `c`,
+is the protocol's. `Relation_Lookup` and
+`Lookup` (`Π̂^F_range`) `relations/lookup.py` and `protocols/lookup.py`,
 covered by `test_range.py` and `test_lookup.py`. A range claim reduces all
 the way down — through the lookup, its two degree-3 zerochecks and their
 virtual-oracle openings — to evaluation claims on `ṽ` over `R_q` and on
@@ -48,14 +63,15 @@ wiring:
 
 ```python
 iop = IOP(domain=field)                       # field = F_p; or fiat_shamir=True
-iop.register(Relation_Range,  RangeDecomposition(field, m, alphabet, kappa, ring))
+iop.register(Relation_Range,  RangeDecomposition(field, m, alphabet, kappa, ring, c))
 #                                     m = split point, alphabet = |Sigma| = sigma,
-#                                     kappa = repetitions (all Fig. 13); ring = R_q
+#                                     kappa = repetitions (all of Π̂*_range); ring = R_q,
+#                                     c = chunks, the digits per coefficient
 iop.register(Relation_Lookup, Lookup(field))
 iop.register(Relation_Sum,    Sumcheck())
 iop.register(Relation_Eval,   VirtualEval(), kind=OracleKind.virtual)
 # Relation_Eval for plain oracles stays unregistered -> terminal oracle query
-assert iop.run(Statement(Relation_Range(B, c), oracles=[TableOracle(v_tilde)]))
+assert iop.run(Statement(Relation_Range(B), oracles=[TableOracle(v_tilde)]))
 ```
 
 In the notation of `piop.md` §5's reduction table, the two lines are
@@ -69,11 +85,11 @@ and the run produces this statement DAG (`→` = registered protocol; leaves are
 decided by the relation's own `check()`):
 
 ```text
-Relation_Range(B, c) on ṽ
+Relation_Range(B) on ṽ
 ├── κ × Relation_Eval on ṽ   at x_η              [terminal: one oracle query]
 ├── κ × Relation_Eval on µ̃'  at (r'_η, s')       [terminal]
 └── Relation_Lookup(β) on µ̃'
-    ├── Relation_Sum, ℓ* vars, degree 3   → Sumcheck → Eval on the Fig.-12 VirtualOracle
+    ├── Relation_Sum, ℓ* vars, degree 3   → Sumcheck → Eval on the VirtualOracle of g
     │     → VirtualEval → Eval on f^(1)_WSµ, f^(1)_RS at r  +  Eval on the virtual f_WSµ, f_RS
     │       → VirtualEval again → Eval on µ̃', read_ts, f^(1)_α at the shifted points [terminal]
     ├── Relation_Sum, b* vars,  degree 3  → … same, ending on t̃β (public), final_cts, f^(1)_α
@@ -83,6 +99,11 @@ Relation_Range(B, c) on ṽ
 (When `c` does not divide `b`, a second `Relation_Lookup(β_top)` follows,
 on the top digits of `µ̃'`, with the same subtree; see "A shorter top
 digit".)
+
+`Relation_ResidueRange` and `ResidueRangeDecomposition`, in the same files
+and covered by `test_residue_range.py`, are `Π̂*_range` on `ũ = unpack(ṽ)`
+itself, held as one oracle per prime of `q`; see
+[The decomposition on residue oracles](#the-decomposition-on-residue-oracles).
 
 The framework's vocabulary used below — relations, statements, protocols,
 oracle kinds, `VirtualOracle`, `VirtualEval` — is that of `piop.md` §3–§5.
@@ -95,27 +116,28 @@ Paper notation, all of it used below:
 | --- | --- |
 | `R_q = Z_q[Y]/(Y^N+1)`, `q = Π p_l` | the ring `ṽ` lives in; `N = 2^ν` |
 | `ṽ` | the oracle under test: `ℓ`-variate multilinear over `R_q` |
-| `B = 2^b` | the coefficient bound; `T_B` is the paper's table of in-range ring elements |
-| `c = 2^γ`, `β = 2^{⌈b/c⌉} = 2^{b*}` | number of digits per coefficient, and the digit alphabet (`B^{1/c}` when `c` divides `b`) |
-| `β_top = B / β^{c−1}` | the alphabet of the most significant digit: `β` when `c` divides `b`, smaller otherwise (`top_beta`) |
+| `B = 2^b` | the coefficient bound; `T_B` is the paper's table of in-range ring elements. The relation takes any positive `B`; the decomposition a power of two |
+| `c = 2^γ`, `β = 2^{⌈b/c⌉} = 2^{b*}` | number of digits per coefficient (the protocol's `chunks`), and the digit alphabet (`B^{1/c}` when `c` divides `b`) |
+| `β_top = B / β^{c−1}` | the alphabet of the most significant digit: `β` when `c` divides `b`, smaller otherwise (`top_beta`); `digit_alphabets(B, c)` is `(β, β_top)` |
 | `t_β = {0,…,β−1}`, `t̃β` | the lookup table and its MLE (a *public* oracle) |
 | `ℓ* = ℓ + ν + γ` | variables of the digit polynomial |
-| `ũ = unpack(ṽ)` | `ũ(x, k) = ṽ(x)[k]`: the `Z_q` coefficients spread over `ν` extra variables (§3.1). Never committed — queried through Lemma 3.1 |
+| `ũ = unpack(ṽ)` | `ũ(x, k) = ṽ(x)[k]`: the `Z_q` coefficients spread over `ν` extra variables. `RangeDecomposition` never commits to it — it queries it through [CCCFGS26]'s unpacked-evaluation lemma |
+| `ũ_1, …, ũ_U` | the residue oracles of `Relation_ResidueRange`: `ũ_i` is `ũ` modulo the `i`-th prime `p_i` of `q`, over a field of characteristic `p_i` with entries in its prime subfield, on `n` variables (`n = ℓ + ν` for the unpacking of `ṽ`) |
 | `µ̃` | the integer digit polynomial, `µ̃(i,k,j) = dig_j^{(β)}(ṽ(i)[k])`, the `j`-th base-`β` digit of the `k`-th coefficient of `ṽ(i)` |
 | `µ̃' = π_p(µ̃)` | its reduction into `F_p` — the prime marks "over `F_p`", not a derivative |
-| `ι` | the balanced lift `F_p → I_p = {−⌊p/2⌋,…,⌊p/2⌋} ⊂ Z` |
-| `Σ = {0,…,σ−1} ⊂ Z`, `m ≤ ℓ+ν`, `κ` | the small-integer challenge alphabet, the split point, the repetition count (Fig. 13). With `m > ℓ` the bound prefix reaches into the `Z` block and `ψ̃'_η` has fewer than `c·N` entries. `σ ≤ p_min` is required, so that `π_q(Σ)` lands in the exceptional set `Ŝ_0 ⊂ Z_q` and the query to `ṽ` is sound |
+| `ι` | the centered representative, `F_p → I_p = {−⌊p/2⌋,…,⌊p/2⌋} ⊂ Z` |
+| `Σ = {0,…,σ−1} ⊂ Z`, `m ≤ ℓ+ν`, `κ` | the small-integer challenge alphabet, the split point, the repetition count of `Π̂*_range`. With `m > ℓ` the bound prefix reaches into the `Z` block and `ψ̃'_η` has fewer than `c·N` entries. `σ ≤ p_min` is required, so that `π_q(Σ)` lands in the exceptional set `Ŝ_0 ⊂ Z_q` and the query to `ṽ` is sound |
 | `r_η ∈ Σ^{ℓ+ν}` | repetition `η`'s challenge. Split as `x_η = (r_{η,1..ℓ})` (the `X` block, for `ṽ`) and `z_η = (r_{η,ℓ+1..ℓ+ν})` (the `Z` block); and separately as `r'_η = (r_{η,1..m})` (bound into `ψ̃'`) and `r_η^{>m} = (r_{η,m+1..ℓ+ν})` (used as `eq̃` weights) |
 | `ψ̃'_η = µ̃'(r'_η, ·)` | the partial evaluation the prover sends, over `ℓ*−m` variables; `δ ∈ {0,1}^{ℓ+ν−m}` and `k ∈ {0,1}^γ` index it |
 | `s' ∈ F_p^{ℓ*−m}` | the spot-check point for `ψ̃'_η` |
-| `σ_L`, `τ`, `χ`, `ρ`, `ξ` | Figure 11's challenges: two fingerprints, one batching scalar, and two `eq̃` points (`ρ ∈ F_p^{ℓ*}`, `ξ ∈ F_p^{b*}`) |
-| `α ∈ {WSµ, RS, WSt, S}` | the four multiset fingerprints of Lemma I.3: write-set and read-set on the `µ̃` side, write-set and final-counts on the table side |
+| `σ_L`, `τ`, `χ`, `ρ`, `ξ` | the lookup PIOP's challenges: two fingerprints, one batching scalar, and two `eq̃` points (`ρ ∈ F_p^{ℓ*}`, `ξ ∈ F_p^{b*}`) |
+| `α ∈ {WSµ, RS, WSt, S}` | the four multiset fingerprints of the memory-checking lemma ([BEGKN91; Set20], stated for `R_q` in [CCCFGS25]): write-set and read-set on the `µ̃` side, write-set and final-counts on the table side |
 | `f^{(0)}_α`, `f^{(1)}_α`, `f_α` | the grand-product layers: leaves, internal nodes, and the `(n+1)`-variate polynomial combining them, with `n = ℓ*` for `α ∈ {WSµ, RS}` and `n = b*` for `α ∈ {WSt, S}` |
 
-> **Name clash, inherited from the paper.** §I uses `σ` for `|Σ|` and Figure 11
-> uses `σ` for the lookup fingerprint challenge. Here the fingerprint is
-> written `σ_L` (code: `zeta`), and `σ` keeps its §I meaning (code:
-> `alphabet`).
+> **Name clash, inherited from the paper.** The range decomposition uses `σ`
+> for `|Σ|` and the lookup PIOP uses `σ` for the fingerprint challenge. Here
+> the fingerprint is written `σ_L` (code: `zeta`), and `σ` keeps the
+> decomposition's meaning (code: `alphabet`).
 
 ## Conventions: domains and index order
 
@@ -146,7 +168,7 @@ power of two so there is no bias.
 
 **`µ̃'`** has variables `[X_1..X_ℓ, Z_1..Z_ν, Z'_1..Z'_γ]`, so
 `index = i + 2^ℓ·k + 2^{ℓ+ν}·j` and `µ̃'(i,k,j) = dig_j^{(β)}(ṽ(i)[k])`
-(paper §C.1). The `X` block varies fastest, the digit index `j` slowest. At
+([CCCFGS26]'s digit-decomposition lemma). The `X` block varies fastest, the digit index `j` slowest. At
 toy parameters `ℓ = ν = γ = 1`:
 
 | index | `X_1` | `Z_1` | `Z'_1` | `(i,k,j)` | value |
@@ -163,8 +185,8 @@ toy parameters `ℓ = ν = γ = 1`:
 and `P = f[2^{n+1}−2]`. The pinning is not cosmetic: applying the recurrence at
 `k = 2^n−1` would be self-referential (`f[2^{n+1}−1] = P·f[2^{n+1}−1]`), and
 the zerocheck below is only identically zero on the *whole* hypercube because
-both sides vanish there; the paper's Lemma I.4 carries the same convention
-implicitly. Reading the array LSB-first, with
+both sides vanish there; the grand-product lemma (layered products, [Tha13;
+SL20]) carries the same convention implicitly. Reading the array LSB-first, with
 `f_α`'s variables `W = [W_0 … W_n]` and `index = W_0 + 2W_1 + … + 2^n W_n`, at
 `n = 2`:
 
@@ -195,7 +217,7 @@ With arguments listed in variable order `W_0 … W_n`, `f_α(X, 1)` is index
   `2^n − 2` of the top half. (The paper writes this query point as `(1,0)`,
   meaning `(1,…,1,0)` in its own argument order.)
 
-> **Comparing with the paper side by side.** Figure 11 writes the layer
+> **Comparing with the paper side by side.** The lookup PIOP writes the layer
 > selector as the *first* argument (`f(1,i) = f(i,0)·f(i,1)`, with
 > `f^{(1)}_α(i) = f^{(i_1)}_α(i', 0)·f^{(i_1)}_α(i', 1)`); above it is the
 > *last* variable `W_n`, and the new bit is inserted at `W_0`. These are the
@@ -204,9 +226,10 @@ With arguments listed in variable order `W_0 … W_n`, `f_α(X, 1)` is index
 > protocol depends on which naming is used (`ρ` and `ξ` are uniform), and
 > putting the selector last is what buys the index alignment with `µ̃'`.
 
-## The lookup protocol — Figure 11
+## The lookup protocol
 
-Taken first, because Figure 13 reduces to it. The relation is
+[CCCFGS26]'s lookup PIOP over a prime field, `Π̂^F_range`. Taken first,
+because `Π̂*_range` reduces to it. The relation is
 `relations/lookup.py`, the protocol `protocols/lookup.py`.
 
 ```python
@@ -226,11 +249,11 @@ where it is `α ∈ {WSt, S}` and `n = b*`. The two are independent apart from
 sharing the challenges `σ_L, τ, χ`.
 
 `Lookup(Protocol)`: `reduces_from = Relation_Lookup`,
-`reduces_to = (Relation_Sum, Relation_Eval)`. Steps 1–2 below are Figure 11's
-steps 1–2; steps 3–6 are all of its step 3.
+`reduces_to = (Relation_Sum, Relation_Eval)`. Steps 1–2 below are the
+paper's first two steps; steps 3–6 are all of its last one.
 
 1. Build `read_ts` (`ℓ*` vars) and `final_cts` (`b*` vars) by the counter
-   algorithm of Lemma I.3, over `F_p`. One pass:
+   algorithm of the memory-checking lemma, over `F_p`. One pass:
    `read_ts[i]` is how many times the value `µ̃'[i]` has been seen *before*
    position `i`, and `final_cts[v]` is the total count of `v`. For
    `β = 4`, `µ̃' = [2, 0, 2, 2]`: `read_ts = [0, 0, 1, 2]` and
@@ -239,7 +262,7 @@ steps 1–2; steps 3–6 are all of its step 3.
 2. Build the four leaf tables `f^{(0)}_α` and their grand products; send the
    four top halves `f^{(1)}_α`. Draw `χ`, `ρ ∈ F_p^{ℓ*}`, `ξ ∈ F_p^{b*}`.
 
-   The leaves are the paper's fingerprints, eqs. (41)–(43):
+   The leaves are the paper's fingerprints:
 
    | `α` | `f^{(0)}_α[i]` | over |
    | --- | --- | --- |
@@ -305,10 +328,10 @@ steps 1–2; steps 3–6 are all of its step 3.
    maps  = [identity, rename1, child0, child1, rename2, child0, child1]
    ```
 
-   This is Figure 12 transcribed: one `eq̃(ρ, X)` factor, `f_1(1,X) −
+   This is the function `g` transcribed: one `eq̃(ρ, X)` factor, `f_1(1,X) −
    f_1(X,0)·f_1(X,1) + χ·(…)`. `degree_in` is 3 in every variable (`eq̃ · f · f`
    in the second and fourth terms), matching the "degree 3 in each variable"
-   of the proof of Thm. I.5.
+   of the proof of [CCCFGS26]'s soundness theorem for its lookup PIOP.
 
    **Invariant:** the `WSµ` and `RS` halves must share the *same* `X` objects
    (and likewise `WSt`/`S`). `MLE_Variable` compares by identity, so two
@@ -322,8 +345,7 @@ steps 1–2; steps 3–6 are all of its step 3.
    *read* values on the four claims. (In the ideal model the verifier holds the
    tables and could read `P_α` off them directly, making the message
    redundant; sending it is what keeps the step intact once the oracles become
-   commitments. Note also that the paper's proof of Thm. I.5 calls this "step
-   6" while Figure 11 numbers it 3 — the figure is the right reading.)
+   commitments.)
 
 The prover records `prover.witnesses[f_α] = <the (n+1)-variable table>` — the
 same handoff the Composer uses for the heads of a reduction, and the only way
@@ -335,7 +357,7 @@ a missing witness is a hard `TypeError` from the sumcheck prover.
 > `test_composition.py` have a grand product,
 > `L_i(z) = Σ_p eq̃(z,p)·L_{i+1}(p,0)·L_{i+1}(p,1)` — the Thaler/GKR form,
 > which must be *implicit* because multilinear extension does not commute
-> with products. Figure 11 uses Quarks' form instead: the internal nodes
+> with products. The lookup PIOP uses Quarks' form instead: the internal nodes
 > `f^{(1)}_α` are sent as an oracle, and the tree identity becomes a
 > zerocheck on `f_α(X,1) − f_α(0,X)·f_α(1,X)` — a claim about a polynomial
 > the verifier can already name. So there is no implicit oracle here, no
@@ -392,28 +414,33 @@ A group of one is the single run, under the same labels. Claims join a group
 only when they are on the frontier together, as the lookup claims of range
 statements that are on the frontier together are.
 
-## The decomposition protocol — Figure 13
+## The decomposition protocol
 
-The relation is `relations/range.py`, the protocol `protocols/range.py`.
+[CCCFGS26]'s optimized range PIOP, `Π̂*_range`. The relation is `relations/range.py`, the protocol `protocols/range.py`.
 
 ```python
-class Relation_Range(Relation):
+class Relation_Range(_Range):
     """Every coefficient of every hypercube evaluation of the R_q oracle
     lies in [0, B): the table T_B of the paper."""
     name = "range"
+    # from _Range, shared with Relation_ResidueRange:
     fields = ("oracles",)
-    index_fields = ("bound", "chunks")
-    def __init__(self, bound: int, chunks: int) -> None:   # B, c
-        super().__init__(index={"bound": bound, "chunks": chunks})
+    index_fields = ("bound",)
+    def __init__(self, bound: int) -> None:   # B, any positive integer
+        super().__init__(index={"bound": bound})
 ```
 
 `check()` walks the hypercube and tests `max(poly.get_polynomial()) < B`.
 
 `RangeDecomposition(Protocol)`: `reduces_from = Relation_Range`,
 `reduces_to = (Relation_Lookup, Relation_Eval)`. The constructor takes
-`(field, m, alphabet, kappa, ring)`; `B` and `c` come from the relation's
-index, `N`/`ν` from the ring (an oracle does not expose its domain: a
-committed one has no table on the verifier's side), `ℓ` from `ṽ.num_vars`.
+`(field, m, alphabet, kappa, ring, chunks)`; `B` comes from the
+relation's index, `c` is the protocol's `chunks` (a power of two), `β` and
+`β_top` are `digit_alphabets(B, c)`, `ℓ` comes from `ṽ.num_vars`, and
+`N`/`ν`, the primes and `q` from `ring`, the `R_q` the claims are about.
+The decomposition needs `B = 2^b > 1` with at least one bit left for the
+top digit; `digit_alphabets` checks this when `_shape` first sees the
+statement, and raises `ValueError` otherwise.
 
 1. The prover builds the integer digit table `µ̃` by reading each
    `Polynomial.get_polynomial()` and slicing out `c` base-`β` digits, lifts it
@@ -426,21 +453,23 @@ committed one has no table on the verifier's side), `ℓ` from `ṽ.num_vars`.
    while `µ̃'` must be bound at `π_p(r'_η)`, i.e. `field(r)` per coordinate.
 4. `s' ← F_p^{ℓ*−m}` via `challenge`.
 5. The verifier checks, for each `η`: compute both sides as exact Python
-   integers, using the balanced lift `ι` to leave `F_p`, then reduce and
+   integers, using the centered lift `ι` to leave `F_p`, then reduce and
    compare mod `q`:
 
    ```text
    Σ_{δ,j} ι(ψ̃'_η[δ,j]) · eq̃(δ; r_η^{>m}) · β^{to-int(j)}   ≡   uEval(w_η, z_η)   (mod q)
    ```
 
-   where `uEval(a, z) = Σ_{k∈{0,1}^ν} a[k] · eq̃(k, z)` (Lemma 3.1). This is how
-   `ũ = unpack(ṽ)` is queried without anyone ever committing to `ũ`: a single
-   query to `ṽ` plus `O(N)` local work. Checking mod `q` is checking mod every
+   where `uEval(a, z) = Σ_{k∈{0,1}^ν} a[k] · eq̃(k, z)` ([CCCFGS26]'s
+   unpacked-evaluation lemma; `unpacked_evaluation` in the code). This is
+   how `ũ = unpack(ṽ)` is queried without anyone ever committing to `ũ`: a
+   single query to `ṽ` plus `O(N)` local work, the evaluation of all
+   multilinear Lagrange basis values [VSBW13]. Checking mod `q` is checking mod every
    `p_l`, by CRT.
 
-   *Index warning:* Figure 13 writes the digit index as `k` in this formula,
-   having used `j` for it in eq. (4). This note uses `j` for the digit and `k`
-   for the coefficient **everywhere**; transposing the two blocks is the
+   *Index warning:* the paper writes the digit index as `k` in this formula,
+   having used `j` for it in the digit-decomposition lemma. This note uses
+   `j` for the digit and `k` for the coefficient **everywhere**; transposing the two blocks is the
    easiest way to get this wrong.
 6. Emit `κ` `Relation_Eval` on `µ̃'` at `(r'_η, s')` with value `ψ̃'_η(s')`
    (both parties compute it from the `ψ` message), `κ` `Relation_Eval` on `ṽ`
@@ -451,9 +480,9 @@ committed one has no table on the verifier's side), `ℓ` from `ṽ.num_vars`.
 ### A shorter top digit
 
 When `c` does not divide `b`, the digits are `c − 1` of `b* = ⌈b/c⌉` bits
-and a top one of `b − (c−1)b*` bits, at least one (`Relation_Range`
+and a top one of `b − (c−1)b*` bits, at least one (`digit_alphabets`
 refuses a `(B, c)` that leaves none). The prover's digit table, the
-recomposition check and its eq. (38) bound are those of a `β^c` bound: an
+recomposition check and its bound `p > 2β(2σ)^m` are those of a `β^c` bound: an
 honest coefficient below `B` simply has a top digit below `β_top`. What the
 first lookup and the recomposition prove together is a coefficient in
 `[0, β^c)`, so a last claim bounds the top digits:
@@ -473,21 +502,107 @@ digit is a field element, and `2^s · d` in `[0, β)` holds as well for
 `d = e / 2^s` with `e` not a multiple of `2^s`, a field element far outside
 any small range.
 
+### The decomposition on residue oracles
+
+`Relation_ResidueRange(B)` (`relations/range.py`) is the range claim on
+the unpacked table `ũ = unpack(ṽ)` held in the CRT components of
+`Z_q`: `U` oracles `ũ_1, …, ũ_U`, one per prime `p_i` of `q`, each over a
+field of characteristic `p_i` (`F_{p_i}` or an extension of it) with
+entries in the prime subfield, `ũ_i` holding the residues modulo `p_i`. The
+claim is that at every hypercube point the residues are those of an
+integer in `[0, B)`; an entry outside the prime subfield is the residue of
+no integer. The oracles have one number of variables `n`, which is
+`ℓ + ν` when they come from an `ℓ`-variate `R_q` oracle and any number
+otherwise. The index is `Relation_Range`'s, the bound `B` alone.
+
+`ResidueRangeDecomposition(field, m, alphabet, kappa, chunks)`
+(`protocols/range.py`) is `Π̂*_range` on these oracles without the `uEval`
+shortcut of step 5: the verifier queries the residue oracles themselves.
+`c` is its `chunks` and `β`, `β_top` are `digit_alphabets(B, c)`, as for
+`RangeDecomposition`. The rounds are those of `RangeDecomposition` with `n`
+in place of `ℓ + ν`:
+
+1. The prover sends `µ̃'`, over `ℓ* = n + γ` variables
+   `[X_1..X_n, Z'_1..Z'_γ]`, `index = i + 2^n·j`: the digits of the
+   integers the residues define.
+2. `r_0 … r_{κ−1} ← Σ^n` via `challenge_bits`.
+3. The prover sends `ψ̃'_η = µ̃'(r'_η, ·)` for each `η`, as before, and in
+   place of `w_η = ṽ(x_η)` the tuple `(ũ_1(r_η), …, ũ_U(r_η))`, each
+   coordinate of `r_η` read in the oracle's field, as one transcript
+   message, `residue_range<path>/w{η}`.
+4. `s' ← F_p^{ℓ*−m}` via `challenge`.
+5. The verifier checks, for each `η` and each prime `p_i`:
+
+   ```text
+   (Σ_{δ,j} ι(ψ̃'_η[δ,j]) · eq̃(δ; r_η^{>m}) · β^{to-int(j)}) mod p_i  =  ũ_i(r_η)  in F_{p_i^d}
+   ```
+
+   The left side is the integer of the recomposition check reduced mod
+   `p_i`. Holding at every prime, the two sides agree mod `q`: the
+   recomposition check of `Π̂*_range`,
+   with `uEval(w_η, z_η)` replaced by the value of `ũ` at `r_η`. The left
+   side lies in the prime subfield, so the equality also forces the answer
+   there; an answer that is not an element of the oracle's field is
+   rejected.
+6. Emit `κ` `Relation_Eval` on `µ̃'` at `(r'_η, s')`, as before, then
+   `κ·U` `Relation_Eval` on the residue oracles, `ũ_i` at `π_{p_i}(r_η)`
+   with value `ũ_i(r_η)` (repetition by repetition, the oracles in the
+   statement's order), then the lookup on `µ̃'`, and the second one when
+   `β_top < β`.
+
+```text
+Relation_ResidueRange ─(ResidueRangeDecomposition, κ)─▶ Relation_Lookup × Relation_Eval^{κ(U+1)}
+```
+
+`soundness_error` is the bound of [CCCFGS26]'s theorem on `Π̂*_range` with
+`n` for `ℓ + ν`:
+`max{ (n/σ)^κ , (ℓ*−m)/p }` with `ℓ* = n + γ`, the child lookups
+accounting for the rest. The side conditions are those of `Π̂*_range` with `n` for
+`ℓ + ν` — `m ≤ n`, `p > 2β(2σ)^m`, `p > 2^{ℓ*}` — and `σ ≤ min p_i`, so
+that every `π_{p_i}(Σ)` lies in the exceptional set of `F_{p_i}`; they are
+checked in `_shape`, as for `RangeDecomposition`.
+
+The prover reads each residue table as 64-bit words, which needs a dense
+field table in the evaluation basis with entries in the prime subfield,
+lifts them to the integers in `[0, q)` modulo `2^128` with
+`vfhe.arith.crt_lift_mod_2_128`, and slices the digits with one
+`FieldVector.set_radix_decomposition`, LSB-first as above: entry `i` of
+digit `j` at `index = i + 2^n·j`. When the digits are not bit fields of
+the integers modulo `2^128` — a digit wider than 64 bits, or digits past
+bit 128 while the primes have more than 128 bits together — it rebuilds
+each integer exactly by CRT and slices its digits one entry at a time.
+
+The wiring takes no ring: the primes come from the oracles' domains
+(`Oracle.domain`), which must be fields of distinct primes.
+
+```python
+iop.register(Relation_ResidueRange,
+             ResidueRangeDecomposition(field, m, alphabet, kappa, c))
+iop.register(Relation_Lookup, Lookup(field))
+# ... Relation_Sum, Relation_Eval as above
+assert iop.run(Statement(Relation_ResidueRange(B),
+                         oracles=[TableOracle(u) for u in residue_tables]))
+```
+
 ## Soundness bookkeeping (both protocols)
 
 Each protocol's `soundness_error` (`piop.md` §6) reports the paper's own
 bound:
 
-- `RangeDecomposition` (Thm. I.6): `max{ ((ℓ+ν)/σ)^κ , (ℓ+ν+γ−m)/p , δ'_range }`,
-  where the third term is what the child `Relation_Lookup` accounts for;
-- `Lookup` (Thm. I.5): `δ'_range = (2^{ℓ*} + 2^{b*}) / p`.
+- `RangeDecomposition` ([CCCFGS26]'s theorem on `Π̂*_range`):
+  `max{ ((ℓ+ν)/σ)^κ , (ℓ+ν+γ−m)/p , δ'_range }`, where the third term is
+  what the child `Relation_Lookup` accounts for;
+- `Lookup` ([CCCFGS26]'s soundness theorem for its lookup PIOP):
+  `δ'_range = (2^{ℓ*} + 2^{b*}) / p`.
 
-The first term dominates: `κ` is chosen so that `((ℓ+ν)/σ)^κ ≈ 2^{−λ}`
-(eq. 44).
+The first term dominates: `κ` is chosen so that `((ℓ+ν)/σ)^κ ≈ 2^{−λ}`.
 
-The correctness side conditions — `p > 2β(2σ)^m` (eq. 38) and `p > 2^{ℓ*}` —
-mix constructor parameters with claim dimensions, so they are checked at the
-protocol's first use of a claim (`_shape`), and a bad parameter set fails
+The correctness side conditions — the parameter condition `p > 2β(2σ)^m`,
+under which the centered lift `ι` of every entry of `ψ̃'_η` is the integer
+it stands for (the lift proposition of [CCCFGS26]'s appendix, the usual
+no-overflow argument for emulating signed integers in `Z_p`), and
+`p > 2^{ℓ*}` — mix constructor parameters with claim dimensions, so they are
+checked at the protocol's first use of a claim (`_shape`), and a bad parameter set fails
 loudly there rather than producing a proof that is quietly unsound.
 
 ## Sending an oracle (both protocols)
@@ -520,12 +635,16 @@ so `ṽ` must be committed too (ring Basefold, say, with its own
 
 ```python
 messages = BasefoldMessages([main_scheme, table_scheme])
-iop.register(Relation_Range, RangeDecomposition(field, m, alphabet, kappa, ring,
+iop.register(Relation_Range, RangeDecomposition(field, m, alphabet, kappa, ring, c,
                                                 messages=messages))
 iop.register(Relation_Lookup, Lookup(field, messages=messages))
 for scheme in (main_scheme, table_scheme, ring_scheme):
     iop.register(Relation_Eval, BasefoldEval(scheme))
 ```
+
+With `ResidueRangeDecomposition`, the residue oracles are committed under
+field Basefold schemes over their own fields, one `BasefoldEval` registered
+per scheme, and their claims land in those schemes' bundles.
 
 The relations, the reductions and the DAG are the same in both models.
 
@@ -534,19 +653,50 @@ The relations, the reductions and the DAG are the same in both models.
 - **[CCCFGS26]** Ignacio Cascudo, Anamaria Costache, Daniele Cozzo, Dario
   Fiore, Antonio Guimarães, Eduardo Soria-Vazquez. *Batch, Pack, and Prove:
   More Efficient Verifiable Computation for CKKS*. ASIACRYPT 2026, to appear.
-  (Appendix I: Figure 11 the lookup argument over a prime field, Figure 12 its
-  virtual oracle, Figure 13 the optimized decomposition. Section 3.1:
-  `unpack` / `uEval`. Section 4: Lemma 4.1 and the table `T_B`.)
+  (`unpack` and the unpacked-evaluation lemma, the digit-decomposition lemma
+  and the table `T_B`, the lookup PIOP over a prime field `Π̂^F_range` and
+  its function `g`, and the optimized range PIOP `Π̂*_range`.)
 - **[CCCFGS25]** Ignacio Cascudo, Anamaria Costache, Daniele Cozzo, Dario
   Fiore, Antonio Guimarães, Eduardo Soria-Vazquez. *Verifiable Computation
   for Approximate Homomorphic Encryption Schemes*. CRYPTO 2025. ePrint
-  2025/286. <https://eprint.iacr.org/2025/286> (Lemma I.3, the memory-checking
-  reduction of a lookup in `t_beta`.)
+  2025/286. <https://eprint.iacr.org/2025/286> (the memory-checking lemma
+  stated for `R_q`, the reduction of a lookup in `t_beta`; range proofs over
+  `R_q` by digit decomposition.)
 - **[SL20]** Srinath Setty, Jonathan Lee. *Quarks: Quadruple-efficient
   transparent zkSNARKs*. ePrint 2020/1275. <https://eprint.iacr.org/2020/1275>
-  (the grand-product layering of Lemma I.4.)
+  (the grand-product layering of the grand-product lemma.)
 - **[Set20]** Srinath Setty. *Spartan: Efficient and General-Purpose zkSNARKs
   Without Trusted Setup*. CRYPTO 2020. ePrint 2019/550.
   <https://eprint.iacr.org/2019/550> (the offline memory-checking technique.)
 - **[Tha22]** Justin Thaler. *Proofs, Arguments, and Zero-Knowledge*.
   Foundations and Trends in Privacy and Security 4(2-4), 2022.
+- **[BBBPWM18]** Benedikt Bünz, Jonathan Bootle, Dan Boneh, Andrew Poelstra,
+  Pieter Wuille, Greg Maxwell. *Bulletproofs: Short Proofs for Confidential
+  Transactions and More*. IEEE S&P 2018. ePrint 2017/1066.
+  <https://eprint.iacr.org/2017/1066> (range proofs by bit decomposition.)
+- **[GW20]** Ariel Gabizon, Zachary J. Williamson. *plookup: A simplified
+  polynomial protocol for lookup tables*. ePrint 2020/315.
+  <https://eprint.iacr.org/2020/315> (range checks as lookups in digit
+  tables.)
+- **[STW24]** Srinath Setty, Justin Thaler, Riad Wahby. *Unlocking the Lookup
+  Singularity with Lasso*. EUROCRYPT 2024. ePrint 2023/1216.
+  <https://eprint.iacr.org/2023/1216> (decomposable tables: a lookup into a
+  large table as `c` lookups into small subtables.)
+- **[BEGKN91]** Manuel Blum, William Evans, Peter Gemmell, Sampath Kannan,
+  Moni Naor. *Checking the Correctness of Memories*. FOCS 1991; Algorithmica
+  1994. (offline memory checking.)
+- **[Tha13]** Justin Thaler. *Time-Optimal Interactive Proofs for Circuit
+  Evaluation*. CRYPTO 2013. ePrint 2013/351.
+  <https://eprint.iacr.org/2013/351> (grand products as layered product
+  circuits.)
+- **[BCS21]** Jonathan Bootle, Alessandro Chiesa, Katerina Sotiraki.
+  *Sumcheck Arguments and Their Applications*. CRYPTO 2021. ePrint 2021/333.
+  <https://eprint.iacr.org/2021/333> (sumcheck and Schwartz–Zippel over rings
+  with exceptional sets.)
+- **[VSBW13]** Victor Vu, Srinath Setty, Andrew J. Blumberg, Michael Walfish.
+  *A Hybrid Architecture for Interactive Verifiable Computation*. IEEE S&P
+  2013. (the `O(2^n)` evaluation of all multilinear Lagrange basis
+  polynomials.)
+- **[Gar59]** Harvey L. Garner. *The Residue Number System*. IRE Transactions
+  on Electronic Computers 8(2), 1959. (residue number systems and
+  mixed-radix conversion.)
