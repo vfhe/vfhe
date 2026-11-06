@@ -8,7 +8,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import ArithParent
+from vfhe.crypto import chain_digest
 
+from .digest import element_digest
 from .relation import Relation, Statement, child_statement
 
 if TYPE_CHECKING:
@@ -70,6 +72,14 @@ class Protocol:
     protocol. The registry keys a protocol by it: a claim on a
     `CommittedOracle` goes to the protocol of the scheme the oracle was
     committed under (`IOP.protocol_for`).
+
+    `parameters()` lists the public parameters the verifier's checks depend
+    on -- a field, a repetition count, a commitment scheme -- as values
+    `element_digest` takes; `digest()` binds them with the protocol's
+    identity. A Fiat-Shamir chain is seeded with every registered protocol's
+    digest (`IOP.registry_digest`), so a proof is a proof under one protocol
+    with one parameter set, which is what the transform's soundness assumes.
+    A protocol with a parameter the default misses overrides `parameters`.
     """
 
     reduces_from: type[Relation] | None = None
@@ -77,6 +87,18 @@ class Protocol:
     batching: bool = False
     supported_domains: tuple[type, ...] = ()
     scheme: Any = None
+
+    def parameters(self) -> tuple:
+        """The public parameters of this protocol, in a fixed order; empty
+        by default."""
+        return ()
+
+    def digest(self) -> bytes:
+        """A 32-byte digest of the protocol's identity (its class) and its
+        `parameters()`."""
+        parts = [b"protocol", element_digest(type(self))]
+        parts.append(element_digest(self.parameters()))
+        return chain_digest(parts)
 
     def bundle_key(self, oracle) -> Any:
         """What a bundle protocol groups claims on `oracle` by: the driver

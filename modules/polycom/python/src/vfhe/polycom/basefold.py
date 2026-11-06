@@ -64,7 +64,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from vfhe.arith import MLE, Field, FieldElement, FieldVector, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
-from vfhe.crypto import DIGEST_LEN, Merkle, hash_bytes
+from vfhe.crypto import DIGEST_LEN, Merkle, chain_digest, hash_bytes, int_digest
 from vfhe.piop import (
     CommittedOracle,
     OracleMessages,
@@ -261,6 +261,14 @@ class Basefold:
         code = self.code
         return code.ring if isinstance(code, FoldableRS) else code.field
 
+    def digest(self) -> bytes:
+        """A 32-byte digest of the scheme's public parameters: the code
+        (`FoldableRS.digest` / `FieldFoldableRS.digest`) and the layer
+        schedule."""
+        parts = [b"basefold", self.code.digest()]
+        parts += [int_digest(folds) for folds in self.schedule]
+        return chain_digest(parts)
+
     def _check_polynomial(self, f) -> None:
         if not _committed_table(f):
             raise TypeError(
@@ -389,6 +397,14 @@ class BasefoldMessages(OracleMessages):
                 )
         return cls([Basefold(code.truncated(n - log_k0)) for n in num_vars])
 
+    def digest(self) -> bytes:
+        """The schemes by table size and the sizes sent in the clear."""
+        parts = [b"basefold-messages"]
+        for num_vars in sorted(self.schemes):
+            parts += [int_digest(num_vars), self.schemes[num_vars].digest()]
+        parts += [int_digest(num_vars) for num_vars in sorted(self.sent)]
+        return chain_digest(parts)
+
     def _scheme(self, num_vars: int) -> Basefold:
         scheme = self.schemes.get(num_vars)
         if scheme is None:
@@ -493,6 +509,9 @@ class BasefoldEval(Protocol):
         #: every challenge of this protocol is drawn, whatever the IOP's
         #: domain is.
         self.domain = scheme.domain
+
+    def parameters(self) -> tuple:
+        return (self.scheme, self.rep)
 
     def soundness_error(
         self,

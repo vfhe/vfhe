@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import MLE
+from vfhe.crypto import hash_bytes
 
 from .oracle import Oracle, TableOracle
 from .protocol import Rejection
@@ -33,6 +34,11 @@ class OracleMessages:
     variables it passes (`MLE_Variable`s compare by identity, so each party
     uses its own).
     """
+
+    def digest(self) -> bytes:
+        """What a transcript absorbs for the way tables travel: the ideal
+        model has no parameters."""
+        return hash_bytes(b"oracle-messages")
 
     def send(self, prover: Prover, label: str, table: MLE) -> Oracle:
         """Write `table` under `label` and return the prover's oracle to it."""

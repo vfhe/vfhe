@@ -34,7 +34,7 @@ from abc import ABC, ABCMeta, abstractmethod
 from array import array
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from vfhe.crypto import entropy, hash_bytes, seeded
+from vfhe.crypto import chain_digest, entropy, hash_bytes, int_digest, seeded
 from vfhe.util._cpu import last_level_cache_bytes
 
 from .registry import registered, resolve
@@ -324,6 +324,13 @@ class Ring(ArithParent, metaclass=_ImplementationDispatch):
     @property
     def exceptional_set_size(self) -> int:
         """|A| for an exceptional set of this ring."""
+        raise NotImplementedError
+
+    def digest(self) -> bytes:
+        """A 32-byte digest of the parameters that fix the arithmetic (for an
+        `RNSRing`: the degree `N`, the primes in order and the splitting
+        degree). Two rings with equal digests are the same ring to a
+        transcript."""
         raise NotImplementedError
 
 
@@ -812,6 +819,15 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         """|A| for any field is its order: every nonzero difference of two
         field elements is invertible, so the whole field is exceptional."""
         return self.order
+
+    def digest(self) -> bytes:
+        """A 32-byte digest of the parameters that fix the arithmetic: the
+        prime, the degree and, for an extension, the constant `w` of its
+        defining polynomial `x^degree - w`. Two fields with equal digests are
+        the same field to a transcript."""
+        parts = [b"field", int_digest(int(self.prime)), int_digest(int(self.degree))]
+        parts.append(int_digest(int(getattr(self, "w", 0))))
+        return chain_digest(parts)
 
     def _uniform_from_seed(self, seed: bytes) -> FieldElement:
         """One uniform element, a pure function of ``seed``.

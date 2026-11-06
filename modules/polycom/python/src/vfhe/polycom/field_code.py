@@ -50,6 +50,7 @@ from vfhe.arith import (
     PseudoMersenneField,
     PseudoMersenneVector,
 )
+from vfhe.crypto import bytes_digest, chain_digest, int_digest, str_digest
 from vfhe.util.bindings import ffi, lib
 
 from .code import (
@@ -578,6 +579,25 @@ class FieldFoldableRS:
             x = self._transforms.points(self.roots[level + 1], n)
             self._twist_vectors.append(x)
             self._fold_scale_vectors.append(x.scale(2).inverse())
+
+    def digest(self) -> bytes:
+        """A 32-byte digest of the code's public parameters: the field, `k0`,
+        `c`, `d`, the instantiation, the seed, the twist field and the root
+        field. Two codes with equal digests encode, fold and hash
+        identically."""
+        return chain_digest(
+            [
+                b"field-foldable-rs",
+                self.field.digest(),
+                int_digest(self.k0),
+                int_digest(self.c),
+                int_digest(self.d),
+                str_digest(self.instantiation),
+                bytes_digest(self.seed),
+                str_digest(self.twist_field),
+                str_digest(self.root_field),
+            ]
+        )
 
     def truncated(self, depth: int) -> FieldFoldableRS:
         """The depth-`depth` code with this code's field, `k0`, `c`, seed and

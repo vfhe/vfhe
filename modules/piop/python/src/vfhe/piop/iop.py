@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from vfhe.crypto import chain_digest
+
 from .and_composition import ANDComposition, current_subprotocol
 from .digest import element_digest
 from .fs import FS_Verifier
@@ -187,11 +189,40 @@ class IOP:
                 return protocol
         return None
 
+    def registry_digest(self) -> bytes:
+        """A 32-byte digest of the verifier's configuration: the challenge
+        domain and every registered protocol with the relation, the oracle
+        kind and the scheme it is registered for, each by `Protocol.digest`
+        (its identity and public parameters). Independent of the order of
+        registration."""
+        domain = self.domain
+        own = getattr(domain, "digest", None)
+        # A domain without a digest of its own (a test's integer domain,
+        # say) is bound by its class.
+        parts = [b"registry", own() if callable(own) else element_digest(type(domain))]
+        entries = []
+        for (relation, kind, _), protocol in self.protocols.items():
+            entries.append(
+                chain_digest(
+                    [
+                        element_digest(relation),
+                        element_digest(None if kind is None else kind.value),
+                        protocol.digest(),
+                    ]
+                )
+            )
+        return chain_digest(parts + sorted(entries))
+
     def _bind(self, statement: Statement) -> None:
-        """Seed the Fiat-Shamir chain with the claim being proven, so every
-        derived challenge depends on it (weak-FS, [DMWG23])."""
+        """Seed the Fiat-Shamir chain with the claim being proven and with
+        the verifier's configuration (`registry_digest`), so every derived
+        challenge depends on both: omitting the claim is the weak
+        Fiat-Shamir bug [DMWG23], and omitting the protocols' parameters
+        would make one transcript a proof under every parameter set."""
         if self.fiat_shamir and not self.transcript.seed:
-            self.transcript.bind(element_digest(statement))
+            self.transcript.bind(
+                chain_digest([element_digest(statement), self.registry_digest()])
+            )
 
     @staticmethod
     def _root(statement: Statement) -> Statement:

@@ -14,6 +14,19 @@ versions may contain breaking changes.
 
 ### Added
 
+- `Ring.digest()` and `Field.digest()`: a 32-byte digest of the parameters
+  that fix the arithmetic (a ring's `N`, primes and splitting degree; a
+  field's prime, degree and `w`). `Protocol.parameters()` (empty by
+  default) lists a protocol's public parameters and `Protocol.digest()`
+  binds them with its class; `RangeDecomposition` (and so
+  `ResidueRangeDecomposition`), `Lookup` and `BasefoldEval` list theirs.
+  `IOP.registry_digest()` digests the challenge domain and every registered
+  protocol with its relation and oracle kind, independently of the order of
+  registration. `Basefold` (code and layer schedule), `BasefoldMessages`
+  (schemes by table size and sizes sent in the clear), `OracleMessages`,
+  `FoldableRS` and `FieldFoldableRS` (ring or field, `k0`, `c`, `d`,
+  instantiation, seed, twist field and, for the field code, root field)
+  have a `digest()`.
 - `vfhe.arith.crt_lift_mod_2_128(residues, primes)`: the integers in
   `[0, q)` given by their residues modulo up to 64 distinct primes below
   `2^63`, one buffer of 64-bit words per prime, modulo `2^128`, as two
@@ -770,6 +783,11 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: the Fiat-Shamir chain is seeded with the root statement's
+  digest and `IOP.registry_digest()` (the challenge domain and every
+  registered protocol with its parameters), so a proof is bound to the
+  verifier's configuration: a verifier configured with other parameters
+  rejects it. Every Fiat-Shamir proof changes.
 - **BREAKING**: `Relation_Range(bound)` and `Relation_ResidueRange(bound)`
   take the bound alone, any positive integer; their index is `("bound",)`,
   so statement digests change. The digit count `c` is the `chunks`
