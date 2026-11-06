@@ -18,6 +18,7 @@ from vfhe.arith.impl.mp.multiprecision import Multiprecision
 from vfhe.arith.number_theory import crt, is_prime
 from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
+from vfhe.crypto import chain_digest, int_digest
 from vfhe.util.bindings import ffi, lib
 
 from .rns_base import registry
@@ -347,6 +348,12 @@ class RNSRing(Ring):
         w = self.lib.rns_base_get_rou_matrix(self.base)
         row_len = self.N // self.split_degree
         return [[w[idx][k] for k in range(row_len)] for idx in self.prime_indices]
+
+    def digest(self) -> bytes:
+        """See `Ring.digest`: `N`, the primes in order, the splitting degree."""
+        parts = [b"ring", int_digest(self.N), int_digest(self.split_degree)]
+        parts += [int_digest(int(p)) for p in self.primes]
+        return chain_digest(parts)
 
     def residue_field(self, index: int) -> ExtensionField:
         """A residue field of ``R_q`` at the prime ``p = primes[index]``: the

@@ -504,18 +504,18 @@ def _full_iop(ring, field, protocol=None, **kw):
 _PINNED = {
     (6, 2): (
         "b1df74e7e7c1dc262130cf0cbbd8cd2e11e9a43b8517a92580ec6db2fc7d581a",
-        "4fb457fba21b1ba42cb65520b4e6fcca9be0adee99b3d757cc5f3f6cd3d70de5",
+        "4c05f5c813dd4729323ada6f9785def641140130b2232d6d17d2c6a63912e686",
     ),
     (8, 4): (
         "8f7897eea66213ced30d145daee1196e91b8d640629e8825ab5404df91ed2713",
-        "18a22fc1cd729a02e59a652c9452163070ea3813f4652b68ffd2b96d8cb1366d",
+        "240f763b6979849863f11190c0954610e808ae4a673329e8992d06f77747cdd9",
     ),
     (8, 1): (
         "8f7897eea66213ced30d145daee1196e91b8d640629e8825ab5404df91ed2713",
-        "9368cb57b689ec72f179d40183c1de5f759114905d73dcb3bf31043397fa5df9",
+        "83999b1188337f63908a9ba58a24286b445b4d718de33586950f49466242e60c",
     ),
 }
-_PINNED_WITH_LOOKUP = "c6db2b11fbca546434d2fdc46019c282f7daa585f43dffa0264bdee1a53c20c9"
+_PINNED_WITH_LOOKUP = "0d86754c683f58bb64c97bbb82168d8d2d71644344bc00d5e279980d4d3a28b2"
 
 
 @pytest.mark.parametrize(("bits", "chunks"), list(_PINNED))
