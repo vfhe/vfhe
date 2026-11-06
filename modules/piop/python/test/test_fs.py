@@ -2,17 +2,47 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the Fiat-Shamir layer: the transcript's chained prefix hash and
 its caches, the element-digest walker, deterministic challenge derivation
-(ring and seeded-stub domains), root-statement binding, and end-to-end FS
+(ring and seeded-stub domains), root-statement and registry binding, the
+protocol and parameter digests the registry is built from, and end-to-end FS
 sumcheck / sumcheckprod runs — two FS runs of the same statement must
 produce byte-identical transcripts.
 """
 
 import pytest
-from vfhe.arith import MLE, MLE_Variable, Polynomial, Ring, RNSRing
-from vfhe.piop import IOP, FS_Verifier, Proof, Statement, TableOracle, element_digest
+from vfhe.arith import (
+    MLE,
+    Field,
+    MLE_Variable,
+    Polynomial,
+    PseudoMersenneField,
+    Ring,
+    RNSRing,
+)
+from vfhe.piop import (
+    IOP,
+    FS_Verifier,
+    OracleKind,
+    OracleMessages,
+    Proof,
+    Relation_Eval,
+    Statement,
+    TableOracle,
+    element_digest,
+)
 from vfhe.piop.fs import expand_bytes
-from vfhe.piop.protocols import Sumcheck, SumcheckProd
-from vfhe.piop.relations import Relation_Sum, Relation_SumProd
+from vfhe.piop.protocols import (
+    Lookup,
+    RangeDecomposition,
+    Sumcheck,
+    SumcheckProd,
+    VirtualEval,
+)
+from vfhe.piop.relations import (
+    Relation_Range,
+    Relation_Sum,
+    Relation_SumProd,
+)
+from vfhe.polycom import Basefold, BasefoldEval, BasefoldMessages, FieldFoldableRS
 
 
 def _ring() -> RNSRing:
@@ -290,3 +320,145 @@ def test_fs_challenge_bits_deterministic():
 
     one, two = draw(), draw()
     assert one == two and len(one) == 16
+
+
+# --- the registry: the verifier's configuration ------------------------------
+
+
+def _pmf_field() -> PseudoMersenneField:
+    return PseudoMersenneField.generate(260, two_adicity=8)
+
+
+def _range(field, ring, **kw) -> RangeDecomposition:
+    kw = {"m": 2, "alphabet": 256, "kappa": 2, "chunks": 2, **kw}
+    return RangeDecomposition(field, ring=ring, **kw)
+
+
+def _scheme(field, **kw) -> Basefold:
+    return Basefold(FieldFoldableRS(field, k0=4, c=4, d=2, **kw))
+
+
+def test_registry_digest_binds_the_configuration():
+    ring, field = _ring(), _pmf_field()
+    scheme = _scheme(field)
+
+    def registry(kappa=2, rep=4, domain=ring, reverse=False) -> IOP:
+        iop = IOP(domain=domain, fiat_shamir=True)
+        entries = [
+            (Relation_Sum, Sumcheck()),
+            (Relation_Range, _range(field, ring, kappa=kappa)),
+            (Relation_Eval, BasefoldEval(scheme, rep=rep)),
+        ]
+        for relation, protocol in entries[::-1] if reverse else entries:
+            iop.register(relation, protocol)
+        return iop
+
+    base = registry().registry_digest()
+    assert len(base) == 32
+    assert registry().registry_digest() == base
+    assert registry(reverse=True).registry_digest() == base
+    assert registry(kappa=3).registry_digest() != base
+    assert registry(rep=5).registry_digest() != base
+    other_ring = Ring(2048, prime_size=[49], split_degree=4)
+    assert registry(domain=other_ring).registry_digest() != base
+    # A domain without a digest method of its own is accepted.
+    plain = IOP(domain=_SeededDomain(), fiat_shamir=True)
+    plain.register(Relation_Sum, Sumcheck())
+    assert plain.registry_digest() == plain.registry_digest()
+
+
+def test_fs_challenges_bind_the_registry():
+    # The same statement under two registries that differ only in a
+    # protocol the run never uses: the chain seed differs, so the first
+    # challenge already differs and a proof made under one registry does
+    # not verify under the other.
+    ring = _ring()
+    statement = _dense_sum_statement(ring, [1, 2, 3, 4])
+
+    def wider(ring: RNSRing) -> IOP:
+        iop = _fs_sum_iop(ring)
+        iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+        return iop
+
+    r0 = []
+    for make in (_fs_sum_iop, wider):
+        iop = make(ring)
+        assert iop.run(statement)
+        r0.append(element_digest(iop.transcript.entries["sumcheck/r0"].result()))
+    assert r0[0] != r0[1]
+    proof = _fs_sum_iop(ring).prove(statement)
+    assert _fs_sum_iop(ring).verify(statement, proof)
+    assert not wider(ring).verify(statement, proof)
+
+
+def test_protocol_digest_covers_parameters():
+    ring, field = _ring(), _pmf_field()
+    other_field = Field((1 << 61) - 1, 2, w=5)
+    other_ring = Ring(2048, prime_size=[49], split_degree=4)
+    scheme = _scheme(field)
+    messages = BasefoldMessages([scheme])
+
+    # Each parameter of the range decomposition in turn.
+    base = _range(field, ring).digest()
+    assert _range(field, ring).digest() == base
+    for kw in (
+        {"field": other_field},
+        {"m": 3},
+        {"alphabet": 512},
+        {"kappa": 3},
+        {"ring": other_ring},
+        {"chunks": 4},
+        {"messages": messages},
+    ):
+        args = {"field": field, "ring": ring, **kw}
+        assert _range(args.pop("field"), args.pop("ring"), **args).digest() != base
+
+    # The lookup: its field and the way its tables travel.
+    base = Lookup(field).digest()
+    assert Lookup(field, messages=OracleMessages()).digest() == base
+    assert Lookup(other_field).digest() != base
+    assert Lookup(field, messages=messages).digest() != base
+
+    # The evaluation protocol: its scheme and repetition count.
+    base = BasefoldEval(scheme, rep=4).digest()
+    assert BasefoldEval(_scheme(field), rep=4).digest() == base
+    assert BasefoldEval(scheme, rep=5).digest() != base
+    assert BasefoldEval(_scheme(field, seed=b"other"), rep=4).digest() != base
+
+    # A protocol without parameters is its class.
+    assert Sumcheck().digest() == Sumcheck().digest()
+    assert Sumcheck().digest() != SumcheckProd().digest()
+
+    # The scheme: its code and its layer schedule.
+    code = FieldFoldableRS(field, k0=4, c=4, d=2)
+    assert Basefold(code).digest() == Basefold(code, schedule=[1, 1]).digest()
+    assert Basefold(code).digest() != Basefold(code, schedule=[2]).digest()
+
+    # The code: each public parameter in turn.
+    base = code.digest()
+    assert FieldFoldableRS(field, k0=4, c=4, d=2).digest() == base
+    varied = [
+        FieldFoldableRS(other_field, k0=4, c=4, d=2),
+        FieldFoldableRS(field, k0=8, c=4, d=2),
+        FieldFoldableRS(field, k0=4, c=8, d=2),
+        FieldFoldableRS(field, k0=4, c=4, d=3),
+        FieldFoldableRS(field, k0=4, c=4, d=2, seed=b"other"),
+        FieldFoldableRS(field, k0=4, c=4, d=2, twist_field="prime"),
+    ]
+    assert all(other.digest() != base for other in varied)
+
+    # The ring: N, the primes and the splitting degree.
+    base = Ring(1024, prime_size=[49], split_degree=4).digest()
+    assert ring.digest() == base
+    assert Ring(2048, prime_size=[49], split_degree=4).digest() != base
+    assert Ring(1024, prime_size=[50], split_degree=4).digest() != base
+    assert Ring(1024, prime_size=[49, 49], split_degree=4).digest() != base
+    assert Ring(1024, prime_size=[49], split_degree=2).digest() != base
+
+    # The field: the prime, the degree and w.
+    p = (1 << 61) - 1
+    base = Field(p, 2, w=5).digest()
+    assert Field(p, 2, w=5).digest() == base
+    assert Field((1 << 31) - 1, 2, w=5).digest() != base
+    assert Field(p, 4, w=5).digest() != base
+    assert Field(p, 2, w=7).digest() != base

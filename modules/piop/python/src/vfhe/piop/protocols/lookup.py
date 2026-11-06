@@ -157,6 +157,9 @@ class Lookup(Protocol):
         # model) by default.
         self.messages = OracleMessages() if messages is None else messages
 
+    def parameters(self) -> tuple:
+        return (self.field, self.messages)
+
     def soundness_error(self, statement: Statement, domain: Any = None) -> float:
         """`(2^ell* + 2^b*) / p`, the bound of [CCCFGS26]'s soundness theorem
         for its lookup PIOP.

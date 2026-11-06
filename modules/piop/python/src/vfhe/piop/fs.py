@@ -4,12 +4,16 @@
 
 `FS_Verifier` is a `Verifier` that derives its randomness instead of
 sampling it: both draw hooks (`_draw_challenge`, `_draw_bits`) hash the
-transcript's chained state — seeded with the root statement's digest, so
-every challenge binds both the claim and every message written before it
-(omitting the statement is the "weak Fiat-Shamir" bug [DMWG23]). Nothing
-else changes: same transcript, same compute-if-absent contract, same
-protocols — the IOP machinery stays FS-unaware, and a run is fully
-deterministic (same statement, same protocols => byte-identical transcript).
+transcript's chained state — seeded with the root statement's digest and
+the registry's (`IOP.registry_digest`: the challenge domain and every
+registered protocol with its public parameters), so every challenge binds
+the claim, the verifier's configuration and every message written before
+it (omitting the statement is the "weak Fiat-Shamir" bug [DMWG23]; omitting
+the parameters would make one transcript a proof under every parameter
+set). Nothing else changes: same transcript, same compute-if-absent
+contract, same protocols — the IOP machinery stays FS-unaware, and a run is
+fully deterministic (same statement, same protocols => byte-identical
+transcript).
 
 Domain challenges need a deterministic bytes -> exceptional-element map:
 the domain's own seeded sampler, `domain.random_exceptional(seed=...)`,

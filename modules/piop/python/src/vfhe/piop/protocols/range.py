@@ -293,6 +293,17 @@ class RangeDecomposition(Protocol):
         # F_p for each RNS prime p the verifier has evaluated at.
         self._prime_fields: dict[int, ExtensionField] = {}
 
+    def parameters(self) -> tuple:
+        return (
+            self.field,
+            self.m,
+            self.alphabet,
+            self.kappa,
+            self.ring,
+            self.chunks,
+            self.messages,
+        )
+
     # --- shape and parameter conditions -----------------------------------
 
     def _shape(self, statement: Statement) -> _Shape:

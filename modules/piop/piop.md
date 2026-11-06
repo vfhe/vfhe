@@ -409,8 +409,13 @@ transcript.
   cached (`digests` / `_states`): a new entry costs one compression, any
   prefix is a lookup, and interactive runs that never call `state()` pay
   nothing (the caches fill lazily). The chain is seeded by
-  `bind(seed)` with the *root statement's* digest — σ_0 = ρ(x), whose
-  omission is the "weak Fiat–Shamir" bug of [DMWG23] — and entry values
+  `bind(seed)` with the digest of the *root statement* and of the
+  *registry* (`IOP.registry_digest`: the challenge domain and every
+  registered protocol by `Protocol.digest`, its class and its public
+  parameters) — σ_0 = ρ(x ‖ params); omitting the statement is the "weak
+  Fiat–Shamir" bug of [DMWG23], and omitting the parameters would let one
+  transcript stand as a proof under every parameter set the verifier might
+  be configured with — and entry values
   are digested by `element_digest`: primitives, containers, classes and
   protobuf messages by itself, every other value by its own `digest()`
   (arith's tables, polynomials and field elements, `vfhe.crypto`'s Merkle

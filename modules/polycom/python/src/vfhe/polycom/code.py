@@ -58,7 +58,15 @@ from typing import TYPE_CHECKING, TypeVar
 
 from vfhe.arith import Polynomial, RNSPolynomial, RNSRing, repr
 from vfhe.arith.mle import element_array, mark_ntt
-from vfhe.crypto import hash_bytes, leaf_digest, seeded
+from vfhe.crypto import (
+    bytes_digest,
+    chain_digest,
+    hash_bytes,
+    int_digest,
+    leaf_digest,
+    seeded,
+    str_digest,
+)
 from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
@@ -544,6 +552,23 @@ class FoldableRS:
             if all(len(set(column)) == self.n0 for column in zip(*points, strict=True)):
                 return points
         raise RuntimeError(f"no {self.n0} distinct base points found")
+
+    def digest(self) -> bytes:
+        """A 32-byte digest of the code's public parameters: the ring, `k0`,
+        `c`, `d`, the instantiation, the seed and the twist field. Two codes
+        with equal digests encode, fold and hash identically."""
+        return chain_digest(
+            [
+                b"foldable-rs",
+                self.ring.digest(),
+                int_digest(self.k0),
+                int_digest(self.c),
+                int_digest(self.d),
+                str_digest(self.instantiation),
+                bytes_digest(self.seed),
+                str_digest(self.twist_field),
+            ]
+        )
 
     def truncated(self, depth: int) -> FoldableRS:
         """The depth-`depth` code with this code's ring, `k0`, `c`, seed and
