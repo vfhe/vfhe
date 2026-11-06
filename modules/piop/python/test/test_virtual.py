@@ -10,6 +10,7 @@ import pytest
 from vfhe.arith import (
     MLE,
     ExtensionField,
+    Field,
     FieldElement,
     MLE_Variable,
     Ring,
@@ -668,20 +669,125 @@ def test_restriction_form_and_resolution():
     # No fixed coordinate: a renaming.
     rn = resolve_table(VirtualOracle.restriction(D, t + r, {}))
     assert rn.variables == t + r and list(rn.table) == list(range(8))
-    # Not restrictions: a product, a scaled term, a slice at a non-bit.
+    # A product has no table.
     with pytest.raises(TypeError, match="restriction"):
         resolve_table(VirtualOracle.product([P, D]))
+    # Not restrictions, but partial evaluations: a scaled term resolves to
+    # the scaled slice, a slice at a non-bit to the partial evaluation of
+    # the materialized table.
     scaled = VirtualOracle(r, [P], [(2, (0,))], [r0.maps[0]])
-    assert not scaled.is_restriction()
-    with pytest.raises(TypeError):
-        resolve_table(scaled)
-    assert not r0.evaluate({r[0]: 3}).is_restriction()
+    assert not scaled.is_restriction() and scaled.is_partial_evaluation()
+    s2 = resolve_table(scaled)
+    assert s2.variables == r and s2.evaluations == {0: 10, 3: 22}
+    at3 = r0.evaluate({r[0]: 3})
+    assert not at3.is_restriction() and at3.is_partial_evaluation()
+    d3 = resolve_table(at3)
+    assert isinstance(d3, MLE) and d3.variables == [r[1]]
+    # The slice t = 0 is (5, 0, 0, 11) over (x0, x1); at x0 = 3 it is
+    # 5 + 3 * (0 - 5) and 0 + 3 * (11 - 0) over x1.
+    expected = sparse.materialize().evaluate({t[0]: 0, x[0]: 3}, in_place=False)
+    assert list(d3.table) == list(expected.table) == [-10, 33]
     with pytest.raises(ValueError):
         VirtualOracle.restriction(P, r, {t[0]: 2})
     with pytest.raises(ValueError):  # too few names for the free variables
         VirtualOracle.restriction(P, r[:1], {t[0]: 1})
     # The sparse table is never materialized by resolve_table.
     assert resolve_table(P) is sparse
+
+
+def test_partial_evaluation_resolves_reduces_and_folds():
+    """`c * p(., alpha)` over an extension field, at non-bit constants: its
+    table, its queries, the reduction of a claim on it to one claim on `p`,
+    and a sumcheck with it as a factor."""
+    field = Field(562949948178433, 2, 5)
+    rng = random.Random(23)
+    x, z, y = _vars("x0", "x1"), _vars("z0", "z1"), _vars("y0", "y1")
+    p = TableOracle(
+        MLE(
+            field=field,
+            variables=x + z,
+            evaluations=[field(rng.randrange(field.prime)) for _ in range(16)],
+        )
+    )
+    alpha = [field.random_exceptional() for _ in z]
+    c = field.random_exceptional()
+    fixed = dict(zip(z, alpha, strict=True))
+    h = VirtualOracle.partial_evaluation(p, y, fixed, c)
+    assert h.is_partial_evaluation() and not h.is_restriction()
+    assert h.variables == y and h.domain is field
+    assert h.kind is OracleKind.virtual
+
+    # The table: the partial evaluation of p's table at z = alpha, scaled.
+    table = resolve_table(h)
+    assert isinstance(table, MLE) and table.variables == y
+    expected = p.polynomial.evaluate(fixed, in_place=False)
+    assert list(table.table) == [c * e for e in expected.table]
+
+    # A query: one query to p at (point, alpha), scaled.
+    point = {v: field.random_exceptional() for v in y}
+    at_p = {**dict(zip(x, (point[v] for v in y), strict=True)), **fixed}
+    value = h.query(point)
+    assert value == c * p.query(at_p)
+
+    # VirtualEval: a claim on h becomes one claim on p, at (point, alpha),
+    # with the value the claim's divided by c.
+    terminal = []
+
+    class _Record(Protocol):
+        reduces_from = Relation_Eval
+
+        async def prove(self, prover, statements):
+            return []
+
+        async def verify(self, verifier, statements):
+            terminal.extend(statements)
+            return []
+
+    def eval_iop():
+        iop = IOP(domain=field)
+        iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
+        iop.register(Relation_Eval, _Record())  # plain oracles
+        return iop
+
+    claim = Statement(Relation_Eval(), oracles=[h], point=point, value=value)
+    assert eval_iop().run(claim)
+    assert len(terminal) == 1
+    (on_p,) = terminal
+    assert on_p.oracles[0] is p and dict(on_p.point) == at_p
+    assert on_p.check() and c * on_p.value == value
+    wrong = Statement(
+        Relation_Eval(), oracles=[h], point=point, value=value + field.one
+    )
+    assert not eval_iop().run(wrong)
+
+    # A factor of a sumcheck: sum_b h(b) g(b), ending in claims that
+    # VirtualEval reduces, h's to one on p.
+    g = TableOracle(
+        MLE(
+            field=field,
+            variables=y,
+            evaluations=[field(rng.randrange(field.prime)) for _ in range(4)],
+        )
+    )
+    G = VirtualOracle.product([h, g])
+    products = [a * b for a, b in zip(table.table, g.polynomial.table, strict=True)]
+    total = products[0]
+    for product in products[1:]:
+        total = total + product
+    stmt = Statement(Relation_Sum(), oracles=[G], value=total)
+    assert stmt.check()
+    assert _iop(domain=field).run(stmt)
+    bad = Statement(Relation_Sum(), oracles=[G], value=total + field.one)
+    assert not _iop(domain=field).run(bad)
+    proof = _iop(domain=field, fiat_shamir=True).prove(stmt)
+    assert _iop(domain=field, fiat_shamir=True).verify(stmt, proof)
+    assert not _iop(domain=field, fiat_shamir=True).verify(bad, proof)
+
+    # Constants only, and one name per free variable.
+    with pytest.raises(ValueError, match="constants"):
+        VirtualOracle.partial_evaluation(p, y, {z[0]: alpha[0], z[1]: y[0]})
+    with pytest.raises(ValueError, match="names"):
+        VirtualOracle.partial_evaluation(p, y[:1], fixed, c)
 
 
 # --- the domain an oracle names -----------------------------------------------

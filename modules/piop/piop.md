@@ -312,6 +312,12 @@ more: a claim on the member is rewritten by `VirtualEval` into a claim on
 restriction to a slice of `P`'s table (`SparseMLE.restrict` for a sparse
 one, a partial evaluation for a dense one), which `prover_view` keeps
 sparse for the two-phase strategy.
+`VirtualOracle.partial_evaluation(P, variables, fixed, coefficient=c)` is
+the same form with constants of `P`'s domain and a coefficient `c`, the
+oracle `c·P(fixed, X)`: `resolve_table` resolves it to the partial
+evaluation of `P`'s table, scaled by `c` (a slice of a sparse table when
+the constants are bits), and `VirtualEval` reduces a claim `v` on it to
+the claim `v/c` on `P` at the extended point.
 
 Each subclass implements `check(statement)`: the *ideal* (non-succinct)
 membership test that simply enumerates the hypercube or queries the oracle.
@@ -1020,7 +1026,8 @@ variables, nothing else, `ImplicitOracle(variables)` is a handle,
 bundled, parked and stored on the object. The prover works on tables:
 `resolve_table(oracle, witnesses)` is the table behind an oracle on its
 side — a table oracle's own, `witnesses[oracle]` for a committed or an
-implicit one, a slice for a restriction.
+implicit one, a slice for a restriction, the scaled partial evaluation of
+its constituent's table for a `VirtualOracle.partial_evaluation`.
 
 ### `OracleMessages` (`messages.py`)
 
@@ -1277,9 +1284,12 @@ therefore lives inside the PCS's evaluation protocol
    [range.md](range.md)). `Relation_Lookup` reduces, by offline memory
    checking over four grand products, to two `Relation_Sum` claims over
    degree-3 virtual oracles plus four `Relation_Eval` claims;
-   `Relation_Range` reduces to it. Open follow-ups: batching the four
-   fingerprints into one sumcheck, and a products-form round kernel in C --
-   the degree-3 rounds are pure Python today (item 3a).
+   `Relation_Range` reduces to it. `Relation_ResidueRange` is the same claim
+   on the unpacked table, held as one oracle per prime of `q`, and reduces
+   to it through `ResidueRangeDecomposition` (see [range.md](range.md)).
+   Open follow-ups: batching the four fingerprints into one sumcheck, and a
+   products-form round kernel in C -- the degree-3 rounds are pure Python
+   today (item 3a).
 5. **Field coefficient domains** are done (`MLE(field=...)`, the
    whole-vector round messages, `Field`'s samplers); binding a variable
    other than the first still unpacks the vector to elements.

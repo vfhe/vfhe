@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Daniele Cozzo <daniele.cozzo@imdea.org>
 # SPDX-License-Identifier: Apache-2.0
-"""The lookup argument: Figure 11 of [CCCFGS26], Spartan-style offline
-memory checking [Set20] reduced to four grand products [SL20], each of
-which becomes a zerocheck over a virtual oracle. See
+"""The lookup argument: [CCCFGS26]'s lookup PIOP over a prime field,
+`Pi^F_range`. Offline memory checking [BEGKN91] as used in Spartan [Set20]
+is reduced to four grand products, proven as layered product circuits
+[Tha13; SL20], each of which becomes a zerocheck over a virtual oracle. See
 `modules/piop/range.md`.
 """
 
@@ -38,7 +39,8 @@ _SIDE = {"WSmu": "mu", "RS": "mu", "WSt": "t", "S": "t"}
 
 
 def counters(values: Sequence[int], beta: int) -> tuple[Sequence[int], Sequence[int]]:
-    """The `read_ts` and `final_cts` of Lemma I.3, in one pass.
+    """The `read_ts` and `final_cts` of the memory-checking lemma, in one
+    pass.
 
     `read_ts[i]` is how many times `values[i]` has already occurred strictly
     before position `i`, and `final_cts[x]` the total count of `x`. Together
@@ -72,7 +74,7 @@ def counters(values: Sequence[int], beta: int) -> tuple[Sequence[int], Sequence[
 
 def product_tree(leaves: list, zero: Any) -> list:
     """The product tree of `2^n` leaves: the table of the layered polynomial
-    `f` of Lemma I.4, `2^(n+1)` entries read LSB-first.
+    `f` of the grand-product lemma, `2^(n+1)` entries read LSB-first.
 
     `f[k] = leaves[k]` below `2^n`, `f[2^n + k] = f[2k] * f[2k+1]` above it,
     and the very last entry pinned to zero. The pin is not decoration: the
@@ -103,12 +105,14 @@ def product_tree_vector(leaves: FieldVector) -> FieldVector:
 
 
 class Lookup(Protocol):
-    """`Relation_Lookup -> Relation_Sum^2 x Relation_Eval^4` (Figure 11).
+    """`Relation_Lookup -> Relation_Sum^2 x Relation_Eval^4`: the lookup
+    PIOP over a prime field of [CCCFGS26].
 
-    Round 1: the prover sends the two counter polynomials of Lemma I.3, and
-    the verifier replies with the fingerprint challenges `sigma_L`, `tau`.
-    (The paper calls the first one `sigma`; §I already spends that letter on
-    the alphabet size of the decomposition, so it is `zeta` in this code.)
+    Round 1: the prover sends the two counter polynomials of the
+    memory-checking lemma, and the verifier replies with the fingerprint
+    challenges `sigma_L`, `tau`. (The paper writes the first one as
+    `sigma`, the letter the range decomposition uses for its challenge-set
+    size, so here it is `zeta`.)
 
     Round 2: the prover sends the internal nodes `f^(1)_a` of the four grand
     products -- one per fingerprint -- together with the four products
@@ -116,9 +120,10 @@ class Lookup(Protocol):
     points `rho`, `xi`.
 
     It then checks `WSt * WSmu == RS * S`, which is the multiset identity of
-    Lemma I.3 in fingerprinted form, and emits two sum claims: one per side
-    of the cube, each asserting that its pair of grand products was built
-    correctly. Each is a zerocheck over the function `g` of Figure 12,
+    the memory-checking lemma in fingerprinted form, and emits two sum
+    claims: one per side of the cube, each asserting that its pair of grand
+    products was built correctly. Each is a zerocheck over the function `g`
+    of that PIOP,
 
         sum_X eq~(point, X) * [ (f^(1)_a(X) - f_a(0,X) * f_a(1,X))
                           + chi * (f^(1)_b(X) - f_b(0,X) * f_b(1,X)) ] == 0
@@ -153,7 +158,8 @@ class Lookup(Protocol):
         self.messages = OracleMessages() if messages is None else messages
 
     def soundness_error(self, statement: Statement, domain: Any = None) -> float:
-        """`(2^ell* + 2^b*) / p` (Theorem I.5).
+        """`(2^ell* + 2^b*) / p`, the bound of [CCCFGS26]'s soundness theorem
+        for its lookup PIOP.
 
         The degree of the polynomial `P(Z, Z')` whose vanishing the
         fingerprint challenges test, over the field they are drawn from. A
@@ -218,7 +224,8 @@ class Lookup(Protocol):
         return VirtualOracle(W, constituents, terms, maps)
 
     def _summand(self, X: list, point: list, chi: Any, pairs: list) -> VirtualOracle:
-        """The function `g` of Figure 12 for one pair of fingerprints.
+        """The function `g` of the lookup PIOP (the zerocheck over the
+        layered product polynomial) for one pair of fingerprints.
 
         `pairs` is `[(f^(1)_a, f_a), (f^(1)_b, f_b)]`. The parent slot takes
         the real oracle `f^(1)_a` rather than a view of `f_a`, because
@@ -293,7 +300,7 @@ class Lookup(Protocol):
         ]
 
     def _leaves(self, tables: dict, parts: dict, zeta: Any, tau: Any) -> dict:
-        """The four fingerprint leaf tables, equations (41)-(43), from the
+        """The four fingerprint leaf tables of the lookup PIOP, from the
         prover's tables of `mu`, `read_ts` and `final_cts` and the public
         table."""
         mu, table = tables["mu"].table, parts["table"].polynomial.table
@@ -540,9 +547,10 @@ class Lookup(Protocol):
 
         chi, points = await self._draw(iop, label, parts)
 
-        # Lemma I.3 in fingerprinted form: WS = RS u S becomes one product
-        # identity, and the two sum claims below are what pins each of the
-        # four products to the oracle it was supposed to be built from.
+        # The memory-checking lemma in fingerprinted form: WS = RS u S
+        # becomes one product identity, and the two sum claims below are what
+        # pins each of the four products to the oracle it was supposed to be
+        # built from.
         ws_mu, rs, ws_t, s = products  # in FINGERPRINTS order
         if not (ws_t * ws_mu == rs * s):
             raise Rejection(
