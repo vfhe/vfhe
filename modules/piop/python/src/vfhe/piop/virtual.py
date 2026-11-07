@@ -127,6 +127,16 @@ def resolve_table(oracle, witnesses: dict | None = None) -> Any:
 class VirtualOracle(Oracle):
     """`p*(x) = sum_terms coeff * prod_j p_j(h_j(x))` over constituents p_j.
 
+    The constituents `p_1, ..., p_k` are the oracles the definition is built
+    from: for a virtual oracle `g(f_1, ..., f_k)` [CBBZ23, §2.2] they are
+    the `f_i`, and `g` is the products form below (the literature also calls
+    the `f_i` the underlying or constituent polynomials). Each is an oracle
+    in its own right -- a table, a commitment, an implicit oracle or another
+    virtual oracle -- with its own variables, and `p*` holds no table of its
+    own: a query to it at `x` is one query to each constituent `p_j` at
+    `h_j(x)`, and the values are combined by `g`. Constituents are referred
+    to by their index in `constituents`.
+
     `variables` are the virtual oracle's own; `maps[j]` sends each variable
     of constituent j to its source: one of `variables` (a renaming) or a
     constant (a fixed coordinate of the query). `terms` is the products

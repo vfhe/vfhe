@@ -123,6 +123,79 @@ def test_virtual_products_form_sumcheck():
     assert not _iop().run(Statement(Relation_Sum(), oracles=[G], value=total + 1))
 
 
+class _ReadsTheWitness(VirtualEval):
+    """`VirtualEval`, recording what the prover holds as the claim's witness
+    when the claim reaches it."""
+
+    def __init__(self, seen):
+        self.seen = seen
+
+    async def prove(self, prover, statements):
+        (statement,) = statements
+        self.seen.append((statement, dict(prover.witnesses.get(statement, {}))))
+        return await super().prove(prover, statements)
+
+
+@pytest.mark.parametrize("with_eq", [False, True], ids=["dense", "eq-factored"])
+def test_sumcheck_leaves_the_constituent_values_as_the_claims_witness(with_eq):
+    """After its last round the sumcheck prover's tables are the
+    constituents at the point r; they become the witness of the evaluation
+    claim on the virtual oracle, keyed by constituent index, and
+    `VirtualEval` sends them instead of evaluating the constituents again.
+    Covered: an oracle under two maps, each fixing a variable, and the eq~
+    factor, whose value the eq-factored view does not hold (the verifier
+    evaluates it)."""
+    from vfhe.arith import FieldVector, PseudoMersenneField
+
+    field = PseudoMersenneField.generate(127, two_adicity=4)
+    rng = random.Random(3)
+    x = _vars("x0", "x1", "x2")
+    w = _vars("w0", "w1", "w2", "w3")
+
+    def table(variables):
+        values = [field(rng.randrange(1 << 30)) for _ in range(1 << len(variables))]
+        return MLE(
+            field=field, variables=variables, evaluations=FieldVector(field, values)
+        )
+
+    f = TableOracle(table(x))
+    W = TableOracle(table(w))
+    low = {w[0]: x[0], w[1]: x[1], w[2]: x[2], w[3]: field.zero}
+    high = {w[0]: x[0], w[1]: x[1], w[2]: x[2], w[3]: field.one}
+    eq = EqOracle(field, [field(rng.randrange(1 << 30)) for _ in x], variables=x)
+    constituents = [f, W, W]
+    maps = [{v: v for v in x}, low, high]
+    terms = [(field.one, (0, 1)), (field(5), (1, 2))]
+    if with_eq:
+        constituents = [eq, *constituents]
+        maps = [{v: v for v in x}, *maps]
+        terms = [(c, (0, *(i + 1 for i in idxs))) for c, idxs in terms]
+    G = VirtualOracle(x, constituents, terms=terms, maps=maps)
+    total = None
+    for b in range(8):
+        point = {v: field((b >> i) & 1) for i, v in enumerate(x)}
+        e = G.query(point)
+        total = e if total is None else total + e
+    stmt = Statement(Relation_Sum(), oracles=[G], value=total)
+
+    seen = []
+    iop = IOP(domain=field)
+    iop.register(Relation_Sum, Sumcheck())
+    iop.register(Relation_Eval, _ReadsTheWitness(seen), kind=OracleKind.virtual)
+    assert iop.run(stmt)
+    ((claim, values),) = seen
+    point = dict(claim.point)
+    expected = {
+        j: resolve_table(c).evaluate(G.query_point(j, point), in_place=False).constant()
+        for j, c in enumerate(G.constituents)
+        if not isinstance(c, EqOracle)
+    }
+    assert values == expected
+    assert claim not in iop.prover.witnesses  # taken by VirtualEval
+    sent = iop.transcript.entries[f"virtual{claim.path}/vals"].result()
+    assert list(sent) == [expected[idxs[0]] for _, _, idxs in G.claims(point)]
+
+
 def test_virtual_same_oracle_under_two_maps():
     # G(x, y) = W(x) * W(y): one oracle, two constituents, two renamings;
     # sum over the cube is (sum W)^2, and the reduction ends in two claims

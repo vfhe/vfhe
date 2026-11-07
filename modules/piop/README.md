@@ -146,6 +146,9 @@ needs the tables, so a claim on a committed oracle has no decider.
   grand products, two degree-3 zerochecks) and `RangeDecomposition` (the
   base-`β` digits of the coefficients as an oracle over a prime field, a
   recomposition check, and a lookup claim on the digits).
+- `logup.py`: `LogUpGKR`, the same lookup claim by logarithmic derivatives:
+  the multiplicities as the one oracle, and the two fractional sums proven
+  by GKR on trees of fractions, one degree-3 sumcheck per layer.
 
 `c/src/sumcheck.c` holds the sumcheck round-message kernels
 (`python/cdef/sumcheck.h`), the module's only C. The dense-MLE kernels they

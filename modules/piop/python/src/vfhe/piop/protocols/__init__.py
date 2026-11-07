@@ -6,6 +6,7 @@ relations of the toolbox. The sumcheck protocols are a subpackage,
 prover's forms of a virtual oracle (`sumcheck.prover_view`)."""
 
 from .gkr import GKR, GKR_Start, OutputTest
+from .logup import LogUpGKR
 from .lookup import Lookup
 from .range import RangeDecomposition, ResidueRangeDecomposition
 from .sparse import dense_layering
@@ -15,6 +16,7 @@ from .virtual import SumDefStart, VirtualEval
 __all__ = [
     "GKR",
     "GKR_Start",
+    "LogUpGKR",
     "Lookup",
     "OutputTest",
     "RangeDecomposition",

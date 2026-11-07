@@ -132,7 +132,12 @@ class _ProverVirtual:
     `round_evals(var)` gives the round polynomial at the nodes
     `0..degree_in(var)`; the degree counts the factors that *read* the
     variable in the original definition (`reads`), not the tables that now
-    span it. `evaluate` folds every table by the challenge."""
+    span it. `evaluate` folds every table by the challenge.
+
+    `constituents[i]` is the index in the virtual oracle of the constituent
+    whose table is `tables[i]`: every constituent, in order, here; all but
+    the eq~ one in the eq-factored view. Once every variable is bound,
+    `constituent_values` gives their values."""
 
     owned = True  # its own table objects: the round loop may bind them in place
 
@@ -141,6 +146,7 @@ class _ProverVirtual:
         self.reads = [list(f.variables) for f in factors]
         self.tables = [expand_table(f, self.variables) for f in factors]
         self.terms = [(coeff, tuple(idxs)) for coeff, idxs in terms]
+        self.constituents = list(range(len(factors)))
 
     @property
     def num_vars(self) -> int:
@@ -169,6 +175,7 @@ class _ProverVirtual:
             tables,
             self.terms,
         )
+        view.constituents = self.constituents
         return view
 
     def update_tables(self, var, r) -> tuple[_ProverVirtual, tuple | None]:
@@ -205,6 +212,16 @@ class _ProverVirtual:
     def constant(self):
         assert self.num_vars == 0, "constant() needs a fully-evaluated oracle"
         return combine_terms(self.terms, [t.constant() for t in self.tables])
+
+    def constituent_values(self) -> dict[int, Any]:
+        """The value of each constituent this view holds a table of, by its
+        index in the virtual oracle, once every variable is bound: the
+        constituent at its query point (`VirtualOracle.query_point`) for
+        the point the variables were bound to."""
+        assert self.num_vars == 0, "constituent_values() needs every variable bound"
+        return {
+            j: t.constant() for j, t in zip(self.constituents, self.tables, strict=True)
+        }
 
     def _vector_tables(self) -> bool:
         """Whether every table is one field vector (`vector_table`)."""
@@ -411,7 +428,9 @@ class _ProverVirtualEq(_ProverVirtual):
                 for coeff, idxs in oracle.terms
             ]
             factors = [tables[k] for k in others]
-            return cls(oracle.variables, factors, terms, c.point)
+            view = cls(oracle.variables, factors, terms, c.point)
+            view.constituents = others
+            return view
         return None
 
 

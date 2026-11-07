@@ -1499,6 +1499,10 @@ extern "C"
     // `bound`; neither aliases `values`.
     bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values,
                            uint64_t count, uint64_t bound);
+    // For `count` values below `bound`: totals[x] = how many of the values equal x,
+    // for x < bound. Returns false, with `totals` partly written, when a value is
+    // `bound` or more. `totals` holds `bound` words and does not alias `values`.
+    bool histogram(uint64_t *totals, const uint64_t *values, uint64_t count, uint64_t bound);
     // low[j] + 2^64 high[j] = sum_t a[t][j] w_t mod 2^128 for j < n, with
     // w_t = w_low[t] + 2^64 w_high[t], for at most 64 terms. The arrays need
     // no alignment, and `low` and `high` alias none of the a[t].

@@ -5,12 +5,15 @@
 > The design note for the range proof: the optimized range PIOP of
 > [CCCFGS26] and its lookup PIOP over a prime field, expressed in this
 > module's vocabulary, as implemented in `relations/lookup.py`,
-> `protocols/lookup.py`, `relations/range.py` and `protocols/range.py`.
+> `protocols/lookup.py`, `relations/range.py` and `protocols/range.py`; and
+> the logarithmic-derivative lookup with GKR [Hab22; PH23], a second
+> protocol for the same lookup relation, in `protocols/logup.py`.
 
 - [Context](#context)
 - [Notation](#notation)
 - [Conventions](#conventions-domains-and-index-order)
 - [The lookup protocol (`Π̂^F_range`)](#the-lookup-protocol)
+- [The logUp-GKR lookup protocol](#the-logup-gkr-lookup-protocol)
 - [The decomposition protocol (`Π̂*_range`)](#the-decomposition-protocol)
 - [Soundness](#soundness-bookkeeping-both-protocols)
 - [Sending an oracle](#sending-an-oracle-both-protocols)
@@ -414,6 +417,138 @@ A group of one is the single run, under the same labels. Claims join a group
 only when they are on the frontier together, as the lookup claims of range
 statements that are on the frontier together are.
 
+## The logUp-GKR lookup protocol
+
+`LogUpGKR` (`protocols/logup.py`) is a second protocol for
+`Relation_Lookup`, registered in place of `Lookup` with the same
+constructor, `(field, messages=None)`; `Relation_Lookup` and the range
+protocols that reduce to it are unchanged. The difference is what the
+prover commits to: one table per `t_β`, the multiplicities `m`, of `β`
+entries, against `Lookup`'s counters and four `f^{(1)}_α` tables, three of
+which have the size of `µ̃'`. The price is a transcript quadratic in `ℓ*`.
+
+### The identity
+
+Over a field of characteristic above `2^{ℓ*}`, every entry of `f` (over
+`ℓ*` variables) lies in `t_β` exactly when, for some `m: t_β → F`,
+
+```
+Σ_{x ∈ {0,1}^ℓ*} 1 / (X − f(x))  =  Σ_{y < β} m(y) / (X − y)
+```
+
+as rational functions, and then `m(y)` is the number of entries equal to
+`y`, by the set-inclusion lemma of [Hab22]. Nothing in its proof uses
+that the two sides have the same number of terms. The verifier draws `ξ`
+outside `t_β` (drawn again, under the label `xi_1`, `xi_2`, …, while it
+lands in the table: probability `β/|F|`), so that no table-side denominator
+vanishes and an honest run always accepts.
+
+### Trees of fractions
+
+A fraction `a/h` is the pair `(a, h)`, and `(a, h) ⊕ (a', h') = (a h' + a'
+h, h h')` adds them without dividing. `fraction_tree(numerators,
+denominators)` builds the binary tree over `2^n` leaves, root first: entry
+`i` of layer `k` is the sum of entries `i` and `i + 2^k` of layer `k + 1`.
+In the LSB-first order of a table (see
+[LSB-first table order](#lsb-first-table-order)) those are the points `(x,
+0)` and `(x, 1)` of the layer below, so each layer is the two halves of the
+one below, combined entrywise, and the halves are views. The root is
+`(Σ_i a_i Π_{j≠i} h_j, Π_i h_i)`.
+
+Each side of the identity at `X = ξ` is the root of a tree: the oracle side
+over `(1, ξ − f(x))`, `ℓ*` levels deep, and the table side over `(m(y), ξ −
+y)`, `b*` levels deep. Following [PH23, §3], the trees are not committed;
+GKR proves their roots. The two trees have their own depths, and the
+verifier compares the roots as fractions, `a_f h_t = a_t h_f` with `h_f ≠ 0`.
+
+### The rounds
+
+1. Per table `t_β` in the bundle, the prover sends `m` through `messages`
+   (label `logup/…/m{b*}`). The verifier draws `ξ`.
+2. The prover sends, for every tree, the four values of layer 1, `(a(0),
+   a(1), h(0), h(1))` (label `v0`). The verifier computes each root from
+   them, adds the roots of the oracle-side trees of each table and compares
+   the sum with that table's table-side root. A tree of depth 0 sends its
+   single leaf instead (label `leaf`).
+3. The verifier draws `ψ_0`. Each tree's claim on layer 1 at `ρ_1 = (ψ_0)`
+   is the line through its two values, `y = a(0) + ψ_0 (a(1) − a(0))`, and
+   the same for `h`.
+4. For `k = 1, 2, …` while a tree is deeper than `k`: the verifier draws
+   `λ_k` and one coefficient `c_j` per such tree (`c_0 = 1`). The claim
+   `Σ_j c_j (y_j + λ_k y'_j)` is proven by the registered `Relation_Sum`
+   protocol on
+
+   ```
+   Σ_{x ∈ {0,1}^k} eq̃(ρ_k, x) Σ_j c_j [a_j(x,0) h_j(x,1) + a_j(x,1) h_j(x,0)
+                                      + λ_k h_j(x,0) h_j(x,1)]
+   ```
+
+   over layer `k + 1` of every such tree, one `VirtualOracle` of degree 3
+   in each variable whose constituents are the halves of the layers, held
+   as implicit oracles with the prover's tables in `Prover.witnesses` for
+   the length of the sumcheck. The sumcheck runs inside the protocol, as a
+   subprotocol, because the next layer's claim needs its point. It ends at
+   a point `r`; the prover sends every tree's four values at `(r, 0)` and
+   `(r, 1)` (label `v{k}`), the verifier checks them against the sumcheck's
+   final claim, draws `ψ_k`, and each tree's claim on layer `k + 1` is at
+   `ρ_{k+1} = (r, ψ_k)`.
+5. A tree whose leaves are layer `k + 1` stops there with one evaluation
+   claim at `ρ_{k+1}`: `f(ρ) = ξ − y'` on the oracle side, `m(ρ) = y` on the
+   table side. On the leaves the prover sends only what the verifier does not
+   know: the oracle side's numerators are ones, and the table side's
+   denominators are `ξ − t̃(r, b)` with `t̃(y) = Σ_j 2^j y_j`, which the
+   verifier evaluates.
+
+So a run reduces `Relation_Lookup` to `Relation_Eval` claims only: one on
+each looked-up oracle (or group, below) and one on each `m`. The `eq̃`
+factor is an `EqOracle` in every term, so the sumcheck prover takes the
+eq-factored strategy (`_ProverVirtualEq`) and its fused field kernels.
+
+The check after a sumcheck is the one `VirtualEval` would make, written out
+because the protocol needs the values themselves: their line is the next
+claim. The prover sends the values the sumcheck prover's tables hold after
+its last round, which `Sumcheck` leaves as the witness of its final claim,
+so no layer is read again to evaluate it at `r`.
+
+### Several claims, several tables
+
+`LogUpGKR` is a bundle protocol, and one run proves every frontier lookup
+claim, all trees in lockstep:
+
+- claims into the same `t_β` share one `m`, the sum of their counts, and
+  one table-side tree;
+- among them, claims on oracles with the same number of variables are
+  concatenated into one oracle-side tree, as in `Lookup`
+  ([Several claims into one table](#several-claims-into-one-table)): `s =
+  ⌈log₂ k⌉` selector variables after the data ones, zero blocks as padding,
+  counted in `m`, and the final claim is on `Σ_i sel_i · µ̃'_i`, which
+  `VirtualEval` turns into one claim per `µ̃'_i`;
+- every tree, whatever its table and depth, shares `ξ`, the `ψ_k` and
+  `λ_k`, so layer `k` of all the trees deeper than `k` is one sumcheck and
+  the trees end at points that are prefixes of one sequence.
+
+A shorter top digit is its own `Relation_Lookup(top_β)`
+([A shorter top digit](#a-shorter-top-digit)), so it gets its own `m` and
+its own table-side tree: exact, with no rewriting of the claim. A run has
+`D (D − 1) / 2` sumcheck rounds, `D` the deepest tree. For one claim with
+`ℓ* = 24`, `b* = 11`: `m`, then `4 · 276` field elements of sumcheck
+messages and `4 · 24 + 4 · 11 − 4` of layer values, about 1.2k elements,
+against `Lookup`'s six tables, three of `2^24` entries, and its fourteen
+openings.
+
+### Soundness
+
+`soundness_error(statement)` is `(2^{ℓ*} + β) / (|F| − β)`: the numerator
+of the difference of the two sides, cleared of denominators, has degree
+below `2^{ℓ*} + β`, and `ξ` is drawn among `|F| − β` elements [Hab22;
+PH23]. Claims into one table count together, `(Σ_i 2^{ℓ*_i + s_i} + β) / (|F|
+− β)`. The sumcheck rounds contribute `3/|F|` each (degree 3), and each
+step from a layer to the next `3/|F|`: the line through two values at a
+random `ψ`, the combination of `a` and `h` by `λ`, and that of the trees.
+The side condition is a characteristic above the number of entries looked
+up in one table, `Σ_i 2^{ℓ*_i + s_i}` (padding included), the same as
+`Lookup`'s; `β ≤ p` keeps the table's entries distinct.
+
 ## The decomposition protocol
 
 [CCCFGS26]'s optimized range PIOP, `Π̂*_range`. The relation is `relations/range.py`, the protocol `protocols/range.py`.
@@ -662,6 +797,13 @@ The relations, the reductions and the DAG are the same in both models.
   2025/286. <https://eprint.iacr.org/2025/286> (the memory-checking lemma
   stated for `R_q`, the reduction of a lookup in `t_beta`; range proofs over
   `R_q` by digit decomposition.)
+- **[Hab22]** Ulrich Haböck. *Multivariate lookups based on logarithmic
+  derivatives*. ePrint 2022/1530. <https://eprint.iacr.org/2022/1530> (the
+  lookup identity with multiplicities, its lemma.)
+- **[PH23]** Shahar Papini, Ulrich Haböck. *Improving logarithmic derivative
+  lookups using GKR*. ePrint 2023/1284. <https://eprint.iacr.org/2023/1284>
+  (the fractional sums as roots of trees of fractions proven by GKR, with no
+  committed helper.)
 - **[SL20]** Srinath Setty, Jonathan Lee. *Quarks: Quadruple-efficient
   transparent zkSNARKs*. ePrint 2020/1275. <https://eprint.iacr.org/2020/1275>
   (the grand-product layering of the grand-product lemma.)

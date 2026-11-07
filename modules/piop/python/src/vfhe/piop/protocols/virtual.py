@@ -25,7 +25,10 @@ class VirtualEval(Protocol):
     The prover sends the constituent values y_j; the verifier evaluates
     the public constituents itself, checks `ev(y, x) == v`, and emits the
     claims. No challenge: each y_j is bound by its own claim and the check
-    pins v, so the step has soundness error 0.
+    pins v, so the step has soundness error 0. The prover takes a y_j from
+    the claim's witness when the step that made the claim recorded it
+    (`Prover.witnesses[statement]`, constituent index to value: a sumcheck
+    ending on the oracle does), and evaluates the constituent otherwise.
     """
 
     name = "virtual"
@@ -47,10 +50,14 @@ class VirtualEval(Protocol):
         (g,) = statement.oracles
         point = dict(statement.point)
         claims = g.claims(point)
-        values = [
-            resolve_table(c, prover.witnesses).evaluate(pt, in_place=False).constant()
-            for c, pt, _ in claims
-        ]
+        known = prover.witnesses.pop(statement, {})
+        values = []
+        for c, pt, idxs in claims:
+            if idxs[0] in known:
+                values.append(known[idxs[0]])
+            else:
+                table = resolve_table(c, prover.witnesses)
+                values.append(table.evaluate(pt, in_place=False).constant())
         iop.transcript.write(f"{self.name}{statement.path}/vals", tuple(values))
         return self._outputs(statement, claims, values)
 
