@@ -27,6 +27,7 @@ from vfhe.arith import (
     PseudoMersenneField,
     PseudoMersenneNTT,
     count_occurrences,
+    histogram,
 )
 from vfhe.util import parallel
 
@@ -411,6 +412,41 @@ class TestOccurrenceCounts:
         rows = memoryview(array("Q", [0, 1, 2, 3])).cast("B").cast("Q", (2, 2))
         with pytest.raises(TypeError):
             count_occurrences(rows, 4)
+
+
+class TestHistogram:
+    """`histogram`: the totals of `count_occurrences`, without the prior
+    counts."""
+
+    @pytest.mark.parametrize(("n", "bound"), [(0, 4), (1, 1), (37, 5), (1000, 1 << 16)])
+    def test_matches_a_dictionary(self, n, bound):
+        rng = random.Random(n)  # noqa: S311 - test data, not a key
+        values = array("Q", (rng.randrange(bound) for _ in range(n)))
+        totals = histogram(values, bound)
+        assert totals is not None
+        assert list(totals) == reference_counts(values, bound)[1]
+
+    def test_a_value_out_of_range_gives_none(self):
+        assert histogram(array("Q", [0, 3, 4, 1]), 4) is None
+        assert histogram(array("Q", [2**64 - 1]), 4) is None
+
+    def test_on_one_thread_and_many(self):
+        rng = random.Random(6)  # noqa: S311 - test data, not a key
+        n, bound = (1 << 18) + 5, 1 << 10
+        values = array("Q", (rng.randrange(bound) for _ in range(n)))
+        serial, threaded = at_one_and_many(lambda: histogram(values, bound))
+        assert serial == threaded
+        assert serial is not None
+        assert list(serial) == reference_counts(values, bound)[1]
+        values[n - 3] = bound
+        assert at_one_and_many(lambda: histogram(values, bound)) == (None, None)
+
+    def test_rejects_other_buffers(self):
+        with pytest.raises(TypeError):
+            histogram(array("i", [1, 2]), 4)
+        rows = memoryview(array("Q", [0, 1, 2, 3])).cast("B").cast("Q", (2, 2))
+        with pytest.raises(TypeError):
+            histogram(rows, 4)
 
 
 _FUSED_PRIME = 562949953421201

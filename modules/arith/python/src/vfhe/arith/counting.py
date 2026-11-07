@@ -9,15 +9,9 @@ from array import array
 from vfhe.util.bindings import ffi, lib
 
 
-def count_occurrences(values, bound: int) -> tuple[array, array] | None:
-    """For `values`, a one-dimensional buffer of 64-bit unsigned integers
-    (``array('Q')``),
-    the pair ``(prior, totals)`` of ``array('Q')``s: ``prior[i]`` is how many
-    of ``values[:i]`` equal ``values[i]``, and ``totals[x]`` how many of the
-    values equal `x`, for ``x < bound``.
-
-    None when a value is `bound` or more.
-    """
+def _checked_length(values, bound: int) -> int:
+    """The number of `values`, a one-dimensional buffer of 64-bit unsigned
+    integers, checked along with `bound`."""
     view = memoryview(values)
     if view.ndim != 1 or view.itemsize != 8 or view.format not in ("Q", "L"):
         raise TypeError(
@@ -25,7 +19,54 @@ def count_occurrences(values, bound: int) -> tuple[array, array] | None:
         )
     if bound < 0:
         raise ValueError(f"bound {bound} is negative")
-    count = len(view)
+    return len(view)
+
+
+def histogram(values, bound: int) -> array | None:
+    """Count how many times each of `0, 1, ..., bound - 1` occurs in
+    `values`.
+
+    Returns `totals`, where `totals[x]` is the number of entries of `values`
+    equal to `x`. For example, for `values = [2, 0, 2, 2]` and `bound = 4`,
+    `totals = [1, 0, 3, 0]`. Returns None if an entry is `bound` or larger.
+
+    `values` is a flat buffer of unsigned 64-bit integers, for instance
+    ``array.array("Q", ...)`` (the standard-library array; typecode ``"Q"``
+    means unsigned 64-bit), and `totals` is returned as such an array. It is
+    the second result of `count_occurrences`, computed without the first.
+    """
+    count = _checked_length(values, bound)
+    totals = array("Q", bytes(8 * bound))
+    if count and not lib.histogram(
+        ffi.from_buffer("uint64_t[]", totals),
+        ffi.from_buffer("uint64_t[]", values),
+        count,
+        bound,
+    ):
+        return None
+    return totals
+
+
+def count_occurrences(values, bound: int) -> tuple[array, array] | None:
+    """Count the occurrences of each value in `values`, both up to each
+    position and in total.
+
+    Returns `(prior, totals)`:
+
+    - `prior[i]` is how many times `values[i]` occurs before position `i`;
+    - `totals[x]` is how many times `x` occurs in `values`, for every
+      `x < bound`.
+
+    For example, for `values = [2, 0, 2, 2]` and `bound = 4`, `prior =
+    [0, 0, 1, 2]` and `totals = [1, 0, 3, 0]`. Returns None if an entry is
+    `bound` or larger.
+
+    `values` is a flat buffer of unsigned 64-bit integers, for instance
+    ``array.array("Q", ...)`` (the standard-library array; typecode ``"Q"``
+    means unsigned 64-bit), and `prior` and `totals` are returned as such
+    arrays.
+    """
+    count = _checked_length(values, bound)
     prior = array("Q", bytes(8 * count))
     totals = array("Q", bytes(8 * bound))
     if count and not lib.count_occurrences(

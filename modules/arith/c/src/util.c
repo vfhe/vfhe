@@ -51,7 +51,8 @@ void bit_rev(uint64_t *out, uint64_t *in, uint64_t n, uint64_t log_n)
 // counts its values, the counts become per-chunk starting offsets (the counts
 // of every earlier chunk, added in chunk order), and each chunk then runs the
 // one-pass loop from its offsets. Every count is an exact integer, so the
-// result is the one-pass one.
+// result is the one-pass one. The histogram is the first pass alone, the
+// chunks' counts added up.
 
 // The fewest values a chunk covers. A chunk also covers at least
 // OCCURRENCE_BOUND_FACTOR * bound values, so that the per-chunk tables of
@@ -101,14 +102,59 @@ static void occurrence_prior_chunk(void *ctx, uint64_t chunk)
         job->prior[i] = running[job->values[i]]++;
 }
 
+// Splits `count` values into chunks for several threads; false when one chunk
+// is all there is, and the caller runs the one-pass loop.
+static bool occurrence_plan(OccurrenceJob *job, uint64_t count)
+{
+    uint64_t grain = OCCURRENCE_BOUND_FACTOR * job->bound;
+    if (grain < OCCURRENCE_GRAIN)
+        grain = OCCURRENCE_GRAIN;
+    return vec_chunks_plan(&job->chunks, count, grain, 8);
+}
+
+bool histogram(uint64_t *totals, const uint64_t *values, uint64_t count, uint64_t bound)
+{
+    OccurrenceJob job = {.prior = NULL, .values = values, .bound = bound};
+    if (!occurrence_plan(&job, count))
+    {
+        memset(totals, 0, bound * sizeof(uint64_t));
+        for (uint64_t i = 0; i < count; i++)
+        {
+            const uint64_t v = values[i];
+            if (v >= bound)
+                return false;
+            totals[v]++;
+        }
+        return true;
+    }
+
+    const uint64_t chunks = job.chunks.count;
+    job.counts = (uint64_t *)safe_malloc(chunks * bound * sizeof(uint64_t));
+    job.valid = (uint64_t *)safe_malloc(chunks * sizeof(uint64_t));
+    vfhe_parallel_for(chunks, 0, occurrence_count_chunk, &job);
+    bool valid = true;
+    for (uint64_t c = 0; c < chunks; c++)
+        valid = valid && job.valid[c];
+    if (valid)
+    {
+        memset(totals, 0, bound * sizeof(uint64_t));
+        for (uint64_t c = 0; c < chunks; c++)
+        {
+            const uint64_t *counts = job.counts + c * bound;
+            for (uint64_t x = 0; x < bound; x++)
+                totals[x] += counts[x];
+        }
+    }
+    free(job.valid);
+    free(job.counts);
+    return valid;
+}
+
 bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values, uint64_t count,
                        uint64_t bound)
 {
     OccurrenceJob job = {.prior = prior, .values = values, .bound = bound};
-    uint64_t grain = OCCURRENCE_BOUND_FACTOR * bound;
-    if (grain < OCCURRENCE_GRAIN)
-        grain = OCCURRENCE_GRAIN;
-    if (!vec_chunks_plan(&job.chunks, count, grain, 8))
+    if (!occurrence_plan(&job, count))
     {
         memset(totals, 0, bound * sizeof(uint64_t));
         for (uint64_t i = 0; i < count; i++)

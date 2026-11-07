@@ -1292,7 +1292,11 @@ therefore lives inside the PCS's evaluation protocol
    `Relation_Range` reduces to it. `Relation_ResidueRange` is the same claim
    on the unpacked table, held as one oracle per prime of `q`, and reduces
    to it through `ResidueRangeDecomposition` (see [range.md](range.md)).
-   Open follow-ups: batching the four fingerprints into one sumcheck, and a
+   `LogUpGKR` (`protocols/logup.py`) is a second protocol for
+   `Relation_Lookup`: the multiplicities as its only oracle, and the
+   fractional sums of the logarithmic-derivative identity proven by GKR on
+   trees of fractions, one eq-weighted degree-3 sumcheck per layer, ending
+   on `Relation_Eval` claims only. Open follow-ups: batching the four fingerprints into one sumcheck, and a
    products-form round kernel in C -- the degree-3 rounds are pure Python
    today (item 3a).
 5. **Field coefficient domains** are done (`MLE(field=...)`, the

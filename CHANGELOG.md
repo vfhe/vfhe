@@ -14,6 +14,26 @@ versions may contain breaking changes.
 
 ### Added
 
+- `vfhe.piop.protocols.LogUpGKR(field, messages=None)`: a second protocol for
+  `Relation_Lookup`, registered in place of `Lookup`. The lookup by
+  logarithmic derivatives [Hab22]: the prover sends the multiplicities of
+  each table's entries (one table of `beta` entries through `messages`, the
+  only oracle it sends), the verifier draws `xi` outside the table, and the
+  two fractional sums at `xi` are the roots of two trees of fractions,
+  proven by GKR [PH23] and compared as fractions, so the looked-up oracle
+  and the table may have different sizes. It reduces to `Relation_Eval`
+  claims only: one on each looked-up oracle and one on each multiplicity
+  table. A bundle protocol: one run proves every frontier lookup claim,
+  with one multiplicity table per `beta`, claims of one `beta` and size
+  concatenated as in `Lookup`, and layer `k` of every tree in one
+  eq-weighted degree-3 sumcheck through the registered `Relation_Sum`
+  protocol. `soundness_error` is `(2^n + beta) / (|F| - beta)`. Helpers
+  `vfhe.piop.protocols.logup.fraction_tree` and `multiplicities`. Described
+  in `modules/piop/range.md`.
+- `vfhe.arith.histogram(values, bound)` (and the C function of the same
+  name): the totals of `count_occurrences` alone, `totals[x]` the number of
+  values equal to `x`, without the per-value counts; threaded as
+  `count_occurrences` is, and None when a value is `bound` or more.
 - `Ring.digest()` and `Field.digest()`: a 32-byte digest of the parameters
   that fix the arithmetic (a ring's `N`, primes and splitting degree; a
   field's prime, degree and `w`). `Protocol.parameters()` (empty by
@@ -783,6 +803,11 @@ versions may contain breaking changes.
 
 ### Changed
 
+- A `Sumcheck` over a virtual oracle leaves, as the prover's witness of its
+  final `Relation_Eval` claim (`Prover.witnesses[claim]`), the values of the
+  constituents at the final point, which its tables hold after the last
+  round; `VirtualEval`'s prover sends those instead of evaluating each
+  constituent at the point again. The messages are unchanged.
 - **BREAKING**: the Fiat-Shamir chain is seeded with the root statement's
   digest and `IOP.registry_digest()` (the challenge domain and every
   registered protocol with its parameters), so a proof is bound to the

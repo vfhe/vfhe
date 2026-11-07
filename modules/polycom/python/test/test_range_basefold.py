@@ -7,7 +7,8 @@ claim then ends in a `BasefoldEval` bundle: one per scheme. Honest runs
 accept, interactively and as an argument string; a tampered commitment and
 an out-of-range coefficient are rejected. The residue form of the claim,
 one oracle per prime committed with field basefold over its own field, is
-compiled the same way."""
+compiled the same way. With the lookup proven by `LogUpGKR` instead, the
+sent oracles are `mu'` and one multiplicity table per digit table."""
 
 import math
 from array import array
@@ -35,6 +36,7 @@ from vfhe.piop import (
     TableOracle,
 )
 from vfhe.piop.protocols import (
+    LogUpGKR,
     Lookup,
     RangeDecomposition,
     ResidueRangeDecomposition,
@@ -96,10 +98,21 @@ class _Setup:
     """The schemes, the committed `v` and the range claim on it. A bound
     whose bit count `CHUNKS` does not divide adds the table sizes of the
     lookup on the top digits: `ell + nu` variables on its oracle's side,
-    `log2(top_beta)` on the table's."""
+    `log2(top_beta)` on the table's. `lookup` is the protocol registered for
+    `Relation_Lookup`."""
 
-    def __init__(self, field, ring, v, m, bound=BOUND, sent=()):
+    def __init__(
+        self,
+        field,
+        ring,
+        v,
+        m,
+        bound=BOUND,
+        sent=(),
+        lookup: type[Lookup | LogUpGKR] = Lookup,
+    ):
         self.field, self.ring, self.m, self.sent = field, ring, m, sent
+        self.lookup = lookup
         relation = Relation_Range(bound)
         beta, top_beta = digit_alphabets(bound, CHUNKS)
         ell_star = ELL + NU + (CHUNKS.bit_length() - 1)
@@ -133,7 +146,7 @@ class _Setup:
                 messages=messages,
             ),
         )
-        iop.register(Relation_Lookup, Lookup(self.field, messages=messages))
+        iop.register(Relation_Lookup, self.lookup(self.field, messages=messages))
         iop.register(Relation_Sum, Sumcheck())
         iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
         for scheme in [*self.field_schemes, self.ring_scheme]:
@@ -244,6 +257,102 @@ def test_compiled_range_proof_with_a_short_top_digit(field, ring):
 
     bad = _witness(ring, bound=bound, tweak=lambda c: c.__setitem__(1, bound))
     setup = _Setup(field, ring, bad, ELL + NU, bound=bound)
+    assert not setup.iop().run(setup.statement)
+
+
+# --- the same proofs with the lookup proven by LogUpGKR ----------------------
+
+#: The oracles the range proof and LogUpGKR send, in transcript order: `mu'`
+#: and the multiplicities of the digit table, `m3`.
+LOGUP_SENT = ["range/mu", "/m3"]
+
+
+def _basefold_runs(iop):
+    return [
+        x
+        for x in iop.transcript.order
+        if x.startswith("basefold") and x.endswith("/answers")
+    ]
+
+
+@pytest.mark.parametrize("m", [ELL, ELL + NU])
+def test_compiled_range_proof_accepts_under_logup(field, ring, m):
+    """`mu'` and `m` are sent as roots, and the trees never are. One basefold
+    run per scheme with a claim: `mu'` (ell* variables), `m` (b*) and `v`."""
+    setup = _Setup(field, ring, _witness(ring), m, lookup=LogUpGKR)
+    iop = setup.iop()
+    assert iop.run(setup.statement)
+    for name in LOGUP_SENT:
+        root = _sent(iop, name)
+        assert isinstance(root, bytes) and len(root) == DIGEST_LEN, name
+    assert not [x for x in iop.transcript.order if "read_ts" in x or "/f1_" in x]
+    assert len(_basefold_runs(iop)) == 3
+
+
+def test_compiled_range_proof_as_an_argument_string_under_logup(field, ring):
+    setup = _Setup(field, ring, _witness(ring), ELL + NU, lookup=LogUpGKR)
+    proof = setup.iop(fiat_shamir=True).prove(setup.statement)
+    assert setup.iop(fiat_shamir=True).verify(setup.statement, proof)
+
+
+def test_a_tampered_commitment_is_rejected_under_logup(field, ring):
+    setup = _Setup(field, ring, _witness(ring), ELL + NU, lookup=LogUpGKR)
+    proof = setup.iop(fiat_shamir=True).prove(setup.statement)
+    for target in LOGUP_SENT:
+        messages = list(proof.messages)
+        (index,) = [
+            i for i, (label, _) in enumerate(messages) if label.endswith(target)
+        ]
+        label, root = messages[index]
+        messages[index] = (label, bytes([root[0] ^ 1]) + root[1:])
+        assert not setup.iop(fiat_shamir=True).verify(
+            setup.statement, Proof(messages)
+        ), target
+
+
+def test_an_out_of_range_coefficient_is_rejected_under_logup(field, ring):
+    """The runs are repeated and their acceptances bounded by the error of
+    the range reduction plus that of the lookup on `mu'`."""
+    bad = _witness(ring, tweak=lambda c: c.__setitem__(1, BOUND + 1))
+    setup = _Setup(field, ring, bad, ELL + NU, lookup=LogUpGKR)
+    error = RangeDecomposition(
+        field, ELL + NU, ALPHABET, KAPPA, ring, CHUNKS
+    ).soundness_error(setup.statement)
+    beta = digit_alphabets(BOUND, CHUNKS)[0]
+    ell_star = ELL + NU + (CHUNKS.bit_length() - 1)
+    error += ((1 << ell_star) + beta) / (field.exceptional_set_size - beta)
+    runs = 16
+    accepted = sum(bool(setup.iop().run(setup.statement)) for _ in range(runs))
+    assert accepted <= _most_acceptances(runs, error)
+
+
+def test_compiled_range_proof_with_a_short_top_digit_under_logup(field, ring):
+    """log2(B) = 7 in two digits, the top one of 3 bits: one `m` per digit
+    table (`m4` and `m3`), each committed. The top digits' lookup reads a
+    restriction of `mu'`, so its claim lands on `mu'`: the scheme of
+    `ell + nu` variables gets no claim, and the runs are those of `mu'`,
+    `m4`, `m3` and `v`. An honest run accepts, interactively and as an
+    argument string; a coefficient of `B` is rejected."""
+    bound = 1 << 7
+    setup = _Setup(
+        field,
+        ring,
+        _witness(ring, bound=bound),
+        ELL + NU,
+        bound=bound,
+        lookup=LogUpGKR,
+    )
+    iop = setup.iop()
+    assert iop.run(setup.statement)
+    for name in ("range/mu", "/m4", "/m3"):
+        root = _sent(iop, name)
+        assert isinstance(root, bytes) and len(root) == DIGEST_LEN, name
+    assert len(_basefold_runs(iop)) == 4
+    proof = setup.iop(fiat_shamir=True).prove(setup.statement)
+    assert setup.iop(fiat_shamir=True).verify(setup.statement, proof)
+
+    bad = _witness(ring, bound=bound, tweak=lambda c: c.__setitem__(1, bound))
+    setup = _Setup(field, ring, bad, ELL + NU, bound=bound, lookup=LogUpGKR)
     assert not setup.iop().run(setup.statement)
 
 

@@ -156,7 +156,12 @@ class Sumcheck(_SumcheckRounds):
     message is then g_i at 0..degree, computed by the prover view's
     `round_evals` (`prover_view.py`), and the final claim is an evaluation
     claim on the virtual oracle, which `VirtualEval` reduces to its
-    constituents.
+    constituents. After the last round the prover's bookkeeping tables
+    hold every constituent's value at r [Tha13; XZZPS19, Alg. 1]; they are
+    recorded as the prover's witness of that claim
+    (`Prover.witnesses[claim]`, a dict from constituent index to value), so
+    that the prover of the next step reads them instead of evaluating each
+    constituent again.
     """
 
     name = "sumcheck"
@@ -198,10 +203,14 @@ class Sumcheck(_SumcheckRounds):
         return super()._update_tables(factors, var, r, in_place)
 
     def _prove_tail(
-        self, _iop: IOP, statement: Statement, _label: str, factors: list, point: dict
+        self, iop: IOP, statement: Statement, _label: str, factors: list, point: dict
     ) -> list[Statement]:
         (cur,) = factors
-        return [self.reduce([statement], point=point, value=cur.constant())]
+        claim = self.reduce([statement], point=point, value=cur.constant())
+        values = getattr(cur, "constituent_values", None)
+        if callable(values):
+            iop.prover.witnesses[claim] = values()
+        return [claim]
 
     async def _verify_tail(
         self, _iop: IOP, statement: Statement, _label: str, point: dict, claim
