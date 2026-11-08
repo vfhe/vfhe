@@ -402,9 +402,9 @@ ArithStatus arith_rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const
     return ARITH_OK;
 }
 
-// `from` and this ring share a base, and `from`'s primes are a subset of
-// this ring's: the rows then line up, and the kernel's default factors are
-// the product of the primes `from` lacks.
+// `from` must share this ring's base and hold only primes this ring holds:
+// the rows then line up, and the kernel's default factor at each row is the
+// product of the primes this ring holds and `from` does not.
 ArithStatus arith_rns_scaled_lift(ArithRing ring, ArithElement *out, const ArithElement *a,
                                   ArithRing from)
 {
