@@ -834,6 +834,103 @@ void test_round_division_to_a_smaller_ring(void)
     arith_free(ring, &e);
 }
 
+/* A scaled lift from a two-prime sub-ring to the full ring, against the
+ * definition and against the kernel: each kept residue times the product Q'
+ * of the added primes, computed here prime by prime, and zero rows at the
+ * added primes. The sub-rings hold non-adjacent primes, one of them the
+ * narrow row; both domains are carried to the result. */
+void test_scaled_lift_scales_the_kept_residues_and_zeroes_the_added_primes(void)
+{
+    const uint64_t from_masks[] = {0x5, 0xA};
+    const ArithDomain domains[] = {ARITH_DOMAIN_CANONICAL, ARITH_DOMAIN_MUL};
+    for (uint64_t c = 0; c < sizeof(from_masks) / sizeof(from_masks[0]); c++)
+    {
+        const uint64_t from_mask = from_masks[c], added = TEST_MASK & ~from_mask;
+        ArithRing from = arith_rns_ring_new(TEST_N, from_mask, base);
+        ArithElement a, out;
+        arith_new(from, &a);
+        arith_new(ring, &out);
+        RNS_Polynomial p = arith_rns_polynomial(&a);
+        uint64_t x = 0x9E3779B97F4A7C15ULL + c;
+        for (uint64_t i = 0; i < TEST_L; i++)
+        {
+            if (!(from_mask & (1ULL << i)))
+                continue;
+            for (uint64_t j = 0; j < TEST_N; j++)
+            {
+                x = x * 6364136223846793005ULL + 1442695040888963407ULL;
+                set_coeff(p, i, j, (x >> 7) % PRIMES[i]);
+            }
+        }
+        RNS_Polynomial expected = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+        polynomial_RNSc_scaled_lift((RNSc_Polynomial)expected, (RNSc_Polynomial)p, NULL);
+
+        for (uint64_t d = 0; d < sizeof(domains) / sizeof(domains[0]); d++)
+        {
+            a.domain = domains[d];
+            TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_scaled_lift(ring, &out, &a, from));
+            TEST_ASSERT_EQUAL_INT(domains[d], out.domain);
+            RNS_Polynomial got = arith_rns_polynomial(&out);
+            TEST_ASSERT_EQUAL_UINT64(TEST_MASK, got->rns_mask);
+            assert_same(expected, got);
+            for (uint64_t i = 0; i < TEST_L; i++)
+            {
+                uint64_t scale = 1;
+                for (uint64_t k = 0; k < TEST_L; k++)
+                    if (added & (1ULL << k))
+                        scale = (uint64_t)((unsigned __int128)scale * (PRIMES[k] % PRIMES[i]) %
+                                           PRIMES[i]);
+                for (uint64_t j = 0; j < TEST_N; j++)
+                {
+                    const uint64_t want =
+                        (from_mask & (1ULL << i))
+                            ? (uint64_t)((unsigned __int128)coeff(p, i, j) * scale % PRIMES[i])
+                            : 0;
+                    TEST_ASSERT_EQUAL_UINT64(want, coeff(got, i, j));
+                }
+            }
+        }
+        free_RNS_polynomial(expected);
+        arith_free(from, &a);
+        arith_free(ring, &out);
+        arith_ring_free(from);
+    }
+}
+
+/* A scaled lift is refused from a ring holding a prime the target lacks, from
+ * a ring over another base, and of an element holding no value. */
+void test_scaled_lift_refuses_a_missing_prime_another_base_and_an_empty_element(void)
+{
+    ArithRing to = arith_rns_ring_new(TEST_N, 0x3, base);
+    ArithRing from = arith_rns_ring_new(TEST_N, 0x5, base);
+    ArithElement a, out;
+    arith_new(from, &a);
+    arith_new(to, &out);
+    fill(arith_rns_polynomial(&a), 97);
+    a.domain = ARITH_DOMAIN_CANONICAL;
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_scaled_lift(to, &out, &a, from));
+
+    RNS_Base other = new_rns_base(PRIMES, 1, TEST_N, TEST_L);
+    ArithRing elsewhere = arith_rns_ring_new(TEST_N, 0x1, other);
+    ArithElement b, full;
+    arith_new(elsewhere, &b);
+    arith_new(ring, &full);
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_zero(elsewhere, &b));
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_scaled_lift(ring, &full, &b, elsewhere));
+
+    a.domain = ARITH_DOMAIN_EMPTY;
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_scaled_lift(ring, &full, &a, from));
+
+    arith_free(elsewhere, &b);
+    arith_free(ring, &full);
+    arith_ring_free(elsewhere);
+    rns_base_free(other);
+    arith_free(from, &a);
+    arith_free(to, &out);
+    arith_ring_free(from);
+    arith_ring_free(to);
+}
+
 void test_the_shared_ring_is_shared(void)
 {
     ArithRing again = arith_rns_ring_get(TEST_N, TEST_MASK, base);
@@ -1153,6 +1250,8 @@ int main(void)
     RUN_TEST(test_lifted_combination_kernel_known_answers);
     RUN_TEST(test_mod_down_is_round_division_up_to_half_the_primes);
     RUN_TEST(test_round_division_to_a_smaller_ring);
+    RUN_TEST(test_scaled_lift_scales_the_kept_residues_and_zeroes_the_added_primes);
+    RUN_TEST(test_scaled_lift_refuses_a_missing_prime_another_base_and_an_empty_element);
     RUN_TEST(test_the_shared_ring_is_shared);
     RUN_TEST(test_a_forked_child_uses_the_shared_rings);
     RUN_TEST(test_decompose_digit_is_the_lifted_residue);

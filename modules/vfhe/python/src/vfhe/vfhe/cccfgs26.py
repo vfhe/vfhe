@@ -11,12 +11,22 @@ For a multiplication (PreMult, Eq. 18; KeySwitch, Eq. 19; Rescale, Eq. 20):
   holding ``evk[i][t]`` for each digit ``t``;
 - intermediate: ``d0``, ``d1``, ``d2``, ``ct'`` (the key switch's output)
   and ``ct''`` (the rescaled output);
-- witness: ``w_ks``, the digits, within ``p_t/2`` (vfhe's digits are
-  centered, which is within the paper's ``< p_t``), and ``w_quot`` and
-  ``w_rmd`` of each rescale, ``w_rmd`` within ``p_l/2`` and ``w_quot``
-  within ``q_l/p_l``, the modulus of its ring, which an element of that
-  ring meets by construction and which the range check imposes on the
-  integers the proof works with.
+- witness: ``w_ks``, the digits, each within the bound of its
+  decomposition (``p_t/2`` for vfhe's centered residues, which is within
+  the paper's ``< p_t``; ``2^(w-1)`` for balanced radix digits), and
+  ``w_quot`` and ``w_rmd`` of each rescale, ``w_rmd`` within ``P/2`` for
+  the product ``P`` of the primes dropped and ``w_quot`` within ``q_l/P``,
+  the modulus of its ring, which an element of that ring meets by
+  construction and which the range check imposes on the integers the
+  proof works with.
+
+A tensor product no key switch completes is PreMult alone; a key switch
+that completes no tensor product (the relinearization of a sum of extended
+products) has the same names as a multiplication's, ``d2`` the value it
+decomposes and ``d1``, ``d0`` what it adds to the mask and to the body
+(when it adds anything). A rescale between levels that are not nested
+divides ``P_l * ct``, the component lifted to the union of the two levels
+and scaled by the product ``P_l`` of the primes the lift adds.
 
 Two conventions of vfhe differ from the paper and are stated here rather
 than hidden: the products with the key are subtracted,
@@ -25,12 +35,14 @@ primes, whose division is approximate: its quotient and remainder are
 ``w_quot_P`` and ``w_rmd_P``, with ``w_rmd_P`` within ``(k+1)P/2`` for
 ``k`` special primes.
 
-The relations: ``PreMult`` (Eq. 18); each digit recomposes to ``d2``
-through the CRT map, which is the digit agreeing with ``d2`` at its prime;
-``KeySwitch`` (Eq. 19, with the two conventions); and for each division,
-``x * z_l = (w_quot * p_l + w_rmd) * z_l``: in the quotient's ring the
-identity holds by construction, so what is checked is ``x`` and ``w_rmd``
-agreeing modulo the primes divided by.
+The relations: ``PreMult`` (Eq. 18); at each prime, the digits taken there
+recompose to ``d2``: the digit itself for a residue, the sum of the radix
+digits times their powers of two for a radix decomposition (up to the
+rounding of the digits it leaves out); ``KeySwitch`` (Eq. 19, with the two
+conventions); for each division, ``x * z_l = (w_quot * P + w_rmd) * z_l``:
+in the quotient's ring the identity holds by construction, so what is
+checked is ``x`` and ``w_rmd`` agreeing modulo the primes divided by; and
+for a lifted rescale, that the value divided is the lift of its input.
 """
 
 from __future__ import annotations
@@ -39,7 +51,7 @@ from math import prod
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import Polynomial
-from vfhe.vfhe.computation import Division, KeySwitch, Multiplication
+from vfhe.vfhe.computation import Division, KeySwitch, Multiplication, Tensor
 from vfhe.vfhe.witness import Entry, Relation
 
 if TYPE_CHECKING:
@@ -81,28 +93,45 @@ def _division_entries(
     ]
 
 
-def entries(step: Multiplication | Division) -> list[Entry]:
-    if isinstance(step, Division):
-        return [
-            *_division_entries(step, step, None),
-            Entry("ct''", "intermediate", step.quotient, step),
-        ]
-    switch = step.key_switch
-    found = [
+def _tensor_entries(step: Multiplication | Tensor) -> list[Entry]:
+    return [
         Entry("ct0", "instance", step.operands[0], step),
         Entry("ct1", "instance", step.operands[1], step),
         Entry("d0", "intermediate", step.constant, step),
         Entry("d1", "intermediate", step.linear, step),
         Entry("d2", "intermediate", step.quadratic, step),
     ]
-    for t, (digit, p) in enumerate(zip(switch.digits, switch.primes, strict=True)):
-        found.append(Entry("w_ks", "witness", digit, step, t, bound=p / 2))
+
+
+def _switch_entries(switch: KeySwitch, step: Any) -> list[Entry]:
+    found = [
+        Entry("w_ks", "witness", digit, step, t, bound=switch.bound(t))
+        for t, digit in enumerate(switch.digits)
+    ]
     found.extend(
         Entry("evk", "instance", [k[i] for k in switch.key], step, i) for i in range(2)
     )
     for i, division in enumerate(switch.mod_down):
         found += _division_entries(division, step, i, "_P")
     found.append(Entry("ct'", "intermediate", switch.output, step))
+    return found
+
+
+def entries(step: Multiplication | Tensor | KeySwitch | Division) -> list[Entry]:
+    if isinstance(step, Division):
+        return [
+            *_division_entries(step, step, None),
+            Entry("ct''", "intermediate", step.quotient, step),
+        ]
+    if isinstance(step, Tensor):
+        return _tensor_entries(step)
+    if isinstance(step, KeySwitch):
+        found = [Entry("d2", "intermediate", step.quadratic, step)]
+        for name, slot in zip(("d1", "d0"), step.slots, strict=True):
+            if slot is not None:
+                found.append(Entry(name, "intermediate", slot, step))
+        return found + _switch_entries(step, step)
+    found = _tensor_entries(step) + _switch_entries(step.key_switch, step)
     for i, rescale in enumerate(step.rescales):
         found += _division_entries(rescale, step, i)
     if step.rescales:
@@ -118,7 +147,11 @@ def _divides(division: Division) -> bool:
     return reduced == Polynomial(reduced.ring).from_bigint_array(centered)
 
 
-def _premultiplies(step: Multiplication) -> bool:
+def _lifts(division: Division) -> bool:
+    return division.source.scaled_lift(division.x.ring) == division.x
+
+
+def _premultiplies(step: Multiplication | Tensor) -> bool:
     (a0, b0), (a1, b1) = step.operands
     return (
         step.quadratic == a0 * a1
@@ -127,9 +160,18 @@ def _premultiplies(step: Multiplication) -> bool:
     )
 
 
-def _recomposes(switch: KeySwitch, t: int) -> bool:
-    p = switch.primes[t]
-    return _over(switch.digits[t], [p]) == _over(switch.quadratic, [p])
+def _recomposes(switch: KeySwitch, prime: int) -> bool:
+    """Whether the digits taken at ``prime`` recompose to ``d2`` there,
+    within the rounding of the radix digits left out."""
+    taken = [t for t, p in enumerate(switch.primes) if p == prime]
+    total = None
+    for t in taken:
+        term = _over(switch.digits[t], [prime]) * switch.power(t)
+        total = term if total is None else total + term
+    difference = _over(switch.quadratic, [prime]) - total
+    e = switch.digit_events[taken[0]]
+    rounding = 1 << (e.log_base * e.dropped - 1) if e.dropped else 0
+    return max(abs(c) for c in difference.get_polynomial(signed=True)) <= rounding
 
 
 def _switches(switch: KeySwitch) -> bool:
@@ -141,24 +183,45 @@ def _switches(switch: KeySwitch) -> bool:
         if switch.sums[i] + products != 0:
             return False
         switched = switch.mod_down[i].quotient if switch.mod_down else switch.sums[i]
-        if switched + switch.slots[i] != switch.output[i]:
+        if switch.slots[i] is not None:
+            switched = switched + switch.slots[i]
+        if switched != switch.output[i]:
             return False
     return True
 
 
-def relations(step: Multiplication | Division) -> list[Relation]:
-    if isinstance(step, Division):
-        return [Relation("Rescale", lambda: _divides(step))]
-    switch = step.key_switch
-    found = [Relation("PreMult", lambda: _premultiplies(step))]
-    found.extend(
-        Relation(f"w_ks[{t}] recomposes to d2", lambda t=t: _recomposes(switch, t))
-        for t in range(len(switch.digits))
-    )
+def _rescale_relations(division: Division) -> list[Relation]:
+    found = [Relation("Rescale", lambda: _divides(division))]
+    if division.lift != 1:
+        found.append(Relation("the lift by P_l", lambda: _lifts(division)))
+    return found
+
+
+def _switch_relations(switch: KeySwitch) -> list[Relation]:
+    found = []
+    for prime in dict.fromkeys(switch.primes):
+        if switch.digit_events[switch.primes.index(prime)].log_base:
+            name = f"the digits at {prime} recompose to d2"
+        else:
+            name = f"w_ks[{switch.primes.index(prime)}] recomposes to d2"
+        found.append(Relation(name, lambda p=prime: _recomposes(switch, p)))
     found.append(Relation("KeySwitch", lambda: _switches(switch)))
     found += [
         Relation("the division by the special primes", lambda d=d: _divides(d))
         for d in switch.mod_down
     ]
-    found += [Relation("Rescale", lambda r=r: _divides(r)) for r in step.rescales]
+    return found
+
+
+def relations(step: Multiplication | Tensor | KeySwitch | Division) -> list[Relation]:
+    if isinstance(step, Division):
+        return _rescale_relations(step)
+    if isinstance(step, KeySwitch):
+        return _switch_relations(step)
+    found = [Relation("PreMult", lambda: _premultiplies(step))]
+    if isinstance(step, Tensor):
+        return found
+    found += _switch_relations(step.key_switch)
+    for rescale in step.rescales:
+        found += _rescale_relations(rescale)
     return found

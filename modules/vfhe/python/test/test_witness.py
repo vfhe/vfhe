@@ -8,6 +8,9 @@ import math
 
 import pytest
 from vfhe.arith import Ring
+from vfhe.fhe import CKKS_Scheme
+from vfhe.mlwe import GadgetParams
+from vfhe.util import trace
 from vfhe.vfhe import cccfgs26, witness
 
 N = 256
@@ -102,3 +105,99 @@ def test_the_range_classes_group_the_bounded_entries(use_case):
     assert len(witness.coefficients(w, "w_ks")) == 5
     with pytest.raises(ValueError, match="no entry with a bound"):
         witness.coefficients(w, "d2")
+
+
+def _subrings(sizes):
+    Rq = Ring(N, split_degree=1, prime_size=sizes)
+    return lambda *ix: Rq.quotient_ring(mask=sum(1 << Rq.prime_indices[i] for i in ix))
+
+
+def test_lazy_relinearization_and_a_rational_rescale_satisfy_the_relations():
+    subring = _subrings([48, 48, 44])
+    scheme = CKKS_Scheme([subring(0, 1), subring(2)], scaling_factor=2**24)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    secret = key.poly[0]
+    rlk = scheme.gen_rlk(key, [-(secret * secret)])
+    xs = [scheme.encrypt(scheme.encode([v]), key) for v in (0.5, 0.25)]
+    weights = [[scheme.encode([0.25]), scheme.encode([-0.5])]]
+    with trace.recording() as t:
+        squares = [scheme.multiply(x, x, None) for x in xs]
+        [combined] = scheme.linear_combinations(squares, weights)
+        scheme.rational_rescale(scheme.relinearize(combined, rlk))
+    w = witness.of(t.operations(), cccfgs26)
+    assert [type(s).__name__ for s in w.steps] == [
+        "Tensor",
+        "Tensor",
+        "KeySwitch",
+        "Division",
+        "Division",
+    ]
+    names = [r.name for r in w.relations]
+    assert names.count("PreMult") == 2 and names.count("KeySwitch") == 1
+    assert names.count("the lift by P_l") == 2
+    assert [e.value for e in w.query("d1")][-1] == combined.get_a_poly(1)
+    remainders = w.query("w_rmd")
+    P = math.prod(scheme.rings[0].primes)
+    assert [e.bound for e in remainders] == [P / 2] * 2
+    w.check()
+    lifted = w.steps[3]
+    lifted.source = lifted.source + 1
+    with pytest.raises(ValueError, match="the lift by P_l does not hold"):
+        w.check()
+
+
+def test_the_special_prime_division_at_the_last_level_holds():
+    # The special prime is larger than the only prime left, so the
+    # remainder of its division does not fit the quotient's ring.
+    scheme = CKKS_Scheme(
+        Ring(N, prime_size=[45, 45, 50], split_degree=1),
+        scaling_factor=2**30,
+        special_primes=1,
+    )
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    secret = key.poly[0]
+    scheme.rlk = scheme.gen_rlk(key, [-(secret * secret)])
+    a = scheme.encrypt(scheme.encode([0.5]), key)
+    a = scheme.rescale(scheme.multiply(a, a, scheme.rlk))
+    with trace.recording() as t:
+        scheme.multiply(a, a, scheme.rlk)
+    witness.of(t.operations(), cccfgs26).check()
+
+
+@pytest.mark.parametrize("balanced", [True, False])
+@pytest.mark.parametrize("digits", [None, 4])
+def test_radix_digits_carry_their_power_and_bound(balanced, digits):
+    log_base = 12
+    primes = [45] if digits else [45, 45]
+    scheme = CKKS_Scheme(
+        Ring(N, prime_size=primes, split_degree=1),
+        scaling_factor=2**20,
+        balanced=balanced,
+    )
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    secret = key.poly[0]
+    rlk = scheme.gen_rlk(
+        key, [-(secret * secret)], gadget_params=GadgetParams(log_base, digits)
+    )
+    a = scheme.encrypt(scheme.encode([0.5]), key)
+    with trace.recording() as t:
+        scheme.multiply(a, a, rlk)
+    w = witness.of(t.operations(), cccfgs26)
+    [step] = w.steps
+    switch = step.key_switch
+    per_prime = 4  # a 45-bit prime has four 12-bit digits, all kept
+    assert len(switch.digits) == per_prime * len(primes)
+    assert switch.primes == [p for p in scheme.ring.primes for _ in range(per_prime)]
+    levels = [e.level for e in switch.digit_events]
+    assert [switch.power(t) for t in range(len(levels))] == [
+        1 << (log_base * level) for level in levels
+    ]
+    bound = 2 ** (log_base - 1) if balanced else 2**log_base - 1
+    assert [e.bound for e in w.query("w_ks")] == [bound] * len(switch.digits)
+    names = [r.name for r in w.relations]
+    for p in scheme.ring.primes:
+        assert names.count(f"the digits at {p} recompose to d2") == 1
+    w.check()
+    switch.digits[0] = switch.digits[0] + 1
+    with pytest.raises(ValueError, match="recompose to d2 does not hold"):
+        w.check()

@@ -126,6 +126,10 @@ def test_a_rational_rescale_has_its_divisions_under_its_name():
         rescaled.get_b_poly(),
     ]
     assert all(e.ring == rescaled.ring for e in divisions)
-    # The lifted operands reach the tape as inputs: the lift has no slot.
-    inputs = {e.sequence for e in events if e.kind == "input"}
-    assert all(len(e.inputs) == 1 and e.inputs[0] in inputs for e in divisions)
+    # Each division reads the lift of the component it rescales.
+    by_sequence = {e.sequence: e for e in events}
+    lifts = [by_sequence[e.inputs[0]] for e in divisions]
+    assert [e.kind for e in lifts] == ["scaled_lift"] * 2
+    assert [t.version_of(c) for c in (ct.obj_a_i(0), ct.obj_b())] == [
+        e.inputs[0] for e in lifts
+    ]

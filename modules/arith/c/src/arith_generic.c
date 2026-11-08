@@ -456,6 +456,23 @@ ArithStatus arith_mod_reduce_lifted(ArithRing ring, ArithElement *out, const Ari
     return status;
 }
 
+ArithStatus arith_scaled_lift(ArithRing ring, ArithElement *out, const ArithElement *a,
+                              ArithRing from)
+{
+    if (a->domain == ARITH_DOMAIN_EMPTY)
+    {
+        return ARITH_BAD_DOMAIN;
+    }
+    TRACE_BEGIN(ARITH_TRACE_SCALED_LIFT, out, a, NULL, 0, 0, 0.0, NULL);
+    ArithStatus status = ARITH_DISPATCH(ring, scaled_lift, ring, out, a, from);
+    if (status == ARITH_OK)
+    {
+        out->domain = a->domain;
+    }
+    TRACE_END(status, out);
+    return status;
+}
+
 int arith_generic_only_state = 0;
 
 void arith_set_generic_only(int enabled) { arith_generic_only_state = enabled != 0; }

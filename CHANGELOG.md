@@ -14,6 +14,41 @@ versions may contain breaking changes.
 
 ### Added
 
+- `arith_scaled_lift(ring, out, a, from)`, a generic operation: `a`, an
+  element of a ring with modulus `Q`, as an element of `ring`, which holds
+  `Q`'s primes and more, multiplied by the product `Q'` of the primes it
+  adds (the map `x -> Q'x` from `Z_Q` into `Z_(QQ')`). It is recorded on
+  the execution tape as `"scaled_lift"`. `RNSPolynomial.scaled_lift` with
+  the default factor and `CKKS_Scheme.rational_rescale(_batch)` go through
+  it, so a rational rescale's lift is on the tape and its division reads a
+  recorded value instead of an input.
+- `vfhe.vfhe.computation` reads more of the tape:
+  - a key switch wherever it is (`MLWE_Scheme.relinearize`,
+    `relinearize_batch`, `keyswitch`, as well as a multiplication), as a
+    `KeySwitch` with the value decomposed, the digits, the key components,
+    the division by the special primes, the values added (None for a
+    component nothing is added to) and the output; the ones that complete
+    no tensor product are `Computation.key_switches`;
+  - a tensor product no key switch completes (an extended product) as a
+    `Tensor`, in `Computation.tensors`. A tensor product and the key switch
+    that decomposes its quadratic slot and adds the other two are one
+    `Multiplication`, also when they were two calls (`relinearize` of a
+    `multiply(..., None)`), and so are the products of `multiply_batch`;
+  - plaintext-linear steps over ciphertexts of any number of components,
+    such as linear combinations of extended products;
+  - a rescale's input (`Division.source`, `source_version`) and, for a
+    rational rescale, the factor of its lift (`Division.lift`): the value
+    divided is `lift * source`, and `Computation.written_by` names the step
+    that wrote the source.
+
+  `KeySwitch.digit_events`, `power(t)` and `bound(t)` give how each digit
+  was taken, the power of two a radix digit stands for and the largest
+  value a digit can take. `vfhe.vfhe.cccfgs26` covers the new steps: PreMult
+  for a tensor product, the key switch relations for a key switch, the lift
+  of a rational rescale, the digits' recomposition prime by prime (radix
+  digits with their powers) and each digit's bound from its decomposition.
+  `Witness.steps` are in tape order.
+
 - `FieldVector.fold_inner_products`, `fold_and_inner_products`,
   `fold_product_sums` and `fold_and_product_sums` over an extension field
   are one C call each (`field_vec_fold_inner_products`,
@@ -825,6 +860,12 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `CKKS_Scheme.rescale` and `rational_rescale` state their rounding: each
+  component becomes `round(P_l * c / q_drop)` modulo the next level's
+  modulus (`P_l = 1` for nested levels), the remainder being the centered
+  residue modulo `q_drop`. The `MLWE_Scheme` docstring gives the top
+  balanced radix digit's range, `[-2^(w-1), 2^(w-1)]`.
+
 - **BREAKING**: a `Merkle` tree built from packed digests
   (`Merkle.from_digests`) reads the buffer once, while it is built, and no
   longer keeps it: the C tree has its own copy, so the buffer can be freed
@@ -1394,6 +1435,20 @@ versions may contain breaking changes.
 - **BREAKING**: `CGGI16_Key.b_prec`, which nothing read.
 
 ### Fixed
+
+- Fix `vfhe.vfhe.computation.Division.remainder` when the divisor exceeds
+  the quotient's modulus: it was computed modulo the quotient's ring, which
+  wraps a remainder above half that modulus. A rational rescale between
+  levels with no prime in common, and the division by the special primes
+  at a level whose modulus is below the special primes' product, gave a
+  wrong remainder, and `cccfgs26` rejected those honest computations. The
+  remainder is now an element of the dividend's ring, where it is exact.
+- Fix draining a trace that never recorded an event passing a null pointer
+  to `memcpy` and `memmove` (undefined behaviour, reported by the
+  undefined-behaviour sanitizer).
+- Fix `Computation` raising a bare `KeyError`, instead of asking for the
+  earlier values, on a copy of a value recorded in an earlier piece of the
+  tape.
 
 - Fix `ExtensionField(p, d, w)` accepting a composite `p`: the first
   transform built over such a field searched for a root of unity forever.

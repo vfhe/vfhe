@@ -98,6 +98,10 @@ and remainders of the rescale) and `check` evaluates the relations between
 them on the recorded values. `witness.range_classes(w)` groups the values
 that carry a bound, and `witness.coefficients(w, "w_ks")` gives one
 class's values as signed coefficient vectors, the input of a range check.
+`vfhe.vfhe.computation.Computation(operations)` gives the steps themselves
+in vFHE's terms: the multiplications, the tensor products and key switches
+that are not part of one (a relinearization of a sum of extended products),
+the rescales with the value each consumed, and the plaintext-linear steps.
 The tape is one: a second `recording` resumes
 it, and a value it already holds, such as a key, is not recorded again, so
 a witness built from a later piece is given the earlier values

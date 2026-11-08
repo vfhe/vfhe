@@ -618,7 +618,8 @@ class Polynomial(metaclass=_ImplementationDispatch):
         :param ring: The destination ring, which must contain this one.
         :param delta: The per-residue scaling factor, as the native array the
             ring builds (``RNSRing.modulus_ratio(..., return_pointer=True)``).
-            None scales by 1.
+            None scales by the product of the primes ``ring`` adds: the value
+            ``x`` modulo ``q`` becomes ``(Q/q) * x`` modulo ``Q``, exactly.
         """
         raise NotImplementedError
 

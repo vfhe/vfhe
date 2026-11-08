@@ -1302,9 +1302,18 @@ class RNSPolynomial(Polynomial):
         """Lifts the polynomial to a larger ring and scales it by the delta factor."""
         self.to_coeff()
         out = Polynomial(ring)
-        self.ring.lib.polynomial_RNSc_scaled_lift(
-            out.obj, self.obj, delta if delta is not None else ffi.NULL
-        )
+        if delta is None:
+            _check_status(
+                ring.lib.arith_scaled_lift(
+                    ring.arith_ring,
+                    out.as_element(),
+                    self.as_element(),
+                    self.ring.arith_ring,
+                ),
+                "scaled_lift",
+            )
+        else:
+            self.ring.lib.polynomial_RNSc_scaled_lift(out.obj, self.obj, delta)
         out.repr = repr.coeff
         return out
 
