@@ -1173,6 +1173,55 @@ def _check_radix_decomposition(
     return count
 
 
+def product_sums_fit_kernel(
+    tables: list, sums: list, nodes: int, limits: tuple[int, int, int, int, int]
+) -> bool:
+    """Check whether a call of `FieldVector.fold_product_sums` fits a native
+    kernel's fixed limits.
+
+    `limits` is the kernel's ``(tables, nodes, sums, products, factors)``
+    maxima: how many tables, nodes and sums it takes, how many products over
+    all the sums together, and how many factors in any one product. An empty
+    list of sums does not fit: the kernels need at least one.
+    """
+    max_tables, max_nodes, max_sums, max_products, max_factors = limits
+    products = [product for entry in sums for product in entry]
+    return (
+        bool(sums)
+        and len(tables) <= max_tables
+        and nodes <= max_nodes
+        and len(sums) <= max_sums
+        and len(products) <= max_products
+        and all(len(factors) <= max_factors for _, factors in products)
+    )
+
+
+def encode_product_sums(sums: list) -> array:
+    """Flatten `sums` into the array of words the native fold kernels read.
+
+    `sums` is the argument of `FieldVector.fold_product_sums`: a list of
+    sums, each a list of signed products ``(sign, factors)``, with ``sign``
+    1 or -1 and ``factors`` the indices of the tables multiplied. The words
+    are, in order: the number of sums; then, for each sum, the number of
+    its products; and for each product, 1 if its sign is -1 and 0
+    otherwise, the number of its factors, and the factors' indices.
+
+    For example, the one sum ``f_0 f_1 - f_2``, written
+    ``[[(1, (0, 1)), (-1, (2,))]]``, becomes ``[1, 2, 0, 2, 0, 1, 1, 1, 2]``:
+    one sum of two products; then ``+``, two factors, tables 0 and 1; then
+    ``-``, one factor, table 2.
+
+    The words come back as an ``array.array("Q", ...)`` (unsigned 64-bit
+    integers), which the kernels take without a copy.
+    """
+    words = [len(sums)]
+    for entry in sums:
+        words.append(len(entry))
+        for sign, factors in entry:
+            words += [int(sign < 0), len(factors), *factors]
+    return array("Q", words)
+
+
 def _check_fold_product_sums(tables: list, sums: list, nodes: int, weights) -> None:
     """The preconditions of `FieldVector.fold_product_sums`."""
     length = len(tables[0])
