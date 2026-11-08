@@ -882,6 +882,17 @@ class TestNativeMovementAndFold:
         )
         assert len(FieldVector.fold_product_sums(tables, sums * 5, 5)) == 5
 
+    def test_fold_product_sums_of_no_sums_are_empty(self, field):
+        """An empty list of sums takes the whole-vector body, which returns
+        no sums, and the fold still happens; the kernel needs at least one
+        sum."""
+        table = FieldVector(field, random_values(field, 8, 310))
+        assert FieldVector.fold_product_sums([table], [], 3) == []
+        r = field(5)
+        (folded,), sums = FieldVector.fold_and_product_sums([table], r, [], 3)
+        assert sums == []
+        assert folded == table.fold(r)
+
     def test_fold_product_sums_reject_mismatches(self, field):
         a, b = FieldVector(field, 6), FieldVector(field, 8)
         with pytest.raises(ValueError, match="odd"):

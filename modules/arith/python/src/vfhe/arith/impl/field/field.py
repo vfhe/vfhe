@@ -6,6 +6,7 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith.base import Field, FieldElement
+from vfhe.arith.number_theory import is_prime
 from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
 from vfhe.util.bindings import ffi, lib
@@ -25,13 +26,16 @@ class ExtensionField(Field):
         """
         Build F_(modulus^degree) with defining polynomial ``x^degree - w``.
 
-        ``w`` must make ``x^degree - w`` irreducible over F_modulus, which is
-        the caller's responsibility -- it is not verified here. For
-        ``degree=1`` no defining polynomial exists and ``w`` is ignored;
-        for higher degrees it is required.
+        ``modulus`` must be prime, and a composite one is rejected (checked
+        with ``number_theory.is_prime``). ``w`` must make ``x^degree - w``
+        irreducible over F_modulus, which is the caller's responsibility -- it
+        is not verified here. For ``degree=1`` no defining polynomial exists
+        and ``w`` is ignored; for higher degrees it is required.
         """
         if degree > 1 and w is None:
             raise TypeError(f"degree={degree} needs w, with x^{degree} - w irreducible")
+        if not is_prime(modulus):
+            raise ValueError(f"modulus={modulus} is not prime")
         self.prime = modulus
         self.w = 0 if w is None else w
         self.d = degree

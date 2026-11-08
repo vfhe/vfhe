@@ -713,8 +713,8 @@ class PseudoMersenneVector(FieldVector):
 
 def _product_shape(tables: list, sums: list, nodes: int, weights) -> array | None:
     """The shape words `pmf_vec_fold_product_sums` reads, or None when the
-    operands are not all pseudo-Mersenne vectors of one field or the shape
-    is past the kernel's bounds."""
+    operands are not all pseudo-Mersenne vectors of one field, there are no
+    sums, or the shape is past the kernel's bounds."""
     operands = tables if weights is None else [*tables, weights]
     if not all(isinstance(v, PseudoMersenneVector) for v in operands):
         return None
@@ -722,7 +722,8 @@ def _product_shape(tables: list, sums: list, nodes: int, weights) -> array | Non
         return None
     products = [product for entry in sums for product in entry]
     if (
-        len(tables) > lib.PMF_FOLD_MAX_TABLES
+        not sums
+        or len(tables) > lib.PMF_FOLD_MAX_TABLES
         or nodes > lib.PMF_FOLD_MAX_NODES
         or len(sums) > lib.PMF_FOLD_MAX_SUMS
         or len(products) > lib.PMF_FOLD_MAX_PRODUCTS

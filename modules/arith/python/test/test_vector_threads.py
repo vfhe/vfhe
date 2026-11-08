@@ -506,6 +506,35 @@ EXTENSION_KERNELS: dict[str, Callable[..., Any]] = {
     "lift_twisted_plane": lambda o: FieldVector.lift_twisted(o.a, o.b, o.t),
     "fma_interleave": lambda o: FieldVector.fma_interleave(o.a, o.b, o.c, -o.c),
     "fma_interleave_scalar": lambda o: FieldVector.fma_interleave(o.a, o.b, o.r, o.c),
+    "fold_inner_products": lambda o: o.a.fold_inner_products(o.b),
+    "fold_and_inner_products": lambda o: o.a.fold_and_inner_products(o.b, o.r),
+    "fold_product_sums": lambda o: FieldVector.fold_product_sums(
+        [o.a, o.b, o.c], SUMS, 3
+    ),
+    "fold_product_sums_weighted": lambda o: FieldVector.fold_product_sums(
+        [o.a, o.b, o.c], SUMS, 4, o.c.query(range(len(o.a) // 2))
+    ),
+    "fold_and_product_sums": lambda o: FieldVector.fold_and_product_sums(
+        [o.a, o.b, o.c], o.r, SUMS, 4
+    ),
+    "fold_and_product_sums_weighted": lambda o: FieldVector.fold_and_product_sums(
+        [o.a, o.b, o.c], o.r, SUMS, 2, o.b.query(range(len(o.a) // 4))
+    ),
+}
+
+#: The folded sums whose values the threaded runs are also checked against:
+#: each computed by the front's whole-vector body.
+EXTENSION_FOLD_BODIES: dict[str, Callable[..., Any]] = {
+    "fold_inner_products": lambda o: FieldVector.fold_inner_products(o.a, o.b),
+    "fold_product_sums_weighted": lambda o: FieldVector._fold_product_sums(
+        [o.a, o.b, o.c], SUMS, 4, o.c.query(range(len(o.a) // 2))
+    ),
+    "fold_and_product_sums": lambda o: (
+        [t.fold(o.r) for t in (o.a, o.b, o.c)],
+        FieldVector._fold_product_sums(
+            [t.fold(o.r) for t in (o.a, o.b, o.c)], SUMS, 4, None
+        ),
+    ),
 }
 
 
@@ -518,6 +547,18 @@ class TestExtension:
         r = extension([9, 10, 11, 12][: extension.d])
         o = SimpleNamespace(a=a, b=b, c=c, t=table, s=s, r=r)
         same_on_one_and_many(lambda: compute(o))
+
+    @pytest.mark.parametrize("kernel", list(EXTENSION_FOLD_BODIES))
+    def test_folded_sums_match_the_whole_vector_body(
+        self, extension, ext_operands, kernel
+    ):
+        """The folded sums on many threads, where each chunk sums its own
+        pairs, against the front's body: the chunks' sums are added up."""
+        a, b, c = ext_operands
+        r = extension([9, 10, 11, 12][: extension.d])
+        o = SimpleNamespace(a=a, b=b, c=c, r=r)
+        serial, threaded = at_one_and_many(lambda: EXTENSION_KERNELS[kernel](o))
+        assert threaded == serial == EXTENSION_FOLD_BODIES[kernel](o)
 
     def test_fold_twisted_over_its_own_word(self, extension, ext_operands):
         """A fold written over the low half of its word reads pairs that

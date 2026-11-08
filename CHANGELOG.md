@@ -14,6 +14,28 @@ versions may contain breaking changes.
 
 ### Added
 
+- `FieldVector.fold_inner_products`, `fold_and_inner_products`,
+  `fold_product_sums` and `fold_and_product_sums` over an extension field
+  are one C call each (`field_vec_fold_inner_products`,
+  `field_vec_fold_and_inner_products`, `field_vec_fold_product_sums`,
+  `field_vec_fold_and_product_sums`) instead of the front's whole-vector
+  bodies: one pass over the tables, nothing table-sized allocated, and the
+  sums kept unreduced across pairs and reduced once per chunk. IFMA kernels
+  for primes below `2^50` at degrees up to 8, the engine's element-wise
+  kernels over cache-sized windows of pairs for other moduli and degrees,
+  and scalar code on the portable engine; on the library's threads, with
+  results independent of their number. Degrees above
+  `FIELD_FOLD_MAX_DEGREE` (16) and shapes past the `FIELD_FOLD_MAX_*`
+  bounds keep the front's bodies.
+- `ExtensionFieldNTT.pack(..., zero_padding=True)` (and the C
+  `field_ntt_zero_padded`): the batch given by the first elements of each
+  transform, in either layout, with zeros after them, laid out as `forward`
+  needs it in one pass and with no zero-padded intermediate. The field
+  code's extension-field base encoder (`FieldFoldableRS` over an
+  `ExtensionField`) packs its batch that way: the base step no longer holds
+  a zeroed padding and a padded copy next to the transform's buffer, so its
+  peak falls from 12 table sizes to 5 with the root in `F_p` (9 with it in
+  the extension). The commit's peak is then the twist levels'.
 - `vfhe.piop.protocols.LogUpGKR(field, messages=None)`: a second protocol for
   `Relation_Lookup`, registered in place of `Lookup`. The lookup by
   logarithmic derivatives [Hab22]: the prover sends the multiplicities of
@@ -803,6 +825,16 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: a `Merkle` tree built from packed digests
+  (`Merkle.from_digests`) reads the buffer once, while it is built, and no
+  longer keeps it: the C tree has its own copy, so the buffer can be freed
+  (for a Basefold commitment, the leaf digests of the codeword: two table
+  sizes per committed table and per opened layer). Such a tree is
+  recommitted with the new digests, `commit(digests)`; `commit()` without
+  them raises, and a tree over leaves refuses `digests`.
+- `vfhe.util.memory_pool.release_all` and `set_capacity` say what they cost
+  in speed, and `docs/USAGE.md` says when a long-running process may want
+  `release_all` after a phase whose buffer sizes do not recur.
 - A `Sumcheck` over a virtual oracle leaves, as the prover's witness of its
   final `Relation_Eval` claim (`Prover.witnesses[claim]`), the values of the
   constituents at the final point, which its tables hold after the last
@@ -1363,6 +1395,14 @@ versions may contain breaking changes.
 
 ### Fixed
 
+- Fix `ExtensionField(p, d, w)` accepting a composite `p`: the first
+  transform built over such a field searched for a root of unity forever.
+  The constructor now rejects a modulus that is not prime, as
+  `PseudoMersenneField` already did.
+- Fix `FieldVector.fold_product_sums` and `fold_and_product_sums` over
+  pseudo-Mersenne vectors aborting, in builds with assertions, on an empty
+  list of sums: such a call now takes the whole-vector body, which returns
+  no sums (and the fold).
 - Fix a forked child hanging on its first ring lookup when another thread
   of the parent was looking up a ring at the fork (every MLWE sample
   allocation does): arith's ring caches are now locked across `fork`.

@@ -293,6 +293,8 @@ void field_vec_mul(FieldVector out, const FieldVector a, const FieldVector b);
 void field_vec_scale(FieldVector out, const FieldVector a, const uint64_t *s);
 void field_ntt_to_interleaved(FieldVector out, const FieldVector in, uint64_t blocks);
 void field_ntt_to_blocks(FieldVector out, const FieldVector in, uint64_t blocks);
+void field_ntt_zero_padded(FieldVector out, const FieldVector in, uint64_t blocks,
+                           bool in_by_blocks, bool out_by_blocks);
 void field_ntt_points(FieldVector out, uint64_t psi, uint64_t bits);
 void field_vec_fma(FieldVector out, const FieldVector a, const FieldVector b, const FieldVector c);
 void field_vec_fma_scalar(FieldVector out, const FieldVector a, const FieldVector b,
@@ -330,6 +332,23 @@ bool field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indi
 void field_vec_fold(FieldVector out, const FieldVector a, const uint64_t *r);
 void field_vec_fold_blocks(FieldVector out, const FieldVector a, uint64_t block, const uint64_t *r);
 void field_vec_split_blocks(FieldVector lo, FieldVector hi, const FieldVector a, uint64_t block);
+#define FIELD_FOLD_MAX_TABLES ...
+#define FIELD_FOLD_MAX_NODES ...
+#define FIELD_FOLD_MAX_SUMS ...
+#define FIELD_FOLD_MAX_PRODUCTS ...
+#define FIELD_FOLD_MAX_FACTORS ...
+#define FIELD_FOLD_MAX_DEGREE ...
+void field_vec_fold_product_sums(uint64_t *const *sums, const FieldVector *tables, uint64_t count,
+                                 const uint64_t *shape, uint64_t nodes, const FieldVector weights);
+void field_vec_fold_and_product_sums(FieldVector *outs, uint64_t *const *sums,
+                                     const FieldVector *tables, uint64_t count, const uint64_t *r,
+                                     const uint64_t *shape, uint64_t nodes,
+                                     const FieldVector weights);
+void field_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const FieldVector a,
+                                   const FieldVector b);
+void field_vec_fold_and_inner_products(FieldVector a_out, FieldVector b_out, uint64_t *q0,
+                                       uint64_t *q1, uint64_t *q2, const FieldVector a,
+                                       const FieldVector b, const uint64_t *r);
 void field_vec_frobenius(FieldVector out, const FieldVector a, uint64_t k);
 int field_vec_is_equal(const FieldVector a, const FieldVector b);
 void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed_len,
