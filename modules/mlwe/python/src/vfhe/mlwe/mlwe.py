@@ -138,9 +138,10 @@ class MLWE_Scheme:
         ``balanced`` decomposes against the RNS gadget into centered digits, in
         ``(-p_j/2, p_j/2]``, rather than into residues in ``[0, p_j)``, and
         against the radix gadget into balanced base-``2^w`` digits of the
-        centered residue, in ``[-2^(w-1), 2^(w-1))`` but the top one, rather
-        than into the residue's unsigned digits (``w = 1`` always takes the
-        unsigned ones, which are no larger). The keys are the same either way,
+        centered residue, rather than into the residue's unsigned digits
+        (``w = 1`` always takes the unsigned ones, which are no larger). The
+        balanced digits are in ``[-2^(w-1), 2^(w-1))``, except the top one,
+        which carries what the others leave and is in ``[-2^(w-1), 2^(w-1)]``. The keys are the same either way,
         and the balanced digits add about one bit less noise standard deviation
         at the same cost. The key-switch keys the scheme generates carry the
         choice, and :class:`MGSW_Scheme` follows it.

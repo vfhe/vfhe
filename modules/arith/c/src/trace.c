@@ -661,9 +661,13 @@ void arith_trace_release(uint64_t count)
     // hook, which takes the lock itself.
     ArithTraceEvent *released =
         (ArithTraceEvent *)safe_malloc((count ? count : 1) * sizeof(ArithTraceEvent));
-    memcpy(released, t->events, count * sizeof(ArithTraceEvent));
-    memmove(t->events, t->events + count, (t->length - count) * sizeof(ArithTraceEvent));
-    memmove(t->open, t->open + count, t->length - count);
+    // A tape that never held an event has no event array to copy from.
+    if (count > 0)
+    {
+        memcpy(released, t->events, count * sizeof(ArithTraceEvent));
+        memmove(t->events, t->events + count, (t->length - count) * sizeof(ArithTraceEvent));
+        memmove(t->open, t->open + count, t->length - count);
+    }
     t->length -= count;
     t->published -= count;
     pthread_cond_broadcast(&t->changed);

@@ -402,6 +402,22 @@ ArithStatus arith_rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const
     return ARITH_OK;
 }
 
+// `from` and this ring share a base, and `from`'s primes are a subset of
+// this ring's: the rows then line up, and the kernel's default factors are
+// the product of the primes `from` lacks.
+ArithStatus arith_rns_scaled_lift(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  ArithRing from)
+{
+    const RNSParams *to = params_of(ring), *source = params_of(from);
+    if (to->base != source->base || (source->rns_mask & ~to->rns_mask) != 0)
+    {
+        return ARITH_BAD_DOMAIN;
+    }
+    polynomial_RNSc_scaled_lift((RNSc_Polynomial)arith_rns_polynomial(out),
+                                (RNSc_Polynomial)arith_rns_polynomial(a), NULL);
+    return ARITH_OK;
+}
+
 // One residue per prime the ring holds, in the base's row order, which is what
 // the per-prime kernels index by.
 ArithStatus arith_rns_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out)
@@ -453,6 +469,7 @@ static const ArithMethods RNS_NTT_METHODS = {
     .round_division = arith_rns_round_division,
     .round_division_approximate = arith_rns_round_division_approximate,
     .mod_reduce_lifted = arith_rns_mod_reduce_lifted,
+    .scaled_lift = arith_rns_scaled_lift,
     .decompose_digit = arith_rns_decompose_digit,
     .scalar_new = arith_rns_scalar_new,
     .scalar_free = arith_rns_scalar_free,

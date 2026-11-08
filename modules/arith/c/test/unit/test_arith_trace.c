@@ -348,6 +348,36 @@ void test_digits_and_approximate_divisions_are_recorded(void)
     arith_ring_free(to);
 }
 
+void test_a_scaled_lift_names_its_operand_over_the_smaller_ring(void)
+{
+    ArithRing from = arith_rns_ring_new(TEST_N, 0x5, base);
+    ArithElement x, y;
+    arith_new(from, &x);
+    RNS_Polynomial p = arith_rns_polynomial(&x);
+    for (uint64_t i = 0; i < TEST_L; i += 2)
+        for (uint64_t j = 0; j < TEST_N; j++)
+            set_coeff(p, i, j, (j * 1442695040888963407ULL + i) % PRIMES[i]);
+    x.domain = ARITH_DOMAIN_CANONICAL;
+    arith_new(ring, &y);
+    arith_trace_enable();
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_scaled_lift(ring, &y, &x, from));
+    TEST_ASSERT_EQUAL_UINT64(2, arith_trace_length());
+    ArithTraceEvent e = event(0);
+    TEST_ASSERT_EQUAL_INT(ARITH_TRACE_INPUT, e.kind);
+    TEST_ASSERT_EQUAL_UINT64(0x5, e.mask);
+    assert_same(p, (RNS_Polynomial)e.value);
+    e = event(1);
+    TEST_ASSERT_EQUAL_INT(ARITH_TRACE_SCALED_LIFT, e.kind);
+    TEST_ASSERT_EQUAL_UINT32(1, e.n_inputs);
+    TEST_ASSERT_EQUAL_UINT64(1, e.inputs[0]);
+    TEST_ASSERT_EQUAL_UINT64(TEST_MASK, e.mask);
+    TEST_ASSERT_EQUAL_INT(ARITH_DOMAIN_CANONICAL, e.domain);
+    assert_same(arith_rns_polynomial(&y), (RNS_Polynomial)e.value);
+    arith_free(from, &x);
+    arith_free(ring, &y);
+    arith_ring_free(from);
+}
+
 static int third_mark_done = 0;
 
 static void *three_marks(void *arg)
@@ -477,6 +507,7 @@ int main(void)
     RUN_TEST(test_scale_by_records_the_scalar_and_samples_are_secret);
     RUN_TEST(test_marks_and_disabling);
     RUN_TEST(test_digits_and_approximate_divisions_are_recorded);
+    RUN_TEST(test_a_scaled_lift_names_its_operand_over_the_smaller_ring);
     RUN_TEST(test_an_append_over_the_limit_waits_for_a_release);
     RUN_TEST(test_verify_flags_a_write_the_tape_did_not_see);
     RUN_TEST(test_an_event_is_published_when_its_operation_ends);

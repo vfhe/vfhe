@@ -172,6 +172,9 @@ extern "C"
         ArithStatus (*decompose_digit)(ArithRing ring, ArithElement *out, const ArithElement *a,
                                        uint64_t primes, uint64_t log_base, uint64_t level,
                                        uint64_t dropped, int centered);
+        // `a` moved up into this ring, see arith_scaled_lift.
+        ArithStatus (*scaled_lift)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                   ArithRing from);
 
         // scalars
         ArithStatus (*scalar_new)(ArithRing ring, const uint64_t *per_component, ArithScalar *out);
@@ -274,6 +277,14 @@ extern "C"
     ArithStatus arith_decompose_digit(ArithRing ring, ArithElement *out, const ArithElement *a,
                                       uint64_t primes, uint64_t log_base, uint64_t level,
                                       uint64_t dropped, int centered);
+    // `a`, an element of the ring `from`, times the product Q' of the primes
+    // this ring holds and `from` lacks, as an element of this ring, which
+    // holds every prime of `from`. With Q the modulus of `from`, x -> Q'x is
+    // a well-defined map from Z_Q into Z_(QQ'), so the result is exact: the
+    // residues at the primes of `from` scaled by Q', zero at the others.
+    // `out` is in `a`'s domain.
+    ArithStatus arith_scaled_lift(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  ArithRing from);
 
     // --- the generic interface as the only path -----------------------------
     //

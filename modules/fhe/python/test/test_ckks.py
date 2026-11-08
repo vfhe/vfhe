@@ -325,6 +325,79 @@ def test_rational_rescale_disjoint_primes():
     assert all(abs(v - d) < 0.05 for v, d in zip(values, dec, strict=False))
 
 
+def _rescale_chain(chain):
+    """A scheme without special primes over the two-level chain ``chain``."""
+    if chain == "nested_one_prime":
+        rings = Ring(N, split_degree=1, prime_size=[50, 45, 45])
+    elif chain == "nested_non_last_primes":
+        Rq = Ring(N, split_degree=1, prime_size=[45, 46, 47, 48])
+        rings = [_subring(Rq, 0, 1, 2, 3), _subring(Rq, 1, 3)]
+    elif chain == "shared_primes":
+        Rq = Ring(N, split_degree=1, prime_size=[50, 50, 45, 42])
+        rings = [_subring(Rq, 0, 1, 2), _subring(Rq, 0, 1, 3)]
+    else:
+        Rq = Ring(N, split_degree=1, prime_size=[48, 48, 44])
+        rings = [_subring(Rq, 0, 1), _subring(Rq, 2)]
+    return CKKS_Scheme(rings, scaling_factor=2**40, special_primes=0)
+
+
+def _rounded_rescale(coeffs, ring, next_ring):
+    """``round(P_l * c / q_drop)`` of each coefficient, centered mod ``q_{l+1}``."""
+    gained = math.prod(p for p in next_ring.primes if p not in ring.primes)
+    dropped = math.prod(p for p in ring.primes if p not in next_ring.primes)
+    q_next = math.prod(next_ring.primes)
+    out = []
+    for c in coeffs:
+        x = gained * c
+        r = x % dropped
+        if r > dropped // 2:
+            r -= dropped
+        assert 2 * abs(r) <= dropped - 1
+        v = ((x - r) // dropped) % q_next
+        out.append(v - q_next if v > q_next // 2 else v)
+    return out
+
+
+def _components(ct):
+    return [
+        ct.get_a_poly(0).get_polynomial(signed=True),
+        ct.get_b_poly().get_polynomial(signed=True),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("chain", "nested"),
+    [
+        ("nested_one_prime", True),
+        ("nested_non_last_primes", True),
+        ("shared_primes", False),
+        ("disjoint_primes", False),
+    ],
+)
+def test_rescale_rounds_each_component_to_the_nearest_integer(chain, nested):
+    scheme = _rescale_chain(chain)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ct = scheme.encrypt(scheme.encode(rand_values(N // 2)), key)
+    ring, next_ring = ct.ring, scheme.rings[1]
+    assert next_ring.is_quotient_ring(ring) == nested
+    expected = [_rounded_rescale(c, ring, next_ring) for c in _components(ct)]
+    rescaled = scheme.rescale(ct)
+    assert rescaled.lvl == 1 and rescaled.ring.primes == next_ring.primes
+    assert _components(rescaled) == expected
+
+
+def test_rational_rescale_batch_rounds_each_component_to_the_nearest_integer():
+    scheme = _rescale_chain("disjoint_primes")
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    cts = [scheme.encrypt(scheme.encode(rand_values(N // 2)), key) for _ in range(2)]
+    ring, next_ring = cts[0].ring, scheme.rings[1]
+    expected = [
+        [_rounded_rescale(c, ring, next_ring) for c in _components(ct)] for ct in cts
+    ]
+    rescaled = scheme.rational_rescale_batch(cts)
+    assert [_components(ct) for ct in rescaled] == expected
+
+
 def test_rational_rescale_from_residue_selection():
     # Derive the RNS prime chain from a target scaling-factor chain, then rescale
     # once through the selected residues (no special prime here, so no

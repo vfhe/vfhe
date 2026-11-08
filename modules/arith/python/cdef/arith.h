@@ -70,6 +70,7 @@ int arith_to_canonical(void *ring, ArithElement *element);
 int arith_round_division_approximate(void *ring, ArithElement *element, void *to);
 int arith_decompose_digit(void *ring, ArithElement *out, ArithElement *a, uint64_t primes,
                           uint64_t log_base, uint64_t level, uint64_t dropped, int centered);
+int arith_scaled_lift(void *ring, ArithElement *out, ArithElement *a, void *from);
 void arith_set_generic_only(int enabled);
 int arith_generic_only(void);
 void *arith_rns_ring_get(uint64_t N, uint64_t rns_mask, void *base);
@@ -497,6 +498,7 @@ typedef enum
     ARITH_TRACE_MOD_REDUCE_LIFTED,
     ARITH_TRACE_ROUND_DIVISION_APPROXIMATE,
     ARITH_TRACE_DECOMPOSE_DIGIT,
+    ARITH_TRACE_SCALED_LIFT,
     ARITH_TRACE_MARK,
 } ArithTraceKind;
 typedef struct

@@ -313,8 +313,18 @@ class CKKS_Scheme(MLWE_Scheme):
 
         Levels start at 0 and grow as primes are consumed, so a rescale
         increments ``lvl``. The destination ring is taken from ``self.rings``.
-        Only the case where the next level is a quotient of the current ring is
-        handled here; non-nested moduli need ``rational_rescale``.
+        When the next level's ring is not a quotient of the current one, this
+        is :meth:`rational_rescale`.
+
+        Each component ``c`` becomes ``round(c / q_drop)`` modulo the next
+        level's modulus, where ``q_drop`` is the product of the primes the
+        next level drops and the rounding is to the nearest integer. In
+        other words, the result is ``(c - r) / q_drop``, with ``r`` the
+        centered residue of ``c`` modulo ``q_drop``, so
+        ``|r| <= (q_drop - 1)/2``. For example, with ``q_drop = 7``,
+        ``c = 10`` becomes 1 and ``c = 11`` becomes 2. The primes are divided
+        one at a time, each after adding half of it; for odd primes this
+        gives the same rounding whatever their order.
         """
         lvl = ciphertext.lvl
         next_lvl = lvl + 1
@@ -439,8 +449,18 @@ class CKKS_Scheme(MLWE_Scheme):
     def rational_rescale(
         self, ct: CKKS_Ciphertext, n_threads: int = 0
     ) -> CKKS_Ciphertext:
-        """
-        Rescale from level (lvl) to (lvl+1) as planned in the residue system.
+        """Rescale from level ``lvl`` to ``lvl + 1`` when the next level's
+        ring is not a quotient of this one.
+
+        Each component ``c`` is lifted into the ring holding both levels'
+        primes as ``P_l * c``, where ``P_l`` is the product of the primes the
+        next level adds. That value is divided as in :meth:`rescale` by
+        ``q_drop``, the product of this level's primes that the next level
+        lacks. The result is ``round(P_l * c / q_drop)`` modulo the next
+        level's modulus, that is ``(P_l * c - r) / q_drop`` with ``r`` the
+        centered residue of ``P_l * c`` modulo ``q_drop``
+        (``|r| <= (q_drop - 1)/2``). The scaling factor is multiplied by
+        ``P_l / q_drop``.
 
         Returns a new ciphertext, and leaves ``ct`` in the coefficient domain.
         """
@@ -470,9 +490,15 @@ class CKKS_Scheme(MLWE_Scheme):
         for ct in cts:
             ct.to_coeff()
             res = ct.new_like(lvl=-1, ring=union_ring)
-            for i in range(self.r):
-                lib.polynomial_RNSc_scaled_lift(res.obj_a_i(i), ct.obj_a_i(i), ffi.NULL)
-            lib.polynomial_RNSc_scaled_lift(res.obj_b(), ct.obj_b(), ffi.NULL)
+            source, target = ffi.cast("MLWE", ct.obj), ffi.cast("MLWE", res.obj)
+            pairs = [(target.a[i], source.a[i]) for i in range(self.r)]
+            for out, component in [*pairs, (target.b, source.b)]:
+                lib.arith_scaled_lift(
+                    union_ring.arith_ring,
+                    ffi.addressof(out),
+                    ffi.addressof(component),
+                    start_ring.arith_ring,
+                )
             res.repr = repr.coeff
             lifted.append(res)
         self.round_division_batch(lifted, level + 1, n_threads)

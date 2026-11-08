@@ -58,6 +58,8 @@ ArithStatus arith_rns_decompose_digit(ArithRing ring, ArithElement *out, const A
                                       uint64_t dropped, int centered);
 ArithStatus arith_rns_mod_reduce_lifted(ArithRing ring, ArithElement *out, const ArithElement *a,
                                         ArithRing from);
+ArithStatus arith_rns_scaled_lift(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  ArithRing from);
 ArithStatus arith_rns_scalar_new(ArithRing ring, const uint64_t *per_component, ArithScalar *out);
 void arith_rns_scalar_free(ArithRing ring, ArithScalar *scalar);
 

@@ -3,21 +3,33 @@
 """The computation a trace recorded, read into its steps in vfhe's own
 terms, with the recorded values.
 
-A multiplication is a ``MLWE_Scheme.multiply`` operation with a key: the
-tensor product of the two operands, the key switch (the digits of the
-quadratic slot, their products with the key's components, the division by
-the special primes when the key has them, and the slot added to each
-component), and the rescales applied to the output afterwards. A rescale
-is a round division of a ciphertext component by the level's prime.
+A tensor product is the extended product of two ciphertexts, written by
+``MLWE_Scheme.multiply``, ``multiply_batch`` or ``tensor_product``. A key
+switch is read wherever the tape holds one (in a multiplication, a
+relinearization, a key switch of a ciphertext): the digits of one
+decomposed value, their products with the key's components accumulated
+into each output component, the division by the special primes when the
+key has them, and the value added to each component, if any. A
+multiplication is a tensor product whose quadratic slot a key switch
+decomposes and whose other slots it adds, with the rescales applied to its
+output afterwards; a key switch that completes no tensor product, such as
+the relinearization of a sum of extended products, is a step of its own,
+and so is a tensor product no key switch completes. A rescale is a round
+division of a ciphertext component by the primes the next level drops; a
+rescale between levels that are not nested divides a lift of the
+component into a ring holding both levels' primes, and the rescale is read
+from the component before the lift.
 
 A plaintext-linear step is a ciphertext computed as
 ``sum_j sign_j * plaintext_j * ciphertext_j``, read from products by a
 plaintext (``MLWE.multiply_poly``), linear combinations
 (``MLWE_Scheme.linear_combinations``, with or without a `PlaintextMatrix`)
 and additions and subtractions of ciphertexts; a ciphertext added as is
-is a term without a plaintext. Additions are followed back: the terms of
-a step are ciphertexts that no plaintext-linear step wrote, and a sum
-that is only added into other sums is not a step of its own.
+is a term without a plaintext. The ciphertexts may have any number of
+components, such as the three of an extended product. Additions are
+followed back: the terms of a step are ciphertexts that no plaintext-linear
+step wrote, and a sum that is only added into other sums is not a step of
+its own.
 
 Each step carries its ``layer``, the number of multiplications on the
 longest chain from the computation's inputs to the step's operands, and
@@ -30,16 +42,15 @@ its ``ell``, the number of primes of the ring it computes over.
 
 What an arithmetization makes of these steps, which values it names and
 the relations it asks of them, is `vfhe.vfhe.witness`'s. Rank 1 only: a
-product of another rank is refused, one without a key is left out.
-Operations of other kinds (automorphisms, key switches outside a
-multiplication, additions of a plaintext) are not read, and
-`Computation.unread` names them.
+product of another rank is refused. Operations of other kinds
+(automorphisms, additions of a plaintext, key switches sharing one
+decomposition) are not read, and `Computation.unread` names them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import prod
+from math import gcd, prod
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import Polynomial
@@ -55,11 +66,18 @@ __all__ = [
     "KeySwitch",
     "Linear",
     "Multiplication",
+    "Tensor",
     "Term",
 ]
 
-#: The operation a multiplication is read from.
-PRODUCT = "MLWE_Scheme.multiply"
+#: The operations tensor products are read from.
+PRODUCTS = frozenset(
+    {
+        "MLWE_Scheme.multiply",
+        "MLWE_Scheme.multiply_batch",
+        "MLWE_Scheme.tensor_product",
+    }
+)
 
 #: The operations plaintext-linear steps are read from, with the sign each
 #: gives its second operand.
@@ -70,8 +88,7 @@ LINEAR = {
     "MLWE.sub_MLWE": -1,
 }
 
-#: Event kinds of operations that are not read. Outside a multiplication,
-#: an operation holding one is not read as plaintext-linear either.
+#: Event kinds of operations that are not read as plaintext-linear.
 FOREIGN = frozenset({"permute", "decompose_digit"})
 
 #: Event kinds that place or move values rather than compute them.
@@ -81,12 +98,20 @@ BOOKKEEPING = frozenset({"input", "copy", "zero", "mark"})
 @dataclass
 class Division:
     """A rounded division of ``x`` by ``primes``: ``quotient`` is the value
-    on the tape, over the ring without those primes, and ``remainder`` what
-    the quotient leaves, ``x - quotient * P`` computed in that ring, where it
-    is exact. ``exact`` tells a rescale, which rounds exactly, from the
-    division by a key's special primes, which goes through the fast base
-    conversion and may leave a remainder of several multiples of ``P``.
-    ``ell`` is the number of primes of ``x``'s ring."""
+    on the tape, over the ring without those primes, and ``remainder`` is
+    ``x - P * quotient`` over ``x``'s ring, with ``P`` the product of
+    ``primes``. ``x``'s modulus is ``P`` times the quotient's, so the
+    remainder is exact: its centered coefficients are the integers ``r``
+    with ``x = P * quotient + r``. ``exact`` tells a rescale, which rounds
+    to the nearest integer (``|r| <= (P - 1)/2``), from the division by a
+    key's special primes, which goes through the fast base conversion and
+    may leave a remainder of several multiples of ``P``.
+
+    ``source`` is the value the division was applied to: ``x`` itself, or,
+    for a rescale between levels that are not nested, the component before
+    its lift, with ``x = lift * source`` (``lift`` the product of the
+    primes the lift adds; 1 without one). ``source_version`` is its
+    version. ``ell`` is the number of primes of ``x``'s ring."""
 
     event: Event
     x: Any
@@ -94,18 +119,43 @@ class Division:
     quotient: Any
     remainder: Any
     exact: bool
+    source: Any = None
+    source_version: int = 0
+    lift: int = 1
     layer: int = 0
     ell: int = 0
 
     @classmethod
-    def of(cls, event: Event, x: Any, exact: bool) -> Division:
+    def of(
+        cls,
+        event: Event,
+        x: Any,
+        exact: bool,
+        source: Any = None,
+        source_version: int = 0,
+    ) -> Division:
         primes = tuple(p for p in x.ring.primes if p not in event.ring.primes)
-        P = prod(primes)
         quotient = event.value
-        remainder = x.mod_reduce(quotient.ring) - quotient * [
-            P % p for p in quotient.ring.primes
-        ]
-        return cls(event, x, primes, quotient, remainder, exact, ell=len(x.ring.primes))
+        # P * quotient over x's ring: the quotient's residues scaled by P at
+        # its own primes, zero at the primes divided by.
+        remainder = x - quotient.scaled_lift(x.ring)
+        if source is None:
+            source = x
+            lift = 1
+        else:
+            lift = prod(p for p in x.ring.primes if p not in source.ring.primes)
+        return cls(
+            event,
+            x,
+            primes,
+            quotient,
+            remainder,
+            exact,
+            source=source,
+            source_version=source_version,
+            lift=lift,
+            ell=len(x.ring.primes),
+        )
 
     @property
     def modulus(self) -> int:
@@ -115,13 +165,18 @@ class Division:
 
 @dataclass
 class KeySwitch:
-    """The key switch of a multiplication: ``digits[t]`` is the digit of
-    ``quadratic`` at ``primes[t]``, ``key[t][i]`` the key component it
+    """A key switch: ``digits[t]`` is digit ``t`` of ``quadratic``, the
+    value decomposed (a product's quadratic slot, or the mask of a
+    ciphertext), and ``digit_events[t]`` the event that wrote it, which
+    holds how it was taken (see `power` and `bound`); ``primes[t]`` is the
+    first prime of its residue. ``key[t][i]`` is the key component it
     multiplies into accumulator ``i``, ``sums[i]`` the accumulated products
     (subtracted, as vfhe computes them), ``mod_down[i]`` their division by
     the special primes (none for a key without them), ``slots[i]`` the
-    tensor slot added to component ``i``, ``output[i]`` the result and
-    ``output_events[i]`` the event that wrote it."""
+    value added to component ``i`` (None when nothing is), ``output[i]``
+    the result and ``output_events[i]`` the event that wrote it.
+    ``versions`` are the versions of ``quadratic`` and of the slots (0 for
+    a missing one)."""
 
     quadratic: Any
     digits: list[Any]
@@ -132,6 +187,49 @@ class KeySwitch:
     slots: list[Any]
     output: list[Any]
     output_events: list[Event]
+    digit_events: list[Event] = field(default_factory=list)
+    versions: list[int] = field(default_factory=list)
+    layer: int = 0
+    ell: int = 0
+
+    def power(self, t: int) -> int:
+        """The power of two digit ``t`` stands for in its residue:
+        ``2^(log_base * level)`` for a radix digit, 1 for a residue."""
+        e = self.digit_events[t]
+        return 1 << (e.log_base * e.level)
+
+    def bound(self, t: int) -> float:
+        """The largest absolute value digit ``t`` can take. A centered
+        residue at one prime ``p`` is within ``p/2``; the fast base
+        conversion of the residue at a group of primes with product ``Q``
+        within ``k*Q/2`` for ``k`` primes, centered, or below ``k*Q``.
+        A balanced radix digit is in ``[-2^(w-1), 2^(w-1)]``, the top one
+        included, and an unsigned one below ``2^w``."""
+        e = self.digit_events[t]
+        if e.log_base:
+            return float(1 << (e.log_base - 1)) if e.centered else (1 << e.log_base) - 1
+        modulus = prod(e.primes)
+        if len(e.primes) == 1:
+            return modulus / 2 if e.centered else modulus - 1
+        return len(e.primes) * modulus / (2 if e.centered else 1)
+
+
+@dataclass
+class Tensor:
+    """The extended product of two ciphertexts: ``operands[k]`` is operand
+    ``k`` as ``[mask, body]`` and ``versions[k]`` their versions;
+    ``constant``, ``linear`` and ``quadratic`` the slots by their degree in
+    the secret, ``slot_versions`` their versions in that order."""
+
+    operation: Operation
+    operands: list[list[Any]]
+    constant: Any
+    linear: Any
+    quadratic: Any
+    versions: list[list[int]] = field(default_factory=list)
+    slot_versions: list[int] = field(default_factory=list)
+    layer: int = 0
+    ell: int = 0
 
 
 @dataclass
@@ -139,8 +237,10 @@ class Multiplication:
     """One multiplication: ``operands[k]`` is operand ``k`` as
     ``[mask, body]`` and ``versions[k]`` their versions; ``constant``,
     ``linear`` and ``quadratic`` the tensor slots by their degree in the
-    secret; ``rescales`` the round divisions of the output, in tape order,
-    when the scheme rescaled it."""
+    secret, ``key_switch`` the key switch that decomposes the quadratic slot
+    and adds the other two; ``rescales`` the round divisions of the output,
+    in tape order, when it was rescaled. ``operation`` is the one that
+    wrote the tensor product."""
 
     operation: Operation
     operands: list[list[Any]]
@@ -157,8 +257,8 @@ class Multiplication:
 @dataclass
 class Term:
     """``sign * plaintext * ciphertext``, ``plaintext`` None for a
-    ciphertext added as is. ``ciphertext`` is ``[mask, body]``; the
-    versions are the plaintext's and the ciphertext's components'."""
+    ciphertext added as is. ``ciphertext`` is the list of its components,
+    the body last; the versions are the plaintext's and the components'."""
 
     plaintext: Any | None
     ciphertext: list[Any]
@@ -169,7 +269,7 @@ class Term:
 
 @dataclass
 class Linear:
-    """A plaintext-linear step: ``output``, as ``[mask, body]`` with
+    """A plaintext-linear step: ``output``, its components with
     ``versions``, is the sum of ``terms``. ``operation`` is the one that
     wrote the output; the terms may come from earlier ones, whose sums it
     adds."""
@@ -193,13 +293,17 @@ class _Sum:
     versions: tuple[int, ...]
 
 
+Step = Multiplication | Tensor | KeySwitch | Division | Linear
+
+
 class Computation:
-    """The multiplications, the rescales and the plaintext-linear steps
-    among ``operations``, the outermost operations of a trace. ``values``
-    holds every recorded value by sequence number, zeros and copies
-    materialized; ``origin`` names, for each event, the event whose value it
-    holds (copies collapsed); ``inputs`` are the versions the computation
-    did not compute, recorded as inputs or given as known.
+    """The multiplications, the tensor products and key switches that are
+    not part of one, the rescales and the plaintext-linear steps among
+    ``operations``, the outermost operations of a trace. ``values`` holds
+    every recorded value by sequence number, zeros and copies materialized;
+    ``origin`` names, for each event, the event whose value it holds (copies
+    collapsed); ``inputs`` are the versions the computation did not compute,
+    recorded as inputs or given as known.
 
     A tape read in pieces refers back: a value recorded in an earlier piece
     (a key, seen once) is not recorded again, so the reader of a later piece
@@ -215,65 +319,100 @@ class Computation:
             (e for op in self.operations for e in op.all_events() if e.kind != "mark"),
             key=lambda e: e.sequence,
         )
+        self._events = {e.sequence: e for e in events}
         self.values: dict[int, Any] = dict(known or {})
         self.origin: dict[int, int] = {s: s for s in self.values}
         self.inputs = set(self.values)
         for e in events:
             self.origin[e.sequence] = e.sequence
             if e.kind == "copy":
-                self.origin[e.sequence] = self.origin[e.inputs[0]]
                 self.values[e.sequence] = self.value(e.inputs[0])
+                self.origin[e.sequence] = self.origin[e.inputs[0]]
             elif e.kind == "zero":
                 self.values[e.sequence] = Polynomial(e.ring).from_array([0])
             elif e.value is not None:
                 self.values[e.sequence] = e.value
             if e.kind == "input":
                 self.inputs.add(e.sequence)
-        self.multiplications: list[Multiplication] = []
+        self._read: set[int] = set()
+        tensors: list[Tensor] = []
+        switches: list[KeySwitch] = []
         for op in self.operations:
             for inner in op.walk():
-                if inner.name == PRODUCT:
-                    multiplication = self._multiplication(inner)
-                    if multiplication is not None:
-                        self.multiplications.append(multiplication)
+                found = self._key_switches(inner)
+                if inner.name in PRODUCTS:
+                    if found is None:
+                        raise ValueError("only products of rank 1 are read")
+                    products = self._tensors(inner)
+                    if found and len(found) != len(products):
+                        raise ValueError("only products of rank 1 are read")
+                    tensors += products
+                switches += found or []
+        #: The multiplications: tensor products completed by a key switch.
+        self.multiplications: list[Multiplication] = []
+        #: The key switches that complete no tensor product, in tape order.
+        self.key_switches: list[KeySwitch] = []
+        by_quadratic = {t.slot_versions[2]: t for t in tensors}
+        completed: set[int] = set()
+        for switch in switches:
+            tensor = by_quadratic.get(switch.versions[0])
+            if (
+                tensor is not None
+                and switch.versions[1:] == tensor.slot_versions[1::-1]
+            ):
+                completed.add(id(tensor))
+                self.multiplications.append(
+                    Multiplication(
+                        tensor.operation,
+                        tensor.operands,
+                        tensor.constant,
+                        tensor.linear,
+                        tensor.quadratic,
+                        switch,
+                        versions=tensor.versions,
+                        ell=tensor.ell,
+                    )
+                )
+            else:
+                self.key_switches.append(switch)
+        #: The tensor products no key switch completes, in tape order.
+        self.tensors = [t for t in tensors if id(t) not in completed]
         #: Every rescale on the tape, whether or not a multiplication owns it.
-        self.rescales = [
-            Division.of(e, self.value(e.inputs[0]), exact=True)
-            for e in events
-            if e.kind == "round_division"
-        ]
-        written_by = {
+        self.rescales = [self._rescale(e) for e in events if e.kind == "round_division"]
+        written_by: dict[int, Multiplication | KeySwitch | Tensor] = {
             self.origin[e.sequence]: m
             for m in self.multiplications
             for e in m.key_switch.output_events
         }
+        written_by |= {
+            self.origin[e.sequence]: s
+            for s in self.key_switches
+            for e in s.output_events
+        }
+        written_by |= {v: t for t in self.tensors for v in t.slot_versions}
         for rescale in self.rescales:
-            owner = written_by.get(self.origin[rescale.event.inputs[0]])
-            if owner is not None:
+            owner = written_by.get(self._origin(rescale.source_version))
+            if isinstance(owner, Multiplication):
                 owner.rescales.append(rescale)
         sums: list[_Sum] = []
         for op in self.operations:
             sums += self._sums(op)
         #: The plaintext-linear steps, in tape order.
         self.linears = self._linears(sums, events)
-        self._writers: dict[int, Multiplication | Division | Linear] = {
+        self._writers: dict[int, Step] = {
             **written_by,
             **{r.event.sequence: r for r in self.rescales},
             **{v: step for step in self.linears for v in step.versions},
         }
         self._layers(events)
-        read = {
-            e.sequence for m in self.multiplications for e in m.operation.all_events()
-        }
-        read |= {e.sequence for s in sums for e in s.events}
-        read |= {r.event.sequence for r in self.rescales}
+        self._read |= {e.sequence for s in sums for e in s.events}
         #: The paths of the operations holding events no step read, such as
         #: automorphisms or additions of a plaintext, in tape order.
         self.unread: list[str] = []
         for op in self.operations:
             for inner in op.walk():
                 if inner.path not in self.unread and any(
-                    e.kind not in BOOKKEEPING and e.sequence not in read
+                    e.kind not in BOOKKEEPING and e.sequence not in self._read
                     for e in inner.events
                 ):
                     self.unread.append(inner.path)
@@ -288,97 +427,182 @@ class Computation:
                 "pass the earlier values as known"
             ) from None
 
-    def written_by(self, sequence: int) -> Multiplication | Division | Linear | None:
-        """The step that wrote version ``sequence``: the multiplication of a
-        key switch's output, the rescale of a quotient, the plaintext-linear
-        step of a sum. None for a value no step wrote, such as an input of
-        the computation."""
+    def written_by(self, sequence: int) -> Step | None:
+        """The step that wrote version ``sequence``: the multiplication or
+        key switch of a key switch's output, the tensor product of an
+        extended product's slot, the rescale of a quotient, the
+        plaintext-linear step of a sum. None for a value no step wrote,
+        such as an input of the computation."""
         return self._writers.get(self.origin.get(sequence, sequence))
 
-    def _multiplication(self, operation: Operation) -> Multiplication | None:
-        events = [e for e in operation.all_events() if e.kind != "mark"]
-        by_kind: dict[str, list[Event]] = {}
+    def _origin(self, sequence: int) -> int:
+        return self.origin.get(sequence, sequence)
+
+    def _rescale(self, event: Event) -> Division:
+        """The rescale ``event`` computes, read from before the lift when the
+        divided value is one."""
+        self._read.add(event.sequence)
+        x_version = self._origin(event.inputs[0])
+        lift = self._events.get(x_version)
+        if lift is not None and lift.kind == "scaled_lift":
+            self._read.add(lift.sequence)
+            (source,) = lift.inputs
+            return Division.of(
+                event,
+                self.value(x_version),
+                exact=True,
+                source=self.value(source),
+                source_version=self._origin(source),
+            )
+        return Division.of(
+            event, self.value(x_version), exact=True, source_version=x_version
+        )
+
+    def _tensors(self, operation: Operation) -> list[Tensor]:
+        """The tensor products among ``operation``'s own events: the partial
+        product ``a0 * b1`` accumulated with ``b0 * a1`` into the linear
+        slot, next to ``a0 * a1`` and ``b0 * b1``."""
+        products = [e for e in operation.events if e.kind == "mul"]
+        written = {e.sequence: e for e in products}
+        found = []
+        for linear in operation.events:
+            if linear.kind != "mul_addto" or linear.inputs[0] not in written:
+                continue
+            partial = written[linear.inputs[0]]
+            (a0, b1), (_, b0, a1) = partial.inputs, linear.inputs
+            # The nearest such products: a batch may hold the same product
+            # twice.
+            before = [e for e in products if e.sequence < partial.sequence]
+            after = [e for e in products if e.sequence > linear.sequence]
+            quadratic = next(
+                (e for e in reversed(before) if e.inputs == (a0, a1)), None
+            )
+            constant = next((e for e in after if e.inputs == (b0, b1)), None)
+            if quadratic is None or constant is None:
+                continue
+            self._read |= {e.sequence for e in (partial, linear, quadratic, constant)}
+            values, origin = self.value, self._origin
+            found.append(
+                Tensor(
+                    operation,
+                    [[values(a0), values(b0)], [values(a1), values(b1)]],
+                    constant.value,
+                    linear.value,
+                    quadratic.value,
+                    versions=[[origin(a0), origin(b0)], [origin(a1), origin(b1)]],
+                    slot_versions=[
+                        constant.sequence,
+                        linear.sequence,
+                        quadratic.sequence,
+                    ],
+                    ell=len(quadratic.ring.primes),
+                )
+            )
+        return found
+
+    def _key_switches(self, operation: Operation) -> list[KeySwitch] | None:
+        """The key switches among ``operation``'s own events, or None when
+        its digits do not form rank-1 key switches (two accumulators per
+        decomposed value, each taking every digit once)."""
+        events = operation.events
+        digits: dict[int, list[Event]] = {}
         for e in events:
-            by_kind.setdefault(e.kind, []).append(e)
-        digits = by_kind.get("decompose_digit", [])
+            if e.kind == "decompose_digit":
+                digits.setdefault(self._origin(e.inputs[0]), []).append(e)
         if not digits:
-            return None  # no key: the extended product is handed back
-        decomposed = {self.origin[e.inputs[0]] for e in digits}
-        accumulators = by_kind.get("zero", [])
-        products = by_kind.get("mul", [])
-        if len(decomposed) != 1 or len(accumulators) != 2 or len(products) != 3:
-            raise ValueError("only products of rank 1 are read")
-        values = self.value
-        # The quadratic slot is the one the digits decompose, the linear slot
-        # the accumulated cross products, the constant slot the remaining
-        # product. The partial product of the linear slot pairs the first
-        # mask with the other operand's body, which tells the operands apart.
-        (quadratic_sequence,) = decomposed
-        (linear_event,) = by_kind["mul_addto"]
-        (quadratic_event,) = [e for e in products if e.sequence == quadratic_sequence]
-        (partial,) = [e for e in products if e.sequence == linear_event.inputs[0]]
-        (constant_event,) = [e for e in products if e not in (quadratic_event, partial)]
-        masks, bodies = quadratic_event.inputs, constant_event.inputs
-        p, q = partial.inputs
-        a0, b1 = (p, q) if p in masks else (q, p)
-        a1 = masks[1] if masks[0] == a0 else masks[0]
-        b0 = bodies[1] if bodies[0] == b1 else bodies[0]
-        slots = {
-            quadratic_sequence: values(quadratic_sequence),
-            linear_event.sequence: linear_event.value,
-            constant_event.sequence: constant_event.value,
+            return []
+        digit_of = {e.sequence: x for x, ds in digits.items() for e in ds}
+        zeros = {e.sequence for e in events if e.kind == "zero"}
+        root: dict[int, int] = {}
+        chains: dict[int, list[Event]] = {}
+        for e in events:
+            if e.kind != "mul_subto" or self._origin(e.inputs[1]) not in digit_of:
+                continue
+            start = e.inputs[0] if e.inputs[0] in zeros else root.get(e.inputs[0])
+            if start is None:
+                return None
+            root[e.sequence] = start
+            chains.setdefault(start, []).append(e)
+        by_value: dict[int, list[int]] = {}
+        for start, chain in chains.items():
+            by_value.setdefault(digit_of[self._origin(chain[0].inputs[1])], []).append(
+                start
+            )
+        divided = {
+            e.inputs[0]: e for e in events if e.kind == "round_division_approximate"
         }
-        # Each accumulator's chain, digit by digit, then its division by the
-        # special primes and the addition of its slot.
-        chain = {e.sequence: i for i, e in enumerate(accumulators)}
-        digit_index = {e.sequence: t for t, e in enumerate(digits)}
+        adds = [e for e in events if e.kind == "add"]
+        shapes = []
+        for x, ds in digits.items():
+            starts = sorted(by_value.get(x, []))
+            order = [d.sequence for d in ds]
+            if len(starts) != 2 or any(
+                [self._origin(e.inputs[1]) for e in chains[s]] != order for s in starts
+            ):
+                return None
+            shapes.append((x, ds, [chains[s] for s in starts]))
+        found = [
+            self._key_switch(x, ds, chains_of, divided, adds)
+            for x, ds, chains_of in shapes
+        ]
+        found.sort(key=lambda s: s.output_events[-1].sequence)
+        return found
+
+    def _key_switch(
+        self,
+        x: int,
+        digits: list[Event],
+        chains: list[list[Event]],
+        divided: dict[int, Event],
+        adds: list[Event],
+    ) -> KeySwitch:
+        values = self.value
         key: list[list[Any]] = [[None, None] for _ in digits]
-        sums: dict[int, Any] = {}
-        mod_down: dict[int, Division] = {}
-        added: dict[int, Any] = {}
-        output: dict[int, Event] = {}
-        for e in by_kind.get("mul_subto", []):
-            i = chain[e.inputs[0]]
-            chain[e.sequence] = i
-            key[digit_index[self.origin[e.inputs[1]]]][i] = values(e.inputs[2])
-            sums[i] = e.value
-        for e in by_kind.get("round_division_approximate", []):
-            i = chain[e.inputs[0]]
-            chain[e.sequence] = i
-            mod_down[i] = Division.of(e, values(e.inputs[0]), exact=False)
-        for e in by_kind.get("add", []):
-            summed = [self.origin[s] for s in e.inputs]
-            (i,) = [chain[s] for s in summed if s in chain]
-            (added[i],) = [slots[s] for s in summed if s in slots]
-            output[i] = e
-        key_switch = KeySwitch(
-            quadratic=values(quadratic_sequence),
+        sums, mod_down, slots, slot_versions, outputs = [], [], [], [], []
+        for i, chain in enumerate(chains):
+            for t, e in enumerate(chain):
+                key[t][i] = values(e.inputs[2])
+            end = chain[-1]
+            sums.append(end.value)
+            self._read |= {e.sequence for e in chain} | {e.inputs[0] for e in chain[:1]}
+            division = divided.get(end.sequence)
+            if division is not None:
+                self._read.add(division.sequence)
+                mod_down.append(Division.of(division, end.value, exact=False))
+                end = division
+            added = [e for e in adds if end.sequence in map(self._origin, e.inputs)]
+            if added:
+                (output,) = added
+                (slot,) = [s for s in output.inputs if self._origin(s) != end.sequence]
+                self._read.add(output.sequence)
+                slots.append(values(slot))
+                slot_versions.append(self._origin(slot))
+            else:
+                output = end
+                slots.append(None)
+                slot_versions.append(0)
+            outputs.append(output)
+        self._read |= {e.sequence for e in digits}
+        return KeySwitch(
+            quadratic=values(x),
             digits=[e.value for e in digits],
             primes=[e.primes[0] for e in digits],
             key=key,
-            sums=[sums[i] for i in range(2)],
-            mod_down=[mod_down[i] for i in range(2) if i in mod_down],
-            slots=[added[i] for i in range(2)],
-            output=[output[i].value for i in range(2)],
-            output_events=[output[i] for i in range(2)],
-        )
-        origin = self.origin
-        return Multiplication(
-            operation,
-            [[values(a0), values(b0)], [values(a1), values(b1)]],
-            constant_event.value,
-            linear_event.value,
-            values(quadratic_sequence),
-            key_switch,
-            versions=[[origin[a0], origin[b0]], [origin[a1], origin[b1]]],
-            ell=len(quadratic_event.ring.primes),
+            sums=sums,
+            mod_down=mod_down,
+            slots=slots,
+            output=[e.value for e in outputs],
+            output_events=outputs,
+            digit_events=list(digits),
+            versions=[x, *slot_versions],
+            ell=len(values(x).ring.primes),
         )
 
     def _sums(self, operation: Operation) -> list[_Sum]:
         """The sums written by the plaintext-linear operations in
-        ``operation``, outside multiplications and operations with foreign
+        ``operation``, outside products and operations with foreign
         events."""
-        if operation.name == PRODUCT or _foreign(operation):
+        if operation.name in PRODUCTS or _foreign(operation):
             return []
         sign = LINEAR.get(operation.name or "")
         if sign is not None:
@@ -388,52 +612,69 @@ class Computation:
             found += self._sums(child)
         return found
 
-    def _term(self, plaintext: int | None, mask: int, body: int, sign: int) -> Term:
-        origin, values = self.origin, self.value
+    def _term(self, plaintext: int | None, components: list[int], sign: int) -> Term:
+        origin, values = self._origin, self.value
         return Term(
             None if plaintext is None else values(plaintext),
-            [values(mask), values(body)],
+            [values(c) for c in components],
             sign,
-            None if plaintext is None else origin[plaintext],
-            [origin[mask], origin[body]],
+            None if plaintext is None else origin(plaintext),
+            [origin(c) for c in components],
         )
 
     def _read_linear(self, operation: Operation, sign: int) -> list[_Sum]:
         # The mlwe kernels write a ciphertext's components one after the
-        # other, mask first, so the events come in pairs: a product by a
+        # other, so a term is a run of events of one kind: a product by a
         # plaintext is (component, plaintext), an accumulation
         # (accumulator, component, plaintext), an addition (left, right).
         events = [e for e in operation.all_events() if e.kind not in ("input", "mark")]
-        if len(events) % 2:
-            raise ValueError("only ciphertexts of rank 1 are read")
+        for e in events:
+            if e.kind not in ("zero", "mul", "mul_addto", "add", "sub"):
+                raise ValueError(f"{operation.name} holds a {e.kind!r}, not read")
+        width = _component_count(operation, events)
+        if width == 0 or len(events) % width:
+            raise ValueError(f"{operation.name}: its ciphertexts are not read")
         found: list[_Sum] = []
-        for mask, body in zip(events[0::2], events[1::2], strict=True):
-            if mask.kind != body.kind:
-                raise ValueError("only ciphertexts of rank 1 are read")
-            versions = (mask.sequence, body.sequence)
-            if mask.kind == "zero":
-                found.append(_Sum(operation, [mask, body], [], versions))
-            elif mask.kind == "mul":
-                term = self._term(mask.inputs[1], mask.inputs[0], body.inputs[0], 1)
-                found.append(_Sum(operation, [mask, body], [term], versions))
-            elif mask.kind == "mul_addto":
-                current = found[-1]
-                if current.versions != (mask.inputs[0], body.inputs[0]):
+        by_output: dict[tuple[int, ...], _Sum] = {}
+        for k in range(0, len(events), width):
+            group = events[k : k + width]
+            kind = group[0].kind
+            if any(e.kind != kind for e in group):
+                raise ValueError(f"{operation.name}: its ciphertexts are not read")
+            versions = tuple(e.sequence for e in group)
+            if kind == "zero":
+                current = _Sum(operation, group, [], versions)
+            elif kind == "mul":
+                if any(e.inputs[1] != group[0].inputs[1] for e in group):
+                    raise ValueError(f"{operation.name}: its ciphertexts are not read")
+                term = self._term(group[0].inputs[1], [e.inputs[0] for e in group], 1)
+                current = _Sum(operation, group, [term], versions)
+            elif kind == "mul_addto":
+                accumulators = tuple(e.inputs[0] for e in group)
+                current = by_output.pop(accumulators, None)  # type: ignore[assignment]
+                if current is None or any(
+                    e.inputs[2] != group[0].inputs[2] for e in group
+                ):
                     raise ValueError("an accumulation does not continue its sum")
-                current.events += [mask, body]
+                current.events += group
                 current.terms.append(
-                    self._term(mask.inputs[2], mask.inputs[1], body.inputs[1], 1)
+                    self._term(group[0].inputs[2], [e.inputs[1] for e in group], 1)
                 )
                 current.versions = versions
-            elif mask.kind in ("add", "sub"):
-                (left, right), (left_body, right_body) = mask.inputs, body.inputs
-                terms = [
-                    self._term(None, left, left_body, 1),
-                    self._term(None, right, right_body, sign),
-                ]
-                found.append(_Sum(operation, [mask, body], terms, versions))
+                by_output[versions] = current
+                continue
             else:
-                raise ValueError(f"{operation.name} holds a {mask.kind!r}, not read")
+                current = _Sum(
+                    operation,
+                    group,
+                    [
+                        self._term(None, [e.inputs[0] for e in group], 1),
+                        self._term(None, [e.inputs[1] for e in group], sign),
+                    ],
+                    versions,
+                )
+            found.append(current)
+            by_output[versions] = current
         return found
 
     def _linears(self, sums: list[_Sum], events: list[Event]) -> list[Linear]:
@@ -445,7 +686,7 @@ class Computation:
         for e in events:
             if e.kind not in BOOKKEEPING:
                 for s in e.inputs:
-                    users.setdefault(self.origin.get(s, s), []).append(e.sequence)
+                    users.setdefault(self._origin(s), []).append(e.sequence)
 
         def added_into(s: _Sum, user: int) -> bool:
             other = owner.get(user)
@@ -473,14 +714,13 @@ class Computation:
             used = [u for v in s.versions for u in users.get(v, [])]
             if used and all(added_into(s, u) for u in used):
                 continue
-            mask, body = s.versions
             linears.append(
                 Linear(
                     s.operation,
                     list(expand(s, 1)),
-                    [self.value(mask), self.value(body)],
-                    [mask, body],
-                    ell=len(self.value(mask).ring.primes),
+                    [self.value(v) for v in s.versions],
+                    list(s.versions),
+                    ell=len(self.value(s.versions[0]).ring.primes),
                 )
             )
         return linears
@@ -488,37 +728,90 @@ class Computation:
     def _layers(self, events: list[Event]) -> None:
         """Sets each step's ``layer``: the multiplications on the longest
         chain from an input to the step's operands. A multiplication's output
-        is one layer above its operands."""
+        is one layer above its operands, and so are the slots of a tensor
+        product."""
         depth: dict[int, int] = {}
-        outputs = {
-            e.sequence: m
+        raises = {
+            e.sequence: m.versions
             for m in self.multiplications
             for e in m.key_switch.output_events
         }
+        raises |= {v: t.versions for t in self.tensors for v in t.slot_versions}
 
         def of(versions: Iterable[int]) -> int:
-            return max(
-                (depth.get(self.origin.get(v, v), 0) for v in versions), default=0
-            )
+            return max((depth.get(self._origin(v), 0) for v in versions), default=0)
 
         for e in events:
             if e.kind == "copy":
                 continue
-            multiplication = outputs.get(e.sequence)
-            if multiplication is not None:
-                multiplication.layer = of(v for k in multiplication.versions for v in k)
-                depth[e.sequence] = multiplication.layer + 1
+            operands = raises.get(e.sequence)
+            if operands is not None:
+                depth[e.sequence] = of(v for k in operands for v in k) + 1
             else:
                 depth[e.sequence] = of(e.inputs)
+        for m in self.multiplications:
+            m.layer = m.key_switch.layer = of(v for k in m.versions for v in k)
+        for t in self.tensors:
+            t.layer = of(v for k in t.versions for v in k)
+        for s in self.key_switches:
+            s.layer = of(v for v in s.versions if v)
         for rescale in self.rescales:
-            rescale.layer = of(rescale.event.inputs)
+            rescale.layer = of([rescale.source_version])
         for linear in self.linears:
             linear.layer = of(v for t in linear.terms for v in t.versions)
 
 
+def _component_count(operation: Operation, events: list[Event]) -> int:
+    """The number of components of the ciphertexts ``operation`` combines.
+    A product by a plaintext or an addition handles one ciphertext, so all
+    its events; a linear combination accumulates one term of a row at a
+    time, so a run of accumulations into distinct sums is one ciphertext,
+    and without any (rows of one term) a run of products by one plaintext
+    of distinct components is, cut where a component comes back."""
+    if operation.name != "MLWE_Scheme.linear_combinations":
+        return len(events)
+    runs: list[int] = []
+    previous: Event | None = None
+    seen: set[int] = set()
+    for e in events:
+        operand = e.inputs[-2] if e.kind in ("mul", "mul_addto") else e.sequence
+        same = (
+            previous is not None
+            and e.kind == previous.kind
+            and e.inputs[-1:] == previous.inputs[-1:]
+            and operand not in seen
+            and not (e.kind == "mul_addto" and e.inputs[0] in seen)
+        )
+        if same:
+            runs[-1] += 1
+        else:
+            runs.append(1)
+            seen = set()
+        seen.add(operand)
+        if e.kind == "mul_addto":
+            seen.add(e.sequence)
+        previous = e
+    accumulations = [
+        n
+        for n, e in zip(runs, _run_starts(events, runs), strict=True)
+        if e.kind == "mul_addto"
+    ]
+    if accumulations:
+        return min(accumulations)
+    return gcd(*runs)
+
+
+def _run_starts(events: list[Event], runs: list[int]) -> list[Event]:
+    starts, k = [], 0
+    for n in runs:
+        starts.append(events[k])
+        k += n
+    return starts
+
+
 def _foreign(operation: Operation) -> bool:
-    """Whether ``operation`` holds a foreign event outside multiplications."""
-    if operation.name == PRODUCT:
+    """Whether ``operation`` holds a foreign event outside products."""
+    if operation.name in PRODUCTS:
         return False
     return any(e.kind in FOREIGN for e in operation.events) or any(
         _foreign(child) for child in operation.children

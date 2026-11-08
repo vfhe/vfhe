@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from vfhe.vfhe.computation import Computation
+from vfhe.vfhe.computation import Computation, KeySwitch, Multiplication, Tensor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping
@@ -82,11 +82,24 @@ class Relation:
 
 class Arithmetization(Protocol):
     """What an arithmetization provides for each step of a computation: a
-    multiplication, or a rescale no multiplication owns."""
+    multiplication, a tensor product or a key switch that is not part of
+    one, or a rescale no multiplication owns."""
 
     def entries(self, step: Any) -> list[Entry]: ...
 
     def relations(self, step: Any) -> list[Relation]: ...
+
+
+def _written(step: Any) -> int:
+    """The version of the value a step wrote last, which orders the steps
+    as the tape does."""
+    if isinstance(step, Multiplication):
+        return step.key_switch.output_events[-1].sequence
+    if isinstance(step, KeySwitch):
+        return step.output_events[-1].sequence
+    if isinstance(step, Tensor):
+        return max(step.slot_versions)
+    return step.event.sequence
 
 
 def _largest(value: Any) -> int:
@@ -108,9 +121,13 @@ class Witness:
         self.arithmetization = arithmetization
         self.view = view
         owned = {id(r) for m in computation.multiplications for r in m.rescales}
-        self.steps: list[Any] = list(computation.multiplications) + [
-            r for r in computation.rescales if id(r) not in owned
+        steps: list[Any] = [
+            *computation.multiplications,
+            *computation.tensors,
+            *computation.key_switches,
+            *(r for r in computation.rescales if id(r) not in owned),
         ]
+        self.steps: list[Any] = sorted(steps, key=_written)
         self.entries: list[Entry] = []
         self.relations: list[Relation] = []
         for step in self.steps:
