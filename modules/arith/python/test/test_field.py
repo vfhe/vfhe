@@ -204,6 +204,17 @@ def test_pow_inverts_for_a_negative_exponent():
         _ = a**True
 
 
+def test_a_composite_modulus_is_rejected():
+    """The field's arithmetic and its transforms assume a prime modulus: a
+    root-of-unity search over a composite one never ends, so the
+    constructor refuses it."""
+    composite = 8388609 * (1 << 24) + 1  # 2^47 + 2^24 + 1, divisible by 5
+    for modulus, degree, w in [(composite, 4, 13), (composite, 1, None), (91, 2, 3)]:
+        with pytest.raises(ValueError, match="not prime"):
+            ExtensionField(modulus, degree, w)
+    ExtensionField(8388637 * (1 << 24) + 1, 4, 3)  # a prime of the same shape
+
+
 def test_frobenius_rejects_a_negative_power():
     field = ExtensionField(PRIME, 4, 3)
     with pytest.raises(ValueError, match="negative"):

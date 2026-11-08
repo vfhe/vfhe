@@ -147,7 +147,10 @@ int field_ext_root_of_unity(uint64_t *out, uint64_t n, uint64_t d, uint64_t w, M
 // goes in tiles.
 #define FIELD_NTT_TILE 32
 
-static void field_ntt_transpose(uint64_t *out, const uint64_t *in, uint64_t rows, uint64_t cols)
+// out[j * stride + i] = in[i * cols + j] for i < rows, j < cols: the
+// transpose of a rows x cols matrix, written with rows `stride` apart.
+static void field_ntt_transpose_strided(uint64_t *out, uint64_t stride, const uint64_t *in,
+                                        uint64_t rows, uint64_t cols)
 {
     // Each tile goes through a local buffer with an odd row stride: both the
     // reads from `in` and the writes to `out` are then whole contiguous runs,
@@ -168,9 +171,14 @@ static void field_ntt_transpose(uint64_t *out, const uint64_t *in, uint64_t rows
                     tile[i - i0][j - j0] = in[i * cols + j];
             for (uint64_t j = j0; j < jmax; j++)
                 for (uint64_t i = i0; i < imax; i++)
-                    out[j * rows + i] = tile[i - i0][j - j0];
+                    out[j * stride + i] = tile[i - i0][j - j0];
         }
     }
+}
+
+static void field_ntt_transpose(uint64_t *out, const uint64_t *in, uint64_t rows, uint64_t cols)
+{
+    field_ntt_transpose_strided(out, rows, in, rows, cols);
 }
 
 void field_ntt_to_interleaved(FieldVector out, const FieldVector in, uint64_t blocks)
@@ -185,6 +193,36 @@ void field_ntt_to_blocks(FieldVector out, const FieldVector in, uint64_t blocks)
     const uint64_t n = in->n / blocks;
     for (uint64_t k = 0; k < in->d; k++)
         field_ntt_transpose(out->coeffs[k], in->coeffs[k], n, blocks);
+}
+
+void field_ntt_zero_padded(FieldVector out, const FieldVector in, uint64_t blocks,
+                           bool in_by_blocks, bool out_by_blocks)
+{
+    const uint64_t k = in->n / blocks;
+    const uint64_t n = out->n / blocks;
+    for (uint64_t c = 0; c < in->d; c++)
+    {
+        uint64_t *plane = out->coeffs[c];
+        const uint64_t *source = in->coeffs[c];
+        if (out_by_blocks)
+        {
+            if (in_by_blocks)
+                for (uint64_t b = 0; b < blocks; b++)
+                    memcpy(plane + b * n, source + b * k, k * sizeof(uint64_t));
+            else
+                field_ntt_transpose_strided(plane, n, source, k, blocks);
+            for (uint64_t b = 0; b < blocks; b++)
+                memset(plane + b * n + k, 0, (n - k) * sizeof(uint64_t));
+        }
+        else
+        {
+            if (in_by_blocks)
+                field_ntt_transpose_strided(plane, blocks, source, blocks, k);
+            else
+                memcpy(plane, source, in->n * sizeof(uint64_t));
+            memset(plane + in->n, 0, (out->n - in->n) * sizeof(uint64_t));
+        }
+    }
 }
 
 uint64_t field_ext_root_subfield_degree(uint64_t n, Modulus mod)

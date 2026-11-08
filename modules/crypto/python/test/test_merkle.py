@@ -161,13 +161,27 @@ class TestFromDigests:
                 packed.root, index, packed.open(index), leaves[index], hash=lambda x: x
             )
 
-    def test_recommits_from_the_buffer_it_kept(self):
-        """`commit()` has no leaf list to walk here, so it must re-read the
-        digests it was given."""
+    def test_recommits_from_the_digests_it_is_given(self):
+        """A tree over packed digests has no leaf list to walk, so it is
+        recommitted with the new digests; the same digests give the same
+        root, and other digests the root a fresh tree over them has."""
         leaves = self.digests(8)
         tree = Merkle.from_digests(b"".join(leaves))
         first = tree.root
-        assert tree.commit() == first
+        assert tree.commit(b"".join(leaves)) == first
+        other = b"".join(self.digests(9)[1:])
+        assert tree.commit(other) == Merkle.from_digests(other).root
+        assert tree.root == Merkle.from_digests(other).root
+
+    def test_recommitting_needs_digests_of_the_same_count(self):
+        tree = Merkle.from_digests(b"".join(self.digests(8)))
+        with pytest.raises(TypeError, match="new digests"):
+            tree.commit()
+        with pytest.raises(ValueError, match="8 digests"):
+            tree.commit(b"".join(self.digests(7)))
+        objects = Merkle(self.digests(8), hash=lambda leaf: leaf)
+        with pytest.raises(TypeError, match="from its leaves"):
+            objects.commit(b"".join(self.digests(8)))
 
     def test_any_bytes_like_buffer_is_accepted(self):
         """The producer hands over a read-only view of a C buffer, not
@@ -181,25 +195,32 @@ class TestFromDigests:
         }
         assert len(roots) == 1
 
-    def test_the_buffer_is_kept_rather_than_copied(self):
-        """Deliberate, and the reason `from_digests` says so: copying a
-        codeword's worth of digests costs more than the tree. The visible
-        consequence is that a mutable buffer stays connected -- `commit()`
-        reads it again."""
+    def test_the_buffer_is_read_once_and_not_kept(self):
+        """The C tree copies the digests while it is built, and the tree
+        holds no reference to the buffer: changing the buffer afterwards
+        changes neither the root nor an opening, and the buffer can be
+        freed."""
+        import gc
+        import weakref
+
         leaves = self.digests(8)
         buffer = bytearray(b"".join(leaves))
         tree = Merkle.from_digests(buffer)
-        first = tree.root
-
+        first, path = tree.root, tree.open(3)
         buffer[0] ^= 0xFF
-        assert tree.commit() != first, "a kept buffer must be re-read"
-        assert tree.root == Merkle.from_digests(bytes(buffer)).root
+        assert tree.root == first
+        assert tree.open(3).siblings == path.siblings
 
-        # `bytes` is what a caller passes to be insulated from that.
-        held = Merkle.from_digests(bytes(buffer))
-        before = held.root
-        buffer[0] ^= 0xFF
-        assert held.commit() == before
+        class _Digests(bytearray):
+            """A bytearray that can be weakly referenced."""
+
+        held = _Digests(b"".join(leaves))
+        alive = weakref.ref(held)
+        tree = Merkle.from_digests(held)
+        del held
+        gc.collect()
+        assert alive() is None
+        assert tree.root == first
 
     def test_a_buffer_that_is_not_whole_digests_is_refused(self):
         for bad in (b"", b"\x00" * 31, b"\x00" * 33):

@@ -186,8 +186,8 @@ class _PseudoMersenneTransforms:
         """The forward transform of `message` zero-padded to the level's
         codeword length. The padding leaves the operand untouched, so the
         transform runs in place on the padded copy."""
-        padding = FieldVector(self.field, self.lengths[level] - len(message))
-        padded = type(message).concat([message, padding])
+        zeros = self.lengths[level] - len(message)
+        padded = type(message).concat([message, FieldVector(self.field, zeros)])
         return self._plans[level].forward(_pmf_vector(padded), in_place=True)
 
     def decode(
@@ -213,8 +213,9 @@ class _BatchedTransforms:
     codeword length is the same batch interleaved (coefficient `i` of base
     message `b` at `i * 2^l + b`). The plan takes and returns its batch in one
     of those two layouts, which one depending on its domain, so `plan.pack`
-    and `plan.unpack` bring the message in and the codewords out: exactly one
-    of the two is a transpose pass, the other nothing, in either domain.
+    (with `zero_padding`) brings the message in and `plan.unpack` the
+    codewords out: exactly one of the two is a transpose pass, the other a
+    copy or nothing, in either domain.
     """
 
     def __init__(self, field: ExtensionField, n: int, domain: str = "auto"):
@@ -245,9 +246,7 @@ class _BatchedTransforms:
         """The base codewords of the `2^level` base messages of `message`,
         end to end."""
         blocks = 1 << level
-        padding = FieldVector(self.field, blocks * self.n - len(message))
-        padded = FieldVector.concat([message, padding])
-        work = self.plan.pack(padded, blocks, layout="interleaved")
+        work = self.plan.pack(message, blocks, layout="interleaved", zero_padding=True)
         self._forward(work, blocks)
         return self.plan.unpack(work, blocks)
 

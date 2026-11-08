@@ -381,6 +381,55 @@ class TestBatchLayout:
         with pytest.raises(ValueError, match="layout"):
             plan.pack(interleaved, blocks, layout="rows")
 
+    @pytest.mark.parametrize(("prime", "w"), FIELDS)
+    @pytest.mark.parametrize(("domain", "n"), [("base", 8), ("extension", 16)])
+    @pytest.mark.parametrize("layout", ["interleaved", "blocks"])
+    @pytest.mark.parametrize("blocks", [1, 3, 4, 40])
+    @pytest.mark.parametrize("given", ["one", "half", "all"])
+    def test_zero_padding_packs_the_padded_batch(
+        self, prime, w, domain, n, layout, blocks, given
+    ):
+        """The first `k` elements of every transform, in either layout, and
+        zeros after them: the same vector as padding each transform with
+        zeros and packing, in either domain. 40 blocks is more than one
+        transpose tile."""
+        field = ExtensionField(prime, 4, w)
+        plan = field.ntt_plan(n, domain=domain)
+        k = {"one": 1, "half": n // 2, "all": n}[given]
+        source = values(field, k * blocks, seed=48)
+        vector = FieldVector(field, source)
+        if layout == "interleaved":
+            padded = source + [field.zero] * ((n - k) * blocks)
+        else:
+            padded = [
+                source[b * k + i] if i < k else field.zero
+                for b in range(blocks)
+                for i in range(n)
+            ]
+        expected = plan.pack(FieldVector(field, padded), blocks, layout=layout)
+        result = plan.pack(vector, blocks, layout=layout, zero_padding=True)
+        assert result is not vector
+        assert len(result) == n * blocks
+        assert result.to_list() == expected.to_list()
+        dest = FieldVector(field, n * blocks)
+        assert plan.pack(vector, blocks, dest, layout, zero_padding=True) is dest
+        assert dest.to_list() == expected.to_list()
+
+    def test_zero_padding_refuses_a_batch_that_does_not_fit(self):
+        field = ExtensionField(FUSED_PRIME, 4, FUSED_W)
+        plan = field.ntt_plan(8, domain="base")
+        with pytest.raises(ValueError, match="first elements"):
+            plan.pack(FieldVector(field, 7), 2, zero_padding=True)
+        with pytest.raises(ValueError, match="first elements"):
+            plan.pack(FieldVector(field, 18), 2, zero_padding=True)
+        with pytest.raises(ValueError, match="blocks"):
+            plan.pack(FieldVector(field, 8), 0, zero_padding=True)
+        with pytest.raises(ValueError, match="layout"):
+            plan.pack(FieldVector(field, 8), 1, layout="rows", zero_padding=True)
+        vector = FieldVector(field, 16)
+        with pytest.raises(ValueError, match="into its input"):
+            plan.pack(vector, 2, out=vector, zero_padding=True)
+
     def test_a_packed_batch_transforms_to_the_same_thing(self):
         """The round trip that makes the pair worth having: hold the batch by
         blocks, pack, transform, unpack, and each block is transformed."""

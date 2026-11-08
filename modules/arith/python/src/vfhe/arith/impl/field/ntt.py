@@ -146,6 +146,7 @@ class ExtensionFieldNTT:
         blocks: int = 1,
         out=None,
         layout: str = "blocks",
+        zero_padding: bool = False,
     ) -> ExtensionFieldVector:
         """`vector`, laid out the way this plan's `forward` needs it.
 
@@ -159,8 +160,40 @@ class ExtensionFieldNTT:
         Where the two layouts coincide there is nothing to do: the input is
         returned as it is unless `out` is given, in which case it is copied
         there. A conversion is a tiled transpose, one pass.
+
+        With ``zero_padding``, `vector` may hold fewer than `n` elements of
+        each transform: it holds the first ``k = len(vector) // blocks`` of
+        each, in ``layout`` over ``k`` elements per transform, and every
+        element from ``k`` on is zero. The result is then always a new vector
+        of ``blocks * n`` elements (or `out`), written in one pass with no
+        padded copy of `vector` in between.
         """
-        return self._reshape(vector, blocks, out, layout, self.batch_layout)
+        if not zero_padding:
+            return self._reshape(vector, blocks, out, layout, self.batch_layout)
+        if layout not in ("blocks", "interleaved"):
+            raise ValueError(
+                f"layout must be 'blocks' or 'interleaved', got {layout!r}"
+            )
+        if not isinstance(blocks, int) or isinstance(blocks, bool) or blocks < 1:
+            raise ValueError(f"blocks must be a positive int, got {blocks}")
+        if vector.field is not self.field:
+            raise ValueError("vector belongs to a different field")
+        if len(vector) % blocks or len(vector) > self.n * blocks:
+            raise ValueError(
+                f"{len(vector)} elements are not the first elements of {blocks} "
+                f"transforms of length {self.n}"
+            )
+        result = vector._destination(out, self.n * blocks)
+        if result is vector:
+            raise ValueError("a layout conversion cannot write into its input")
+        lib.field_ntt_zero_padded(
+            result._struct,
+            vector._struct,
+            blocks,
+            layout == "blocks",
+            self.batch_layout == "blocks",
+        )
+        return result
 
     def unpack(
         self,

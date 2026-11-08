@@ -24,6 +24,7 @@ from vfhe.arith import (
     FieldElement,
     FieldVector,
     Spec,
+    is_prime,
 )
 
 PRIME = (1 << 61) - 1
@@ -1532,7 +1533,8 @@ class TestDestinations:
     @pytest.mark.parametrize(("prime", "w"), _DESTINATION_FIELDS)
     def test_a_destination_is_checked(self, prime, w):
         field, (a, b) = self.vectors(prime, w, 16, 2)
-        other = ExtensionField(prime + 4, 4, w)
+        other_prime = next(q for q in range(prime + 2, prime + 1000, 2) if is_prime(q))
+        other = ExtensionField(other_prime, 4, w)
         with pytest.raises(ValueError, match="holds"):
             a.add(b, out=FieldVector(field, 8))
         with pytest.raises(ValueError, match="different field"):
@@ -1835,3 +1837,249 @@ class TestUint64AndCoefficients:
             vector.set_coefficients([array("Q", [1, 2])] * 4, start=7)
         with pytest.raises(TypeError, match="64-bit"):
             vector.set_coefficients([array("I", [1, 2])] * 4)
+
+
+#: The largest primes below 2^50 and 2^62: the top of the range the IFMA
+#: kernels take, and the top of the range any field takes.
+_TOP_IFMA_PRIME = (1 << 50) - 27
+_TOP_PRIME = (1 << 62) - 57
+
+#: (prime, degree) pairs for the folded sums. On the avx512ifma engine the
+#: primes below 2^50 at degree 8 or less take the IFMA kernels and the rest
+#: (61 and 62 bits, or degree 9) the element-wise windows; on the portable
+#: engine every one takes the scalar kernels. Degrees 1, 2, 4 and 8 are
+#: unrolled, 3, 5 and 9 take the runtime degree.
+_FOLD_FIELDS = [
+    pytest.param((_FUSED_PRIME, 1), id="p49-d1"),
+    pytest.param((_FUSED_PRIME, 2), id="p49-d2"),
+    pytest.param((_FUSED_PRIME, 3), id="p49-d3"),
+    pytest.param((_TOP_IFMA_PRIME, 4), id="p50-d4"),
+    pytest.param((_FUSED_PRIME, 8), id="p49-d8"),
+    pytest.param((_FUSED_PRIME, 9), id="p49-d9"),
+    pytest.param((PRIME, 1), id="p61-d1"),
+    pytest.param((PRIME, 4), id="p61-d4"),
+    pytest.param((_TOP_PRIME, 2), id="p62-d2"),
+    pytest.param((_TOP_PRIME, 5), id="p62-d5"),
+]
+
+#: Signed sums of products: a negated first product, a table repeated in one
+#: product and shared between sums, products of one to three factors.
+_FOLD_SUMS = [
+    [(1, (0,)), (-1, (1, 2))],
+    [(-1, (3, 4, 1)), (1, (2, 2))],
+    [(1, (4,))],
+]
+
+
+def _fold_vector(field, n: int, seed: int, dirty: bool = True) -> ExtensionFieldVector:
+    """n random elements, with the padding set to p - 1 when `dirty`: the
+    kernels must not read it as values."""
+    rng = random.Random(seed)  # noqa: S311 - test data, not a key
+    vector = ExtensionFieldVector(
+        field,
+        [[rng.randrange(field.prime) for _ in range(field.d)] for _ in range(n)],
+    )
+    if dirty:
+        for plane in vector._planes:
+            for i in range(n, vector._allocated_n):
+                plane[i] = field.prime - 1
+    return vector
+
+
+def _reference_product_sums(tables, sums, nodes, weights) -> list[list]:
+    """`FieldVector.fold_product_sums` one element at a time."""
+    values = [t.to_list() for t in tables]
+    w = weights.to_list() if weights is not None else None
+    zero = tables[0].field.zero
+    rows = []
+    for products in sums:
+        row = []
+        for t in range(nodes):
+            total = zero
+            for i in range(len(values[0]) // 2):
+                inner = zero
+                for sign, factors in products:
+                    term = tables[0].field.one
+                    for j in factors:
+                        u, v = values[j][2 * i], values[j][2 * i + 1]
+                        term = term * (u + (v - u) * t)
+                    inner = inner + term if sign > 0 else inner - term
+                total = total + (inner if w is None else inner * w[i])
+            row.append(total)
+        rows.append(row)
+    return rows
+
+
+def _assert_padding_zero(vector) -> None:
+    for plane in vector._planes:
+        assert list(plane[len(vector) : vector._allocated_n]) == [0] * (
+            vector._allocated_n - len(vector)
+        )
+
+
+class TestFoldSums:
+    """Compare the native fold kernels over extension fields (the inner
+    products and the weighted sums of products of folds, with and without
+    the folds written out) with the front's whole-vector bodies, called
+    explicitly so that two implementations are compared, and at small
+    lengths with a loop over elements.
+
+    Lengths are below, astride and past the eight pairs a group of the IFMA
+    kernels takes, so that the last group is partial; the padding of every
+    operand is dirty.
+    """
+
+    @pytest.fixture(params=_FOLD_FIELDS)
+    def field(self, request):
+        prime, d = request.param
+        return ExtensionField(prime, d, W)
+
+    @pytest.mark.parametrize("n", [0, 2, 4, 6, 14, 16, 18, 34, 130])
+    def test_fold_inner_products(self, field, n):
+        a, b = _fold_vector(field, n, 1 + n), _fold_vector(field, n, 2 + n)
+        sums = a.fold_inner_products(b)
+        assert sums == FieldVector.fold_inner_products(a, b)
+        assert a.fold_inner_products(a) == FieldVector.fold_inner_products(a, a)
+        if n <= 18:
+            expected = _reference_product_sums([a, b], [[(1, (0, 1))]], 3, None)[0]
+            assert list(sums) == expected
+
+    @pytest.mark.parametrize("n", [0, 4, 8, 12, 28, 32, 36, 132])
+    def test_fold_and_inner_products(self, field, n):
+        a, b = _fold_vector(field, n, 3 + n), _fold_vector(field, n, 4 + n)
+        r = field([7 + j for j in range(field.d)])
+        a_bound, b_bound, sums = a.fold_and_inner_products(b, r)
+        assert a_bound == a.fold(r) and b_bound == b.fold(r)
+        assert (a_bound, b_bound, sums) == FieldVector.fold_and_inner_products(a, b, r)
+        assert sums == FieldVector.fold_inner_products(a_bound, b_bound)
+        _assert_padding_zero(a_bound)
+        _assert_padding_zero(b_bound)
+
+    @pytest.mark.parametrize("n", [2, 4, 6, 16, 18, 50, 130])
+    @pytest.mark.parametrize("weighted", [False, True], ids=["unweighted", "weighted"])
+    def test_fold_product_sums(self, field, n, weighted):
+        tables = [_fold_vector(field, n, 10 * n + j) for j in range(5)]
+        w = _fold_vector(field, n // 2, 9 * n) if weighted else None
+        for nodes in (1, 2, 3, 4):
+            got = FieldVector.fold_product_sums(tables, _FOLD_SUMS, nodes, w)
+            assert got == FieldVector._fold_product_sums(tables, _FOLD_SUMS, nodes, w)
+            if n <= 6:
+                expected = _reference_product_sums(tables, _FOLD_SUMS, nodes, w)
+                assert [list(row) for row in got] == expected
+
+    @pytest.mark.parametrize("n", [4, 8, 12, 36, 100, 132])
+    @pytest.mark.parametrize("weighted", [False, True], ids=["unweighted", "weighted"])
+    def test_fold_and_product_sums(self, field, n, weighted):
+        tables = [_fold_vector(field, n, 20 * n + j) for j in range(5)]
+        w = _fold_vector(field, n // 4, 19 * n) if weighted else None
+        r = field([3 + 2 * j for j in range(field.d)])
+        for nodes in (1, 3, 4):
+            folded, got = FieldVector.fold_and_product_sums(
+                tables, r, _FOLD_SUMS, nodes, w
+            )
+            assert folded == [t.fold(r) for t in tables]
+            assert got == FieldVector._fold_product_sums(folded, _FOLD_SUMS, nodes, w)
+            for table in folded:
+                _assert_padding_zero(table)
+
+    def test_long_tables(self, field):
+        """Tables long enough to take several windows of the element-wise
+        kernels, the last of them partial."""
+        n = 4 * 10003
+        tables = [_fold_vector(field, n, 30 + j) for j in range(5)]
+        w = _fold_vector(field, n // 2, 35)
+        got = FieldVector.fold_product_sums(tables, _FOLD_SUMS, 3, w)
+        assert got == FieldVector._fold_product_sums(tables, _FOLD_SUMS, 3, w)
+        r = field(13)
+        folded, got = FieldVector.fold_and_product_sums(tables, r, _FOLD_SUMS, 4)
+        assert got == FieldVector._fold_product_sums(folded, _FOLD_SUMS, 4, None)
+
+    def test_a_table_no_product_reads_is_still_folded(self, field):
+        tables = [_fold_vector(field, 36, 40 + j) for j in range(3)]
+        r = field(11)
+        folded, got = FieldVector.fold_and_product_sums(tables, r, [[(1, (2,))]], 2)
+        assert folded == [t.fold(r) for t in tables]
+        assert got == FieldVector._fold_product_sums(folded, [[(1, (2,))]], 2, None)
+
+    @pytest.mark.parametrize("weighted", [False, True], ids=["unweighted", "weighted"])
+    @pytest.mark.parametrize(
+        ("prime", "d"),
+        [(_FUSED_PRIME, 1), (_FUSED_PRIME, 2), (_TOP_IFMA_PRIME, 8), (_TOP_PRIME, 4)],
+        ids=["p49-d1", "p49-d2", "p50-d8", "p62-d4"],
+    )
+    def test_at_the_lazy_sum_bounds(self, prime, d, weighted):
+        """Sums left unreduced over many pairs, with summands as large as the
+        accumulators take: below 2^50 the low 52 bits of every coefficient
+        product are 2^52 - 1, the most the IFMA kernels' low words take
+        between normalizations; above it every coefficient is p - 1, which
+        carries out of 128 bits after 16 products. Long enough for each to
+        run past its bound more than twice."""
+        field = ExtensionField(prime, d, W)
+        if prime < 1 << 50:
+            rng = random.Random(d)  # noqa: S311 - test data, not a key
+            while True:
+                x = rng.randrange(1, prime) | 1
+                y = -pow(x, -1, 1 << 52) % (1 << 52)
+                if y < prime:
+                    break
+        else:
+            x = y = prime - 1
+        n = 2 * 8 * (3 * 4096 // d)
+        a = ExtensionFieldVector(field, n)
+        b = ExtensionFieldVector(field, n)
+        a.set_coefficients([array("Q", [x]) * n for _ in range(d)])
+        b.set_coefficients([array("Q", [y]) * n for _ in range(d)])
+        if weighted:
+            sums, w = [[(1, (0,))]], b.view(0, n // 2)
+        else:
+            sums, w = [[(1, (0, 1))]], None
+        got = FieldVector.fold_product_sums([a, b], sums, 4, w)
+        assert got == FieldVector._fold_product_sums([a, b], sums, 4, w)
+        assert a.fold_inner_products(b) == FieldVector.fold_inner_products(a, b)
+        folded, got = FieldVector.fold_and_product_sums([a, b], 1, sums, 4)
+        assert got == FieldVector._fold_product_sums(folded, sums, 4, None)
+
+    def test_past_the_kernel_bounds(self):
+        """Nine tables, an empty list of sums, and a degree past
+        FIELD_FOLD_MAX_DEGREE take the whole-vector bodies."""
+        field = make_field(2)
+        tables = [_fold_vector(field, 8, 50 + j) for j in range(9)]
+        sums = [[(1, tuple(range(9)))]]
+        assert FieldVector.fold_product_sums(
+            tables, sums, 2
+        ) == FieldVector._fold_product_sums(tables, sums, 2, None)
+        assert FieldVector.fold_product_sums(tables, [], 2) == []
+        wide = ExtensionField(PRIME, 17, W)
+        a, b = _fold_vector(wide, 8, 60), _fold_vector(wide, 8, 61)
+        assert a.fold_inner_products(b) == FieldVector.fold_inner_products(a, b)
+        assert a.fold_and_inner_products(b, 5) == FieldVector.fold_and_inner_products(
+            a, b, 5
+        )
+        pair_sums = [[(1, (0,)), (-1, (1, 1, 0))]]
+        assert FieldVector.fold_product_sums(
+            [a, b], pair_sums, 3
+        ) == FieldVector._fold_product_sums([a, b], pair_sums, 3, None)
+
+    def test_mismatches_are_rejected(self):
+        field = make_field(2)
+        a, b = _fold_vector(field, 6, 70), _fold_vector(field, 8, 71)
+        other = _fold_vector(make_field(2), 6, 72)
+        with pytest.raises(ValueError, match="odd"):
+            _fold_vector(field, 5, 73).fold_inner_products(_fold_vector(field, 5, 74))
+        with pytest.raises(ValueError, match="length mismatch"):
+            a.fold_inner_products(b)
+        with pytest.raises(ValueError, match="different fields"):
+            a.fold_inner_products(other)
+        not_a_vector: Any = [1, 2]
+        with pytest.raises(TypeError, match="ExtensionFieldVector"):
+            a.fold_inner_products(not_a_vector)
+        with pytest.raises(ValueError, match="multiple of 4"):
+            a.fold_and_inner_products(a, 3)
+        with pytest.raises(ValueError, match="weights"):
+            FieldVector.fold_product_sums([a], [[(1, (0,))]], 2, a)
+        with pytest.raises(ValueError, match="different field"):
+            FieldVector.fold_product_sums([a, other], [[(1, (0, 1))]], 2)
+        with pytest.raises(ValueError, match="multiple of 4"):
+            FieldVector.fold_and_product_sums([a], 3, [[(1, (0,))]], 2)
+        with pytest.raises(ValueError, match="weights"):
+            FieldVector.fold_and_product_sums([b], 3, [[(1, (0,))]], 2, b)

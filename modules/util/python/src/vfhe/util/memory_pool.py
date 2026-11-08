@@ -48,7 +48,8 @@ def set_capacity(n_bytes: int | Literal["auto"] | None = None) -> None:
     ``"auto"`` follows the library's peak use and ``0`` turns the pool off;
     ``None`` restores the default (``VFHE_MEMPOOL_CAPACITY`` if set, else
     ``"auto"``). Lowering the capacity below what the pool keeps releases it
-    all.
+    all. A capacity below what a workload reuses costs speed on every
+    request the pool no longer serves (see `release_all`).
     """
     if n_bytes is None:
         setting = lib.MEMPOOL_CAPACITY_DEFAULT
@@ -84,7 +85,17 @@ def wipe_on_release() -> bool:
 
 
 def release_all() -> None:
-    """Returns every buffer the pool keeps, on every thread, to the C library."""
+    """Returns every buffer the pool keeps, on every thread, to the C library.
+
+    This costs speed afterwards: the next requests for those sizes are
+    served by the C library again, and a large buffer it hands out gets
+    fresh pages, faulted in on first use, which costs about as much as one
+    pass over the buffer. Keeping the buffers to avoid that is what the pool
+    is for. Call it after a phase whose buffer sizes will not come back (a
+    large one-off computation, say) when the memory matters more than the
+    speed of what follows; the C library may keep part of the memory for the
+    process.
+    """
     lib.mempool_release_all()
 
 

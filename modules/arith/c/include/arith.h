@@ -482,6 +482,63 @@ extern "C"
     // a->n / 2 elements and may not alias `a`.
     void field_vec_split_blocks(FieldVector lo, FieldVector hi, const FieldVector a,
                                 uint64_t block);
+// The largest shape and degree field_vec_fold_product_sums and the three
+// functions after it take.
+#define FIELD_FOLD_MAX_TABLES 8
+#define FIELD_FOLD_MAX_NODES 4
+#define FIELD_FOLD_MAX_SUMS 4
+#define FIELD_FOLD_MAX_PRODUCTS 8 // over all the sums
+#define FIELD_FOLD_MAX_FACTORS 8  // in one product
+#define FIELD_FOLD_MAX_DEGREE 16
+    // Weighted sums of signed products of folded tables. With (u_ji, v_ji) =
+    // (tables[j][2i], tables[j][2i + 1]) the adjacent pairs of tables[j], for
+    // i < m = tables[0]->n / 2, and f_ji(t) = u_ji + t (v_ji - u_ji), sum s is
+    // the polynomial
+    //     S_s(t) = sum_i w_i sum_(p in s) (-1)^neg_p prod_(j in p) f_ji(t)
+    // and sums[s * nodes + t] receives S_s(t), d words, for t < nodes. w_i is
+    // weights[i], or 1 when weights is NULL.
+    //
+    // `shape` lists the sums as words: their count, then for each sum the
+    // count of its products, and for each product neg_p (0 or 1), the count of
+    // its factors and their indices into tables. For example {1, 2, 0, 2, 0,
+    // 1, 1, 1, 2} is the one sum f_0 f_1 - f_2. An index may appear in several
+    // products and more than once in one.
+    //
+    // The `count` tables have one even length and one field, of degree at
+    // most FIELD_FOLD_MAX_DEGREE; weights has m elements over the same field;
+    // the shape stays within the FIELD_FOLD_MAX_* bounds above. Each table is
+    // read once, words past its n included in no sum, and nothing table-sized
+    // is allocated. Runs on up to the library's thread limit (parallel.h) when
+    // the tables are long enough, and the sums do not depend on the number of
+    // threads.
+    void field_vec_fold_product_sums(uint64_t *const *sums, const FieldVector *tables,
+                                     uint64_t count, const uint64_t *shape, uint64_t nodes,
+                                     const FieldVector weights);
+    // outs[j] = fold(tables[j], r), as field_vec_fold, and sums =
+    // field_vec_fold_product_sums(outs, ...), in one pass over the tables. The
+    // tables' length must be a multiple of 4; each output holds half of it,
+    // is written whole, its padding with zeros, and may not alias an input;
+    // weights has a quarter of it. `r` is one element, d words. Threads as
+    // field_vec_fold_product_sums.
+    void field_vec_fold_and_product_sums(FieldVector *outs, uint64_t *const *sums,
+                                         const FieldVector *tables, uint64_t count,
+                                         const uint64_t *r, const uint64_t *shape, uint64_t nodes,
+                                         const FieldVector weights);
+    // With (u_i, v_i) and (x_i, y_i) the adjacent pairs of a and b, for i <
+    // a->n / 2, the quadratic q(t) = sum_i (u_i + t (v_i - u_i)) (x_i + t (y_i -
+    // x_i)) -- the inner product of the two vectors folded at t -- at t = 0, 1
+    // and 2, into the elements q0, q1 and q2 (d words each): the one product
+    // f_a f_b of field_vec_fold_product_sums at three nodes. `a->n` must be
+    // even, b->n == a->n, and a and b may be the same vector.
+    void field_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2,
+                                       const FieldVector a, const FieldVector b);
+    // a_out = fold(a, r) and b_out = fold(b, r), as field_vec_fold, and q0, q1,
+    // q2 = field_vec_fold_inner_products(a_out, b_out), in one pass over a and
+    // b. `a->n` must be a multiple of 4, b->n == a->n, and the outputs hold
+    // a->n / 2 elements, are written whole and may not alias an input.
+    void field_vec_fold_and_inner_products(FieldVector a_out, FieldVector b_out, uint64_t *q0,
+                                           uint64_t *q1, uint64_t *q2, const FieldVector a,
+                                           const FieldVector b, const uint64_t *r);
     // Elementwise Frobenius, the map field_ext_frobenius describes: d whole-plane
     // scalings, whatever the length. `out` may be `a`.
     void field_vec_frobenius(FieldVector out, const FieldVector a, uint64_t k);
@@ -602,6 +659,14 @@ extern "C"
     // transform that asks for it. `out` may not alias `in`.
     void field_ntt_to_interleaved(FieldVector out, const FieldVector in, uint64_t blocks);
     void field_ntt_to_blocks(FieldVector out, const FieldVector in, uint64_t blocks);
+    // A batch of `blocks` transforms of n = out->n / blocks elements each, of
+    // which only the first k = in->n / blocks are given in `in`, every element
+    // from k on being zero, written to `out` in full. Each side is laid out by
+    // blocks (element i of block b at b * len + i, len its own k or n) when its
+    // flag is set, interleaved (at i * blocks + b) otherwise. k <= n, and `out`
+    // may not alias `in`.
+    void field_ntt_zero_padded(FieldVector out, const FieldVector in, uint64_t blocks,
+                               bool in_by_blocks, bool out_by_blocks);
 
     // The points the transform above evaluates at, as a table: after
     // `field_ntt_forward` of a length-2^bits block, position i of it holds

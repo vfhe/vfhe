@@ -18,6 +18,7 @@ from vfhe.arith._alloc import aligned64, aligned64_unset
 from vfhe.arith.base import (
     FieldVector,
     _check_bit_field,
+    _check_fold_product_sums,
     _sample_positions,
     index_buffer,
 )
@@ -647,6 +648,125 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_fold_blocks(result._struct, self._struct, block, element.value)
         return result
 
+    def _check_partner(self, other, name: str) -> None:
+        """Check that `other` is a vector over this field and of this
+        vector's length, as the inner products of the two folds need."""
+        if not isinstance(other, ExtensionFieldVector):
+            raise TypeError(f"{name} takes an ExtensionFieldVector")
+        if other.field is not self.field:
+            raise ValueError("vectors belong to different fields")
+        if len(other) != self._n:
+            raise ValueError(f"length mismatch: {self._n} and {len(other)}")
+
+    def fold_inner_products(self, other) -> tuple:
+        """Compute `FieldVector.fold_inner_products` (documented there) with
+        the native kernel `field_vec_fold_inner_products`, in one pass over
+        both vectors.
+
+        A field of degree above `FIELD_FOLD_MAX_DEGREE` takes the front's
+        whole-vector body instead.
+        """
+        self._check_partner(other, "fold_inner_products")
+        self._checked_block(1)
+        if self.field.d > lib.FIELD_FOLD_MAX_DEGREE:
+            return FieldVector.fold_inner_products(self, other)
+        evals = [self._new_value() for _ in range(3)]
+        lib.field_vec_fold_inner_products(*evals, self._struct, other._struct)
+        return tuple(ExtensionFieldElement(self.field, value) for value in evals)
+
+    def fold_and_inner_products(self, other, r) -> tuple:
+        """Compute `FieldVector.fold_and_inner_products` (documented there)
+        with the native kernel `field_vec_fold_and_inner_products`, in one
+        pass over both vectors.
+
+        A field of degree above `FIELD_FOLD_MAX_DEGREE` makes the separate
+        calls instead: the two folds, then their inner products.
+        """
+        self._check_partner(other, "fold_and_inner_products")
+        if self._n % 4:
+            raise ValueError(f"length {self._n} is not a multiple of 4")
+        if self.field.d > lib.FIELD_FOLD_MAX_DEGREE:
+            return FieldVector.fold_and_inner_products(self, other, r)
+        element = self._coerce_element(r)
+        a, b = self._like(self._n // 2), self._like(self._n // 2)
+        evals = [self._new_value() for _ in range(3)]
+        lib.field_vec_fold_and_inner_products(
+            a._struct, b._struct, *evals, self._struct, other._struct, element.value
+        )
+        return a, b, tuple(ExtensionFieldElement(self.field, value) for value in evals)
+
+    @staticmethod
+    def fold_product_sums(
+        tables: list, sums: list, nodes: int, weights=None
+    ) -> list[tuple]:
+        """Compute `FieldVector.fold_product_sums` (documented there) with
+        the native kernel `field_vec_fold_product_sums`, in one pass over the
+        tables.
+
+        A shape or a degree past the kernel's bounds (the `FIELD_FOLD_MAX_*`
+        constants of `arith.h`), or an empty list of sums, takes the front's
+        whole-vector body instead.
+        """
+        tables = list(tables)
+        _check_fold_product_sums(tables, sums, nodes, weights)
+        shape = _product_shape(tables, sums, nodes, weights)
+        if shape is None:
+            return FieldVector._fold_product_sums(tables, sums, nodes, weights)
+        first = tables[0]
+        evals = [first._new_value() for _ in range(len(sums) * nodes)]
+        lib.field_vec_fold_product_sums(
+            ffi.new("uint64_t *[]", evals),
+            ffi.new("FieldVector[]", [t._struct for t in tables]),
+            len(tables),
+            ffi.from_buffer("uint64_t[]", shape),
+            nodes,
+            ffi.NULL if weights is None else weights._struct,
+        )
+        return _product_sums(first.field, evals, len(sums), nodes)
+
+    @staticmethod
+    def fold_and_product_sums(
+        tables: list, r, sums: list, nodes: int, weights=None
+    ) -> tuple:
+        """Compute `FieldVector.fold_and_product_sums` (documented there)
+        with the native kernel `field_vec_fold_and_product_sums`, in one pass
+        over the tables.
+
+        A shape or a degree past the kernel's bounds, or an empty list of
+        sums, makes the separate calls instead: the folds, then their product
+        sums.
+        """
+        tables = list(tables)
+        _check_fold_product_sums(tables, sums, nodes, None)
+        first = tables[0]
+        if len(first) % 4:
+            raise ValueError(f"length {len(first)} is not a multiple of 4")
+        half = len(first) // 2
+        if weights is not None and len(weights) != half // 2:
+            raise ValueError(f"{len(weights)} weights for {half // 2} pairs")
+        shape = _product_shape(tables, sums, nodes, weights)
+        if shape is None:
+            folded = [t.fold(r) for t in tables]
+            return folded, FieldVector._fold_product_sums(folded, sums, nodes, weights)
+        element = first._coerce_element(r)
+        folded = [first._like(half) for _ in tables]
+        evals = [first._new_value() for _ in range(len(sums) * nodes)]
+        lib.field_vec_fold_and_product_sums(
+            ffi.new("FieldVector[]", [t._struct for t in folded]),
+            ffi.new("uint64_t *[]", evals),
+            ffi.new("FieldVector[]", [t._struct for t in tables]),
+            len(tables),
+            element.value,
+            ffi.from_buffer("uint64_t[]", shape),
+            nodes,
+            ffi.NULL if weights is None else weights._struct,
+        )
+        return folded, _product_sums(first.field, evals, len(sums), nodes)
+
+    def _new_value(self):
+        """A zeroed native buffer of one element's d coefficients."""
+        return ffi.new("uint64_t[]", self.field.d)
+
     def chunk_length(self, live: int = 4) -> int:
         """`FieldVector.chunk_length`, with an element taking d words, one
         per coefficient plane."""
@@ -785,3 +905,42 @@ class ExtensionFieldVector(FieldVector):
 
     def __repr__(self) -> str:
         return f"ExtensionFieldVector(n={self._n}, d={self.field.d})"
+
+
+def _product_shape(tables: list, sums: list, nodes: int, weights) -> array | None:
+    """Encode `sums` as the shape words `field_vec_fold_product_sums` reads
+    (`arith.h` describes them), or return None when the kernel cannot take
+    the call: an operand that is not an extension-field vector over the
+    tables' field, no sums, or a shape or degree past the kernel's bounds."""
+    operands = tables if weights is None else [*tables, weights]
+    if not all(isinstance(v, ExtensionFieldVector) for v in operands):
+        return None
+    field = tables[0].field
+    if any(v.field is not field for v in operands):
+        return None
+    products = [product for entry in sums for product in entry]
+    if (
+        not sums
+        or field.d > lib.FIELD_FOLD_MAX_DEGREE
+        or len(tables) > lib.FIELD_FOLD_MAX_TABLES
+        or nodes > lib.FIELD_FOLD_MAX_NODES
+        or len(sums) > lib.FIELD_FOLD_MAX_SUMS
+        or len(products) > lib.FIELD_FOLD_MAX_PRODUCTS
+        or any(len(f) > lib.FIELD_FOLD_MAX_FACTORS for _, f in products)
+    ):
+        return None
+    words = [len(sums)]
+    for entry in sums:
+        words.append(len(entry))
+        for sign, factors in entry:
+            words += [int(sign < 0), len(factors), *factors]
+    return array("Q", words)
+
+
+def _product_sums(field, evals: list, count: int, nodes: int) -> list[tuple]:
+    """Wrap the kernel's output buffers as elements: one tuple of `nodes`
+    elements per sum."""
+    return [
+        tuple(ExtensionFieldElement(field, evals[s * nodes + t]) for t in range(nodes))
+        for s in range(count)
+    ]

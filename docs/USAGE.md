@@ -138,6 +138,16 @@ node. The memory pool keeps freed buffers per thread for reuse, up to the
 peak in use; `VFHE_MEMPOOL_CAPACITY` bounds it in bytes, and `0` turns it
 off.
 
+The pool is sized for speed, so it also keeps buffers whose sizes never come
+back, such as the one-off temporaries of a large polynomial commitment. A
+long-running process that has finished such a phase and needs the memory
+more than the speed can call `vfhe.util.memory_pool.release_all()`, which
+returns everything the pool keeps to the C library. The price is speed: the
+next allocations of those sizes go to the C library again, and their fresh
+pages are faulted in on first use, about the cost of one pass over each
+buffer. A capacity bounds the pool for good, at the same price on every
+allocation it no longer serves.
+
 ## Next steps
 
 - Raise `Ring`'s degree and modulus bit-count for deeper computations, at the

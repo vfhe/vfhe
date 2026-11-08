@@ -179,8 +179,12 @@ class Merkle:
     (see the module docstring). A leaf count that is not a power of two is
     padded with zero digests.
 
-    The same object may be recommitted: mutate `leaves` in place (keeping its
-    length) and call `commit()` again - the C tree allocation is reused.
+    The same object may be recommitted, reusing the C tree allocation. A
+    tree built from leaf objects stores them in `leaves`: change them in
+    place (keeping their number) and call `commit()`. A tree built from
+    packed digests (`from_digests`) stores no leaf data in the object, since
+    the C tree holds its own copy of the digests: pass the new digests,
+    `commit(digests)`.
     """
 
     def __init__(
@@ -205,22 +209,16 @@ class Merkle:
                 )
             self.leaves = None
             self.hash = None
-            # Kept, not copied: at a codeword's worth of leaves the copy is
-            # tens of milliseconds and buys nothing, since `commit` hands the
-            # bytes to C and C takes its own. The cost is that `commit()`
-            # re-reads whatever the buffer holds then -- see `from_digests`.
-            self._packed: bytes | bytearray | memoryview | None = digests
             self._size = len(digests) // DIGEST_LEN
         else:
             self.leaves = list(leaves)  # type: ignore[arg-type]
             if not self.leaves:
                 raise ValueError("a Merkle tree needs at least one leaf")
             self.hash = hash
-            self._packed = None
             self._size = len(self.leaves)
         self.log_size = (self._size - 1).bit_length()
         self.obj = lib.merkle_new(self._size)
-        self.root = self.commit()
+        self.root = self.commit(digests)
 
     @classmethod
     def from_digests(cls, digests: bytes | bytearray | memoryview) -> Merkle:
@@ -236,10 +234,10 @@ class Merkle:
         a kernel's own output buffer that `FieldVector.hash_elements`
         returns, which reaches the tree builder without being copied at all.
 
-        The tree **keeps the buffer rather than copying it**, so a mutable one
-        handed in here stays connected: `commit()` reads it again and would
-        see any change. Pass `bytes(...)`, or the read-only view the arith
-        side produces, if that matters.
+        The tree reads the buffer once, while it is built, and does not keep
+        it: the C tree copies the digests, so the buffer can be freed or
+        changed afterwards without affecting the tree. Recommit with new
+        digests by `commit(digests)`.
 
         It has no `leaves` list, since not building one is the point -- `open`
         and `verify` need only the digests and the index.
@@ -254,16 +252,35 @@ class Merkle:
     def __len__(self) -> int:
         return self._size
 
-    def commit(self) -> bytes:
-        """(Re)build the tree from the current leaves and return the root."""
-        if self._packed is not None:
-            digests = self._packed
-        elif self.leaves is not None:
+    def commit(self, digests: bytes | bytearray | memoryview | None = None) -> bytes:
+        """(Re)build the tree and return the root.
+
+        How depends on how the tree was built:
+
+        - **From leaf objects** (`Merkle(leaves, hash=...)`): the object
+          stores the leaves, in its `leaves` list. `commit()` hashes the
+          list's current contents again, so a caller may change leaves in
+          place (keeping their number) and recommit. It takes no `digests`.
+        - **From packed digests** (`Merkle.from_digests`): the object stores
+          no leaf data; only the C tree holds the digests. `commit(digests)`
+          must be given the new digests, as many `DIGEST_LEN`-byte digests
+          as the tree has leaves.
+        """
+        if self.leaves is not None:
+            if digests is not None:
+                raise TypeError("a tree over leaves is recommitted from its leaves")
             digests = b"".join(leaf_digest(leaf, self.hash) for leaf in self.leaves)
-        else:  # __init__ sets exactly one of the two, so this cannot happen
-            raise RuntimeError("a Merkle tree with neither leaves nor digests")
+        elif digests is None:
+            raise TypeError(
+                "a tree over packed digests is recommitted with new digests"
+            )
+        elif len(digests) != self._size * DIGEST_LEN:
+            raise ValueError(
+                f"{self._size} digests of {DIGEST_LEN} bytes expected, "
+                f"got {len(digests)} bytes"
+            )
         # from_buffer rather than letting cffi convert: it takes any bytes-like
-        # without copying, which is the whole point of keeping the buffer.
+        # without a Python copy; merkle_commit copies the digests into the tree.
         lib.merkle_commit(self.obj, ffi.from_buffer("uint8_t[]", digests))
         out = ffi.new("uint8_t[]", DIGEST_LEN)
         lib.merkle_get_root(out, self.obj)
