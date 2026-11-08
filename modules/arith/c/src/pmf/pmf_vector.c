@@ -794,79 +794,83 @@ void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const
     pmf_vec_inner_sums_extrapolate(q0, q1, q2, a->params);
 }
 
-// The pairs of the 2 * PMF_VEC_GROUP consecutive elements held in F0 and F1, as
-// one group each of first (E) and second (O) members: the lanes of
-// pmf_vec_load_pairs, from registers.
-PMF_INLINE void pmf_vec_pairs_of(pv_t *E, pv_t *O, const pv_t *F0, const pv_t *F1, uint64_t L)
+// --- fold and sum in one pass over the input --------------------------------
+//
+// The fused kernels fold every table at r and sum over the folds while the
+// folded block is still in cache: per block of folded pairs, the fold body
+// writes the block's outputs of every table, then the summing body reads them
+// back. Each body runs as its own call, instantiated for the literal limb count
+// like the unfused kernels; inlined together into one function, the compiler
+// no longer specializes them for it and the kernel runs at half the speed. A
+// block's sums are added into the chunk's, element by element.
+
+// The folded pairs a block covers, a multiple of PMF_VEC_GROUP: a block's
+// outputs, `count` vectors of 2 * block elements of L limbs, take about 64 KiB,
+// so the summing body reads them from L2 and a block's fixed costs (two calls
+// per table, the sums' reduction) stay small beside its work.
+static uint64_t pmf_vec_fold_block(uint64_t count, uint64_t L)
 {
-#if VFHE_HAVE_AVX512IFMA
-    const __m512i evens = _mm512_set_epi64(14, 12, 10, 8, 6, 4, 2, 0);
-    const __m512i odds = _mm512_set_epi64(15, 13, 11, 9, 7, 5, 3, 1);
-    for (uint64_t k = 0; k < L; k++)
-    {
-        E[k] = _mm512_permutex2var_epi64(F0[k], evens, F1[k]);
-        O[k] = _mm512_permutex2var_epi64(F0[k], odds, F1[k]);
-    }
-#else
-    for (uint64_t k = 0; k < L; k++)
-    {
-        E[k] = F0[k];
-        O[k] = F1[k];
-    }
-#endif
+    uint64_t block = (64u << 10) / (count * 2 * L * sizeof(uint64_t));
+    block -= block % PMF_VEC_GROUP;
+    return block < PMF_VEC_GROUP ? PMF_VEC_GROUP : block;
 }
 
-// Each pass of the main loop folds two output groups of each vector, stores
-// them, and takes the pairs of the next fold from the registers it has just
-// stored: the 2 * PMF_VEC_GROUP output elements from 2j are the pairs j .. j +
-// PMF_VEC_GROUP - 1 of the folded vector. The remaining output groups, padding
-// included, are folded alone, and the pairs among them summed one at a time.
-//
-// [begin, end) is the range of j, the pairs of the folded vector the main loop
-// covers; `last` adds the rest: the output groups past them and the pairs among
-// those.
-PMF_INLINE void pmf_vec_fold_and_inner_products_body(PMFVector a_out, PMFVector b_out,
-                                                     uint64_t *const *sums, const PMFVector a,
-                                                     const PMFVector b, const uint64_t *r,
-                                                     uint64_t begin, uint64_t end, int last,
-                                                     PMFParams P)
+// The outputs [first, last) of the fold of `a` at r.
+static __attribute__((noinline)) void pmf_vec_fold_outputs(PMFVector out, const PMFVector a,
+                                                           const uint64_t *r, uint64_t first,
+                                                           uint64_t last, PMFParams params)
 {
-    const uint64_t L = P->limbs;
-    pv_t R[PMF_MAX_LIMBS];
-    pv_t A0[PMF_MAX_LIMBS + 1], A1[PMF_MAX_LIMBS + 1], B0[PMF_MAX_LIMBS + 1], B1[PMF_MAX_LIMBS + 1];
-    pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS], X[PMF_MAX_LIMBS], Y[PMF_MAX_LIMBS];
-    PMFInnerSums S;
+    PMF_WITH_LIMBS(params, pmf_vec_fold_body(out, a, r, first, last, &P_));
+}
 
-    pmf_vec_load_scalar(R, r, L);
-    pmf_vec_inner_sums_init(&S, L);
-    for (uint64_t j = begin; j < end; j += PMF_VEC_GROUP)
+// The three inner-product sums of the pairs [begin, end) of a and b, and then
+// of the pairs `from` .. a->n / 2 - 1 one at a time, into sums[0..2].
+static __attribute__((noinline)) void
+pmf_vec_inner_products_of(uint64_t *const *sums, const PMFVector a, const PMFVector b,
+                          uint64_t begin, uint64_t end, uint64_t from, PMFParams params)
+{
+    PMF_WITH_LIMBS(params, pmf_vec_fold_inner_products_body(sums, a, b, begin, end, from, &P_));
+}
+
+// sums[s] += part[s] for the `count` elements.
+static void pmf_vec_add_sums(uint64_t *const *sums, uint64_t (*part)[PMF_LANES], uint64_t count,
+                             PMFParams params)
+{
+    for (uint64_t s = 0; s < count; s++)
+        pmf_add(sums[s], sums[s], part[s], params);
+}
+
+// [begin, end) is the range of the folded pairs j summed in blocks; `last` adds
+// the rest: the output groups past them, padding included, and the pairs among
+// those, summed one at a time.
+static void pmf_vec_fold_and_inner_products_chunk(PMFVector a_out, PMFVector b_out,
+                                                  uint64_t *const *sums, const PMFVector a,
+                                                  const PMFVector b, const uint64_t *r,
+                                                  uint64_t begin, uint64_t end, int last,
+                                                  PMFParams params)
+{
+    const uint64_t block = pmf_vec_fold_block(2, params->limbs);
+    const uint64_t pairs = a_out->n / 2;
+    _Alignas(64) uint64_t part[3][PMF_LANES];
+    uint64_t *const parts[3] = {part[0], part[1], part[2]};
+
+    for (uint64_t s = 0; s < 3; s++)
+        memset(sums[s], 0, PMF_LANES * sizeof(uint64_t));
+    for (uint64_t j0 = begin; j0 < end; j0 += block)
     {
-        const uint64_t i = 2 * j;
-        pmf_vec_fold_group(A0, a, i, R, P);
-        pmf_vec_fold_group(A1, a, i + PMF_VEC_GROUP, R, P);
-        pmf_vec_fold_group(B0, b, i, R, P);
-        pmf_vec_fold_group(B1, b, i + PMF_VEC_GROUP, R, P);
-        pmf_vec_store_group(a_out, i, A0, L);
-        pmf_vec_store_group(a_out, i + PMF_VEC_GROUP, A1, L);
-        pmf_vec_store_group(b_out, i, B0, L);
-        pmf_vec_store_group(b_out, i + PMF_VEC_GROUP, B1, L);
-        pmf_vec_pairs_of(U, V, A0, A1, L);
-        pmf_vec_pairs_of(X, Y, B0, B1, L);
-        pmf_vec_inner_sums_add(&S, U, V, X, Y, P);
+        const uint64_t j1 = j0 + block < end ? j0 + block : end;
+        pmf_vec_fold_outputs(a_out, a, r, 2 * j0, 2 * j1, params);
+        pmf_vec_fold_outputs(b_out, b, r, 2 * j0, 2 * j1, params);
+        pmf_vec_inner_products_of(parts, a_out, b_out, j0, j1, pairs, params);
+        pmf_vec_add_sums(sums, part, 3, params);
     }
-    if (!last)
+    if (last)
     {
-        pmf_vec_inner_sums_finish(sums, &S, a_out, b_out, a_out->n / 2, P);
-        return;
+        pmf_vec_fold_outputs(a_out, a, r, 2 * end, a_out->allocated_n, params);
+        pmf_vec_fold_outputs(b_out, b, r, 2 * end, b_out->allocated_n, params);
+        pmf_vec_inner_products_of(parts, a_out, b_out, end, end, end, params);
+        pmf_vec_add_sums(sums, part, 3, params);
     }
-    for (uint64_t i = 2 * end; i < a_out->allocated_n; i += PMF_VEC_GROUP)
-    {
-        pmf_vec_fold_group(A0, a, i, R, P);
-        pmf_vec_fold_group(B0, b, i, R, P);
-        pmf_vec_store_group(a_out, i, A0, L);
-        pmf_vec_store_group(b_out, i, B0, L);
-    }
-    pmf_vec_inner_sums_finish(sums, &S, a_out, b_out, end, P);
 }
 
 static void pmf_vec_fold_and_inner_products_range(const PMFVecJob *job, uint64_t begin,
@@ -874,9 +878,8 @@ static void pmf_vec_fold_and_inner_products_range(const PMFVecJob *job, uint64_t
 {
     uint64_t *const sums[3] = {pmf_vec_partial(job, chunk, 0), pmf_vec_partial(job, chunk, 1),
                                pmf_vec_partial(job, chunk, 2)};
-    PMF_WITH_LIMBS(job->params, pmf_vec_fold_and_inner_products_body(job->out, job->out2, sums,
-                                                                     job->a, job->b, job->s, begin,
-                                                                     end, end == job->total, &P_));
+    pmf_vec_fold_and_inner_products_chunk(job->out, job->out2, sums, job->a, job->b, job->s, begin,
+                                          end, end == job->total, job->params);
 }
 
 void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t *q0, uint64_t *q1,
@@ -896,8 +899,7 @@ void pmf_vec_fold_and_inner_products(PMFVector a_out, PMFVector b_out, uint64_t 
     if (pmf_vec_split(&job, whole, PMF_VEC_PRODUCT_GRAIN / 2))
         pmf_vec_reduce_chunks(&job, sums, 3);
     else
-        PMF_WITH_LIMBS(a->params, pmf_vec_fold_and_inner_products_body(a_out, b_out, sums, a, b, r,
-                                                                       0, whole, 1, &P_));
+        pmf_vec_fold_and_inner_products_chunk(a_out, b_out, sums, a, b, r, 0, whole, 1, a->params);
     pmf_vec_inner_sums_extrapolate(q0, q1, q2, a->params);
 }
 
@@ -1153,58 +1155,54 @@ void pmf_vec_fold_product_sums(uint64_t *const *sums, const PMFVector *tables, u
             pmf_vec_fold_product_sums_body(sums, tables, count, weights, &decoded, 0, pairs, &P_));
 }
 
-// As pmf_vec_fold_and_inner_products: each pass of the main loop folds two
-// output groups of every table, stores them, and takes the pairs of the next
-// round from the registers. The remaining output groups, padding included, are
-// folded alone, and the pairs among them summed from the stored folds.
-//
-// [begin, end) is the range of j, as in pmf_vec_fold_and_inner_products_body,
-// and `last` adds the rest.
-PMF_INLINE void pmf_vec_fold_and_product_sums_body(PMFVector *outs, uint64_t *const *sums,
-                                                   const PMFVector *tables, uint64_t count,
-                                                   const uint64_t *r, const PMFVector weights,
-                                                   const PMFProductShape *shape, uint64_t begin,
-                                                   uint64_t end, int last, PMFParams P)
+// The sums of the pairs [begin, end) of the tables, the lanes at or past `end`
+// masked, into sums[0 .. sums * nodes - 1].
+static __attribute__((noinline)) void
+pmf_vec_product_sums_of(uint64_t *const *sums, const PMFVector *tables, uint64_t count,
+                        const PMFVector weights, const PMFProductShape *shape, uint64_t begin,
+                        uint64_t end, PMFParams params)
 {
-    const uint64_t L = P->limbs;
-    pv_t R[PMF_MAX_LIMBS], W[PMF_MAX_LIMBS];
-    pv_t A0[PMF_MAX_LIMBS + 1], A1[PMF_MAX_LIMBS + 1];
-    pv_t U[PMF_MAX_LIMBS], V[PMF_MAX_LIMBS];
-    pv_t F[PMF_FOLD_MAX_TABLES][PMF_FOLD_MAX_NODES][PMF_MAX_LIMBS];
-    PMFProductSums S;
+    PMF_WITH_LIMBS(params, pmf_vec_fold_product_sums_body(sums, tables, count, weights, shape,
+                                                          begin, end, &P_));
+}
 
-    pmf_vec_load_scalar(R, r, L);
-    pmf_vec_product_sums_init(&S, shape, L);
+// As pmf_vec_fold_and_inner_products_chunk, for the product sums of `shape`.
+static void pmf_vec_fold_and_product_sums_chunk(PMFVector *outs, uint64_t *const *sums,
+                                                const PMFVector *tables, uint64_t count,
+                                                const uint64_t *r, const PMFVector weights,
+                                                const PMFProductShape *shape, uint64_t begin,
+                                                uint64_t end, int last, PMFParams params)
+{
+    const uint64_t block = pmf_vec_fold_block(count, params->limbs);
+    const uint64_t slots = shape->sums * shape->nodes;
     const uint64_t pairs = outs[0]->n / 2;
-    for (uint64_t j = begin; j < end; j += PMF_VEC_GROUP)
+    const PMFVector *folded = (const PMFVector *)outs;
+    _Alignas(64) uint64_t part[PMF_FOLD_MAX_SUMS * PMF_FOLD_MAX_NODES][PMF_LANES];
+    uint64_t *parts[PMF_FOLD_MAX_SUMS * PMF_FOLD_MAX_NODES];
+
+    for (uint64_t s = 0; s < slots; s++)
     {
-        const uint64_t i = 2 * j;
+        parts[s] = part[s];
+        memset(sums[s], 0, PMF_LANES * sizeof(uint64_t));
+    }
+    for (uint64_t j0 = begin; j0 < end; j0 += block)
+    {
+        const uint64_t j1 = j0 + block < end ? j0 + block : end;
         for (uint64_t k = 0; k < count; k++)
-        {
-            pmf_vec_fold_group(A0, tables[k], i, R, P);
-            pmf_vec_fold_group(A1, tables[k], i + PMF_VEC_GROUP, R, P);
-            pmf_vec_store_group(outs[k], i, A0, L);
-            pmf_vec_store_group(outs[k], i + PMF_VEC_GROUP, A1, L);
-            pmf_vec_pairs_of(U, V, A0, A1, L);
-            pmf_vec_fold_nodes(F[k], U, V, shape->nodes, P);
-        }
-        if (weights)
-            pmf_vec_load_group(W, weights, j, L);
-        pmf_vec_product_sums_add(&S, F, weights ? W : NULL, shape, P);
+            pmf_vec_fold_outputs(outs[k], tables[k], r, 2 * j0, 2 * j1, params);
+        pmf_vec_product_sums_of(parts, folded, count, weights, shape, j0, j1, params);
+        pmf_vec_add_sums(sums, part, slots, params);
     }
     if (last)
     {
-        for (uint64_t i = 2 * end; i < outs[0]->allocated_n; i += PMF_VEC_GROUP)
-            for (uint64_t k = 0; k < count; k++)
-            {
-                pmf_vec_fold_group(A0, tables[k], i, R, P);
-                pmf_vec_store_group(outs[k], i, A0, L);
-            }
+        for (uint64_t k = 0; k < count; k++)
+            pmf_vec_fold_outputs(outs[k], tables[k], r, 2 * end, outs[0]->allocated_n, params);
         if (end < pairs)
-            pmf_vec_product_sums_load_add(&S, F, (const PMFVector *)outs, count, weights, end,
-                                          pairs, shape, P);
+        {
+            pmf_vec_product_sums_of(parts, folded, count, weights, shape, end, pairs, params);
+            pmf_vec_add_sums(sums, part, slots, params);
+        }
     }
-    pmf_vec_product_sums_finish(sums, &S, shape, P);
 }
 
 static void pmf_vec_fold_and_product_sums_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
@@ -1212,10 +1210,9 @@ static void pmf_vec_fold_and_product_sums_range(const PMFVecJob *job, uint64_t b
 {
     uint64_t *sums[PMF_FOLD_MAX_SUMS * PMF_FOLD_MAX_NODES];
     pmf_vec_product_partials(sums, job, chunk);
-    PMF_WITH_LIMBS(job->params,
-                   pmf_vec_fold_and_product_sums_body(
-                       job->outs, sums, job->tables, job->count, job->s, job->b,
-                       (const PMFProductShape *)job->shape, begin, end, end == job->total, &P_));
+    pmf_vec_fold_and_product_sums_chunk(job->outs, sums, job->tables, job->count, job->s, job->b,
+                                        (const PMFProductShape *)job->shape, begin, end,
+                                        end == job->total, job->params);
 }
 
 void pmf_vec_fold_and_product_sums(PMFVector *outs, uint64_t *const *sums, const PMFVector *tables,
@@ -1240,9 +1237,8 @@ void pmf_vec_fold_and_product_sums(PMFVector *outs, uint64_t *const *sums, const
     if (pmf_vec_split(&job, whole, PMF_VEC_PRODUCT_GRAIN / (2 * count)))
         pmf_vec_reduce_chunks(&job, sums, decoded.sums * decoded.nodes);
     else
-        PMF_WITH_LIMBS(tables[0]->params,
-                       pmf_vec_fold_and_product_sums_body(outs, sums, tables, count, r, weights,
-                                                          &decoded, 0, whole, 1, &P_));
+        pmf_vec_fold_and_product_sums_chunk(outs, sums, tables, count, r, weights, &decoded, 0,
+                                            whole, 1, tables[0]->params);
 }
 
 // One element, 1/2 = (p + 1) / 2: p is odd. PMF_LANES words.
