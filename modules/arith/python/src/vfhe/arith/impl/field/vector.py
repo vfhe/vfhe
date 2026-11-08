@@ -20,7 +20,9 @@ from vfhe.arith.base import (
     _check_bit_field,
     _check_fold_product_sums,
     _sample_positions,
+    encode_product_sums,
     index_buffer,
+    product_sums_fit_kernel,
 )
 from vfhe.util.bindings import ffi, lib
 
@@ -709,7 +711,7 @@ class ExtensionFieldVector(FieldVector):
         """
         tables = list(tables)
         _check_fold_product_sums(tables, sums, nodes, weights)
-        shape = _product_shape(tables, sums, nodes, weights)
+        shape = _encode_for_kernel(tables, sums, nodes, weights)
         if shape is None:
             return FieldVector._fold_product_sums(tables, sums, nodes, weights)
         first = tables[0]
@@ -722,7 +724,7 @@ class ExtensionFieldVector(FieldVector):
             nodes,
             ffi.NULL if weights is None else weights._struct,
         )
-        return _product_sums(first.field, evals, len(sums), nodes)
+        return _wrap_sums(first.field, evals, len(sums), nodes)
 
     @staticmethod
     def fold_and_product_sums(
@@ -744,7 +746,7 @@ class ExtensionFieldVector(FieldVector):
         half = len(first) // 2
         if weights is not None and len(weights) != half // 2:
             raise ValueError(f"{len(weights)} weights for {half // 2} pairs")
-        shape = _product_shape(tables, sums, nodes, weights)
+        shape = _encode_for_kernel(tables, sums, nodes, weights)
         if shape is None:
             folded = [t.fold(r) for t in tables]
             return folded, FieldVector._fold_product_sums(folded, sums, nodes, weights)
@@ -761,7 +763,7 @@ class ExtensionFieldVector(FieldVector):
             nodes,
             ffi.NULL if weights is None else weights._struct,
         )
-        return folded, _product_sums(first.field, evals, len(sums), nodes)
+        return folded, _wrap_sums(first.field, evals, len(sums), nodes)
 
     def _new_value(self):
         """A zeroed native buffer of one element's d coefficients."""
@@ -907,39 +909,41 @@ class ExtensionFieldVector(FieldVector):
         return f"ExtensionFieldVector(n={self._n}, d={self.field.d})"
 
 
-def _product_shape(tables: list, sums: list, nodes: int, weights) -> array | None:
-    """Encode `sums` as the shape words `field_vec_fold_product_sums` reads
-    (`arith.h` describes them), or return None when the kernel cannot take
-    the call: an operand that is not an extension-field vector over the
-    tables' field, no sums, or a shape or degree past the kernel's bounds."""
+def _encode_for_kernel(tables: list, sums: list, nodes: int, weights) -> array | None:
+    """Encode `sums` for the native kernel `field_vec_fold_product_sums`,
+    or return None when the kernel cannot take the call, which then runs the
+    front's generic body.
+
+    The kernel cannot take it when an operand is not an extension-field
+    vector over the tables' field, when the field's degree is above
+    `FIELD_FOLD_MAX_DEGREE`, or when the call does not fit the kernel's
+    limits (`product_sums_fit_kernel`). The encoding is
+    `encode_product_sums`'s.
+    """
     operands = tables if weights is None else [*tables, weights]
     if not all(isinstance(v, ExtensionFieldVector) for v in operands):
         return None
     field = tables[0].field
     if any(v.field is not field for v in operands):
         return None
-    products = [product for entry in sums for product in entry]
-    if (
-        not sums
-        or field.d > lib.FIELD_FOLD_MAX_DEGREE
-        or len(tables) > lib.FIELD_FOLD_MAX_TABLES
-        or nodes > lib.FIELD_FOLD_MAX_NODES
-        or len(sums) > lib.FIELD_FOLD_MAX_SUMS
-        or len(products) > lib.FIELD_FOLD_MAX_PRODUCTS
-        or any(len(f) > lib.FIELD_FOLD_MAX_FACTORS for _, f in products)
-    ):
+    if field.d > lib.FIELD_FOLD_MAX_DEGREE:
         return None
-    words = [len(sums)]
-    for entry in sums:
-        words.append(len(entry))
-        for sign, factors in entry:
-            words += [int(sign < 0), len(factors), *factors]
-    return array("Q", words)
+    limits = (
+        lib.FIELD_FOLD_MAX_TABLES,
+        lib.FIELD_FOLD_MAX_NODES,
+        lib.FIELD_FOLD_MAX_SUMS,
+        lib.FIELD_FOLD_MAX_PRODUCTS,
+        lib.FIELD_FOLD_MAX_FACTORS,
+    )
+    if not product_sums_fit_kernel(tables, sums, nodes, limits):
+        return None
+    return encode_product_sums(sums)
 
 
-def _product_sums(field, evals: list, count: int, nodes: int) -> list[tuple]:
-    """Wrap the kernel's output buffers as elements: one tuple of `nodes`
-    elements per sum."""
+def _wrap_sums(field, evals: list, count: int, nodes: int) -> list[tuple]:
+    """Wrap the kernel's output buffers `evals` as field elements: `count`
+    sums, one tuple of `nodes` elements each, in the order of the sums the
+    kernel was given."""
     return [
         tuple(ExtensionFieldElement(field, evals[s * nodes + t]) for t in range(nodes))
         for s in range(count)

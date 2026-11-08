@@ -5,9 +5,10 @@
 Over ``R_q`` the committed multilinear polynomial has 64 ring elements
 (6 variables): 2^14 coefficients per prime on the small ring, 2^16 on the
 CKKS-like one. Over ``F_(p^2)``, with p the 50-bit prime of polycom's tests,
-it has 2^12 or 2^20 entries. Every code has ``k0 = 16`` and ``c = 4``, so
-the evaluation protocol's default 32 queries fit in its first level. Proofs
-are non-interactive (Fiat-Shamir).
+it has 2^12 or 2^20 entries; over ``F_(p^4)`` with a 48-bit p, 2^16 or 2^20
+entries. The codes have ``k0 = 16`` (``k0 = 256`` over ``F_(p^4)``) and
+``c = 4``, so the evaluation protocol's default 32 queries fit in their first
+level. Proofs are non-interactive (Fiat-Shamir).
 """
 
 from __future__ import annotations
@@ -26,6 +27,24 @@ RING_SHAPES = [
 FIELD_SHAPES = [
     Shape("fp2-q50-v12", prime=562949948178433, w=5, num_vars=12),
     Shape("fp2-q50-v20", prime=562949948178433, w=5, num_vars=20),
+    # F_(p^4) over a 48-bit p with a base code of 256 points, whose root of
+    # unity lies in F_p: the encoder's base step transposes the batch.
+    Shape(
+        "fp4-q48-k256-v16",
+        prime=140737974894593,
+        degree=4,
+        w=3,
+        k0_log=8,
+        num_vars=16,
+    ),
+    Shape(
+        "fp4-q48-k256-v20",
+        prime=140737974894593,
+        degree=4,
+        w=3,
+        k0_log=8,
+        num_vars=20,
+    ),
 ]
 K0_LOG = 4
 C = 4
@@ -47,9 +66,10 @@ class Setting:
             self.f = MLE(ring=ring, variables=self.variables, evaluations=entries)
             self.point = {v: ring.random_exceptional() for v in self.variables}
         else:
-            field = Field(shape["prime"], 2, shape["w"])
+            field = Field(shape["prime"], shape.get("degree", 2), shape["w"])
+            k0_log = shape.get("k0_log", K0_LOG)
             self.domain = field
-            code = FieldFoldableRS(field, k0=1 << K0_LOG, c=C, d=num_vars - K0_LOG)
+            code = FieldFoldableRS(field, k0=1 << k0_log, c=C, d=num_vars - k0_log)
             table = FieldVector(field, 1 << num_vars)
             table.sample_random(b"bench-basefold-table")
             self.f = MLE(field=field, variables=self.variables, evaluations=table)
