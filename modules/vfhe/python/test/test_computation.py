@@ -246,7 +246,7 @@ def test_lazy_relinearization_reads_tensors_a_linear_step_and_a_key_switch():
         computation.tensors
     )
     [switch] = computation.key_switches
-    assert switch.quadratic == combined.get_a_poly(0)
+    assert switch.decomposed == combined.get_a_poly(0)
     assert switch.slots == [combined.get_a_poly(1), combined.get_b_poly()]
     assert switch.output == _components(relinearized)
     assert computation.written_by(switch.versions[0]) is linear
@@ -280,7 +280,7 @@ def test_a_key_switch_of_a_ciphertext_adds_to_the_body_only():
         switched = scheme.keyswitch(ct, ksk)
     computation = Computation(t.operations())
     [switch] = computation.key_switches
-    assert switch.quadratic == ct.get_a_poly(0)
+    assert switch.decomposed == ct.get_a_poly(0)
     assert switch.slots == [None, ct.get_b_poly()]
     assert switch.output == _components(switched)
     assert computation.written_by(_version(t, switched.obj_b())) is switch

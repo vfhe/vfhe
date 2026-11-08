@@ -25,7 +25,8 @@ versions may contain breaking changes.
 - `vfhe.vfhe.computation` reads more of the tape:
   - a key switch wherever it is (`MLWE_Scheme.relinearize`,
     `relinearize_batch`, `keyswitch`, as well as a multiplication), as a
-    `KeySwitch` with the value decomposed, the digits, the key components,
+    `KeySwitch` with the value decomposed (`decomposed`, formerly
+    `quadratic`), the digits, the key components,
     the division by the special primes, the values added (None for a
     component nothing is added to) and the output; the ones that complete
     no tensor product are `Computation.key_switches`;

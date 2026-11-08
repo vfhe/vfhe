@@ -126,7 +126,7 @@ def entries(step: Multiplication | Tensor | KeySwitch | Division) -> list[Entry]
     if isinstance(step, Tensor):
         return _tensor_entries(step)
     if isinstance(step, KeySwitch):
-        found = [Entry("d2", "intermediate", step.quadratic, step)]
+        found = [Entry("d2", "intermediate", step.decomposed, step)]
         for name, slot in zip(("d1", "d0"), step.slots, strict=True):
             if slot is not None:
                 found.append(Entry(name, "intermediate", slot, step))
@@ -161,17 +161,21 @@ def _premultiplies(step: Multiplication | Tensor) -> bool:
 
 
 def _recomposes(switch: KeySwitch, prime: int) -> bool:
-    """Whether the digits taken at ``prime`` recompose to ``d2`` there,
-    within the rounding of the radix digits left out."""
+    """Whether the digits taken at ``prime``, each times its power of two,
+    sum to ``d2`` there: exactly, or within the rounding of the radix
+    digits the decomposition leaves out."""
     taken = [t for t, p in enumerate(switch.primes) if p == prime]
     total = None
     for t in taken:
         term = _over(switch.digits[t], [prime]) * switch.power(t)
         total = term if total is None else total + term
-    difference = _over(switch.quadratic, [prime]) - total
-    e = switch.digit_events[taken[0]]
-    rounding = 1 << (e.log_base * e.dropped - 1) if e.dropped else 0
-    return max(abs(c) for c in difference.get_polynomial(signed=True)) <= rounding
+    target = _over(switch.decomposed, [prime])
+    digit = switch.digit_events[taken[0]]
+    if not digit.dropped:
+        return total == target
+    rounding = 1 << (digit.log_base * digit.dropped - 1)
+    difference = (target - total).get_polynomial(signed=True)
+    return max(abs(c) for c in difference) <= rounding
 
 
 def _switches(switch: KeySwitch) -> bool:
