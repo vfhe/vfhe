@@ -12,6 +12,7 @@ vfhe_c_sources += files(
     'c/src/kernels/fft.c',
     'c/src/kernels/fft_scalar.c',
     'c/src/kernels/interleave.c',
+    'c/src/kernels/reindex.c',
     'c/src/kernels/mod.c',
     'c/src/kernels/mod_basecvt.c',
     'c/src/kernels/mod32.c',

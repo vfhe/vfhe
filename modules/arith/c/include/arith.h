@@ -465,6 +465,18 @@ extern "C"
     // the cost of the gather itself.
     bool field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices,
                           uint64_t count);
+    // Reads `a` through a map of index bits: for i < 2^count,
+    //   out[i] = a[offset + sum_j ((i >> j) & 1) * 2^bits[j]],
+    // the sum over the j with bits[j] >= 0 (a negative bits[j] ignores bit j
+    // of i). For example, bits = {-1, 0} and offset = 2 give
+    // out = {a[2], a[2], a[3], a[3]}. As multilinear tables, variable j of
+    // out is variable bits[j] of a, or one out does not depend on, and a's
+    // other variables are fixed to their bits in `offset`.
+    // Returns false, having written nothing, unless the mapped bits are
+    // distinct, `offset` sets none of them and every index read is below
+    // a->n. `out` holds 2^count elements and does not alias `a`.
+    bool field_vec_reindex(FieldVector out, const FieldVector a, const int64_t *bits,
+                           uint64_t count, uint64_t offset);
     // out[i] = a[2i] + r * (a[2i+1] - a[2i]) for i < a->n / 2, in one pass: the
     // interpolation between adjacent pairs that binds one variable of a
     // multilinear table. `r` is one element. `a->n` must be even, out must hold
@@ -860,6 +872,9 @@ extern "C"
     // out[i] = a[indices[i]]; false and nothing written if an index is out of
     // range. See field_vec_gather.
     bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
+    // field_vec_reindex for pseudo-Mersenne vectors.
+    bool pmf_vec_reindex(PMFVector out, const PMFVector a, const int64_t *bits, uint64_t count,
+                         uint64_t offset);
     // out[i] = a[2i] + r * (a[2i+1] - a[2i]) for i < a->n / 2, in one pass: the
     // interpolation between adjacent pairs that binds one variable of a
     // multilinear table. `r` is one element. `a->n` must be even, out must hold
@@ -1258,33 +1273,35 @@ extern "C"
     void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial *in,
                                        uint64_t count);
     /* The active rows of `p` as words, in natural order: N words per row,
-       rows in ascending base index, and word u + s t of a row is the residue
-       at (u, t) of the native layout, u * (N / s) + t, for split_degree s.
-       In the coefficient domain that is coefficient order; in the mul domain
-       the s residues of each slot are adjacent. Either domain, as the rows
-       are; narrow rows are widened. */
-    void polynomial_RNS_get_natural(uint64_t *out, RNS_Polynomial p);
+       in the order of `rows`, which names each active base index once. Word
+       u + s t of a row is the residue at (u, t) of the native layout,
+       u * (N / s) + t, for split_degree s. In the coefficient domain
+       that is coefficient order; in the mul domain the s residues of each
+       slot are adjacent. Either domain, as the rows are; narrow rows are
+       widened. */
+    void polynomial_RNS_get_natural(uint64_t *out, RNS_Polynomial p, const uint64_t *rows);
     /* The inverse: overwrites the active rows of `p` from `in`, laid out as
-       polynomial_RNS_get_natural writes them. Returns -1, or the position
-       among the active rows of the first row of `in` holding a word >= its
-       prime, in which case `p` is left unchanged. */
-    int64_t polynomial_RNS_set_natural(RNS_Polynomial p, const uint64_t *in);
+       polynomial_RNS_get_natural writes them with the same `rows`. Returns
+       -1, or the position in `rows` of the first row of `in` holding a word
+       >= its prime, in which case `p` is left unchanged. */
+    int64_t polynomial_RNS_set_natural(RNS_Polynomial p, const uint64_t *in, const uint64_t *rows);
     /* polynomial_RNS_get_natural over `count` polynomials on one base with
-       one mask: the L active rows of p[e] start at out + e * L * N. With
-       `to_canonical`, the polynomials are in the mul domain and the rows
-       written are those of their coefficient-domain transform; the
-       polynomials are left as they are. Runs on up to the library's thread
-       limit (parallel.h) when the rows are large enough. */
+       one mask and one order `rows`: the L active rows of p[e] start at
+       out + e * L * N. With `to_canonical`, the polynomials are in the mul
+       domain and the rows written are those of their coefficient-domain
+       transform; the polynomials are left as they are. Runs on up to the
+       library's thread limit (parallel.h) when the rows are large enough. */
     void polynomial_RNS_get_natural_array(uint64_t *out, RNS_Polynomial *p, uint64_t count,
-                                          bool to_canonical);
+                                          const uint64_t *rows, bool to_canonical);
     /* The inverse: overwrites the active rows of p[0 .. count) from `in`,
-       laid out as polynomial_RNS_get_natural_array writes them. With
-       `to_mul`, `in` holds coefficient-domain rows and the polynomials get
-       their mul-domain transform. Returns -1, or the smallest e * L + r such
-       that row r of polynomial e in `in` holds a word >= its prime, in which
-       case the contents of the polynomials are unspecified. */
+       laid out as polynomial_RNS_get_natural_array writes them with the
+       same `rows`. With `to_mul`, `in` holds coefficient-domain rows and the
+       polynomials get their mul-domain transform. Returns -1, or the
+       smallest e * L + r such that row r (base index rows[r]) of polynomial
+       e in `in` holds a word >= its prime, in which case the contents of the
+       polynomials are unspecified. */
     int64_t polynomial_RNS_set_natural_array(RNS_Polynomial *p, const uint64_t *in, uint64_t count,
-                                             bool to_mul);
+                                             const uint64_t *rows, bool to_mul);
     RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N,
                                                         uint64_t rns_mask, RNS_Base base);
     void free_RNS_polynomial_array(uint64_t size, RNS_Polynomial *p);

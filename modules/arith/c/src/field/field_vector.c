@@ -62,6 +62,7 @@ struct FieldVecJob
     uint64_t window, period;
     uint64_t group, window_step, element_step;
     uint8_t *bytes;
+    const VecReindex *reindex;
 };
 
 static void field_vec_chunk(void *ctx, uint64_t chunk)
@@ -1154,6 +1155,25 @@ bool field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indi
     for (uint64_t j = 0; j < a->d; j++)
         for (uint64_t i = 0; i < count; i++)
             out->coeffs[j][i] = a->coeffs[j][indices[i]];
+    return true;
+}
+
+static void field_vec_reindex_range(const FieldVecJob *job, uint64_t begin, uint64_t end)
+{
+    for (uint64_t j = 0; j < job->a->d; j++)
+        vec_reindex_u64(job->out->coeffs[j], job->a->coeffs[j], job->reindex, begin, end);
+}
+
+bool field_vec_reindex(FieldVector out, const FieldVector a, const int64_t *bits, uint64_t count,
+                       uint64_t offset)
+{
+    if (!vec_reindex_valid(bits, count, offset, a->n))
+        return false;
+    VecReindex *plan = (VecReindex *)safe_malloc(sizeof(VecReindex));
+    vec_reindex_plan(plan, bits, count, offset);
+    FieldVecJob job = {.range = field_vec_reindex_range, .out = out, .a = a, .reindex = plan};
+    field_vec_run(&job, 1ULL << count, FIELD_VEC_ADD_GRAIN, MOD_MIN_VECTOR_LEN);
+    free(plan);
     return true;
 }
 

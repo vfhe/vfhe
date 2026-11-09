@@ -149,12 +149,12 @@ int64_t polynomial_RNS_read_rows(void *p, const uint8_t *in, const uint64_t *row
 uint64_t *polynomial_RNS_get_hash_p(void *p);
 void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial *in,
                                    uint64_t count);
-void polynomial_RNS_get_natural(uint64_t *out, void *p);
-int64_t polynomial_RNS_set_natural(void *p, const uint64_t *in);
+void polynomial_RNS_get_natural(uint64_t *out, void *p, const uint64_t *rows);
+int64_t polynomial_RNS_set_natural(void *p, const uint64_t *in, const uint64_t *rows);
 void polynomial_RNS_get_natural_array(uint64_t *out, RNS_Polynomial *p, uint64_t count,
-                                      bool to_canonical);
+                                      const uint64_t *rows, bool to_canonical);
 int64_t polynomial_RNS_set_natural_array(RNS_Polynomial *p, const uint64_t *in, uint64_t count,
-                                         bool to_mul);
+                                         const uint64_t *rows, bool to_mul);
 
 // --- negacyclic FFT ---
 typedef struct _FFT_Plan *FFT_Plan;
@@ -330,6 +330,8 @@ void field_vec_concat(FieldVector out, const FieldVector *parts, uint64_t count)
 void field_vec_clear_padding(FieldVector a);
 bool field_vec_gather(FieldVector out, const FieldVector a, const uint64_t *indices,
                       uint64_t count);
+bool field_vec_reindex(FieldVector out, const FieldVector a, const int64_t *bits, uint64_t count,
+                       uint64_t offset);
 void field_vec_fold(FieldVector out, const FieldVector a, const uint64_t *r);
 void field_vec_fold_blocks(FieldVector out, const FieldVector a, uint64_t block, const uint64_t *r);
 void field_vec_split_blocks(FieldVector lo, FieldVector hi, const FieldVector a, uint64_t block);
@@ -428,6 +430,8 @@ void pmf_vec_interleave(PMFVector out, const PMFVector even, const PMFVector odd
 void pmf_vec_concat(PMFVector out, const PMFVector *parts, uint64_t count);
 void pmf_vec_clear_padding(PMFVector a);
 bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, uint64_t count);
+bool pmf_vec_reindex(PMFVector out, const PMFVector a, const int64_t *bits, uint64_t count,
+                     uint64_t offset);
 void pmf_vec_fold(PMFVector out, const PMFVector a, const uint64_t *r);
 void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const PMFVector a,
                                  const PMFVector b);

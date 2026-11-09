@@ -19,6 +19,7 @@ from vfhe.arith.base import (
     FieldVector,
     _check_bit_field,
     _check_fold_product_sums,
+    _check_reindex,
     _sample_positions,
     encode_product_sums,
     index_buffer,
@@ -647,6 +648,23 @@ class ExtensionFieldVector(FieldVector):
                 f"index out of range for a vector of {self._n}: "
                 f"{next(i for i in view if i >= self._n)}"
             )
+        return result
+
+    def reindex(self, bits, offset: int = 0, out=None) -> ExtensionFieldVector:
+        """Read this vector through a map of index bits, as
+        `FieldVector.reindex` documents, in one native pass."""
+        checked = _check_reindex(bits, offset, self._n)
+        if out is self:
+            raise ValueError("reindex cannot write over the vector it reads")
+        result = self._destination(out, 1 << len(checked))
+        # Checked above, so the kernel cannot refuse it.
+        lib.field_vec_reindex(
+            result._struct,
+            self._struct,
+            ffi.new("int64_t[]", checked),
+            len(checked),
+            offset,
+        )
         return result
 
     def fold(self, r, block: int = 1) -> ExtensionFieldVector:

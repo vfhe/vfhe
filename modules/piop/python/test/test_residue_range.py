@@ -198,6 +198,16 @@ def test_decomposition_accepts_an_honest_witness(field, fields):
     assert order.index("residue_range/s0") > order.index(f"residue_range/w{KAPPA - 1}")
 
 
+def test_max_digit_bits_sets_the_digit_count_per_bound(field, fields):
+    protocol = _protocol(field, chunks=None, max_digit_bits=3)
+    for bits, chunks in ((6, 2), (8, 4)):
+        statement = _statement(
+            _oracles(fields, _values(seed=bits, bound=1 << bits)), bound=1 << bits
+        )
+        assert protocol._shape(statement).chunks == chunks
+        assert _iop(field, protocol).run(statement), bits
+
+
 @pytest.mark.parametrize(
     ("bound", "chunks", "lookups"),
     [(BOUND, CHUNKS, 1), (1 << 7, 2, 2)],

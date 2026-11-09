@@ -63,6 +63,22 @@ static uint64_t active_rows(uint64_t *rows, RNS_Polynomial p)
     return count;
 }
 
+// The number of active rows of `p`. `rows`, the order a caller gives them
+// in, must name each active base index once; asserted.
+static uint64_t ordered_row_count(RNS_Polynomial p, const uint64_t *rows)
+{
+    const uint64_t count = (uint64_t)__builtin_popcountll(p->rns_mask);
+    uint64_t seen = 0;
+    for (uint64_t r = 0; r < count; r++)
+    {
+        assert(rows[r] < p->base->l && !(seen & (1ULL << rows[r])));
+        seen |= 1ULL << rows[r];
+    }
+    assert(seen == p->rns_mask);
+    (void)seen;
+    return count;
+}
+
 void polynomial_RNS_expand_seeded(RNS_Polynomial out, const uint8_t *seed, uint64_t seed_len,
                                   uint64_t stream)
 {
@@ -456,19 +472,17 @@ static void set_natural_row(void *ctx, uint64_t r)
     row_from_natural(job->p, job->rows[r], job->words + r * job->p->base->N);
 }
 
-void polynomial_RNS_get_natural(uint64_t *out, RNS_Polynomial p)
+void polynomial_RNS_get_natural(uint64_t *out, RNS_Polynomial p, const uint64_t *rows)
 {
-    uint64_t rows[64];
-    const uint64_t count = active_rows(rows, p);
+    const uint64_t count = ordered_row_count(p, rows);
     NaturalJob job = {p, out, rows};
     const bool wide = count * p->base->N * sizeof(uint64_t) >= COPY_PARALLEL_BYTES;
     vfhe_parallel_for(count, wide ? 0 : 1, get_natural_row, &job);
 }
 
-int64_t polynomial_RNS_set_natural(RNS_Polynomial p, const uint64_t *in)
+int64_t polynomial_RNS_set_natural(RNS_Polynomial p, const uint64_t *in, const uint64_t *rows)
 {
-    uint64_t rows[64];
-    const uint64_t count = active_rows(rows, p), N = p->base->N;
+    const uint64_t count = ordered_row_count(p, rows), N = p->base->N;
     // Every row is checked before any is written, so a rejected input leaves
     // `p` as it was.
     for (uint64_t r = 0; r < count; r++)
@@ -498,7 +512,7 @@ typedef struct
 {
     RNS_Polynomial *p;
     uint64_t *words;      // L rows of N words per polynomial
-    const uint64_t *rows; // the active base indices, ascending
+    const uint64_t *rows; // the active base indices, in the caller's order
     uint64_t L, rows_per_item, total_rows;
     bool transform; // get: from the mul domain to the coefficient one; set: back
     int64_t *bad;   // set: the smallest e * L + r whose input row is out of range, or -1
@@ -599,7 +613,8 @@ static void set_natural_rows(void *ctx, uint64_t item)
 // Runs `body` over the rows of `count` polynomials, in items of whole rows, on
 // more than one thread when the rows are large enough. A transform is
 // compute-bound work, a plain copy memory-bound.
-static int64_t natural_rows_for(RNS_Polynomial *p, uint64_t *words, uint64_t count, bool transform,
+static int64_t natural_rows_for(RNS_Polynomial *p, uint64_t *words, uint64_t count,
+                                const uint64_t *rows, bool transform,
                                 void (*body)(void *ctx, uint64_t item))
 {
     if (count == 0)
@@ -607,8 +622,7 @@ static int64_t natural_rows_for(RNS_Polynomial *p, uint64_t *words, uint64_t cou
     const RNS_Base base = p[0]->base;
     for (uint64_t e = 0; e < count; e++)
         assert(p[e]->base == base && p[e]->rns_mask == p[0]->rns_mask);
-    uint64_t rows[64];
-    const uint64_t L = active_rows(rows, p[0]), N = base->N;
+    const uint64_t L = ordered_row_count(p[0], rows), N = base->N;
     const uint64_t rows_per_item = NATURAL_ITEM_WORDS > N ? NATURAL_ITEM_WORDS / N : 1;
     const uint64_t total_rows = count * L;
     const uint64_t items = (total_rows + rows_per_item - 1) / rows_per_item;
@@ -621,13 +635,13 @@ static int64_t natural_rows_for(RNS_Polynomial *p, uint64_t *words, uint64_t cou
 }
 
 void polynomial_RNS_get_natural_array(uint64_t *out, RNS_Polynomial *p, uint64_t count,
-                                      bool to_canonical)
+                                      const uint64_t *rows, bool to_canonical)
 {
-    natural_rows_for(p, out, count, to_canonical, get_natural_rows);
+    natural_rows_for(p, out, count, rows, to_canonical, get_natural_rows);
 }
 
 int64_t polynomial_RNS_set_natural_array(RNS_Polynomial *p, const uint64_t *in, uint64_t count,
-                                         bool to_mul)
+                                         const uint64_t *rows, bool to_mul)
 {
-    return natural_rows_for(p, (uint64_t *)in, count, to_mul, set_natural_rows);
+    return natural_rows_for(p, (uint64_t *)in, count, rows, to_mul, set_natural_rows);
 }
