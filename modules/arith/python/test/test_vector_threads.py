@@ -359,7 +359,9 @@ class TestInverseByLevels:
             assert invert(in_place._struct, in_place._struct) == 1
             assert in_place == serial
             return
-        a[{"middle": n // 2, "tail": n - 5}.get(where, where)] = 0
+        index = {"middle": n // 2, "tail": n - 5}.get(where, where)
+        assert isinstance(index, int)
+        a[index] = 0
 
         def refused() -> bool:
             out = a.copy()

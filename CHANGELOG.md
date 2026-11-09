@@ -435,10 +435,6 @@ versions may contain breaking changes.
   definition `L(z) = sum_b G(z, b)` and its composable protocol;
   `Relation_Layer`, `Relation_Equal` / `OutputTest` and `GKR_Start` are the
   pieces of GKR as a composition.
-- Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix` on an
-  unsplit ring: a row is now read with `ffi.unpack` and written with one
-  packed `ffi.memmove` instead of element by element. `BFV_Scheme.encode` /
-  `decode` at N=4096 go from 1.9 / 2.1 ms to 0.27 / 0.29 ms.
 - Add `Polynomial.convert_base(ring, out, exact)`: a value re-expressed over
   another base, which need not contain this one -- the general move
   `base_extend` is the special case of. The default is the fast conversion
@@ -792,8 +788,11 @@ versions may contain breaking changes.
   coefficients of the residue modulo `X^d - w_s` together, slots in the
   order of `get_rou_matrix`. `from_uint64` refuses a word not below its
   prime, leaving the polynomial unchanged.
-- Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix` on a split
-  ring: a row is reordered by slices instead of one coefficient at a time.
+- Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix`: on an
+  unsplit ring, a row is now read with `ffi.unpack` and written with one
+  packed `ffi.memmove` instead of element by element (`BFV_Scheme.encode` /
+  `decode` at N=4096 go from 1.9 / 2.1 ms to 0.27 / 0.29 ms); on a split
+  ring, a row is reordered by slices instead of one coefficient at a time.
 - Add `MLWE_Scheme.sample_batch(msgs, key, lvl=0, n_threads=0)` and
   `CKKS_Scheme.encrypt_batch(messages, key, n_threads=0)`: fresh samples of
   many messages in one native call, through `mlwe_RNS_sample_scaled_batch`.

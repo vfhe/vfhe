@@ -3,6 +3,8 @@
 """The execution tape over CKKS: a product's tensor slots, digits and
 rescales are on it, and what it recorded last is what the ciphertext holds."""
 
+from __future__ import annotations
+
 import pytest
 from vfhe import arith
 from vfhe.arith import Ring

@@ -18,9 +18,11 @@ per marked call that made a ring operation, named after the call:
 
 >>> from vfhe.util import trace
 >>> with trace.recording() as t:
+...     trace.mark("my_layer")
 ...     d = (a * b) * (a * b)
+...     trace.mark("my_layer", enter=False)
 >>> [op.name for op in t.operations()]
-['CKKS_Ciphertext.__mul__', 'CKKS_Ciphertext.__mul__']
+['my_layer']
 
 `Trace.events` and `Trace.operations` drain the tape: what they return is
 gone from it, so a long computation can be read in pieces. With a
@@ -60,7 +62,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import FunctionType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from vfhe.util.bindings import ffi, lib
 
@@ -209,19 +211,32 @@ class _Hook:
 
     A profile function belongs to one thread, so a trace disabled from
     another thread cannot uninstall it there: it is left in place, marking
-    nothing (``active`` off), until that thread enables a trace again."""
+    nothing (``active`` off), until that thread enables a trace again.
+
+    Every event is passed on to the profile function the hook replaced,
+    skipping hooks left inactive, so other profilers keep running."""
 
     def __init__(self) -> None:
         self.labels = _marked()
-        self.previous = sys.getprofile()
+        previous = sys.getprofile()
+        while isinstance(previous, _Hook) and not previous.active:
+            previous = previous.previous
+        self.previous = previous
         self.thread = threading.get_ident()
         self.active = True
 
-    def __call__(self, frame: FrameType, event: str, _arg: object) -> None:
+    def __call__(
+        self,
+        frame: FrameType,
+        event: Literal["call", "return", "c_call", "c_return", "c_exception"],
+        arg: object,
+    ) -> None:
         if self.active and (event == "call" or event == "return"):
             label = self.labels.get(frame.f_code)
             if label is not None:
                 lib.arith_trace_mark(label, 1 if event == "call" else 0)
+        if self.previous is not None:
+            self.previous(frame, event, arg)
 
 
 _hook: _Hook | None = None
@@ -440,7 +455,8 @@ class Trace:
 
 def enable(limit: int | None = None, verify: bool | None = None) -> Trace:
     """Starts recording and returns the `Trace` to read it from; the
-    options are `Trace.enable`'s.
+    options are `Trace.enable`'s. The calls marked are those of the vfhe
+    modules imported before the trace is enabled.
 
     A second call resumes the same tape; `Trace.clear` ends it.
     """

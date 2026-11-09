@@ -149,7 +149,7 @@ class PseudoMersenneNTT:
         self,
         vector: PseudoMersenneVector,
         blocks: int = 1,
-        out=None,
+        out: PseudoMersenneVector | None = None,
         layout: str = "blocks",
     ) -> PseudoMersenneVector:
         """`vector`, held in ``layout``, laid out the way a batched `forward`
@@ -168,13 +168,20 @@ class PseudoMersenneNTT:
         self,
         vector: PseudoMersenneVector,
         blocks: int = 1,
-        out=None,
+        out: PseudoMersenneVector | None = None,
         layout: str = "blocks",
     ) -> PseudoMersenneVector:
         """The inverse of `pack`: a transformed batch back to ``layout``."""
         return self._reshape(vector, blocks, out, self.batch_layout, layout)
 
-    def _reshape(self, vector, blocks, out, source: str, target: str):
+    def _reshape(
+        self,
+        vector: PseudoMersenneVector,
+        blocks: int,
+        out: PseudoMersenneVector | None,
+        source: str,
+        target: str,
+    ):
         for name in (source, target):
             if name not in ("blocks", "interleaved"):
                 raise ValueError(

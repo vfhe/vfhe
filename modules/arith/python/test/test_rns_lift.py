@@ -3,6 +3,8 @@
 """`RNSRing.lift_mod_2_128`: the coefficients as integers in [0, q), modulo
 2^128, against the Python CRT of `get_polynomial`."""
 
+from __future__ import annotations
+
 import random
 
 import pytest

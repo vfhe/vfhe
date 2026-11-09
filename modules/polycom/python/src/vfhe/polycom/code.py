@@ -927,7 +927,9 @@ class FoldableRS:
         reads, and the Merkle leaf (see `pair_leaves`)."""
         return word[2 * i], word[2 * i + 1]
 
-    def leaf_digests_of(self, pairs) -> bytes | memoryview:
+    def leaf_digests_of(
+        self, pairs: list[tuple[RNSPolynomial, RNSPolynomial]]
+    ) -> bytes | memoryview:
         """The leaf digests of `pairs`, packed: entry `k` is
         `leaf_digest(pairs[k])`. The pairs are digested together, as
         `leaf_digests` digests a codeword's."""

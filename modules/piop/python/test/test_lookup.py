@@ -583,10 +583,10 @@ def test_fiat_shamir_is_deterministic(field):
 # --- accounting -------------------------------------------------------------
 
 
-def test_soundness_error_is_the_theorem_bound(field):
+def test_soundness_error_is_the_theorem_bound_with_room_for_a_group(field):
     statement = _statement(field, _bounded())
     reported = Lookup(field).soundness_error(statement)
-    assert reported == ((1 << NUM_VARS) + BETA) / field.prime
+    assert reported == ((2 << NUM_VARS) + BETA) / field.prime
 
 
 # --- under the range protocol, which is what produces these claims ----------
@@ -778,5 +778,7 @@ def test_a_group_of_one_runs_as_a_single_claim(field):
 def test_soundness_error_of_a_group_is_within_the_sum_of_its_claims(field):
     lookup = Lookup(field)
     one = lookup.soundness_error(_statement(field, _bounded()))
-    group = ((1 << (NUM_VARS + 1)) + BETA) / field.prime
-    assert group <= 2 * one
+    for k in range(1, 18):
+        s = (k - 1).bit_length()
+        group = ((1 << (NUM_VARS + s)) + BETA) / field.prime
+        assert group <= k * one

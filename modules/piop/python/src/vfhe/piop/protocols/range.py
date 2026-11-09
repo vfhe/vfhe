@@ -53,6 +53,7 @@ in `modules/piop/range.md`.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -366,6 +367,12 @@ class RangeDecomposition(Protocol):
                 f"sigma = {self.alphabet} must not exceed the smallest RNS prime "
                 f"{min(shape.primes)}, or the challenges leave the "
                 "exceptional set of Z_q"
+            )
+        bound = shape.beta ** (shape.chunks - 1) * shape.top_beta
+        if bound > math.prod(shape.primes):
+            raise ValueError(
+                f"the bound B = 2^{bound.bit_length() - 1} must not exceed the "
+                f"modulus q, of {math.prod(shape.primes).bit_length()} bits"
             )
 
     def soundness_error(self, statement: Statement, domain: Any = None) -> float:
@@ -846,7 +853,7 @@ class ResidueRangeDecomposition(RangeDecomposition):
             raise Rejection(f"{label}: repetition {eta} needs {len(oracles)} answers")
         for oracle, prime, answer in zip(oracles, shape.primes, w, strict=True):
             field = oracle.domain
-            if getattr(answer, "field", None) is not field:
+            if getattr(answer, "field", None) != field:
                 raise Rejection(
                     f"{label}: repetition {eta} has an answer outside its "
                     "oracle's field"

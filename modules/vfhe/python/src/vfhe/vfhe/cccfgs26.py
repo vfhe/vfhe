@@ -160,16 +160,16 @@ def _premultiplies(step: Multiplication | Tensor) -> bool:
     )
 
 
-def _recomposes(switch: KeySwitch, prime: int) -> bool:
-    """Whether the digits taken at ``prime``, each times its power of two,
-    sum to ``d2`` there: exactly, or within the rounding of the radix
-    digits the decomposition leaves out."""
-    taken = [t for t, p in enumerate(switch.primes) if p == prime]
+def _recomposes(switch: KeySwitch, primes: tuple[int, ...]) -> bool:
+    """Whether the digits taken at the residue ``primes``, each times its
+    power of two, sum to ``d2`` modulo their product: exactly, or within
+    the rounding of the radix digits the decomposition leaves out."""
+    taken = [t for t, p in enumerate(switch.primes) if p == primes]
     total = None
     for t in taken:
-        term = _over(switch.digits[t], [prime]) * switch.power(t)
+        term = _over(switch.digits[t], primes) * switch.power(t)
         total = term if total is None else total + term
-    target = _over(switch.decomposed, [prime])
+    target = _over(switch.decomposed, primes)
     digit = switch.digit_events[taken[0]]
     if not digit.dropped:
         return total == target
@@ -203,12 +203,12 @@ def _rescale_relations(division: Division) -> list[Relation]:
 
 def _switch_relations(switch: KeySwitch) -> list[Relation]:
     found = []
-    for prime in dict.fromkeys(switch.primes):
-        if switch.digit_events[switch.primes.index(prime)].log_base:
-            name = f"the digits at {prime} recompose to d2"
+    for primes in dict.fromkeys(switch.primes):
+        if switch.digit_events[switch.primes.index(primes)].log_base:
+            name = f"the digits at {', '.join(map(str, primes))} recompose to d2"
         else:
-            name = f"w_ks[{switch.primes.index(prime)}] recomposes to d2"
-        found.append(Relation(name, lambda p=prime: _recomposes(switch, p)))
+            name = f"w_ks[{switch.primes.index(primes)}] recomposes to d2"
+        found.append(Relation(name, lambda p=primes: _recomposes(switch, p)))
     found.append(Relation("KeySwitch", lambda: _switches(switch)))
     found += [
         Relation("the division by the special primes", lambda d=d: _divides(d))

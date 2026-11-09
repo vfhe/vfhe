@@ -315,8 +315,9 @@ def test_digit_table_is_the_per_entry_one(
     2^128 or entry by entry when a digit is wider than 64 bits, holds the
     digits of the integers the residues define, LSB-first."""
     if large:
-        residue_fields = fields
-        q = P50 * P60
+        # Three primes, so that q is at least the largest bound, 2^128.
+        residue_fields = [*fields, ring.residue_field(0)]
+        q = math.prod(f.prime for f in residue_fields)
     else:
         residue_fields = [ring.residue_field(i) for i in range(len(ring.primes))]
         q = math.prod(ring.primes)
@@ -459,6 +460,13 @@ def test_parameters_are_validated(field, ring):
         _protocol(field, m=0, alphabet=1 << 31)._shape(statement)
     with pytest.raises(ValueError, match="must not exceed the variables"):
         _protocol(field, m=N_VARS + 1)._shape(statement)
+
+
+def test_a_bound_above_the_product_of_the_primes_is_rejected(field, fields):
+    q = math.prod(f.prime for f in fields)
+    statement = _statement(_oracles(fields, _values()), bound=1 << q.bit_length())
+    with pytest.raises(ValueError, match="modulus q"):
+        _protocol(field)._shape(statement)
 
 
 # --- agreement with the ring relation ---------------------------------------

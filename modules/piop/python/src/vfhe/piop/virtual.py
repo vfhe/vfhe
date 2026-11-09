@@ -226,7 +226,11 @@ class VirtualOracle(Oracle):
 
     @classmethod
     def partial_evaluation(
-        cls, constituent, variables: list, fixed: dict, coefficient: Any = 1
+        cls,
+        constituent: Oracle,
+        variables: list,
+        fixed: dict,
+        coefficient: Any = 1,
     ) -> VirtualOracle:
         """`coefficient * p(fixed, .)`: the constituent `p` with the variables
         in `fixed` bound to constants -- elements of its domain, or integers

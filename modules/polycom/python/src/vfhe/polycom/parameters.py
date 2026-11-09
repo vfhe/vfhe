@@ -177,8 +177,9 @@ def basefold_parameters(
     - `gamma = gamma_0 + g` for every `g` in a half-decade grid from
       `10^-2` to `10^-7.5`, where `gamma_0` makes `2d / (gamma^3 |A|)` the
       whole budget left by the batching terms;
-    - `delta = min((Delta + d gamma) / 3, J_gamma(J_gamma(Delta)))`, the
-      largest proximity parameter the theorem admits;
+    - `delta = (1 - 2^-20) min((Delta + d gamma) / 3, J_gamma(J_gamma(Delta)))`,
+      just below the supremum the theorem admits, so that both of its
+      conditions hold strictly;
     - `rep` is the fewest queries for which `basefold_soundness_error`, the
       expression `BasefoldEval.soundness_error` reports, is at most
       `2^-security_bits`, and it must be below `n0 = c k0`, as `BasefoldEval`
@@ -240,7 +241,7 @@ def basefold_parameters(
                 gamma = gamma_0 + gap
                 if gamma >= 1:
                     continue
-                delta = min(
+                delta = (1 - 2**-20) * min(
                     (distance + d * gamma) / 3,
                     _johnson(gamma, _johnson(gamma, distance)),
                 )

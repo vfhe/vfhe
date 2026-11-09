@@ -1397,6 +1397,9 @@ therefore lives inside the PCS's evaluation protocol
 - **[DT24]** Quang Dao, Justin Thaler. *More Optimizations to Sum-Check
   Proving*. Cryptology ePrint Archive, Paper 2024/1210, 2024.
   <https://eprint.iacr.org/2024/1210>
+- **[BDDT25]** Suyash Bagad, Quang Dao, Yuval Domb, Justin Thaler. *Speeding
+  Up Sum-Check Proving*. Cryptology ePrint Archive, Paper 2025/1117, 2025.
+  <https://eprint.iacr.org/2025/1117>
 - **[GWC19]** Ariel Gabizon, Zachary J. Williamson, Oana Ciobotaru. *PLONK:
   Permutations over Lagrange-bases for Oecumenical Noninteractive arguments
   of Knowledge*. Cryptology ePrint Archive, Paper 2019/953, 2019.

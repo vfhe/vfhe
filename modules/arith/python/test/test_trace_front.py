@@ -3,6 +3,8 @@
 """The Python front on the execution tape: the operations `Polynomial` makes
 through the generic interface are recorded, and each equals its event."""
 
+from __future__ import annotations
+
 import pytest
 from vfhe.arith import Ring
 from vfhe.util import trace

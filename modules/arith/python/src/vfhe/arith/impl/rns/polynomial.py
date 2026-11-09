@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Self
 
+    from typing_extensions import Buffer
+
 
 #: The fields `RNSRing.residue_field` returns, one per (N, split_degree, prime).
 _RESIDUE_FIELDS: dict[tuple[int, int, int], ExtensionField] = {}
@@ -815,7 +817,7 @@ class RNSRing(Ring):
                 scale_arr[idx] = vals[k]
         return ffi.new("uint64_t[]", scale_arr)
 
-    def scalar(self, value) -> RNSScalar:
+    def scalar(self, value: int | Sequence[int]) -> RNSScalar:
         """``value`` as a multiplier of this ring's elements: an integer, or
         one integer per prime in `primes` order, each reduced by its prime.
 
@@ -1298,7 +1300,7 @@ class RNSPolynomial(Polynomial):
         )
         return out
 
-    def scaled_lift(self, ring: RNSRing, delta=None) -> RNSPolynomial:
+    def scaled_lift(self, ring: RNSRing, delta: Any = None) -> RNSPolynomial:
         """Lifts the polynomial to a larger ring and scales it by the delta factor."""
         self.to_coeff()
         out = Polynomial(ring)
@@ -1415,7 +1417,7 @@ class RNSPolynomial(Polynomial):
         self.repr = repr
         return self
 
-    def to_uint64(self, repr=repr.coeff) -> array.array:
+    def to_uint64(self, repr: Representation = repr.coeff) -> array.array:
         """The rows in representation `repr`, as one ``array('Q')`` of
         ``ell * N`` words: words ``i * N`` to ``(i + 1) * N - 1`` are the row
         of ``ring.primes[i]``. ``numpy.frombuffer(words, numpy.uint64)
@@ -1440,7 +1442,9 @@ class RNSPolynomial(Polynomial):
         )
         return words
 
-    def from_uint64(self, values, repr=repr.coeff) -> RNSPolynomial:
+    def from_uint64(
+        self, values: Buffer, repr: Representation = repr.coeff
+    ) -> RNSPolynomial:
         """Overwrite with rows laid out as `to_uint64` returns them, holding
         representation `repr`; returns ``self``.
 

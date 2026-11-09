@@ -161,18 +161,23 @@ class Lookup(Protocol):
         return (self.field, self.messages)
 
     def soundness_error(self, statement: Statement, domain: Any = None) -> float:
-        """`(2^ell* + 2^b*) / p`, the bound of [CCCFGS26]'s soundness theorem
-        for its lookup PIOP.
+        """`(2^(n + 1) + beta) / p` for a claim on an oracle over `n`
+        variables into `t_beta`: twice the claim's entries, where
+        [CCCFGS26]'s soundness theorem for its lookup PIOP counts them once.
 
-        The degree of the polynomial `P(Z, Z')` whose vanishing the
-        fingerprint challenges test, over the field they are drawn from. A
-        group of `k` claims is one run with `(2^(ell* + s) + 2^b*) / p`,
-        `s = ceil(log2 k)`, at most the sum of its claims' errors when `k` is
-        a power of two.
+        The theorem bounds a run over `2^ell*` looked-up entries into a table
+        of `2^b*` by `(2^ell* + 2^b*) / p`, the degree of the polynomial
+        `P(Z, Z')` whose vanishing the fingerprint challenges test, over the
+        field they are drawn from. Claims into the same table with the same
+        number of variables count together: a group of `k` is one run over
+        `2^(n + s)` entries, `s = ceil(log2 k)`, with error
+        `(2^(n + s) + beta) / p`. A statement does not determine its group,
+        so each claim reports `2^(n + 1)`: since `2^s < 2k`, the errors of a
+        group's claims add up to at least the group's.
         """
         (mu,) = statement.oracles
         beta = cast("Relation_Lookup", statement.relation).beta
-        return ((1 << mu.num_vars) + beta) / self.field.prime
+        return ((2 << mu.num_vars) + beta) / self.field.prime
 
     # --- the scaffolding both halves build identically ---------------------
 

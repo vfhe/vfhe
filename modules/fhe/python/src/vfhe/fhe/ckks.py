@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from vfhe.arith import (
     ComplexPolynomial,
@@ -522,7 +522,7 @@ class CKKS_Ciphertext(MLWE):
         lvl: int | None = None,
         ring: RNSRing | None = None,
         rank: int | None = None,
-        obj=None,
+        obj: Any = None,
     ):
         super().__init__(scheme, lvl=lvl, ring=ring, rank=rank, obj=obj)
         self.delta = scheme.scaling_factor

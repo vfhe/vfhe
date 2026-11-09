@@ -22,7 +22,7 @@ message.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from vfhe.arith import MLE_Variable
 from vfhe.piop.composer import Composed
@@ -56,7 +56,7 @@ class OutputTest(Protocol):
     reduces_from: type[Relation] = Relation_Equal
     reduces_to: tuple[type[Relation], ...] = (Relation_Eval,)
 
-    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+    def soundness_error(self, statement: Statement, domain: Any = None) -> float | None:
         """s / |A|; the domain defaults to the output oracle's
         (`Oracle.domain`)."""
         if domain is None:
@@ -138,7 +138,7 @@ class GKR(Composed):
     def __init__(self) -> None:
         super().__init__(None, self.name)
 
-    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+    def soundness_error(self, statement: Statement, domain: Any = None) -> float | None:
         """The output test's own error; the layers' is the sumchecks'. The
         domain defaults to the output oracle's (`Oracle.domain`)."""
         if domain is None:
@@ -166,7 +166,7 @@ class GKR_Start(GKR):
     name = "gkr_start"
     reduces_from: type[Relation] = Relation_CircuitSparseIndex.Start
 
-    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+    def soundness_error(self, statement: Statement, domain: Any = None) -> float | None:
         """No random evaluation of its own: the layers' errors only."""
         return 0
 

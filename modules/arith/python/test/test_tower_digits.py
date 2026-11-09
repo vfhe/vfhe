@@ -4,6 +4,8 @@
 switch: a digit of an element's residues, and the approximate round
 division."""
 
+from __future__ import annotations
+
 import pytest
 from vfhe import arith
 from vfhe.arith import Ring, repr

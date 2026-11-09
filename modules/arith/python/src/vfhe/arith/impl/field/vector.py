@@ -29,12 +29,16 @@ from vfhe.util.bindings import ffi, lib
 from .field import ExtensionFieldElement
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
+
+    from vfhe.arith.base import FieldElement
 
     from .field import ExtensionField
 
 
-def _check_coefficients(n: int, d: int, coefficients, start: int) -> int:
+def _check_coefficients(
+    n: int, d: int, coefficients: Sequence[array | memoryview], start: int
+) -> int:
     """The preconditions of `FieldVector.set_coefficients` on a vector of `n`
     elements of a degree-`d` extension; returns the number of elements."""
     if len(coefficients) != d:
@@ -227,7 +231,12 @@ class ExtensionFieldVector(FieldVector):
         return result
 
     def set_uint64(
-        self, values, start: int = 0, shift: int = 0, width: int = 64, high=None
+        self,
+        values: array | memoryview,
+        start: int = 0,
+        shift: int = 0,
+        width: int = 64,
+        high: array | memoryview | None = None,
     ) -> None:
         """See `FieldVector.set_uint64`; one call for all the values."""
         count = _check_bit_field(self._n, values, start, shift, width, high)
@@ -260,7 +269,9 @@ class ExtensionFieldVector(FieldVector):
             out.append(values)
         return out
 
-    def set_coefficients(self, coefficients, start: int = 0) -> None:
+    def set_coefficients(
+        self, coefficients: Sequence[array | memoryview], start: int = 0
+    ) -> None:
         """See `FieldVector.set_coefficients`; one call per coefficient."""
         count = _check_coefficients(self._n, self.field.d, coefficients, start)
         if count:
@@ -650,7 +661,7 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_fold_blocks(result._struct, self._struct, block, element.value)
         return result
 
-    def _check_partner(self, other, name: str) -> None:
+    def _check_partner(self, other: FieldVector, name: str) -> None:
         """Check that `other` is a vector over this field and of this
         vector's length, as the inner products of the two folds need."""
         if not isinstance(other, ExtensionFieldVector):
@@ -660,7 +671,7 @@ class ExtensionFieldVector(FieldVector):
         if len(other) != self._n:
             raise ValueError(f"length mismatch: {self._n} and {len(other)}")
 
-    def fold_inner_products(self, other) -> tuple:
+    def fold_inner_products(self, other: FieldVector) -> tuple:
         """Compute `FieldVector.fold_inner_products` (documented there) with
         the native kernel `field_vec_fold_inner_products`, in one pass over
         both vectors.
@@ -676,7 +687,9 @@ class ExtensionFieldVector(FieldVector):
         lib.field_vec_fold_inner_products(*evals, self._struct, other._struct)
         return tuple(ExtensionFieldElement(self.field, value) for value in evals)
 
-    def fold_and_inner_products(self, other, r) -> tuple:
+    def fold_and_inner_products(
+        self, other: FieldVector, r: FieldElement | int
+    ) -> tuple:
         """Compute `FieldVector.fold_and_inner_products` (documented there)
         with the native kernel `field_vec_fold_and_inner_products`, in one
         pass over both vectors.
@@ -699,7 +712,7 @@ class ExtensionFieldVector(FieldVector):
 
     @staticmethod
     def fold_product_sums(
-        tables: list, sums: list, nodes: int, weights=None
+        tables: list, sums: list, nodes: int, weights: FieldVector | None = None
     ) -> list[tuple]:
         """Compute `FieldVector.fold_product_sums` (documented there) with
         the native kernel `field_vec_fold_product_sums`, in one pass over the
@@ -728,7 +741,11 @@ class ExtensionFieldVector(FieldVector):
 
     @staticmethod
     def fold_and_product_sums(
-        tables: list, r, sums: list, nodes: int, weights=None
+        tables: list,
+        r: FieldElement | int,
+        sums: list,
+        nodes: int,
+        weights: FieldVector | None = None,
     ) -> tuple:
         """Compute `FieldVector.fold_and_product_sums` (documented there)
         with the native kernel `field_vec_fold_and_product_sums`, in one pass
@@ -909,7 +926,9 @@ class ExtensionFieldVector(FieldVector):
         return f"ExtensionFieldVector(n={self._n}, d={self.field.d})"
 
 
-def _encode_for_kernel(tables: list, sums: list, nodes: int, weights) -> array | None:
+def _encode_for_kernel(
+    tables: list, sums: list, nodes: int, weights: FieldVector | None
+) -> array | None:
     """Encode `sums` for the native kernel `field_vec_fold_product_sums`,
     or return None when the kernel cannot take the call, which then runs the
     front's generic body.
@@ -940,7 +959,9 @@ def _encode_for_kernel(tables: list, sums: list, nodes: int, weights) -> array |
     return encode_product_sums(sums)
 
 
-def _wrap_sums(field, evals: list, count: int, nodes: int) -> list[tuple]:
+def _wrap_sums(
+    field: ExtensionField, evals: list, count: int, nodes: int
+) -> list[tuple]:
     """Wrap the kernel's output buffers `evals` as field elements: `count`
     sums, one tuple of `nodes` elements each, in the order of the sums the
     kernel was given."""

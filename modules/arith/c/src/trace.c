@@ -327,6 +327,8 @@ static uint64_t begin(ArithTraceKind kind, ArithRing ring, const ArithElement *o
     if (ring->impl != ARITH_IMPL_RNS)
         return 0;
     Tape *t = tape();
+    if (t == NULL)
+        return 0;
     pthread_mutex_lock(&t->lock);
     uint64_t inputs[ARITH_TRACE_INPUTS] = {0, 0, 0};
     uint32_t n = 0;
@@ -397,8 +399,10 @@ __attribute__((noinline, cold)) void arith_trace_end(uint64_t sequence, const Ar
     if (t == NULL)
         return;
     pthread_mutex_lock(&t->lock);
-    // An open event cannot have been released, so it is still on the tape.
-    if (t->length > 0 && sequence >= t->events[0].sequence)
+    // An open event cannot have been released, so it is still on the tape;
+    // a sequence the tape does not hold is dropped.
+    if (tape() == t && t->length > 0 && sequence >= t->events[0].sequence &&
+        sequence - t->events[0].sequence < t->length)
     {
         const uint64_t index = sequence - t->events[0].sequence;
         ArithTraceEvent *e = &t->events[index];

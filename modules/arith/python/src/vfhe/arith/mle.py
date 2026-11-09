@@ -29,6 +29,8 @@ from .impl.rns.polynomial import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from typing_extensions import Buffer
+
 # Which basis a dense table is written in — a property of the table, not of
 # its domain class.
 MLE_Basis = Enum("MLE_Basis", ["eval", "coeff"])
@@ -126,7 +128,7 @@ def _check_entries_over(ring: RNSRing, entries: list) -> None:
             raise ValueError("a table entry is not over the table's ring")
 
 
-def _ring_coefficient(ring: RNSRing, value) -> RNSPolynomial:
+def _ring_coefficient(ring: RNSRing, value: RNSPolynomial | int) -> RNSPolynomial:
     """A coefficient of a ring-backed linear combination: an element of
     `ring` as it is, or an integer as a constant of `ring`."""
     if isinstance(value, RNSPolynomial):
@@ -386,7 +388,7 @@ class MLE:
         cls,
         ring: RNSRing,
         variables: list,
-        values,
+        values: Buffer,
         repr: Representation = repr.coeff,
     ) -> MLE:
         """A table over `ring` in the evaluation basis, its ``n =

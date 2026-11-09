@@ -170,7 +170,7 @@ class Sumcheck(_SumcheckRounds):
     supported_domains: tuple[type, ...] = (Ring, Field)
 
     def soundness_error(
-        self, statement: Statement, domain=None, degree: int | None = None
+        self, statement: Statement, domain: Any = None, degree: int | None = None
     ) -> float | None:
         """degree * num_vars / |A| (piop.md §6); None if |A| is unknown. The
         domain defaults to the oracle's (`Oracle.domain`), the degree to the
@@ -243,7 +243,7 @@ class SumcheckProd(_SumcheckRounds):
     reduces_to: tuple[type[Relation], ...] = (Relation_Eval,)
     supported_domains: tuple[type, ...] = (Ring, Field)
 
-    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+    def soundness_error(self, statement: Statement, domain: Any = None) -> float | None:
         """k * num_vars / |A| (piop.md §6); None if |A| is unknown. The
         domain defaults to the first factor's (`Oracle.domain`)."""
         if domain is None:

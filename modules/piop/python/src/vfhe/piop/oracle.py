@@ -144,11 +144,10 @@ class EqOracle(TableOracle):
     of `MLE.eq`, held as its point: a query is the product
     `prod_i (z_i x_i + (1 - z_i)(1 - x_i))`, linear in the number of
     variables, and the digest is that of the point. The table is built only
-    when something reads `polynomial` (a prover that folds it as a table, or
-    the ideal decider); a sumcheck prover reads `point` instead, to factor
-    the equality polynomial out of its round messages."""
+    when something reads `polynomial`; `point` gives the equality polynomial
+    in factored form without it."""
 
-    def __init__(self, domain, point: list, variables: list) -> None:
+    def __init__(self, domain: Any, point: list, variables: list) -> None:
         if len(point) != len(variables):
             raise ValueError(f"{len(point)} coordinates for {len(variables)} variables")
         self._domain = domain
