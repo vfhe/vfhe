@@ -1135,6 +1135,36 @@ def index_buffer(indices):
     return view
 
 
+def _check_reindex(bits, offset: int, length: int) -> list[int]:
+    """Check `FieldVector.reindex`'s `bits` and `offset` against a vector of
+    `length` elements, and return `bits` as the kernels take it: one int per
+    bit of the result's indices, -1 where `bits` has None.
+
+    Raises ValueError when the map would read a source bit twice, when
+    `offset` sets a bit the map reads, or when it would read past the end.
+    """
+    bits = [-1 if b is None else int(b) for b in bits]
+    if len(bits) > 63:
+        raise ValueError(f"cannot reindex onto 2^{len(bits)} elements")
+    if offset < 0:
+        raise ValueError(f"offset must be non-negative, got {offset}")
+    mapped = 0
+    for b in bits:
+        if b < -1:
+            raise ValueError(f"a source bit must be non-negative or None, got {b}")
+        if b >= 0:
+            if mapped >> b & 1:
+                raise ValueError(f"source bit {b} is read twice")
+            mapped |= 1 << b
+    if offset & mapped:
+        raise ValueError("offset sets a bit the map reads")
+    if offset | mapped >= length:
+        raise ValueError(
+            f"the map reads index {offset | mapped} of a vector of {length}"
+        )
+    return bits
+
+
 def _check_bit_field(
     n: int,
     values: array | memoryview,
@@ -1980,6 +2010,46 @@ class FieldVector(metaclass=_ImplementationDispatch):
         plain sequence rather than silently read as unsigned.
         """
         return type(self)(self.field, [self[i] for i in indices])
+
+    def reindex(
+        self, bits, offset: int = 0, out: FieldVector | None = None
+    ) -> FieldVector:
+        """Read this vector through a map of index bits.
+
+        The result has ``2^len(bits)`` elements. Its element ``i`` is element
+        ``offset + sum_j ((i >> j) & 1) * 2^bits[j]`` of this vector, where
+        the sum skips the ``j`` with ``bits[j]`` None: bit ``j`` of ``i`` is
+        then ignored. For example, with ``bits = [None, 0]`` and
+        ``offset = 2``, the result is ``[v[2], v[2], v[3], v[3]]``.
+
+        Read as multilinear tables, bit ``j`` of an index being variable
+        ``j``: variable ``j`` of the result is variable ``bits[j]`` of this
+        table, or, where ``bits[j]`` is None, a variable the result does not
+        depend on. The variables of this table that `bits` does not name are
+        fixed to their bits in `offset`. One call thus restricts a table to
+        0/1 values of some variables, renames the others and adds new ones.
+
+        Raises ValueError unless the named bits are distinct, `offset` sets
+        none of them, and every index read is below the length.
+
+        :param bits: one entry per bit of the result's indices: the bit of
+            this vector's indices it supplies, or None.
+        :param offset: the bits of this vector's indices that are the same
+            for every element read.
+        :param out: where to write: a vector of ``2^len(bits)`` elements,
+            not this one. A new vector when omitted.
+        :returns: `out`, or the vector allocated for the result.
+        """
+        checked = _check_reindex(bits, offset, len(self))
+        sources = [offset]
+        for b in checked:
+            sources += sources if b < 0 else [s | 1 << b for s in sources]
+        gathered = self.query(sources)
+        if out is None:
+            return gathered
+        for i in range(len(gathered)):
+            out[i] = gathered[i]
+        return out
 
     def fold_twisted(
         self,

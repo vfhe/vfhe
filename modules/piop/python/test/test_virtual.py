@@ -35,7 +35,12 @@ from vfhe.piop.protocols import Sumcheck, VirtualEval
 from vfhe.piop.protocols.sumcheck import prover_view as view_module
 from vfhe.piop.protocols.sumcheck import rounds as rounds_module
 from vfhe.piop.relations import Relation_Sum, Relation_Zero
-from vfhe.piop.virtual import resolve_table
+from vfhe.piop.virtual import (
+    expand_table,
+    gather_bits,
+    resolve_table,
+    restrict_boolean,
+)
 
 
 class _IntDomain:
@@ -903,3 +908,95 @@ def test_every_oracle_kind_names_its_domain():
     foreign = TableOracle(MLE(ring=other, variables=x, evaluations=[1, 2, 3, 4]))
     with pytest.raises(ValueError, match="different domains"):
         _ = VirtualOracle.product([table, foreign]).domain
+
+
+def _field_table(field, names, seed=b"table"):
+    from vfhe.arith import FieldVector
+
+    vector = FieldVector(field, 1 << len(names))
+    vector.sample_random(seed)
+    return MLE(field=field, variables=_vars(*names), evaluations=vector)
+
+
+@pytest.mark.parametrize("domain", ["field", "ring"])
+@pytest.mark.parametrize(
+    "order", [(2, 0, 1), (None, 0, 1, 2), (0, None, 2, None, 1), (1, 2, None, 0)]
+)
+def test_expand_table_is_the_entry_by_entry_expansion(domain, order):
+    """Entry `idx` of the expansion is the table's entry at the bits of `idx`
+    where its variables now sit (`gather_bits`), the added variables
+    (`None`) ignored."""
+    if domain == "field":
+        table = _field_table(ExtensionField((1 << 61) - 1, 2, 3), ["a0", "a1", "a2"])
+    else:
+        ring = Ring(16, prime_size=[30], split_degree=1)
+        table = MLE(
+            ring=ring,
+            variables=_vars("a0", "a1", "a2"),
+            evaluations=[ring.random_element() for _ in range(8)],
+        )
+    variables = [
+        table.variables[k] if k is not None else MLE_Variable(f"new{j}")
+        for j, k in enumerate(order)
+    ]
+    own = [variables.index(v) for v in table.variables]
+    expanded = expand_table(table, variables)
+    assert expanded.variables == variables
+    for idx in range(1 << len(variables)):
+        assert expanded.table[idx] == table.table[gather_bits(idx, own)]
+
+
+@pytest.mark.parametrize("which", ["ints", "elements"])
+def test_restrict_boolean_is_the_partial_evaluation_at_bits(which):
+    field = ExtensionField((1 << 61) - 1, 4, 3)
+    table = _field_table(field, ["a0", "a1", "a2", "a3"])
+    a = table.variables
+    bit = (
+        (lambda b: b) if which == "ints" else (lambda b: field.one if b else field.zero)
+    )
+    for fixed in (
+        {a[1]: bit(1)},
+        {a[0]: bit(0), a[3]: bit(1)},
+        {a[2]: bit(1), a[0]: bit(1)},
+    ):
+        restricted = restrict_boolean(table, fixed)
+        want = table.evaluate(fixed, in_place=False)
+        assert restricted is not None and restricted.variables == want.variables
+        assert list(restricted.table) == list(want.table)
+    # Not bits, a variable the table lacks, or a ring table: left to the caller.
+    assert restrict_boolean(table, {a[0]: 2}) is None
+    assert restrict_boolean(table, {a[0]: FieldElement(field, [0, 1, 0, 0])}) is None
+    assert restrict_boolean(table, {MLE_Variable("other"): 1}) is None
+    ring = Ring(16, prime_size=[30], split_degree=1)
+    ring_table = MLE(
+        ring=ring, variables=_vars("b0"), evaluations=[ring.random_element()] * 2
+    )
+    assert restrict_boolean(ring_table, {ring_table.variables[0]: 1}) is None
+
+
+def test_a_field_restriction_resolves_by_the_gather():
+    field = ExtensionField((1 << 61) - 1, 2, 3)
+    table = _field_table(field, ["t", "x0", "x1"])
+    t, x0, x1 = table.variables
+    r = _vars("r0", "r1")
+    restriction = VirtualOracle.restriction(TableOracle(table), r, {t: 1})
+    resolved = resolve_table(restriction)
+    assert resolved.variables == r
+    assert list(resolved.table) == [
+        table.table[1],
+        table.table[3],
+        table.table[5],
+        table.table[7],
+    ]
+    # A dense view of a virtual oracle reading the same table through a
+    # restriction and an added variable: the same messages as the folds.
+    y = MLE_Variable("y")
+    G = VirtualOracle(
+        [y, *r], [TableOracle(table)], [(1, (0,))], maps=[{t: 0, x0: r[0], x1: r[1]}]
+    )
+    view = view_module.prover_view(G, {}, strategy="dense")
+    (expanded,) = view.tables
+    want = table.evaluate({t: 0}, in_place=False)
+    assert [expanded.table[i] for i in range(8)] == [
+        want.table[i >> 1] for i in range(8)
+    ]

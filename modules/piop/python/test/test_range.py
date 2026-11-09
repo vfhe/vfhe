@@ -27,6 +27,7 @@ from vfhe.piop.protocols.range import (
     base_digits,
     centered,
     digit_alphabets,
+    digit_count,
     eq_int,
     unpacked_evaluation,
 )
@@ -173,6 +174,73 @@ def test_digit_alphabets(bits, chunks, beta, top_beta):
     left: the same alphabet when `c` divides `log2(B)`."""
     assert digit_alphabets(1 << bits, chunks) == (beta, top_beta)
     assert beta ** (chunks - 1) * top_beta == 1 << bits
+
+
+@pytest.mark.parametrize(
+    ("bits", "max_digit_bits", "chunks"),
+    [
+        (6, 6, 1),  # one digit already fits
+        (6, 5, 2),
+        (8, 2, 4),
+        (5, 3, 2),  # a short top digit: 3 + 2 bits
+        (44, 16, 4),  # 22-bit halves are too wide
+        (55, 16, 4),
+        (87, 16, 8),
+        (109, 16, 8),
+    ],
+)
+def test_digit_count_is_the_fewest_digits_that_fit(bits, max_digit_bits, chunks):
+    assert digit_count(1 << bits, max_digit_bits) == chunks
+    beta, _ = digit_alphabets(1 << bits, chunks)
+    assert beta <= 1 << max_digit_bits
+    if chunks > 1:
+        assert digit_alphabets(1 << bits, chunks // 2)[0] > 1 << max_digit_bits
+
+
+def test_digit_count_rejects_what_no_power_of_two_decomposes():
+    with pytest.raises(ValueError, match="B = 2\\^b"):
+        digit_count(100, 4)
+    with pytest.raises(ValueError, match="at least 1"):
+        digit_count(1 << 8, 0)
+    # Nine bits in digits of at most three: four digits leave nothing for
+    # the top one, and eight digits of two bits overshoot.
+    with pytest.raises(ValueError, match="no power-of-two"):
+        digit_count(1 << 9, 3)
+
+
+def test_chunks_or_max_digit_bits(ring, field):
+    for kw in ({"chunks": None}, {"max_digit_bits": 4}):
+        with pytest.raises(ValueError, match="exactly one"):
+            _protocol(field, ring, **kw)
+    with pytest.raises(ValueError, match="at least 1"):
+        _protocol(field, ring, chunks=None, max_digit_bits=0)
+
+
+def test_max_digit_bits_sets_the_digit_count_per_bound(ring, field):
+    """One protocol, two bounds: each claim's `c` follows from its bound,
+    and both runs are honest ones that accept."""
+    protocol = _protocol(field, ring, chunks=None, max_digit_bits=3)
+    assert protocol.parameters()[5] == ("max_digit_bits", 3)
+    for bits, chunks in ((6, 2), (8, 4)):
+        bound = 1 << bits
+        v = _witness(ring, seed=bits, bound=bound)
+        statement = Statement(Relation_Range(bound), oracles=[TableOracle(v)])
+        assert protocol._shape(statement).chunks == chunks
+        iop = IOP(domain=field)
+        iop.register(Relation_Range, protocol)
+        assert iop.run(statement), bits
+
+
+def test_decomposition_over_a_ring_listing_its_primes_out_of_base_order(ring, field):
+    """The verifier reads the rows of `to_uint64` by the ring's prime order;
+    a ring listing the base's primes the other way round proves as well."""
+    reversed_ring = Ring(ring.N, primes=list(reversed(ring.primes)), split_degree=1)
+    assert sorted(reversed_ring.prime_indices) != reversed_ring.prime_indices or (
+        sorted(ring.prime_indices) != ring.prime_indices
+    )
+    for each in (ring, reversed_ring):
+        v = _witness(each, seed=5)
+        assert _iop(each, field).run(_statement(v))
 
 
 def test_relation_lookup_check(field):

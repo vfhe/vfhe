@@ -429,6 +429,7 @@ class MLE:
             handles,
             ffi.from_buffer("uint64_t[]", view.cast("B")),
             count,
+            ring._row_order,
             repr is Representation.coeff,
         )
         if bad >= 0:
@@ -466,6 +467,7 @@ class MLE:
                 ffi.from_buffer("uint64_t[]", words),
                 handles,
                 len(views),
+                ring._row_order,
                 repr is Representation.coeff,
             )
         return words

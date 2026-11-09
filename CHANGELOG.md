@@ -14,6 +14,22 @@ versions may contain breaking changes.
 
 ### Added
 
+- `FieldVector.reindex(bits, offset=0, out=None)` reads a vector through a
+  map of index bits: element `i` of the result is element
+  `offset + sum_j ((i >> j) & 1) * 2^bits[j]`, and a `None` in `bits`
+  ignores bit `j` of `i`. On multilinear tables, one call restricts a
+  table to 0/1 values of some variables, renames the others and adds
+  variables the result does not depend on. It is native for
+  extension-field and pseudo-Mersenne vectors (`field_vec_reindex`,
+  `pmf_vec_reindex`) and runs on the library's threads. Runs of
+  consecutive entries are copied whole; other positions are looked up,
+  with a gather under AVX-512.
+- `RangeDecomposition` and `ResidueRangeDecomposition` take
+  `max_digit_bits` in place of `chunks`: each claim's number of digits is
+  then the fewest that keep every digit within that many bits
+  (`vfhe.piop.protocols.range.digit_count`), so one protocol serves
+  claims with bounds that no single digit count fits.
+
 - `arith_scaled_lift(ring, out, a, from)`, a generic operation: `a`, an
   element of a ring with modulus `Q`, as an element of `ring`, which holds
   `Q`'s primes and more, multiplied by the product `Q'` of the primes it
@@ -860,6 +876,20 @@ versions may contain breaking changes.
 
 ### Changed
 
+- `piop.virtual.expand_table` expands a field table with one native pass
+  (`FieldVector.reindex`) instead of a Python loop over the entries, and
+  a table of ring entries through a list of positions built in `O(2^n)`
+  rather than `O(n 2^n)`. Restricting a dense field table to bits
+  (`VirtualOracle.dense_constituent`, `resolve_table`) is one gather
+  instead of a fold per fixed variable (`restrict_boolean`).
+- `BasefoldEval`'s batched opening adds the eq~ tables of the claims on one
+  polynomial into their sum as they are built, so the prover holds two
+  tables per polynomial (three while a ring sum is replaced) rather than
+  one per claim. The transcript is unchanged.
+- **BREAKING (C)**: `polynomial_RNS_get_natural`, `polynomial_RNS_set_natural`
+  and their `_array` forms take the order of the rows, `rows` (the base
+  indices of the active primes), as `polynomial_RNS_write_rows` does.
+
 - `CKKS_Scheme.rescale` and `rational_rescale` state their rounding: each
   component becomes `round(P_l * c / q_drop)` modulo the next level's
   modulus (`P_l = 1` for nested levels), the remainder being the centered
@@ -1435,6 +1465,15 @@ versions may contain breaking changes.
 - **BREAKING**: `CGGI16_Key.b_prec`, which nothing read.
 
 ### Fixed
+
+- Fix `RNSPolynomial.to_uint64` / `from_uint64` and `MLE.to_uint64` /
+  `from_uint64` on a ring that lists its primes in another order than the
+  shared base registered them in. That happens to a ring built after
+  another of the same `N` and split degree whose primes it reuses out of
+  order. The rows came in the base's order instead of `ring.primes`'s,
+  silently permuted, and a value above its prime was reported against the
+  wrong prime. The range protocols read the rows of `to_uint64` in the
+  ring's order, so they rejected honest claims over such a ring.
 
 - Fix `vfhe.vfhe.computation.Division.remainder` when the divisor exceeds
   the quotient's modulus: it was computed modulo the quotient's ring, which

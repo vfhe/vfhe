@@ -270,6 +270,9 @@ class RNSRing(Ring):
         )
         self.base = registry().bases[(self.N, self.split_degree)]
         self.mask = sum(1 << idx for idx in self.prime_indices)
+        # `prime_indices` as a native array, for the kernels that lay rows
+        # out in the order of `primes`. The base's index order can differ.
+        self._row_order = ffi.new("uint64_t[]", self.prime_indices)
         self._pow2_consts: dict[int, tuple] = {}
 
     @classmethod
@@ -1438,7 +1441,7 @@ class RNSPolynomial(Polynomial):
         view = self._viewed_as(repr)  # a local: the call reads its rows
         words = array.array("Q", bytes(8 * self.ring.ell * self.ring.N))
         self.ring.lib.polynomial_RNS_get_natural(
-            ffi.from_buffer("uint64_t[]", words), view.obj
+            ffi.from_buffer("uint64_t[]", words), view.obj, self.ring._row_order
         )
         return words
 
@@ -1462,7 +1465,9 @@ class RNSPolynomial(Polynomial):
         if view.nbytes != 8 * size:
             raise ValueError(f"{view.nbytes // 8} values for {size} residues")
         bad = self.ring.lib.polynomial_RNS_set_natural(
-            self.obj, ffi.from_buffer("uint64_t[]", view.cast("B"))
+            self.obj,
+            ffi.from_buffer("uint64_t[]", view.cast("B")),
+            self.ring._row_order,
         )
         if bad >= 0:
             raise ValueError(

@@ -709,6 +709,29 @@ def test_table_from_uint64_refuses_a_value_above_its_prime():
         MLE.from_uint64(ring, table.variables, array("I", [0] * len(words)))
 
 
+@pytest.mark.parametrize("d", [1, 4])
+@pytest.mark.parametrize("representation", [repr.coeff, repr.ntt])
+def test_table_uint64_rows_follow_the_ring_prime_order(d, representation):
+    # Of a ring and the one listing its primes reversed, one lists them out
+    # of the shared base's order; the rows follow `ring.primes` in both.
+    first = Ring(64, prime_size=[28, 31, 50], split_degree=d)
+    for ring in (first, Ring(64, primes=list(reversed(first.primes)), split_degree=d)):
+        table = _random_table(ring, 2)
+        words = table.to_uint64(repr=representation)
+        width = ring.ell * ring.N
+        for k, entry in enumerate(table.table):
+            rows = [
+                list(words[k * width + i * ring.N : k * width + (i + 1) * ring.N])
+                for i in range(ring.ell)
+            ]
+            assert rows == entry.get_coeff_matrix(repr=representation)
+        back = MLE.from_uint64(ring, table.variables, words, repr=representation)
+        assert all(a == b for a, b in zip(back.table, table.table, strict=True))
+        words[(1 * ring.ell + 2) * ring.N] = ring.primes[2]
+        with pytest.raises(ValueError, match=f"entry 1, row 2 .* {ring.primes[2]}"):
+            MLE.from_uint64(ring, table.variables, words, repr=representation)
+
+
 @pytest.fixture
 def threads():
     """Lets the test's parallel calls use up to 8 threads (vfhe defaults to 1)."""

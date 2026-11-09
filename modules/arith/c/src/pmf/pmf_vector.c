@@ -1755,6 +1755,29 @@ bool pmf_vec_gather(PMFVector out, const PMFVector a, const uint64_t *indices, u
     return valid;
 }
 
+static void pmf_vec_reindex_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
+                                  uint64_t chunk)
+{
+    (void)chunk;
+    for (uint64_t k = 0; k < job->params->limbs; k++)
+        vec_reindex_u64(job->out->limbs[k], job->a->limbs[k], (const VecReindex *)job->shape, begin,
+                        end);
+}
+
+bool pmf_vec_reindex(PMFVector out, const PMFVector a, const int64_t *bits, uint64_t count,
+                     uint64_t offset)
+{
+    if (!vec_reindex_valid(bits, count, offset, a->n))
+        return false;
+    VecReindex *plan = (VecReindex *)safe_malloc(sizeof(VecReindex));
+    vec_reindex_plan(plan, bits, count, offset);
+    PMFVecJob job = {
+        .range = pmf_vec_reindex_range, .params = a->params, .out = out, .a = a, .shape = plan};
+    pmf_vec_run(&job, 1ULL << count, pmf_vec_move_grain(a->params));
+    free(plan);
+    return true;
+}
+
 int pmf_vec_is_equal(const PMFVector a, const PMFVector b)
 {
     if (a->n != b->n || a->params->limbs != b->params->limbs)

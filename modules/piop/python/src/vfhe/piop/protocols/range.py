@@ -19,9 +19,10 @@ range PIOP `Pi*_range`, the variant of its appendix that takes the
 auxiliary ring to be a large prime field `F_p`. It reads the relation as a
 lookup into `T_B`, the table of all values with coefficients below `B`
 [CCCFGS25; CCCFGS26], which the decomposition into `c` digits turns into
-lookups in `t_beta`; `c` is the protocol's parameter (`chunks`), as in
-Lasso, and `B` must be a power of two. The prover sends the digits as an
-oracle over `F_p`, and what remains is
+lookups in `t_beta`. `c` is the protocol's parameter (`chunks`), as in
+Lasso, or follows from `B` and the widest digit allowed (`max_digit_bits`,
+see `digit_count`). `B` must be a power of two. The prover sends the digits
+as an oracle over `F_p`, and what remains is
 
 - that the digits *recompose* to the coefficients: an identity between the
   unpacked polynomial and the digit polynomial over the integers, tested
@@ -174,6 +175,39 @@ def digit_alphabets(bound: int, chunks: int) -> tuple[int, int]:
     return 1 << width, 1 << (bits - (chunks - 1) * width)
 
 
+def digit_count(bound: int, max_digit_bits: int) -> int:
+    """Return the number of digits `c` that values below `bound` split into
+    when no digit may have more than `max_digit_bits` bits.
+
+    `c` is the smallest power of two whose digits (`digit_alphabets(bound,
+    c)`) have at most `max_digit_bits` bits each, that is
+    `beta <= 2^max_digit_bits`, with the most significant digit keeping at
+    least one bit. Fewer digits mean a smaller digit oracle, so this is the
+    cheapest `c` whose lookup table `t_beta` has at most
+    `2^max_digit_bits` entries. For example, `digit_count(2**44, 16)` is 4
+    (four digits of 11 bits) and `digit_count(2**87, 16)` is 8 (seven
+    digits of 11 bits and one of 10).
+
+    `bound` must be a power of two `B = 2^b > 1`. Raises ValueError when no
+    power of two `c` fits.
+    """
+    if bound <= 1 or bound & (bound - 1):
+        raise ValueError(f"the decomposition needs a bound B = 2^b > 1, got {bound}")
+    if max_digit_bits < 1:
+        raise ValueError(f"max_digit_bits must be at least 1, got {max_digit_bits}")
+    bits = bound.bit_length() - 1
+    chunks = 1
+    while chunks <= bits:
+        width = -(-bits // chunks)
+        if width <= max_digit_bits and bits - (chunks - 1) * width >= 1:
+            return chunks
+        chunks *= 2
+    raise ValueError(
+        f"no power-of-two number of digits of at most {max_digit_bits} bits "
+        f"decomposes log2(B) = {bits} bits with a bit left for the top digit"
+    )
+
+
 @dataclass(frozen=True)
 class _Shape:
     """The dimensions of one range claim, derived identically by both parties."""
@@ -254,7 +288,10 @@ class RangeDecomposition(Protocol):
     of two at most the smallest prime of `q`; `kappa`, the number of
     repetitions (soundness `((ell + nu) / sigma)^kappa`); `ring`, the `R_q`
     of the claims; `chunks`, the number `c` of digits per coefficient
-    (`digit_alphabets`); `messages`, how `mu'` travels (`OracleMessages`).
+    (`digit_alphabets`); or, instead of `chunks`, `max_digit_bits`, the
+    widest digit allowed, and then each claim gets the `c` that
+    `digit_count` gives for its bound; `messages`, how `mu'` travels
+    (`OracleMessages`).
     """
 
     name = "range"
@@ -268,11 +305,17 @@ class RangeDecomposition(Protocol):
         alphabet: int,
         kappa: int,
         ring: Any,
-        chunks: int,
+        chunks: int | None = None,
         messages: OracleMessages | None = None,
+        *,
+        max_digit_bits: int | None = None,
     ) -> None:
-        if chunks <= 0 or chunks & (chunks - 1):
+        if (chunks is None) == (max_digit_bits is None):
+            raise ValueError("give exactly one of chunks and max_digit_bits")
+        if chunks is not None and (chunks <= 0 or chunks & (chunks - 1)):
             raise ValueError(f"chunks c must be a power of two, got {chunks}")
+        if max_digit_bits is not None and max_digit_bits < 1:
+            raise ValueError(f"max_digit_bits must be at least 1, got {max_digit_bits}")
         if alphabet <= 1 or alphabet & (alphabet - 1):
             raise ValueError(
                 f"the alphabet size sigma must be a power of two > 1, got {alphabet}"
@@ -285,8 +328,11 @@ class RangeDecomposition(Protocol):
         self.m = m
         self.alphabet = alphabet
         self.kappa = kappa
-        # c, the number of base-beta digits each coefficient splits into.
+        # c, the number of base-beta digits each coefficient splits into;
+        # None when it follows from each claim's bound (`chunks_for`).
         self.chunks = chunks
+        # The widest digit allowed, in bits, when `chunks` is None.
+        self.max_digit_bits = max_digit_bits
         # The R_q the claims are about: N, the primes and q are read from it.
         self.ring = ring
         # How mu' is sent: its entries (the ideal model) by default.
@@ -301,9 +347,20 @@ class RangeDecomposition(Protocol):
             self.alphabet,
             self.kappa,
             self.ring,
-            self.chunks,
+            self.chunks
+            if self.chunks is not None
+            else ("max_digit_bits", self.max_digit_bits),
             self.messages,
         )
+
+    def chunks_for(self, bound: int) -> int:
+        """Return the number of digits `c` for a claim with bound `bound`:
+        `chunks` when it was given, else `digit_count(bound,
+        max_digit_bits)`."""
+        if self.chunks is not None:
+            return self.chunks
+        assert self.max_digit_bits is not None
+        return digit_count(bound, self.max_digit_bits)
 
     # --- shape and parameter conditions -----------------------------------
 
@@ -320,15 +377,16 @@ class RangeDecomposition(Protocol):
         ring = self.ring
         ell = v.num_vars
         nu = ring.N.bit_length() - 1
-        gamma = self.chunks.bit_length() - 1
-        beta, top_beta = digit_alphabets(relation.bound, self.chunks)
+        chunks = self.chunks_for(relation.bound)
+        gamma = chunks.bit_length() - 1
+        beta, top_beta = digit_alphabets(relation.bound, chunks)
         shape = _Shape(
             ell=ell,
             nu=nu,
             gamma=gamma,
             beta=beta,
             top_beta=top_beta,
-            chunks=self.chunks,
+            chunks=chunks,
             ring=ring,
             primes=tuple(ring.primes),
             variables=[MLE_Variable(f"mu{i}") for i in range(ell + nu + gamma)],
@@ -749,8 +807,10 @@ class ResidueRangeDecomposition(RangeDecomposition):
     `kappa U` evaluation claims on the residue oracles at the integer
     points, in place of the `kappa` claims on the ring oracle.
 
-    The constructor takes `(field, m, alphabet, kappa, chunks)`: the primes
-    come from the oracles' domains (`Oracle.domain`).
+    The constructor takes `RangeDecomposition`'s parameters without the
+    ring, `(field, m, alphabet, kappa, chunks)` or `max_digit_bits` instead
+    of `chunks`. The primes come from the oracles' domains
+    (`Oracle.domain`).
     """
 
     name = "residue_range"
@@ -762,10 +822,21 @@ class ResidueRangeDecomposition(RangeDecomposition):
         m: int,
         alphabet: int,
         kappa: int,
-        chunks: int,
+        chunks: int | None = None,
         messages: OracleMessages | None = None,
+        *,
+        max_digit_bits: int | None = None,
     ) -> None:
-        super().__init__(field, m, alphabet, kappa, None, chunks, messages)
+        super().__init__(
+            field,
+            m,
+            alphabet,
+            kappa,
+            None,
+            chunks,
+            messages,
+            max_digit_bits=max_digit_bits,
+        )
 
     def _shape(self, statement: Statement) -> _Shape:
         oracles = statement.oracles
@@ -776,15 +847,16 @@ class ResidueRangeDecomposition(RangeDecomposition):
             )
         primes = residue_primes(oracles)
         ell = oracles[0].num_vars
-        gamma = self.chunks.bit_length() - 1
-        beta, top_beta = digit_alphabets(relation.bound, self.chunks)
+        chunks = self.chunks_for(relation.bound)
+        gamma = chunks.bit_length() - 1
+        beta, top_beta = digit_alphabets(relation.bound, chunks)
         shape = _Shape(
             ell=ell,
             nu=0,
             gamma=gamma,
             beta=beta,
             top_beta=top_beta,
-            chunks=self.chunks,
+            chunks=chunks,
             ring=None,
             primes=tuple(primes),
             variables=[MLE_Variable(f"mu{i}") for i in range(ell + gamma)],

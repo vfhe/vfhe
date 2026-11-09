@@ -13,6 +13,7 @@ replaying an honest transcript against a verifier-only run; and the parking
 rule gathers into one bundle the claims a pending statement produces later.
 """
 
+import weakref
 from typing import Any
 
 import pytest
@@ -286,6 +287,37 @@ def test_parking_gathers_a_claim_produced_later(dom):
     answers = [x for x in _labels(iop) if x.endswith("/answers")]
     assert len(answers) == 1
     assert "basefold/0/alpha" in _labels(iop)
+
+
+def test_the_claims_weight_holds_one_eq_table_at_a_time(dom, monkeypatch):
+    """Many claims on one polynomial: their eq~ tables are added up as they
+    are built, so when the next one is made no more than one table built
+    from an earlier one (the sum so far) is alive, however many claims
+    there are."""
+    claims = [dom.claim("f") for _ in range(6)]
+    built: list = []
+    alive_at_build: list[int] = []
+    eq, scale = MLE.eq.__func__, MLE.scale
+
+    def tracked_eq(cls, *args, **kwargs):
+        alive_at_build.append(sum(ref() is not None for ref in built))
+        table = eq(cls, *args, **kwargs)
+        built.append(weakref.ref(table))
+        return table
+
+    def tracked_scale(self, factor):
+        table = scale(self, factor)
+        if any(ref() is self for ref in built):
+            built.append(weakref.ref(table))
+        return table
+
+    monkeypatch.setattr(MLE, "eq", classmethod(tracked_eq))
+    monkeypatch.setattr(MLE, "scale", tracked_scale)
+    proof = dom.iop(fiat_shamir=True).prove(_statement(claims))
+    monkeypatch.undo()
+    assert len(alive_at_build) >= len(claims)
+    assert max(alive_at_build) <= 1
+    assert dom.iop(fiat_shamir=True).verify(_statement(claims), proof)
 
 
 def test_soundness_error_adds_the_batching_terms(dom):

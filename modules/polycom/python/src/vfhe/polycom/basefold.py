@@ -803,17 +803,15 @@ class BasefoldEval(Protocol):
             powers = _powers(s, len(statements), one)
             # h = sum_c f_c * E_c, with E_c the sum of s^m eq~(z_m, .) over
             # the claims on f_c, so a round is one product per polynomial.
-            weights: list[MLE] = []
-            for c, f in enumerate(fs):
-                terms = [
-                    MLE.eq(domain, points[m], variables=f.variables).scale(powers[m])
-                    for m in range(len(statements))
-                    if owners[m] == c
-                ]
-                weight = terms[0]
-                for term in terms[1:]:
-                    weight = weight + term
-                weights.append(weight)
+            weights = [
+                _eq_combination(
+                    domain,
+                    [points[m] for m in range(len(statements)) if owners[m] == c],
+                    [powers[m] for m in range(len(statements)) if owners[m] == c],
+                    f.variables,
+                )
+                for c, f in enumerate(fs)
+            ]
             tables = list(fs)
             point = []
             for t in range(len(points[0])):
@@ -992,6 +990,26 @@ def _powers(x, n: int, one) -> list:
     for _ in range(1, n):
         out.append(out[-1] * x)
     return out
+
+
+def _eq_combination(domain, points: list, coefficients: list, variables: list) -> MLE:
+    """Build the table of ``sum_m coefficients[m] * eq~(points[m], .)`` over
+    `variables`.
+
+    Each eq~ table is added into the sum as soon as it is built, so besides
+    the sum only one eq~ table exists at a time, whatever the number of
+    points. Over a field the sum is updated in place; over a ring it is
+    rebuilt on each addition, so a third table exists while that happens.
+    """
+    total = MLE.eq(domain, points[0], variables=variables).scale(coefficients[0])
+    for point, coefficient in zip(points[1:], coefficients[1:], strict=True):
+        term = MLE.eq(domain, point, variables=variables)
+        if vector_table(total):
+            total.table.fma(term.table, coefficient, out=total.table)
+        else:
+            total = MLE.linear_combination([total, term], [1, coefficient])
+        del term  # freed before the next one is built
+    return total
 
 
 def _eq_at(a: list, b: list, one):

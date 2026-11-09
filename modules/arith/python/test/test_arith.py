@@ -1190,6 +1190,37 @@ def test_from_uint64_refuses_a_value_above_its_prime():
         b.from_uint64(array("I", [0] * (2 * ring.N)))
 
 
+def _reversed_ring(n, sizes, d):
+    """A ring whose primes are those of another, in the opposite order: of
+    the two, at least one lists its primes out of the shared base's order."""
+    ring = Ring(n, prime_size=sizes, split_degree=d)
+    return Ring(n, primes=list(reversed(ring.primes)), split_degree=d)
+
+
+@pytest.mark.parametrize(
+    ("n", "sizes", "d"), [(64, [28, 31, 50], 1), (64, [28, 31, 50], 4)]
+)
+@pytest.mark.parametrize("representation", [repr.coeff, repr.ntt])
+def test_uint64_rows_follow_the_ring_prime_order(n, sizes, d, representation):
+    for ring in (
+        Ring(n, prime_size=sizes, split_degree=d),
+        _reversed_ring(n, sizes, d),
+    ):
+        a = ring.random_element(ntt=True)
+        words = a.to_uint64(repr=representation)
+        rows = [list(words[i * n : (i + 1) * n]) for i in range(ring.ell)]
+        assert rows == a.get_coeff_matrix(repr=representation)
+        assert Polynomial(ring).from_uint64(words, repr=representation) == a
+
+
+def test_from_uint64_names_the_prime_of_the_ring_position():
+    ring = _reversed_ring(32, [28, 50], 2)
+    words = ring.random_element(ntt=False).to_uint64()
+    words[ring.N + 5] = ring.primes[1]
+    with pytest.raises(ValueError, match=f"row 1 .* {ring.primes[1]}"):
+        Polynomial(ring).from_uint64(words)
+
+
 @pytest.mark.parametrize("sizes", [[50], [30]])
 @pytest.mark.parametrize("split_degree", [1, 4])
 def test_from_coeff_matrix_needs_whole_rows(sizes, split_degree):
