@@ -419,8 +419,9 @@ void pmf_vec_get_range(uint64_t *out, const PMFVector a, uint64_t start, uint64_
 void pmf_vec_set_uint64(PMFVector out, uint64_t start, const uint64_t *low, const uint64_t *high,
                         uint64_t count, uint32_t shift, uint32_t width);
 bool pmf_vec_get_uint64(uint64_t *out, const PMFVector a);
-void pmf_vec_set_radix_decomposition(PMFVector out, const uint64_t *low, const uint64_t *high, uint64_t rows,
-                        uint64_t columns, uint32_t width, uint64_t digits);
+void pmf_vec_set_radix_decomposition(PMFVector out, const uint64_t *low, const uint64_t *high,
+                                     uint64_t rows, uint64_t columns, uint32_t width,
+                                     uint64_t digits);
 void pmf_vec_copy(PMFVector out, const PMFVector a);
 void pmf_vec_split_even_odd(PMFVector even, PMFVector odd, const PMFVector a);
 void pmf_vec_interleave(PMFVector out, const PMFVector even, const PMFVector odd);
@@ -467,8 +468,8 @@ void pmf_vec_ntt_encode_blocks(PMFVector out, const PMFVector msg, uint64_t bloc
                                PMFNTTPlan plan);
 
 // --- counting ---
-bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values,
-                           uint64_t count, uint64_t bound);
+bool count_occurrences(uint64_t *prior, uint64_t *totals, const uint64_t *values, uint64_t count,
+                       uint64_t bound);
 bool histogram(uint64_t *totals, const uint64_t *values, uint64_t count, uint64_t bound);
 void vec_combination_mod_2_128(uint64_t *low, uint64_t *high, const uint64_t *const *a,
                                const uint64_t *w_low, const uint64_t *w_high, uint64_t m,

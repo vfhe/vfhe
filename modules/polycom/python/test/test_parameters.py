@@ -11,8 +11,10 @@ one query fewer above it -- and satisfies the soundness theorem's
 conditions; batching costs; a field too small for the target raises; and
 `proof_bits` counts the messages of a real opening."""
 
+from __future__ import annotations
+
 import math
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
 from vfhe.arith import (
@@ -39,6 +41,9 @@ from vfhe.polycom import (
 from vfhe.polycom import parameters as parameters_module
 from vfhe.polycom.basefold import basefold_soundness_error
 from vfhe.polycom.parameters import _proof_bits
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # The estimator's repetitions for 11 to 24 variables, at lambda = 128 and
 # log2|F| = 180 and 260; it picks k0 = 2^8 and n0 = 2^10 for all of them.
@@ -114,7 +119,7 @@ def test_the_choice_meets_the_library_bounds(name, twist_field):
         domain.exceptional_set_size, p.d, 10, p.rep - 1, p.gamma, p.delta
     )
     assert fewer > 2.0**-security
-    # The theorem's conditions, with delta at their supremum.
+    # The theorem's conditions, with delta just below their supremum.
     johnson = lambda x: 1 - math.sqrt(1 - x * (1 - p.gamma))  # noqa: E731
     assert p.delta <= johnson(johnson(p.distance))
     assert 3 * p.delta - p.d * p.gamma <= p.distance * (1 + 1e-12)

@@ -5,11 +5,15 @@
 from __future__ import annotations
 
 from array import array
+from typing import TYPE_CHECKING
 
 from vfhe.util.bindings import ffi, lib
 
+if TYPE_CHECKING:
+    from typing_extensions import Buffer
 
-def _checked_length(values, bound: int) -> int:
+
+def _checked_length(values: Buffer, bound: int) -> int:
     """The number of `values`, a one-dimensional buffer of 64-bit unsigned
     integers, checked along with `bound`."""
     view = memoryview(values)
@@ -22,7 +26,7 @@ def _checked_length(values, bound: int) -> int:
     return len(view)
 
 
-def histogram(values, bound: int) -> array | None:
+def histogram(values: Buffer, bound: int) -> array | None:
     """Count how many times each of `0, 1, ..., bound - 1` occurs in
     `values`.
 
@@ -47,7 +51,7 @@ def histogram(values, bound: int) -> array | None:
     return totals
 
 
-def count_occurrences(values, bound: int) -> tuple[array, array] | None:
+def count_occurrences(values: Buffer, bound: int) -> tuple[array, array] | None:
     """Count the occurrences of each value in `values`, both up to each
     position and in total.
 

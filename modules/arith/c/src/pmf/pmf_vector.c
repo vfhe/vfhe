@@ -799,10 +799,10 @@ void pmf_vec_fold_inner_products(uint64_t *q0, uint64_t *q1, uint64_t *q2, const
 // The fused kernels fold every table at r and sum over the folds while the
 // folded block is still in cache: per block of folded pairs, the fold body
 // writes the block's outputs of every table, then the summing body reads them
-// back. Each body runs as its own call, instantiated for the literal limb count
-// like the unfused kernels; inlined together into one function, the compiler
-// no longer specializes them for it and the kernel runs at half the speed. A
-// block's sums are added into the chunk's, element by element.
+// back. Each body is a small function with its own limb dispatch, so each
+// instantiation for a literal limb count stays as small as the unfused
+// kernels'; noinline keeps them apart. A block's sums are added into the
+// chunk's, element by element.
 
 // The folded pairs a block covers, a multiple of PMF_VEC_GROUP: a block's
 // outputs, `count` vectors of 2 * block elements of L limbs, take about 64 KiB,

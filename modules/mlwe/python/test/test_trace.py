@@ -5,6 +5,8 @@ operation's generic path, so the tape is the dispatch's alone: this checks
 that the generic path computes what the kernel computes, bit for bit, and
 that every recorded operation replays in Python on its recorded operands."""
 
+from __future__ import annotations
+
 import pytest
 from vfhe import arith
 from vfhe.arith import Polynomial, Ring

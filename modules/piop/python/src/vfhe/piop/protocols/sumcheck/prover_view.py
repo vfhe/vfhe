@@ -21,7 +21,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from math import comb
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import FieldVector
 from vfhe.arith.mle import MLE, SparseMLE, native_table, pair_indices, vector_table
@@ -44,6 +44,9 @@ from .rounds import (
     prod_round_evals_native,
     round_evals,
 )
+
+if TYPE_CHECKING:
+    from vfhe.arith import FieldElement
 
 
 def _one_of(tables) -> Any:
@@ -78,7 +81,7 @@ def _mul(a, b) -> Any:
     return a * b
 
 
-def _signed_sums(terms: list, field) -> tuple[list, list]:
+def _signed_sums(terms: list, field: Any) -> tuple[list, list]:
     """A products form as sums of signed products: the terms whose
     coefficients are equal or opposite share one sum, under the first such
     coefficient. Returns the coefficients and the sums, the latter in the
@@ -344,7 +347,7 @@ class _ProverVirtualEq(_ProverVirtual):
         step = self.rho[0] - low  # eq~(rho_1, t) = low + t * step
         return tuple(self.scale * (low + step * t) * value for t, value in enumerate(q))
 
-    def _bind_first(self, r) -> None:
+    def _bind_first(self, r: FieldElement) -> None:
         """c *= eq~(rho_1, r); the weights lose their first variable."""
         low = self.field.one - self.rho[0]
         self.scale = self.scale * (low + (self.rho[0] - low) * r)
@@ -364,7 +367,9 @@ class _ProverVirtualEq(_ProverVirtual):
         )
         return self._round_message(_combine_sums(coefficients, evals))
 
-    def update_tables(self, var, r) -> tuple[_ProverVirtualEq, tuple | None]:
+    def update_tables(
+        self, var, r: FieldElement
+    ) -> tuple[_ProverVirtualEq, tuple | None]:
         if len(self.variables) < 2 or var is not self.variables[0]:
             return self.evaluate({var: r}), None
         coefficients, sums = _signed_sums(self.terms, self.field)

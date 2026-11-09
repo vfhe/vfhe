@@ -19,7 +19,7 @@ update of its bookkeeping tables with the challenge [XZZPS19, Alg. 1].
 These are the building blocks of the sumcheck protocols
 (`sumcheck.py`), of the prover's round messages over a virtual oracle
 (`prover_view.py`), and of protocols that interleave sumcheck rounds with
-other messages (basefold in `vfhe.polycom`).
+other messages (a commitment scheme's folding rounds).
 """
 
 from __future__ import annotations
@@ -181,7 +181,7 @@ def prod_round_evals(factors: list, var=None) -> tuple:
     operations (prod2_round_evals_vector), anything else runs the
     pure-Python path — identical messages either way. This is the round
     building block for protocols that interleave product sumcheck rounds
-    with other messages (e.g. basefold in vfhe.polycom).
+    with other messages (e.g. a commitment scheme's folding rounds).
     """
     if len(factors) == 2 and all(native_table(f) for f in factors):
         return prod2_round_evals_native(factors[0], factors[1], var)

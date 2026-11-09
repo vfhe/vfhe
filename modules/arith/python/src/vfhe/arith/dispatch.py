@@ -16,6 +16,8 @@ True
 >>> arith.set_generic_only(False)
 """
 
+from __future__ import annotations
+
 from vfhe.util.bindings import lib
 
 __all__ = ["generic_only", "set_generic_only"]

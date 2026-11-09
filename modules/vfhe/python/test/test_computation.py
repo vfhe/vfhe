@@ -33,7 +33,7 @@ def test_the_use_case_reads_as_two_multiplications(use_case, special_primes):
     cross = a.get_a_poly(0) * b.get_b_poly() + a.get_b_poly() * b.get_a_poly(0)
     assert first.linear == cross
     switch = first.key_switch
-    assert switch.primes == scheme.ring.primes
+    assert switch.primes == [(p,) for p in scheme.ring.primes]
     assert [len(k) for k in switch.key] == [2, 2, 2]
     assert len(switch.mod_down) == 2 * bool(special_primes)
     assert all(not division.exact for division in switch.mod_down)

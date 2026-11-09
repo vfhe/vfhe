@@ -65,14 +65,14 @@ Everything else is the framework's. The whole construction is this much
 wiring:
 
 ```python
-iop = IOP(domain=field)                       # field = F_p; or fiat_shamir=True
-iop.register(Relation_Range,  RangeDecomposition(field, m, alphabet, kappa, ring, c))
+iop = IOP(domain=field)  # field = F_p; or fiat_shamir=True
+iop.register(Relation_Range, RangeDecomposition(field, m, alphabet, kappa, ring, c))
 #                                     m = split point, alphabet = |Sigma| = sigma,
 #                                     kappa = repetitions (all of Π̂*_range); ring = R_q,
 #                                     c = chunks, the digits per coefficient
 iop.register(Relation_Lookup, Lookup(field))
-iop.register(Relation_Sum,    Sumcheck())
-iop.register(Relation_Eval,   VirtualEval(), kind=OracleKind.virtual)
+iop.register(Relation_Sum, Sumcheck())
+iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
 # Relation_Eval for plain oracles stays unregistered -> terminal oracle query
 assert iop.run(Statement(Relation_Range(B), oracles=[TableOracle(v_tilde)]))
 ```
@@ -238,10 +238,13 @@ because `Π̂*_range` reduces to it. The relation is
 ```python
 class Relation_Lookup(Relation):
     """Every hypercube evaluation of the oracle lies in t_beta = {0..beta-1}."""
+
     name = "lookup"
     fields = ("oracles",)
     index_fields = ("beta",)
-    def __init__(self, beta: int) -> None: super().__init__(index={"beta": beta})
+
+    def __init__(self, beta: int) -> None:
+        super().__init__(index={"beta": beta})
 ```
 
 `check()` walks the hypercube and tests `0 <= int(value) < beta`.
@@ -285,17 +288,18 @@ paper's first two steps; steps 3–6 are all of its last one.
 
    ```python
    notlast = TableOracle(MLE.eq(field, [0], variables=[w]), public=True)  # [1, 0] = 1 - w
-   last    = TableOracle(MLE.eq(field, [1], variables=[w]), public=True)  # [0, 1] = w
-   onto_W  = lambda t: {v: W[i] for i, v in enumerate(t.variables)}
+   last = TableOracle(MLE.eq(field, [1], variables=[w]), public=True)  # [0, 1] = w
+   onto_W = lambda t: {v: W[i] for i, v in enumerate(t.variables)}
    f_WSmu = VirtualOracle(
        variables=W,
        constituents=[notlast, last, mu_prime, read_ts, f1_WSmu],
-       terms=[(one,        (0, 2)),     # (1-W_n) * mu'
-              (zeta,       (0, 3)),     # (1-W_n) * sigma_L * read_ts
-              (zeta - tau, (0,)),       # (1-W_n) * (sigma_L - tau)
-              (one,        (1, 4))],    # W_n * f^(1)
-       maps=[{w: W[n]}, {w: W[n]},
-             onto_W(mu_prime), onto_W(read_ts), onto_W(f1_WSmu)],
+       terms=[
+           (one, (0, 2)),  # (1-W_n) * mu'
+           (zeta, (0, 3)),  # (1-W_n) * sigma_L * read_ts
+           (zeta - tau, (0,)),  # (1-W_n) * (sigma_L - tau)
+           (one, (1, 4)),
+       ],  # W_n * f^(1)
+       maps=[{w: W[n]}, {w: W[n]}, onto_W(mu_prime), onto_W(read_ts), onto_W(f1_WSmu)],
    )
    ```
 
@@ -308,8 +312,8 @@ paper's first two steps; steps 3–6 are all of its last one.
    `X = [X_0 … X_{n−1}]`:
 
    ```python
-   child0 = {W[0]: 0} | {W[i+1]: X[i] for i in range(n)}   # f_a(0, X)
-   child1 = {W[0]: 1} | {W[i+1]: X[i] for i in range(n)}   # f_a(1, X)
+   child0 = {W[0]: 0} | {W[i + 1]: X[i] for i in range(n)}  # f_a(0, X)
+   child1 = {W[0]: 1} | {W[i + 1]: X[i] for i in range(n)}  # f_a(1, X)
    ```
 
    The parent slot needs no view of `f_α` at all: `f_α(X, 1) = f^{(1)}_α(X)`
@@ -326,9 +330,8 @@ paper's first two steps; steps 3–6 are all of its last one.
 
    ```python
    constituents = [eq_rho, f1_WSmu, f_WSmu, f_WSmu, f1_RS, f_RS, f_RS]
-   terms = [( one, (0, 1)), (-one, (0, 2, 3)),
-            ( chi, (0, 4)), (-chi, (0, 5, 6))]
-   maps  = [identity, rename1, child0, child1, rename2, child0, child1]
+   terms = [(one, (0, 1)), (-one, (0, 2, 3)), (chi, (0, 4)), (-chi, (0, 5, 6))]
+   maps = [identity, rename1, child0, child1, rename2, child0, child1]
    ```
 
    This is the function `g` transcribed: one `eq̃(ρ, X)` factor, `f_1(1,X) −
@@ -410,8 +413,9 @@ counters count like any entry.
   degree 3.
 - The claims on `µ̃'` at the end become one claim on each `µ̃'_i` at the data
   coordinates; the selector factors are evaluated by the verifier.
-- Soundness: `(2^{ℓ*+s} + β)/p` for the group, at most the sum of the
-  members' bounds when `k` is a power of two.
+- Soundness: `(2^{ℓ*+s} + β)/p` for the group. Each member reports
+  `(2^{ℓ*+1} + β)/p`, since a statement does not determine its group; as
+  `2^s < 2k`, the members' reports add up to at least the group's bound.
 
 A group of one is the single run, under the same labels. Claims join a group
 only when they are on the frontier together, as the lookup claims of range
@@ -432,7 +436,7 @@ which have the size of `µ̃'`. The price is a transcript quadratic in `ℓ*`.
 Over a field of characteristic above `2^{ℓ*}`, every entry of `f` (over
 `ℓ*` variables) lies in `t_β` exactly when, for some `m: t_β → F`,
 
-```
+```text
 Σ_{x ∈ {0,1}^ℓ*} 1 / (X − f(x))  =  Σ_{y < β} m(y) / (X − y)
 ```
 
@@ -478,7 +482,7 @@ verifier compares the roots as fractions, `a_f h_t = a_t h_f` with `h_f ≠ 0`.
    `Σ_j c_j (y_j + λ_k y'_j)` is proven by the registered `Relation_Sum`
    protocol on
 
-   ```
+   ```text
    Σ_{x ∈ {0,1}^k} eq̃(ρ_k, x) Σ_j c_j [a_j(x,0) h_j(x,1) + a_j(x,1) h_j(x,0)
                                       + λ_k h_j(x,0) h_j(x,1)]
    ```
@@ -538,11 +542,15 @@ openings.
 
 ### Soundness
 
-`soundness_error(statement)` is `(2^{ℓ*} + β) / (|F| − β)`: the numerator
-of the difference of the two sides, cleared of denominators, has degree
-below `2^{ℓ*} + β`, and `ξ` is drawn among `|F| − β` elements [Hab22;
-PH23]. Claims into one table count together, `(Σ_i 2^{ℓ*_i + s_i} + β) / (|F|
-− β)`. The sumcheck rounds contribute `3/|F|` each (degree 3), and each
+`soundness_error(statement)` is `(2^{ℓ*+1} + β) / (|A| − β)`, `|A|` the
+exceptional set of the field: the numerator of the difference of the two
+sides, cleared of denominators, has degree below the entries looked up plus
+`β`, and `ξ` is drawn among `|A| − β` elements [Hab22; PH23]. Claims into
+one table count together: a group of `k` claims over `ℓ*` variables is one
+run over `2^{ℓ*+s}` entries, `s = ⌈log₂ k⌉`, with error `(2^{ℓ*+s} + β) /
+(|A| − β)`; a statement does not know its group, so each reports
+`2^{ℓ*+1}`, and since `2^s < 2k` the group's claims add up to at least the
+group's error, as `Lookup` reports. The sumcheck rounds contribute `3/|F|` each (degree 3), and each
 step from a layer to the next `3/|F|`: the line through two values at a
 random `ψ`, the combination of `a` and `h` by `λ`, and that of the trees.
 The side condition is a characteristic above the number of entries looked
@@ -557,11 +565,13 @@ up in one table, `Σ_i 2^{ℓ*_i + s_i}` (padding included), the same as
 class Relation_Range(_Range):
     """Every coefficient of every hypercube evaluation of the R_q oracle
     lies in [0, B): the table T_B of the paper."""
+
     name = "range"
     # from _Range, shared with Relation_ResidueRange:
     fields = ("oracles",)
     index_fields = ("bound",)
-    def __init__(self, bound: int) -> None:   # B, any positive integer
+
+    def __init__(self, bound: int) -> None:  # B, any positive integer
         super().__init__(index={"bound": bound})
 ```
 
@@ -711,12 +721,16 @@ The wiring takes no ring: the primes come from the oracles' domains
 (`Oracle.domain`), which must be fields of distinct primes.
 
 ```python
-iop.register(Relation_ResidueRange,
-             ResidueRangeDecomposition(field, m, alphabet, kappa, c))
+iop.register(
+    Relation_ResidueRange, ResidueRangeDecomposition(field, m, alphabet, kappa, c)
+)
 iop.register(Relation_Lookup, Lookup(field))
 # ... Relation_Sum, Relation_Eval as above
-assert iop.run(Statement(Relation_ResidueRange(B),
-                         oracles=[TableOracle(u) for u in residue_tables]))
+assert iop.run(
+    Statement(
+        Relation_ResidueRange(B), oracles=[TableOracle(u) for u in residue_tables]
+    )
+)
 ```
 
 ## Soundness bookkeeping (both protocols)
@@ -728,7 +742,9 @@ bound:
   `max{ ((ℓ+ν)/σ)^κ , (ℓ+ν+γ−m)/p , δ'_range }`, where the third term is
   what the child `Relation_Lookup` accounts for;
 - `Lookup` ([CCCFGS26]'s soundness theorem for its lookup PIOP):
-  `δ'_range = (2^{ℓ*} + 2^{b*}) / p`.
+  `δ'_range = (2^{ℓ*} + 2^{b*}) / p` for a run over `2^{ℓ*}` entries; each
+  claim reports `(2^{ℓ*+1} + 2^{b*}) / p`, an upper bound on its share of
+  the run of its group (see the batching notes above).
 
 The first term dominates: `κ` is chosen so that `((ℓ+ν)/σ)^κ ≈ 2^{−λ}`.
 
@@ -770,8 +786,10 @@ so `ṽ` must be committed too (ring Basefold, say, with its own
 
 ```python
 messages = BasefoldMessages([main_scheme, table_scheme])
-iop.register(Relation_Range, RangeDecomposition(field, m, alphabet, kappa, ring, c,
-                                                messages=messages))
+iop.register(
+    Relation_Range,
+    RangeDecomposition(field, m, alphabet, kappa, ring, c, messages=messages),
+)
 iop.register(Relation_Lookup, Lookup(field, messages=messages))
 for scheme in (main_scheme, table_scheme, ring_scheme):
     iop.register(Relation_Eval, BasefoldEval(scheme))

@@ -10,12 +10,10 @@ them, and states the relations between them. `of` reads the computation
 from a trace's operations and applies one:
 
 >>> from vfhe.util import trace
->>> from vfhe.vfhe import cccfgs26, witness
+>>> from vfhe.vfhe import witness
 >>> with trace.recording() as t:
 ...     d = (a * b) * (a * b)
->>> w = witness.of(t.operations(), cccfgs26)
->>> [e.value for e in w.query("d2")][0] == a.get_a_poly(0) * b.get_a_poly(0)
-True
+>>> w = witness.of(t.operations(), arithmetization)
 >>> w.check()
 
 `check` is the ideal decider: it evaluates every bound and every relation

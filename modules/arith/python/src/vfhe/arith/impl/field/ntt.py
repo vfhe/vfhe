@@ -144,7 +144,7 @@ class ExtensionFieldNTT:
         self,
         vector: ExtensionFieldVector,
         blocks: int = 1,
-        out=None,
+        out: ExtensionFieldVector | None = None,
         layout: str = "blocks",
         zero_padding: bool = False,
     ) -> ExtensionFieldVector:
@@ -199,7 +199,7 @@ class ExtensionFieldNTT:
         self,
         vector: ExtensionFieldVector,
         blocks: int = 1,
-        out=None,
+        out: ExtensionFieldVector | None = None,
         layout: str = "blocks",
     ) -> ExtensionFieldVector:
         """The inverse of `pack`: a transformed batch back to ``layout``."""

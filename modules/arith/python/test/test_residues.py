@@ -3,6 +3,8 @@
 """`crt_lift_mod_2_128`: integers from their residues modulo several primes,
 against the Python CRT."""
 
+from __future__ import annotations
+
 import random
 from array import array
 

@@ -437,10 +437,10 @@ static void product_round_range(const void *round, ArithElement *g, uint64_t beg
     const uint64_t k = job->factors, m = job->nodes;
     const uint64_t stride = 1ULL << job->eval_var_idx;
     ArithElement *const *tables = job->tables;
-    const ArithElement **value = (const ArithElement **)malloc(k * sizeof(*value));
+    const ArithElement **value = (const ArithElement **)safe_malloc(k * sizeof(*value));
     // diff[j] = hi - lo and ext[j], the value at the node, per factor; then
     // the two product temporaries.
-    ArithElement *scratch = (ArithElement *)malloc((2 * k + 2) * sizeof(ArithElement));
+    ArithElement *scratch = (ArithElement *)safe_malloc((2 * k + 2) * sizeof(ArithElement));
     ArithElement *diff = scratch, *ext = scratch + k, *prod = scratch + 2 * k;
     const bool extrapolates = m > 2;
     if (extrapolates)

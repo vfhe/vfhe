@@ -7,9 +7,8 @@ polynomials with `N` coefficients in `Z_q`, every coefficient below `B`;
 `Relation_ResidueRange` the same claim on an integer table held in residue
 number system form [Gar59], one oracle per prime of `q`. The index is the
 bound alone: the relations say what is claimed, not how it is proven.
-`protocols.RangeDecomposition` and `protocols.ResidueRangeDecomposition`
-discharge them by digit decomposition and lookups; the conventions those
-rely on -- LSB-first table order, which variable block is which -- are set
+A decomposition protocol discharges them by digit decomposition and
+lookups; the conventions it relies on -- LSB-first table order, which variable block is which -- are set
 out in `modules/piop/range.md`.
 """
 

@@ -288,6 +288,8 @@ def test_digits_round_trip():
 def test_bulk_digit_table_is_the_per_coefficient_one(ring, field, bound, chunks):
     """The digit table built in whole-array steps holds exactly the digits
     of the per-coefficient table, including digits that start past bit 64."""
+    if bound > math.prod(ring.primes):  # a q of at least B
+        ring = Ring(1 << NU, prime_size=[45, 45, 45], split_degree=1)
     v = _witness(ring, seed=7, bound=min(bound, 1 << 20))
     statement = Statement(Relation_Range(bound), oracles=[TableOracle(v)])
     protocol = _protocol(field, ring, chunks=chunks)
@@ -934,6 +936,14 @@ def test_parameters_are_validated(ring, field):
     too_wide = 1 << (min(ring.primes).bit_length() + 1)
     with pytest.raises(ValueError, match="smallest RNS prime"):
         _protocol(field, ring, m=0, alphabet=too_wide)._shape(statement)
+
+
+def test_a_bound_above_q_is_rejected(ring, field):
+    q = math.prod(ring.primes)
+    bound = 1 << q.bit_length()
+    statement = Statement(Relation_Range(bound), oracles=[TableOracle(_witness(ring))])
+    with pytest.raises(ValueError, match="modulus q"):
+        _protocol(field, ring)._shape(statement)
 
 
 def test_soundness_error_is_the_theorem_bound(ring, field):

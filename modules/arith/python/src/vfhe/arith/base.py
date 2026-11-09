@@ -609,7 +609,7 @@ class Polynomial(metaclass=_ImplementationDispatch):
         """
         raise NotImplementedError
 
-    def scaled_lift(self, ring: Ring, delta=None) -> Polynomial:
+    def scaled_lift(self, ring: Ring, delta: Any = None) -> Polynomial:
         """This value lifted to a larger ring and scaled by ``delta``.
 
         The base-extension behind a rescale between moduli that are not nested
@@ -620,6 +620,8 @@ class Polynomial(metaclass=_ImplementationDispatch):
             ring builds (``RNSRing.modulus_ratio(..., return_pointer=True)``).
             None scales by the product of the primes ``ring`` adds: the value
             ``x`` modulo ``q`` becomes ``(Q/q) * x`` modulo ``Q``, exactly.
+            Only that default is an operation of the generic interface: with
+            ``delta`` given, the lift is not recorded on the execution tape.
         """
         raise NotImplementedError
 
@@ -1134,7 +1136,12 @@ def index_buffer(indices):
 
 
 def _check_bit_field(
-    n: int, values, start: int, shift: int, width: int, high=None
+    n: int,
+    values: array | memoryview,
+    start: int,
+    shift: int,
+    width: int,
+    high: array | memoryview | None = None,
 ) -> int:
     """The preconditions of `FieldVector.set_uint64` on a vector of `n`
     elements; returns the number of values."""
@@ -1156,7 +1163,12 @@ def _check_bit_field(
 
 
 def _check_radix_decomposition(
-    n: int, values, width: int, digits: int, high=None, columns: int = 1
+    n: int,
+    values: array | memoryview,
+    width: int,
+    digits: int,
+    high: array | memoryview | None = None,
+    columns: int = 1,
 ) -> int:
     """The preconditions of `FieldVector.set_radix_decomposition` on a vector of `n`
     elements; returns the number of values."""
@@ -1223,7 +1235,9 @@ def encode_product_sums(sums: list) -> array:
     return array("Q", words)
 
 
-def _check_fold_product_sums(tables: list, sums: list, nodes: int, weights) -> None:
+def _check_fold_product_sums(
+    tables: list, sums: list, nodes: int, weights: FieldVector | None
+) -> None:
     """The preconditions of `FieldVector.fold_product_sums`."""
     length = len(tables[0])
     if length % 2:
@@ -1372,7 +1386,12 @@ class FieldVector(metaclass=_ImplementationDispatch):
         raise NotImplementedError
 
     def set_uint64(
-        self, values, start: int = 0, shift: int = 0, width: int = 64, high=None
+        self,
+        values: array | memoryview,
+        start: int = 0,
+        shift: int = 0,
+        width: int = 64,
+        high: array | memoryview | None = None,
     ) -> None:
         """Element ``start + i`` becomes ``(v_i >> shift) mod 2^width``, for
         every ``i < len(values)``, in place, where ``v_i = values[i] +
@@ -1392,7 +1411,12 @@ class FieldVector(metaclass=_ImplementationDispatch):
             self[start + i] = (value >> shift) & mask
 
     def set_radix_decomposition(
-        self, values, width: int, digits: int, high=None, columns: int = 1
+        self,
+        values: array | memoryview,
+        width: int,
+        digits: int,
+        high: array | memoryview | None = None,
+        columns: int = 1,
     ) -> None:
         """The base-``2^width`` digits of the integers ``v_i = values[i] +
         2^64 high[i]`` (``values[i]`` without `high`), least significant
@@ -1441,7 +1465,9 @@ class FieldVector(metaclass=_ImplementationDispatch):
             f"{type(self.field).__name__} elements have no coefficients of 64 bits"
         )
 
-    def set_coefficients(self, coefficients, start: int = 0) -> None:
+    def set_coefficients(
+        self, coefficients: Sequence[array | memoryview], start: int = 0
+    ) -> None:
         """Element ``start + i`` becomes ``sum_j (coefficients[j][i] mod p)
         x^j``, for every ``i`` below the common length of the ``d`` buffers
         of 64-bit unsigned integers in `coefficients` (``array('Q')``s, say),
@@ -2074,7 +2100,9 @@ class FieldVector(metaclass=_ImplementationDispatch):
             ((v * 2 - u) * (y * 2 - x)).sum(),
         )
 
-    def fold_and_inner_products(self, other: FieldVector, r) -> tuple:
+    def fold_and_inner_products(
+        self, other: FieldVector, r: FieldElement | int
+    ) -> tuple:
         """``(a, b, sums)`` with ``a = self.fold(r)``, ``b = other.fold(r)``
         and ``sums = a.fold_inner_products(b)``.
 
@@ -2160,7 +2188,11 @@ class FieldVector(metaclass=_ImplementationDispatch):
 
     @staticmethod
     def fold_and_product_sums(
-        tables: list, r, sums: list, nodes: int, weights: FieldVector | None = None
+        tables: list,
+        r: FieldElement | int,
+        sums: list,
+        nodes: int,
+        weights: FieldVector | None = None,
     ) -> tuple:
         """``(folded, sums)`` with ``folded = [t.fold(r) for t in tables]``
         and ``sums = FieldVector.fold_product_sums(folded, sums, nodes,

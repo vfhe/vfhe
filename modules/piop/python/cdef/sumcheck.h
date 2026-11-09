@@ -23,9 +23,9 @@ void sumcheck_prod3_round_halves(ArithRing ring, ArithElement *g_out, ArithEleme
 void sumcheck_prod3_round(ArithRing ring, ArithElement *g_out, ArithElement *tf, ArithElement *tg,
                           ArithElement *th, uint64_t size, uint64_t eval_var_idx);
 void sumcheck_product_round_pairs(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                               ArithElement *const *tables, uint64_t factors, uint64_t size);
+                                  ArithElement *const *tables, uint64_t factors, uint64_t size);
 void sumcheck_product_round_halves(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                                ArithElement *const *tables, uint64_t factors, uint64_t size);
+                                   ArithElement *const *tables, uint64_t factors, uint64_t size);
 void sumcheck_product_round(ArithRing ring, ArithElement *g_out, uint64_t nodes,
-                         ArithElement *const *tables, uint64_t factors, uint64_t size,
-                         uint64_t eval_var_idx);
+                            ArithElement *const *tables, uint64_t factors, uint64_t size,
+                            uint64_t eval_var_idx);

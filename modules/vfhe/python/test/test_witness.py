@@ -187,7 +187,7 @@ def test_radix_digits_carry_their_power_and_bound(balanced, digits):
     switch = step.key_switch
     per_prime = 4  # a 45-bit prime has four 12-bit digits, all kept
     assert len(switch.digits) == per_prime * len(primes)
-    assert switch.primes == [p for p in scheme.ring.primes for _ in range(per_prime)]
+    assert switch.primes == [(p,) for p in scheme.ring.primes for _ in range(per_prime)]
     levels = [e.level for e in switch.digit_events]
     assert [switch.power(t) for t in range(len(levels))] == [
         1 << (log_base * level) for level in levels
@@ -200,4 +200,30 @@ def test_radix_digits_carry_their_power_and_bound(balanced, digits):
     w.check()
     switch.digits[0] = switch.digits[0] + 1
     with pytest.raises(ValueError, match="recompose to d2 does not hold"):
+        w.check()
+
+
+def test_a_digit_over_a_group_of_primes_recomposes_modulo_their_product():
+    primes = [45, 45, 45, 45]
+    scheme = CKKS_Scheme(
+        Ring(N, prime_size=primes, split_degree=1), scaling_factor=2**20
+    )
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    secret = key.poly[0]
+    rlk = scheme.gen_rlk(
+        key, [-(secret * secret)], gadget_params=GadgetParams(primes_per_digit=2)
+    )
+    a = scheme.encrypt(scheme.encode([0.5]), key)
+    with trace.recording() as t:
+        scheme.multiply(a, a, rlk)
+    w = witness.of(t.operations(), cccfgs26)
+    [step] = w.steps
+    switch = step.key_switch
+    groups = [tuple(scheme.ring.primes[i : i + 2]) for i in (0, 2)]
+    assert switch.primes == groups
+    w.check()
+    # Off by a multiple of the group's first prime alone: wrong modulo the
+    # product, which is what the digit stands for.
+    switch.digits[0] = switch.digits[0] + groups[0][0]
+    with pytest.raises(ValueError, match="recomposes to d2 does not hold"):
         w.check()

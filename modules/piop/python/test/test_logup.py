@@ -16,7 +16,7 @@ import random
 from array import array
 
 import pytest
-from vfhe.arith import MLE, FieldVector, MLE_Variable, PseudoMersenneField
+from vfhe.arith import MLE, Field, FieldVector, MLE_Variable, PseudoMersenneField
 from vfhe.piop import (
     IOP,
     OracleKind,
@@ -289,6 +289,59 @@ def test_rejects_an_unbounded_entry_for_other_shapes(field, num_vars, beta):
     statement = _statement(field, values, beta)
     assert not statement.check()
     assert not _iop(field).run(statement)
+
+
+@pytest.mark.parametrize(
+    "entry, accepted", [(0, True), (5, False)], ids=["inside", "outside"]
+)
+def test_all_depth_0_trees_check_the_lookup_identity(
+    field: PseudoMersenneField, entry: int, accepted: bool
+) -> None:
+    """With every tree of depth 0 (one oracle entry, `t_1`) the verifier
+    still checks the lookup identity: an entry outside the table rejects."""
+    statement = _statement(field, [entry], beta=1)
+    assert statement.check() is accepted
+    assert bool(_iop(field).run(statement)) is accepted
+
+
+def test_xi_inside_the_table_is_drawn_again(
+    field: PseudoMersenneField, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first draw of `xi` inside `t_beta` is replaced by a second one,
+    under its own label, and the run goes on with it."""
+    iop = _iop(field)
+    draw = iop.verifier._draw_challenge
+
+    def in_table_first(label: str, domain: object = None) -> object:
+        if label.endswith("/xi"):
+            return field(BETA - 1)
+        return draw(label, domain)
+
+    monkeypatch.setattr(iop.verifier, "_draw_challenge", in_table_first)
+    assert iop.run(_statement(field, _bounded(seed=6)))
+    (first,) = [x for x in iop.transcript.order if x.endswith("/xi")]
+    (second,) = [x for x in iop.transcript.order if x.endswith("/xi_1")]
+    assert _entries(iop, first) == field(BETA - 1)
+    assert int(_entries(iop, second)) >= BETA
+
+
+@pytest.mark.parametrize("bad", [False, True], ids=["honest", "unbounded"])
+def test_over_an_extension_field(bad: bool) -> None:
+    """Over `F_(p^2)` an honest run is accepted and an entry outside the
+    table is rejected."""
+    field = Field(562949948178433, 2, 5)
+    values = _bounded(seed=7)
+    if bad:
+        values[9] = BETA
+    statement = _statement(field, values)
+    assert statement.check() is not bad
+    assert bool(_iop(field).run(statement)) is not bad
+
+
+def test_a_characteristic_below_the_looked_up_entries_is_rejected() -> None:
+    field = Field(61)
+    with pytest.raises(ValueError, match="characteristic"):
+        _iop(field).run(_statement(field, _bounded()))
 
 
 def test_rejects_when_every_entry_is_unbounded(field):
@@ -765,7 +818,7 @@ def test_the_registry_binds_the_lookup_protocol(field):
 def test_soundness_error_is_the_draw_of_xi(field, num_vars, beta):
     statement = _statement(field, _bounded(beta=beta, num_vars=num_vars), beta)
     reported = LogUpGKR(field).soundness_error(statement)
-    assert reported == ((1 << num_vars) + beta) / (field.exceptional_set_size - beta)
+    assert reported == ((2 << num_vars) + beta) / (field.exceptional_set_size - beta)
 
 
 # --- under the range protocol, which is what produces these claims ------------

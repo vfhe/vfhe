@@ -6,7 +6,7 @@ definition."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from vfhe.piop.evaluation import Relation_Eval
 from vfhe.piop.protocol import Protocol, Rejection, exceptional_set_size
@@ -103,7 +103,7 @@ class SumDefStart(Protocol):
     reduces_from: type[Relation] = Relation_SumDef.Start
     reduces_to: tuple[type[Relation], ...] = (Relation_Sum,)
 
-    def soundness_error(self, statement: Statement, domain=None) -> float | None:
+    def soundness_error(self, statement: Statement, domain: Any = None) -> float | None:
         """(k - 1) / |A|; the domain defaults to the definition's
         (`Oracle.domain` of its body)."""
         if domain is None:

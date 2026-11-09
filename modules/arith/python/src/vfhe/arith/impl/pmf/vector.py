@@ -34,6 +34,8 @@ from .pseudo_mersenne import _LANES, PseudoMersenneElement
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from vfhe.arith.base import FieldElement
+
     from .pseudo_mersenne import PseudoMersenneField
 
 
@@ -179,7 +181,12 @@ class PseudoMersenneVector(FieldVector):
         return result
 
     def set_uint64(
-        self, values, start: int = 0, shift: int = 0, width: int = 64, high=None
+        self,
+        values: array | memoryview,
+        start: int = 0,
+        shift: int = 0,
+        width: int = 64,
+        high: array | memoryview | None = None,
     ) -> None:
         """See `FieldVector.set_uint64`; one call for all the values."""
         count = _check_bit_field(self._n, values, start, shift, width, high)
@@ -195,7 +202,12 @@ class PseudoMersenneVector(FieldVector):
             )
 
     def set_radix_decomposition(
-        self, values, width: int, digits: int, high=None, columns: int = 1
+        self,
+        values: array | memoryview,
+        width: int,
+        digits: int,
+        high: array | memoryview | None = None,
+        columns: int = 1,
     ) -> None:
         """See `FieldVector.set_radix_decomposition`; one call for all the digits."""
         count = _check_radix_decomposition(
@@ -464,7 +476,7 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_fold(result._struct, self._struct, element._buf)
         return result
 
-    def fold_inner_products(self, other) -> tuple:
+    def fold_inner_products(self, other: FieldVector) -> tuple:
         """`FieldVector.fold_inner_products`, which documents the operation,
         computed by the native kernel `pmf_vec_fold_inner_products` in one
         pass over both vectors, three products a pair."""
@@ -479,7 +491,9 @@ class PseudoMersenneVector(FieldVector):
         lib.pmf_vec_fold_inner_products(*evals, self._struct, other._struct)
         return tuple(self.field._wrap(buf) for buf in evals)
 
-    def fold_and_inner_products(self, other, r) -> tuple:
+    def fold_and_inner_products(
+        self, other: FieldVector, r: FieldElement | int
+    ) -> tuple:
         """`FieldVector.fold_and_inner_products`, which documents the
         operation, computed by the native kernel
         `pmf_vec_fold_and_inner_products` in one pass over both vectors."""
@@ -501,7 +515,7 @@ class PseudoMersenneVector(FieldVector):
 
     @staticmethod
     def fold_product_sums(
-        tables: list, sums: list, nodes: int, weights=None
+        tables: list, sums: list, nodes: int, weights: FieldVector | None = None
     ) -> list[tuple]:
         """`FieldVector.fold_product_sums`, which documents the operation,
         computed by the native kernel `pmf_vec_fold_product_sums` in one pass
@@ -526,7 +540,11 @@ class PseudoMersenneVector(FieldVector):
 
     @staticmethod
     def fold_and_product_sums(
-        tables: list, r, sums: list, nodes: int, weights=None
+        tables: list,
+        r: FieldElement | int,
+        sums: list,
+        nodes: int,
+        weights: FieldVector | None = None,
     ) -> tuple:
         """`FieldVector.fold_and_product_sums`, which documents the
         operation, computed by the native kernel
@@ -560,7 +578,12 @@ class PseudoMersenneVector(FieldVector):
         )
         return folded, _wrap_sums(field, evals, len(sums), nodes)
 
-    def fold_twisted(self, untwist, r, out=None) -> PseudoMersenneVector:
+    def fold_twisted(
+        self,
+        untwist: FieldVector,
+        r: FieldElement | int,
+        out: FieldVector | None = None,
+    ) -> PseudoMersenneVector:
         """`FieldVector.fold_twisted`, which documents the operation, computed
         by the native kernel `pmf_vec_fold_twisted` in one pass, two products
         a pair."""
@@ -581,7 +604,12 @@ class PseudoMersenneVector(FieldVector):
         return result
 
     @staticmethod
-    def lift_twisted(a, b, twist, out=None) -> PseudoMersenneVector:
+    def lift_twisted(
+        a: FieldVector,
+        b: FieldVector,
+        twist: FieldVector,
+        out: FieldVector | None = None,
+    ) -> PseudoMersenneVector:
         """`FieldVector.lift_twisted`, which documents the operation,
         computed by the native kernel `pmf_vec_lift_twisted` in one pass: one
         product per pair, the table read cyclically in place, each pair
@@ -713,7 +741,9 @@ class PseudoMersenneVector(FieldVector):
         )
 
 
-def _encode_for_kernel(tables: list, sums: list, nodes: int, weights) -> array | None:
+def _encode_for_kernel(
+    tables: list, sums: list, nodes: int, weights: FieldVector | None
+) -> array | None:
     """Encode `sums` for the native kernel `pmf_vec_fold_product_sums`, or
     return None when the kernel cannot take the call, which then runs the
     front's generic body.
@@ -740,7 +770,9 @@ def _encode_for_kernel(tables: list, sums: list, nodes: int, weights) -> array |
     return encode_product_sums(sums)
 
 
-def _wrap_sums(field, evals: list, count: int, nodes: int) -> list[tuple]:
+def _wrap_sums(
+    field: PseudoMersenneField, evals: list, count: int, nodes: int
+) -> list[tuple]:
     """Wrap the kernel's output buffers `evals` as field elements: `count`
     sums, one tuple of `nodes` elements each, in the order of the sums the
     kernel was given."""

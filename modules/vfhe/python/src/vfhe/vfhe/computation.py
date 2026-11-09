@@ -45,10 +45,11 @@ its ``ell``, the number of primes of the ring it computes over.
 [3, 3]
 
 What an arithmetization makes of these steps, which values it names and
-the relations it asks of them, is `vfhe.vfhe.witness`'s. Rank 1 only: a
-product of another rank is refused. Operations of other kinds
-(automorphisms, additions of a plaintext, key switches sharing one
-decomposition) are not read, and `Computation.unread` names them.
+the relations it asks of them, is left to the code that reads the
+`Computation`. Rank 1 only: a product of another rank is refused.
+Operations of other kinds (automorphisms, additions of a plaintext, key
+switches sharing one decomposition) are not read, and `Computation.unread`
+names them.
 """
 
 from __future__ import annotations
@@ -175,7 +176,7 @@ class KeySwitch:
 
     - ``digits[t]`` is digit ``t``, ``digit_events[t]`` the event that
       wrote it (it records how the digit was taken, see `power` and
-      `bound`), and ``primes[t]`` the first prime of its residue.
+      `bound`), and ``primes[t]`` the primes of its residue.
     - ``key[t][i]`` is the key component digit ``t`` multiplies into
       accumulator ``i``, and ``sums[i]`` the accumulated products,
       subtracted as vfhe computes them.
@@ -189,7 +190,7 @@ class KeySwitch:
 
     decomposed: Any
     digits: list[Any]
-    primes: list[int]
+    primes: list[tuple[int, ...]]
     key: list[list[Any]]
     sums: list[Any]
     mod_down: list[Division]
@@ -612,7 +613,7 @@ class Computation:
         return KeySwitch(
             decomposed=values(x),
             digits=[e.value for e in digits],
-            primes=[e.primes[0] for e in digits],
+            primes=[e.primes for e in digits],
             key=key,
             sums=sums,
             mod_down=mod_down,
@@ -677,17 +678,17 @@ class Computation:
                 current = _Sum(operation, group, [term], versions)
             elif kind == "mul_addto":
                 accumulators = tuple(e.inputs[0] for e in group)
-                current = by_output.pop(accumulators, None)  # type: ignore[assignment]
-                if current is None or any(
+                continued = by_output.pop(accumulators, None)
+                if continued is None or any(
                     e.inputs[2] != group[0].inputs[2] for e in group
                 ):
                     raise ValueError("an accumulation does not continue its sum")
-                current.events += group
-                current.terms.append(
+                continued.events += group
+                continued.terms.append(
                     self._term(group[0].inputs[2], [e.inputs[1] for e in group], 1)
                 )
-                current.versions = versions
-                by_output[versions] = current
+                continued.versions = versions
+                by_output[versions] = continued
                 continue
             else:
                 current = _Sum(

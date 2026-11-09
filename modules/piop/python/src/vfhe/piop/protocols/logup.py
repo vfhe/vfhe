@@ -181,18 +181,21 @@ class LogUpGKR(Protocol):
         return (self.field, self.messages)
 
     def soundness_error(self, statement: Statement, domain: Any = None) -> float | None:
-        """`(2^n + beta) / (|F| - beta)`, the error of the draw of `xi` for
-        one claim on an oracle over `n` variables, with `|F|` the size of
-        the field the challenges are drawn from.
+        """`(2^(n + 1) + beta) / (|A| - beta)`, twice the entries of a claim
+        on an oracle over `n` variables, with `|A|` the size of the
+        exceptional set the challenges are drawn from.
 
-        The probability that a false claim's two sides agree at `xi`: their
-        difference, a rational function, has a numerator of degree below
-        `2^n + beta`, and `xi` is drawn among the `|F| - beta` elements
-        outside the table. Claims into the same table count together: their
-        error is `(sum_i 2^(n_i + s_i) + beta) / (|F| - beta)`, with `s_i`
-        the selector variables of the group of claim `i`. The rest of the
-        run is below it: `3 / |F|` per sumcheck round, and `3 / |F|` for
-        each step from a layer to the next (`psi`, `lambda` and the
+        The draw of `xi` is where a false claim can pass: the difference of
+        its two sides, a rational function, has a numerator of degree below
+        the entries looked up plus `beta`, and `xi` is drawn among the
+        `|A| - beta` elements outside the table. Claims into the same table
+        count together: a group of `k` claims on oracles over `n` variables
+        is one run over `2^(n + s)` entries, `s = ceil(log2 k)`, with error
+        `(2^(n + s) + beta) / (|A| - beta)`. A statement does not determine
+        its group, so each claim reports `2^(n + 1)`: since `2^s < 2k`, the
+        errors of a group's claims add up to at least the group's. The rest
+        of the run is below it: `3 / |A|` per sumcheck round, and `3 / |A|`
+        for each step from a layer to the next (`psi`, `lambda` and the
         challenges combining the trees). The bound needs a field of
         characteristic above the number of looked-up entries of the table.
         """
@@ -201,7 +204,7 @@ class LogUpGKR(Protocol):
         size = exceptional_set_size(self.field)
         if size is None:
             return None
-        return ((1 << f.num_vars) + beta) / (size - beta)
+        return ((2 << f.num_vars) + beta) / (size - beta)
 
     # --- the two halves ----------------------------------------------------
 
@@ -229,6 +232,15 @@ class LogUpGKR(Protocol):
         trees: list[_Tree] = []
         leaves: dict[int, Any] = {}
         tables = self._groups(statements)
+        for beta, groups in tables.items():
+            looked_up = sum(
+                1 << (n + (len(g) - 1).bit_length()) for n, g in groups.items()
+            )
+            if field.prime <= looked_up:
+                raise ValueError(
+                    f"the field's characteristic must exceed the {looked_up} "
+                    f"entries looked up in t_{beta}, padding included"
+                )
         for beta, groups in tables.items():
             b = beta.bit_length() - 1
             oracle_side = [
@@ -279,6 +291,9 @@ class LogUpGKR(Protocol):
 
         # Layer 0: the children of every other root; then layer by layer.
         active = [t for t in trees if t.depth > 0]
+        if not active and not proving:
+            # Every root is a leaf: the identity is checked here, not on layer 0.
+            self._check_roots(label, trees)
         point: list = []  # the sumcheck's point r on layer k (none on layer 0)
         lam: Any = None
         combination: list = []
@@ -415,17 +430,22 @@ class LogUpGKR(Protocol):
                 for y in range(beta):
                     total[y] += counts[y]
         out = FieldVector(self.field, beta)
-        out.set_uint64(total)
+        if total is not None:
+            out.set_uint64(total)
         return out
 
     async def _draw_xi(self, iop: Any, label: str, beta: int) -> Any:
         """`xi`, uniform outside `t_beta` for the largest table: drawn again,
-        under a new label, while it lands in the table."""
+        under a new label, while it lands in the table. Over an extension
+        field, an element outside the prime subfield is outside the table."""
         attempt = 0
         while True:
             suffix = f"_{attempt}" if attempt else ""
             xi = await iop.verifier.challenge(f"{label}/xi{suffix}", self.field)
-            value = int(xi)
+            try:
+                value = int(xi)
+            except ValueError:  # not in the prime subfield
+                return xi
             if not (value < beta and xi == self.field(value)):
                 return xi
             attempt += 1

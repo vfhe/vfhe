@@ -7,7 +7,7 @@ import dataclasses
 import functools
 import math
 import operator
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from vfhe.arith import (
     ArithParent,
@@ -1762,7 +1762,7 @@ class MLWE_Key:
             )
         return cache[ring.mask]
 
-    def extended_key_obj(self):
+    def extended_key_obj(self) -> Any:
         """The native key an extended product decrypts under, over this key's
         ring: :meth:`MLWE_Scheme.quadratic_key_polys`, then the ``s_i``. Built
         on first use and cached on the key."""
