@@ -247,6 +247,34 @@ def test_interpolation_over_a_field(field):
     assert g(r) == g(r)  # the degree-3 helper is exercised above
 
 
+@pytest.mark.parametrize("degree", [2, 4, 6])
+def test_interpolation_inverts_once_per_call(field, degree, monkeypatch):
+    """Higher degrees are exact, and the Lagrange denominators cost one field
+    inversion per call, whatever the degree."""
+    cs = _random_elements(field, degree + 1, seed=degree)
+
+    def g(t):
+        total, power = cs[0], field.one
+        for c in cs[1:]:
+            power = power * t
+            total = total + c * power
+        return total
+
+    evals = tuple(g(_element(field, t)) for t in range(degree + 1))
+    r = field.random_exceptional()
+    element_type = type(r)
+    inverse = element_type.inverse
+    calls = []
+
+    def counted(self):
+        calls.append(1)
+        return inverse(self)
+
+    monkeypatch.setattr(element_type, "inverse", counted)
+    assert interpolate_evals(evals, r) == g(r)
+    assert len(calls) == 1
+
+
 def test_challenge_sampling(field):
     # The names the verifier and the Fiat-Shamir verifier call on a domain.
     a = field.random_exceptional()

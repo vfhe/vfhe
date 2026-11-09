@@ -108,7 +108,7 @@ class Protocol:
         oracle's identity, a bundle per oracle; an evaluation protocol whose
         opening batches several polynomials returns its scheme instead, for
         one bundle per scheme. The key must be a function of public data, so
-        that both parties form the same bundles."""
+        that both parties form the same bundles, and it must be hashable."""
         return id(oracle)
 
     def reduce(

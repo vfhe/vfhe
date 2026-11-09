@@ -33,10 +33,12 @@ class Party:
         Both parties run this same deterministic traversal, so their DAGs,
         paths, and transcript labels agree.
         """
-        worklist = [statement]
+        worklist = _Frontier(self)
+        worklist.extend([statement])
         terminal = []
         while worklist:
             stmt = self._next(worklist)
+            key = worklist.bundle_key(stmt)
             worklist.remove(stmt)
             protocol = self.iop.protocol_for(stmt)
             if protocol is None:
@@ -44,8 +46,7 @@ class Party:
                 continue
             bundle = [stmt]
             if protocol.batching:
-                key = self._bundle_key(stmt)
-                same = [s for s in worklist if self._bundle_key(s) == key]
+                same = [s for s in worklist if worklist.bundle_key(s) == key]
                 for s in same:
                     worklist.remove(s)
                 bundle += same
@@ -66,7 +67,7 @@ class Party:
             return (type(stmt.relation), id(protocol), protocol.bundle_key(subject))
         return (type(stmt.relation),)
 
-    def _parked(self, stmt: Statement, worklist: list[Statement]) -> bool:
+    def _parked(self, stmt: Statement, worklist: _Frontier) -> bool:
         """The parking rule (piop.md §5): a claim on an oracle headed for a
         bundle protocol waits while any other frontier statement, outside
         its own bundle, can still produce a claim that would join the bundle
@@ -76,31 +77,109 @@ class Party:
         is always ready. Claims on implicit oracles never reach the driver
         (the Composer consumes them), so this concerns committed and plain
         oracles.
-        """
-        subject = stmt.relation.subject(stmt)
-        if subject is None:
-            return False
-        protocol = self.iop.protocol_for(stmt)
-        if protocol is None or not protocol.batching:
-            return False
-        key = self._bundle_key(stmt)
-        subject_key = protocol.bundle_key(subject)
-        for other in worklist:
-            if other is stmt or self._bundle_key(other) == key:
-                continue
-            if any(
-                protocol.bundle_key(o) == subject_key
-                for o in oracle_closure(statement_oracles(other))
-            ):
-                return True
-        return False
 
-    def _next(self, worklist: list[Statement]) -> Statement:
+        Decided by a lookup in the frontier's index (`_Frontier.reaching`).
+        """
+        bundle_protocol = worklist.bundle_protocol(stmt)
+        if bundle_protocol is None:
+            return False
+        protocol, subject_key = bundle_protocol
+        key = worklist.bundle_key(stmt)
+        reaching = worklist.reaching(protocol, subject_key)
+        return any(count and other != key for other, count in reaching.items())
+
+    def _next(self, worklist: _Frontier) -> Statement:
         """The first frontier statement not parked, in worklist order."""
         for stmt in worklist:
             if not self._parked(stmt, worklist):
                 return stmt
         raise RuntimeError("every frontier statement is parked (cyclic definitions?)")
+
+
+class _Frontier:
+    """The driver's worklist: the statements waiting to be discharged, in
+    the order they were added.
+
+    Each statement's bundle key (`Party._bundle_key`), oracle closure and,
+    for a claim headed for a bundle protocol, that protocol and its
+    subject's `Protocol.bundle_key` are computed once, when it is added.
+    Statements and oracle definitions do not change while they wait, so
+    neither do these.
+
+    For each bundle protocol the parking rule has asked about, the frontier
+    also keeps an index for `reaching`. It is built on the first question
+    and updated as statements are added and removed.
+    """
+
+    def __init__(self, party: Party):
+        self._party = party
+        self._order: dict[int, Statement] = {}  # id -> statement, in order
+        self._keys: dict[int, tuple] = {}
+        self._closures: dict[int, list] = {}
+        self._bundled: dict[int, tuple | None] = {}
+        # id(protocol) -> (protocol, {subject key: {bundle key: count}})
+        self._indices: dict[int, tuple[object, dict]] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self._order)
+
+    def __iter__(self):
+        return iter(self._order.values())
+
+    def bundle_key(self, stmt: Statement) -> tuple:
+        """The bundle `stmt` belongs to (`Party._bundle_key`)."""
+        return self._keys[id(stmt)]
+
+    def bundle_protocol(self, stmt: Statement) -> tuple | None:
+        """`(protocol, protocol.bundle_key(subject))` for a claim on an
+        oracle headed for a bundle protocol; None for any other statement."""
+        return self._bundled[id(stmt)]
+
+    def extend(self, statements) -> None:
+        """Add `statements` at the end of the worklist."""
+        for stmt in statements:
+            sid = id(stmt)
+            if sid in self._order:
+                raise ValueError("a statement already on the frontier was added again")
+            self._order[sid] = stmt
+            self._keys[sid] = self._party._bundle_key(stmt)
+            self._closures[sid] = oracle_closure(statement_oracles(stmt))
+            subject = stmt.relation.subject(stmt)
+            protocol = None if subject is None else self._party.iop.protocol_for(stmt)
+            self._bundled[sid] = (
+                (protocol, protocol.bundle_key(subject))
+                if protocol is not None and protocol.batching
+                else None
+            )
+            for protocol, index in self._indices.values():
+                self._update_index(protocol, index, sid, 1)
+
+    def remove(self, stmt: Statement) -> None:
+        """Take `stmt` off the worklist."""
+        sid = id(stmt)
+        for protocol, index in self._indices.values():
+            self._update_index(protocol, index, sid, -1)
+        del self._order[sid], self._keys[sid], self._closures[sid], self._bundled[sid]
+
+    def reaching(self, protocol, subject_key) -> dict:
+        """Count, by bundle key, the frontier statements that have in their
+        oracle closure an oracle `o` with `protocol.bundle_key(o)` equal to
+        `subject_key`. Returns a dict from bundle key to that count; a count
+        can be 0 once the statements it counted are gone."""
+        entry = self._indices.get(id(protocol))
+        if entry is None:
+            entry = self._indices[id(protocol)] = (protocol, {})
+            for sid in self._order:
+                self._update_index(protocol, entry[1], sid, 1)
+        return entry[1].get(subject_key, {})
+
+    def _update_index(self, protocol, index: dict, sid: int, delta: int) -> None:
+        """Add `delta` to the count of statement `sid`'s bundle key under
+        each `protocol.bundle_key` of an oracle in its closure."""
+        key = self._keys[sid]
+        for reached in {protocol.bundle_key(o) for o in self._closures[sid]}:
+            counts = index.setdefault(reached, {})
+            counts[key] = counts.get(key, 0) + delta
 
 
 class Prover(Party):

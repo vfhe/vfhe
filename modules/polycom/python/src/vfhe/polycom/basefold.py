@@ -64,7 +64,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from vfhe.arith import MLE, Field, FieldElement, FieldVector, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
-from vfhe.crypto import DIGEST_LEN, Merkle, chain_digest, hash_bytes, int_digest
+from vfhe.crypto import (
+    DIGEST_LEN,
+    Merkle,
+    MerklePath,
+    chain_digest,
+    hash_bytes,
+    int_digest,
+)
 from vfhe.piop import (
     CommittedOracle,
     OracleMessages,
@@ -112,11 +119,6 @@ def _gather(word: Word, positions: list[int]) -> Word:
     if isinstance(word, FieldVector):
         return word.query(array("Q", positions))
     return [word[i] for i in positions]
-
-
-def _identity(digest):
-    """`Merkle.verify`'s leaf hash when the digest is already in hand."""
-    return digest
 
 
 def _coefficients(f: MLE) -> Word:
@@ -1043,20 +1045,36 @@ def _check_layer(
     query order (`code.join_fibers`). Raises `Rejection` on a malformed leaf
     or a path that does not authenticate.
 
-    The leaves are digested in one call; the paths are independent and are
-    checked one at a time.
+    The leaves are digested in one call and their paths checked in another.
     """
     try:
         block: Word = code.join_fibers([answer[0] for answer in answers], size)
     except ValueError as error:
         raise Rejection(f"{label}: malformed leaf at level {level}: {error}") from error
-    digests = code.leaf_digests(block, size)
-    for k, (j, answer) in enumerate(zip(positions, answers, strict=True)):
-        if not Merkle.verify(
-            root, j, answer[1], digests[32 * k : 32 * (k + 1)], hash=_identity
-        ):
-            raise Rejection(f"{label}: Merkle path rejected at level {level}, leaf {j}")
+    _check_paths(label, level, root, positions, answers, code.leaf_digests(block, size))
     return block
+
+
+def _check_paths(
+    label: str, level: int, root: bytes, positions, answers, digests
+) -> None:
+    """Check that the path of each answer (``answer[1]``) authenticates its
+    leaf under `root`, in one native call.
+
+    The leaf of answer `k` sits at `positions[k]`, and its digest is bytes
+    ``32 k`` to ``32 k + 31`` of `digests`. Raises `Rejection` when a path
+    is missing or does not authenticate, or when the counts differ.
+    """
+    if len(positions) != len(answers):
+        raise Rejection(f"{label}: {len(answers)} answers for {len(positions)} queries")
+    paths = [answer[1] for answer in answers]
+    if not all(isinstance(path, MerklePath) for path in paths):
+        raise Rejection(f"{label}: an answer at level {level} carries no Merkle path")
+    k = Merkle.verify_many(root, positions, paths, digests)
+    if k is not None:
+        raise Rejection(
+            f"{label}: Merkle path rejected at level {level}, leaf {positions[k]}"
+        )
 
 
 class _ProverRun:

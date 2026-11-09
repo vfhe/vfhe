@@ -14,6 +14,15 @@ versions may contain breaking changes.
 
 ### Added
 
+- `Merkle.verify_many(root, indices, paths, digests)` checks the openings
+  of several leaves of one tree in one C call (`merkle_verify_many`). It
+  returns `None`, or the first leaf whose opening does not authenticate.
+  The Basefold and BatchFold verifiers check each layer's query paths with
+  it.
+- `pmf_inverse` inverts one pseudo-Mersenne element in one C call.
+  `PseudoMersenneElement.inverse` uses it instead of a square-and-multiply
+  in Python.
+
 - `FieldVector.reindex(bits, offset=0, out=None)` reads a vector through a
   map of index bits: element `i` of the result is element
   `offset + sum_j ((i >> j) & 1) * 2^bits[j]`, and a `None` in `bits`
@@ -875,6 +884,18 @@ versions may contain breaking changes.
   occurs, or None when a value is out of range.
 
 ### Changed
+
+- The sumcheck's `interpolate_evals` over a field inverts one element per
+  call instead of one per Lagrange term (same values).
+- The IOP driver computes each pending statement's bundle key and oracle
+  closure once, when the statement is added, and keeps an index for the
+  parking rule. Deciding whether a claim waits is a lookup, where it was a
+  scan of every pending statement. The order statements are discharged in,
+  and so every transcript, is unchanged. `Protocol.bundle_key` must now
+  return a hashable key.
+- `TableOracle.digest` keeps the digest of a dense table and recomputes it
+  only when the oracle's table, its entries object, its variables or its
+  basis change.
 
 - `piop.virtual.expand_table` expands a field table with one native pass
   (`FieldVector.reindex`) instead of a Python loop over the entries, and

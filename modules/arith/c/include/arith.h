@@ -760,6 +760,9 @@ extern "C"
     void pmf_sub(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
     void pmf_neg(uint64_t *out, const uint64_t *a, PMFParams params);
     void pmf_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
+    // Sets out to the inverse of a, computed as a^(p-2) (Fermat). Returns 1,
+    // or 0 when a is zero, in which case out is not written. out may alias a.
+    int pmf_inverse(uint64_t *out, const uint64_t *a, PMFParams params);
     int pmf_is_equal(const uint64_t *a, const uint64_t *b, PMFParams params);
     // in: L limbs each below 2^52, not necessarily below p. out: canonical.
     void pmf_canonicalize(uint64_t *out, const uint64_t *in, PMFParams params);
