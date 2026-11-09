@@ -315,3 +315,38 @@ class Merkle:
                 leaf_digest(leaf, hash),
             )
         )
+
+    @staticmethod
+    def verify_many(
+        root: bytes, indices: Sequence[int], paths: Sequence[MerklePath], digests
+    ) -> int | None:
+        """Check the openings of several leaves of one tree in one call, as
+        `verify` checks one.
+
+        Leaf `k` sits at position `indices[k]`, is opened by `paths[k]`, and
+        has its digest at bytes ``32 k`` to ``32 k + 31`` of `digests`, the
+        leaf digests packed end to end.
+
+        Returns None when every opening authenticates, else the first `k`
+        whose opening does not. Openings of one tree all have the same
+        length, so the first path whose length differs from `paths[0]`'s
+        counts as not authenticating.
+        """
+        count = len(indices)
+        if len(paths) != count or len(digests) != DIGEST_LEN * count:
+            raise ValueError("one path and one 32-byte digest per index")
+        if count == 0:
+            return None
+        depth = len(paths[0])
+        same_depth = next((k for k, p in enumerate(paths) if len(p) != depth), count)
+        failed = lib.merkle_verify_many(
+            _as_digest(root),
+            ffi.new("uint64_t[]", list(indices[:same_depth])),
+            b"".join(p.to_bytes() for p in paths[:same_depth]),
+            depth,
+            ffi.from_buffer("uint8_t[]", digests),
+            same_depth,
+        )
+        if failed >= 0:
+            return int(failed)
+        return same_depth if same_depth < count else None

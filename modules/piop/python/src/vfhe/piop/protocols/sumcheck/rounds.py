@@ -24,6 +24,7 @@ other messages (a commitment scheme's folding rounds).
 
 from __future__ import annotations
 
+import math
 from fractions import Fraction
 from typing import Any, cast
 
@@ -46,17 +47,23 @@ def interpolate_evals(evals: tuple, r):
     if k == 1:  # linear: no division needed
         return evals[0] + r * (evals[1] - evals[0])
     if not isinstance(evals[0], Polynomial | int) and hasattr(evals[0], "field"):
+        # One field inversion per call. Each denoms[t] = prod_{j != t} (t - j)
+        # divides product = prod_t denoms[t], so
+        # 1 / denoms[t] = (product // denoms[t]) * (1 / product).
+        denoms = [
+            math.prod(t - j for j in range(k + 1) if j != t) for t in range(k + 1)
+        ]
+        product = math.prod(denoms)
+        inverse = (r.field.one * product).inverse()
         total = None
         for t in range(k + 1):
             num = None  # prod_{j != t} (r - j), a field element
-            denom = 1  # prod_{j != t} (t - j), a small integer
             for j in range(k + 1):
                 if j == t:
                     continue
                 factor = r - j
                 num = factor if num is None else num * factor
-                denom *= t - j
-            term = evals[t] * num * (r.field.one * denom).inverse()
+            term = evals[t] * num * (inverse * (product // denoms[t]))
             total = term if total is None else total + term
         return total
     if isinstance(evals[0], RNSPolynomial):

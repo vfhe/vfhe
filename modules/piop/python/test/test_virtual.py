@@ -436,6 +436,117 @@ def test_parking_rule_sees_an_oracle_read_through_the_index():
     assert sizes == [2, 2]
 
 
+def _scanning_next(party, worklist):
+    """The parking rule as a scan of the whole frontier per candidate, the
+    reference the driver's index must agree with."""
+    from vfhe.piop.oracle import oracle_closure
+    from vfhe.piop.relation import statement_oracles
+
+    for stmt in worklist:
+        subject = stmt.relation.subject(stmt)
+        protocol = None if subject is None else party.iop.protocol_for(stmt)
+        parked = False
+        if protocol is not None and protocol.batching:
+            key = party._bundle_key(stmt)
+            subject_key = protocol.bundle_key(subject)
+            parked = any(
+                other is not stmt
+                and party._bundle_key(other) != key
+                and any(
+                    protocol.bundle_key(o) == subject_key
+                    for o in oracle_closure(statement_oracles(other))
+                )
+                for other in worklist
+            )
+        if not parked:
+            return stmt
+    raise AssertionError("the reference parked everything")
+
+
+def test_the_parking_index_picks_what_the_scan_picks(monkeypatch):
+    """Many oracles, each with an Eval claim that must wait for a Sum claim
+    on it: every statement the driver picks is the one a scan of the
+    frontier would pick, and the protocols' bundle keys are computed a
+    number of times linear in the claims, not quadratic."""
+    from vfhe.piop.party import Party
+
+    oracles = 24
+    sizes, key_calls = [], [0]
+
+    class _Split(Protocol):
+        reduces_from = Relation_Zero
+        reduces_to = (Relation_Eval, Relation_Sum)
+
+        async def prove(self, prover, statements):
+            return self._go(statements)
+
+        async def verify(self, verifier, statements):
+            return self._go(statements)
+
+        def _go(self, statements):
+            (s,) = statements
+            evals = [
+                self.reduce(
+                    statements,
+                    Relation_Eval,
+                    oracles=[f],
+                    point=dict(zip(f.variables, (1, 1), strict=True)),
+                    value=f.polynomial.table[3],
+                )
+                for f in s.oracles
+            ]
+            sums = [
+                self.reduce(
+                    statements, Relation_Sum, oracles=[f], value=sum(f.polynomial.table)
+                )
+                for f in s.oracles
+            ]
+            return evals + sums
+
+    class _Bundle(Protocol):
+        reduces_from = Relation_Eval
+        batching = True
+
+        def bundle_key(self, oracle):
+            key_calls[0] += 1
+            return id(oracle)
+
+        async def prove(self, prover, statements):
+            sizes.append(len(statements))
+            return []
+
+        async def verify(self, verifier, statements):
+            sizes.append(len(statements))
+            return []
+
+    original = Party._next
+
+    def checked(self, worklist):
+        chosen = original(self, worklist)
+        assert chosen is _scanning_next(self, list(worklist))
+        return chosen
+
+    fs = [
+        TableOracle(MLE(variables=_vars("x0", "x1"), evaluations=[1, 2, 3, i]))
+        for i in range(oracles)
+    ]
+    iop = _iop()
+    iop.register(Relation_Zero, _Split())
+    iop.register(Relation_Eval, _Bundle())
+    monkeypatch.setattr(Party, "_next", checked)
+    assert iop.run(Statement(Relation_Zero(), oracles=fs))
+    assert sizes == [2] * (2 * oracles)
+
+    monkeypatch.setattr(Party, "_next", original)
+    key_calls[0] = 0
+    iop = _iop()
+    iop.register(Relation_Zero, _Split())
+    iop.register(Relation_Eval, _Bundle())
+    assert iop.run(Statement(Relation_Zero(), oracles=fs))
+    # A scan costs about (2 * oracles)^2 per party; the index a few per claim.
+    assert key_calls[0] < 40 * oracles
+
+
 def test_public_eval_is_terminal_even_with_a_default_protocol():
     calls = []
 
@@ -1000,3 +1111,27 @@ def test_a_field_restriction_resolves_by_the_gather():
     assert [expanded.table[i] for i in range(8)] == [
         want.table[i >> 1] for i in range(8)
     ]
+
+
+def test_a_table_oracle_keeps_its_digest_until_the_table_changes(monkeypatch):
+    from vfhe.piop import oracle as oracle_module
+
+    table = MLE(variables=_vars("a0", "a1"), evaluations=[1, 2, 3, 4])
+    oracle = TableOracle(table)
+    calls = []
+    digest = oracle_module.element_digest
+
+    def counted(value):
+        calls.append(1)
+        return digest(value)
+
+    monkeypatch.setattr(oracle_module, "element_digest", counted)
+    first = oracle.digest()
+    assert oracle.digest() == first and len(calls) == 1
+    table.variables = _vars("b0", "b1")  # renamed: another table
+    renamed = oracle.digest()
+    assert renamed != first and len(calls) == 2
+    table.evaluate({table.variables[0]: 1})  # bound in place: new entries
+    assert oracle.digest() != renamed and len(calls) == 3
+    oracle.polynomial = MLE(variables=_vars("a0", "a1"), evaluations=[1, 2, 3, 4])
+    assert oracle.digest() == first and len(calls) == 4

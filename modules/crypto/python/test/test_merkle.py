@@ -52,6 +52,29 @@ def test_verify_rejects_tampering():
     assert not Merkle.verify(bytes(DIGEST_LEN), index, path, leaves[index])
 
 
+def test_verify_many_is_verify_on_each_leaf():
+    leaves = random_leaves(32)
+    tree = Merkle(leaves)
+    indices = [3, 17, 3, 31, 0]
+    paths = [tree.open(i) for i in indices]
+    digests = b"".join(leaf_digest(leaves[i]) for i in indices)
+    assert Merkle.verify_many(tree.root, indices, paths, digests) is None
+    assert Merkle.verify_many(tree.root, [], [], b"") is None
+    # The first leaf that does not authenticate, wherever it is.
+    for bad in range(len(indices)):
+        moved = list(indices)
+        moved[bad] = (moved[bad] + 1) % 32
+        assert Merkle.verify_many(tree.root, moved, paths, digests) == bad
+        tampered = list(paths)
+        tampered[bad] = MerklePath(packed=bytes(len(paths[bad].to_bytes())))
+        assert Merkle.verify_many(tree.root, indices, tampered, digests) == bad
+        short = list(paths)
+        short[bad] = MerklePath(packed=paths[bad].to_bytes()[DIGEST_LEN:])
+        assert Merkle.verify_many(tree.root, indices, short, digests) == bad
+    with pytest.raises(ValueError, match="one path"):
+        Merkle.verify_many(tree.root, indices, paths[:-1], digests)
+
+
 def test_root_is_deterministic_and_binding():
     leaves = random_leaves(8)
     assert Merkle(leaves).root == Merkle(list(leaves)).root

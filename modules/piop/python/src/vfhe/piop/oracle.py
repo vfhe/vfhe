@@ -114,6 +114,7 @@ class TableOracle(Oracle):
         # Either class; a reader that needs one of them narrows it.
         self.polynomial: Any = polynomial
         self._public = bool(public)
+        self._digest: tuple | None = None
 
     @property
     def kind(self) -> OracleKind:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -133,7 +134,28 @@ class TableOracle(Oracle):
         return self.polynomial.evaluate(dict(point), in_place=False).constant()
 
     def digest(self) -> bytes:
-        return element_digest(self.polynomial)
+        """Return the digest of the table.
+
+        For a dense table the digest is kept and reused until the oracle
+        holds another table, or the table holds another entries object or
+        has other variables or another basis. Entries are never written in
+        place: the framework binds tables out of place.
+        """
+        table = self.polynomial
+        if not isinstance(table, MLE):
+            return element_digest(table)
+        state = (table, table.table, tuple(map(id, table.variables)), table.basis)
+        kept = self._digest
+        if (
+            kept is not None
+            and kept[0] is state[0]
+            and kept[1] is state[1]
+            and kept[2:4] == state[2:4]
+        ):
+            return kept[4]
+        value = element_digest(table)
+        self._digest = (*state, value)
+        return value
 
     def __repr__(self) -> str:
         return f"TableOracle(vars={self.num_vars}, kind={self.kind.value})"

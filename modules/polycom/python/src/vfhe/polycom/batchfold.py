@@ -81,8 +81,8 @@ from .basefold import (
     BasefoldEval,
     BasefoldOpening,
     _check_layer,
+    _check_paths,
     _committed_table,
-    _identity,
     _layer_answer,
     _ProverRun,
     _VerifierRun,
@@ -680,11 +680,7 @@ def _check_joint_layer(
             for code, block in zip(codes, blocks, strict=True)
         ]
     )
-    for k, (j, answer) in enumerate(zip(positions, answers, strict=True)):
-        if not Merkle.verify(
-            root, j, answer[1], digests[32 * k : 32 * (k + 1)], hash=_identity
-        ):
-            raise Rejection(f"{label}: Merkle path rejected at level {level}, leaf {j}")
+    _check_paths(label, level, root, positions, answers, digests)
     return blocks
 
 

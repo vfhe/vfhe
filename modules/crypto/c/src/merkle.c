@@ -164,3 +164,14 @@ bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path, uin
     }
     return memcmp(node, root, MERKLE_DIGEST_LEN) == 0;
 }
+
+int64_t merkle_verify_many(const uint8_t *root, const uint64_t *indices, const uint8_t *paths,
+                           uint64_t path_len, const uint8_t *leaf_digests, uint64_t count)
+{
+    const uint64_t stride = path_len * MERKLE_DIGEST_LEN;
+    for (uint64_t k = 0; k < count; k++)
+        if (!merkle_verify(root, indices[k], paths + k * stride, path_len,
+                           leaf_digests + k * MERKLE_DIGEST_LEN))
+            return (int64_t)k;
+    return -1;
+}

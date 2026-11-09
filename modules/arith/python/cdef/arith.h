@@ -384,6 +384,7 @@ void pmf_add(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
 void pmf_sub(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
 void pmf_neg(uint64_t *out, const uint64_t *a, void *params);
 void pmf_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
+int pmf_inverse(uint64_t *out, const uint64_t *a, void *params);
 int pmf_is_equal(const uint64_t *a, const uint64_t *b, void *params);
 void pmf_canonicalize(uint64_t *out, const uint64_t *in, void *params);
 void pmf_to_bytes(uint8_t *out, const uint64_t *a, void *params);

@@ -470,13 +470,15 @@ class PseudoMersenneElement(FieldElement):
 
     def inverse(self) -> PseudoMersenneElement:
         """
-        The multiplicative inverse, by Fermat ``a^(p-2)``.
+        Return the multiplicative inverse, computed as ``a^(p-2)`` (Fermat)
+        in one C call.
 
         Raises ZeroDivisionError for zero.
         """
-        if not self:
+        out = self.field._new_buffer()
+        if not lib.pmf_inverse(out, self._buf, self.field._params):
             raise ZeroDivisionError("zero has no inverse")
-        return self ** (self.field.prime - 2)
+        return self.field._wrap(out)
 
     def __truediv__(self, other: PseudoMersenneElement | int) -> PseudoMersenneElement:
         """Sugar for ``self * other.inverse()``; two C calls rather than one."""

@@ -346,6 +346,19 @@ void pmf_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams para
     pmf_ref_mul(out, a, b, params);
 }
 
+int pmf_inverse(uint64_t *out, const uint64_t *a, PMFParams params)
+{
+    // Zero is the only value without an inverse. Elements are canonical, so
+    // zero is the element whose limbs are all 0.
+    uint64_t any = 0;
+    for (uint64_t k = 0; k < params->limbs; k++)
+        any |= a[k];
+    if (!any)
+        return 0;
+    pmf_ref_inverse(out, a, params);
+    return 1;
+}
+
 int pmf_is_equal(const uint64_t *a, const uint64_t *b, PMFParams params)
 {
     // A plain limb comparison is valid only because every output is canonical, so
