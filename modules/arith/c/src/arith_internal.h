@@ -49,14 +49,14 @@ void vec_spread_u32(uint32_t *out, const uint32_t *in, uint64_t k, uint64_t n);
 // Reindexing one plane of words by the bits of the positions (the map of
 // field_vec_reindex): out[i] = in[source(i)], with
 //   source(i) = offset + sum_j ((i >> j) & 1) * 2^bits[j]
-// over the j < count with bits[j] >= 0. The mapped bits are distinct and
-// `offset` sets none of them, so the sum is a bitwise OR.
+// over the j < count with bits[j] >= 0. The source bits (those bits[j]) are
+// distinct and `offset` sets none of them, so the sum is a bitwise OR.
 //
 // The plan holds the map in the form the copy reads:
 // - table[b][v]: the bits of source(i) that byte b of i contributes when that
 //   byte equals v, so source(i) is offset ORed with one entry per byte of i;
 // - bytes: how many bytes of i the table covers, (count + 7) / 8;
-// - run: 2^r, for r the number of low bits j with bits[j] == j. Positions
+// - run: 2^r, for the largest r with bits[j] == j for every j < r. Positions
 //   i .. i + run - 1, i a multiple of run, read consecutive words.
 typedef struct
 {
@@ -64,7 +64,7 @@ typedef struct
     uint64_t offset, bytes, run;
 } VecReindex;
 // Whether (bits, count, offset) is such a map onto a plane of n words: count
-// below 64, distinct mapped bits that `offset` does not set, and every
+// below 64, distinct source bits that `offset` does not set, and every
 // source index below n.
 bool vec_reindex_valid(const int64_t *bits, uint64_t count, uint64_t offset, uint64_t n);
 // Fills `plan` for a valid map; one plan serves every plane and thread.

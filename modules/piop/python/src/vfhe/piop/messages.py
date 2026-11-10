@@ -26,19 +26,27 @@ if TYPE_CHECKING:
     from .party import Prover, Verifier
 
 
-def entries_message(table: MLE):
+def table_message(table: MLE) -> FieldVector | tuple:
     """Return the message that carries the entries of `table`: its
-    `FieldVector` for a field table, which a transcript digests with one
-    hash, and a tuple of its entries otherwise. `entries_table` reads it
-    back."""
+    `FieldVector` for a field table (`vector_table`), else a tuple of its
+    entries. `table_from_message` reads it back.
+
+    For a field table the message is the table's own vector, not a copy, so
+    the table must not be written to after it is sent.
+    """
     return table.table if vector_table(table) else tuple(table.table)
 
 
-def entries_table(message, variables: list, field: Any) -> MLE | None:
+def table_from_message(
+    message: FieldVector | tuple | list, variables: list, field: Any
+) -> MLE | None:
     """Read a table over `field` with `variables` from a message that
-    `entries_message` wrote. Returns None when the message is not one:
-    a vector over another field, or a count of entries other than
-    ``2^len(variables)``."""
+    `table_message` wrote.
+
+    Returns None when `message` has the wrong shape: a vector over another
+    field, or a number of entries other than ``2^len(variables)``. A
+    tuple's entries are not type-checked.
+    """
     count = 1 << len(variables)
     if isinstance(message, FieldVector):
         if message.field != field or len(message) != count:
@@ -66,7 +74,7 @@ class OracleMessages:
 
     def send(self, prover: Prover, label: str, table: MLE) -> Oracle:
         """Write `table` under `label` and return the prover's oracle to it."""
-        prover.iop.transcript.write(label, entries_message(table))
+        prover.iop.transcript.write(label, table_message(table))
         return TableOracle(table)
 
     async def receive(
@@ -74,7 +82,7 @@ class OracleMessages:
     ) -> Oracle:
         """Read the table sent under `label`, a table over `field` with
         `variables`, and return the verifier's oracle to it."""
-        table = entries_table(
+        table = table_from_message(
             await verifier.iop.transcript.read(label), variables, field
         )
         if table is None:

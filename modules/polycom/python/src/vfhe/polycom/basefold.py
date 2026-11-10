@@ -87,7 +87,7 @@ from vfhe.piop import (
     element_digest,
     exceptional_set_size,
 )
-from vfhe.piop.messages import entries_message
+from vfhe.piop.messages import table_message
 from vfhe.piop.protocols.sumcheck.rounds import (
     interpolate_evals,
     prod_round_evals,
@@ -425,7 +425,7 @@ class BasefoldMessages(OracleMessages):
 
     def send(self, prover: Prover, label: str, table: MLE) -> Oracle:
         if table.num_vars in self.sent:
-            prover.iop.transcript.write(label, entries_message(table))
+            prover.iop.transcript.write(label, table_message(table))
             return TableOracle(table, public=True)
         oracle, _ = self._scheme(table.num_vars).commit(table, prover=prover)
         prover.iop.transcript.write(label, oracle.commitment.root)
@@ -982,15 +982,19 @@ class LayerAnswers:
 
     A leaf is a fiber of adjacent symbols of a codeword (`fiber_at`).
     `leaves` holds one word per codeword under the layer's tree, in the
-    word's own form (a `FieldVector` for a field code, a list of ring
+    codeword's own form (a `FieldVector` for a field code, a list of ring
     elements for a ring code): the queried fibers end to end, in query
     order (`fibers_at`). A tree over one codeword has one word; a tree
     whose leaf joins the leaves of several codewords has one per codeword.
     `paths` holds the leaves' authentication paths end to end, in query
     order, as `Merkle.open_many` writes them.
 
-    It is digested with one hash per word and one for the paths, instead of
-    one per symbol and one per path.
+    For example, for queries at leaf indices ``[5, 2]`` of a codeword `w`
+    with fibers of 2 symbols, the word is ``[w[10], w[11], w[4], w[5]]``,
+    and `paths` is the path of leaf 5 followed by the path of leaf 2.
+
+    Its transcript digest hashes each word whole, and the paths' bytes
+    once.
     """
 
     __slots__ = ("leaves", "paths")
@@ -1000,22 +1004,26 @@ class LayerAnswers:
         self.paths = paths
 
     def digest(self) -> bytes:
-        """The digest of the leaves' words, each hashed whole, and of the
-        paths' bytes, under a tag of its own."""
+        """Return the transcript digest: a tag, one hash per word of leaves,
+        then one hash of the paths' bytes. `leaves` other than a tuple, which
+        no honest prover sends, is digested whole as any other message is."""
         parts = [b"layer-answers"]
-        parts += [_word_digest(word) for word in self.leaves]
+        if isinstance(self.leaves, tuple):
+            parts += [_word_digest(word) for word in self.leaves]
+        else:
+            parts.append(element_digest(self.leaves))
         parts.append(element_digest(self.paths))
         return chain_digest(parts)
 
     def __repr__(self) -> str:
-        return f"LayerAnswers({len(self.leaves)} words, {len(self.paths)} path bytes)"
+        return f"LayerAnswers({len(self.leaves)} word(s), {len(self.paths)} path bytes)"
 
 
 def _word_digest(word) -> bytes:
-    """One hash of a word of leaves: `FieldVector.digest` for a vector, the
-    rows of its elements hashed in sequence for a list of ring elements
-    (`RNSPolynomial.digest_sequence`). Anything else, which no honest
-    prover sends, is digested as any other message is."""
+    """One hash of a word of leaves: `FieldVector.digest` for a vector,
+    `RNSPolynomial.digest_sequence` of the elements for a list of ring
+    elements. Anything else, which no honest prover sends, is digested as
+    any other message is."""
     if isinstance(word, FieldVector):
         return word.digest()
     if isinstance(word, list | tuple) and all(
@@ -1028,9 +1036,10 @@ def _word_digest(word) -> bytes:
 def _layer_answers(
     code, word: Word, tree: Merkle, positions: list[int], size: int
 ) -> LayerAnswers:
-    """The answers of the layer committed as `word` under `tree` to the
-    leaves at `positions`: their fibers of `size` symbols and their
-    paths."""
+    """Answer the queries at leaf indices `positions` of the layer committed
+    as `word` under `tree`. Return a `LayerAnswers` with one word (the
+    fibers of `size` symbols at `positions`, end to end) and the leaves'
+    authentication paths."""
     return LayerAnswers(
         (code.fibers_at(word, positions, size),), tree.open_many(positions)
     )
@@ -1094,16 +1103,16 @@ def _combination(words: list[Word], coefficients: list) -> Word:
 
 
 def _check_layer(
-    code, label: str, level: int, root: bytes, answer, positions, size: int
+    code, label: str, level: int, root: bytes, answers, positions, size: int
 ) -> Word:
     """Check one layer's answers to `positions` against the layer's `root`,
     and return the leaves they give as one word, in query order.
 
-    `answer` is the `LayerAnswers` of a tree over one codeword at `level`,
+    `answers` is the `LayerAnswers` of a tree over one codeword at `level`,
     whose leaves are fibers of `size` symbols. Raises `Rejection` when it
     is malformed or a path does not authenticate its leaf.
     """
-    words = _answer_words(label, level, answer, 1)
+    words = _checked_leaf_words(label, level, answers, 1)
     try:
         block: Word = code.check_fibers(words[0], len(positions), size)
     except ValueError as error:
@@ -1111,34 +1120,38 @@ def _check_layer(
             f"{label}: malformed leaves at level {level}: {error}"
         ) from error
     _check_paths(
-        label, level, root, positions, answer.paths, code.leaf_digests(block, size)
+        label, level, root, positions, answers.paths, code.leaf_digests(block, size)
     )
     return block
 
 
-def _answer_words(label: str, level: int, answer, count: int) -> tuple:
-    """The words of leaves of `answer`, checked to be a `LayerAnswers` with
-    `count` of them and paths given as bytes. Raises `Rejection`
+def _checked_leaf_words(label: str, level: int, answers, count: int) -> tuple:
+    """Check that `answers` is a `LayerAnswers` with `count` words of leaves
+    and its paths as bytes, and return the words. Raises `Rejection`
     otherwise."""
     if (
-        not isinstance(answer, LayerAnswers)
-        or not isinstance(answer.leaves, tuple)
-        or len(answer.leaves) != count
-        or not isinstance(answer.paths, bytes)
+        not isinstance(answers, LayerAnswers)
+        or not isinstance(answers.leaves, tuple)
+        or len(answers.leaves) != count
+        or not isinstance(answers.paths, bytes)
     ):
         raise Rejection(f"{label}: malformed answers at level {level}")
-    return answer.leaves
+    return answers.leaves
 
 
 def _check_paths(
     label: str, level: int, root: bytes, positions, paths: bytes, digests
 ) -> None:
-    """Check that `paths`, the openings of the leaves at `positions` packed
-    end to end (`Merkle.open_many`), authenticate those leaves under
-    `root`, in one native call. The digest of the leaf at `positions[k]` is
-    bytes ``32 k`` to ``32 k + 31`` of `digests`. Raises `Rejection` when a
-    path does not authenticate or the paths do not split into one per
-    position.
+    """Check that `paths` authenticate the leaves at `positions` under
+    `root`.
+
+    `paths` holds one authentication path per position, end to end, as
+    `Merkle.open_many` writes them; the digest of the leaf at `positions[k]`
+    is bytes ``32 k`` to ``32 k + 31`` of `digests`. The number of siblings
+    per path is read from the length of `paths`, so a path whose length
+    differs from the depth of the layer's tree is not rejected for its
+    length. Raises `Rejection` when a path does not authenticate its leaf
+    or the paths do not split into one per position.
     """
     try:
         k = Merkle.verify_many(root, positions, paths, digests)
@@ -1158,14 +1171,15 @@ class _ProverRun:
     codeword of f's coefficients under the protocol's code.
 
     The run starts from `word` and does not hold a tree for it:
-    `top_answer(positions)` answers the first layer's leaves at a list of
-    positions, in whatever form the caller's commitment to `word` takes. Every later layer's codeword is
-    committed here and published by its root -- or, with `commit_layer`,
-    handed to ``await commit_layer(layer, step, word)``, which commits it as
-    the caller's protocol does (the root then written after fold `step`),
-    and `answers` is the caller's too. `fold` writes the rounds and the base
-    table; `answers` builds the reply to the query positions, once the caller
-    has drawn them.
+    `top_answer(positions)` returns the first layer's answers at the leaf
+    indices `positions`, in whatever form the caller's commitment to `word`
+    takes. Every later layer's codeword is committed here and published by
+    its root -- or, with `commit_layer`, handed to
+    ``await commit_layer(layer, step, word)``, which commits it as the
+    caller's protocol does (the root then written after fold `step`), and
+    `answers` is the caller's too. `fold` writes the rounds and the base
+    table; `answers` builds the reply to the query positions, once the
+    caller has drawn them.
     """
 
     def __init__(
@@ -1229,10 +1243,11 @@ class _ProverRun:
         iop.transcript.write(f"{label}/h0", cur_f)
 
     def answers(self, queries) -> tuple:
-        """The answers of every layer to `queries`, first layer first: for
-        each layer, its leaves at the positions the queries' walks
-        (`BasefoldEval._walk`) visit there, with their paths. The first
-        layer's come from `top_answer`, the others' are `LayerAnswers`."""
+        """Answer `queries` on every layer. Return one entry per layer, first
+        layer first: that layer's leaves at the positions the queries' walks
+        visit (`BasefoldEval._walk`), with their authentication paths. The
+        first entry is what `top_answer` returns; the others are
+        `LayerAnswers`."""
         protocol = self.protocol
         schedule, code = protocol.scheme.schedule, protocol.code
         walks = [protocol._walk(q) for q in queries]
@@ -1274,7 +1289,7 @@ class _VerifierRun:
         label: str,
         zs: list,
         value,
-        top_check: Callable[[list, list[int]], Word] | None,
+        top_check: Callable[[Any, list[int]], Word] | None,
         read_root: Callable[[int], Awaitable[bytes]] | None = None,
     ) -> None:
         self.protocol = protocol

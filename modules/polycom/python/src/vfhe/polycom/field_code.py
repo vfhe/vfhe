@@ -1048,9 +1048,12 @@ class FieldFoldableRS:
         return word.query(array("Q", range(i * size, (i + 1) * size)))
 
     def fibers_at(self, word: FieldVector, positions, size: int) -> FieldVector:
-        """Gather the fibers of `size` symbols at `positions` into one
-        vector, end to end in that order: for each `j` of `positions`, the
-        symbols of `fiber_at(word, j, size)`. One gather (`query`)."""
+        """Gather the fibers of `size` symbols at fiber indices `positions`
+        into one vector, end to end in that order: for each `j` of
+        `positions`, the symbols of `fiber_at(word, j, size)`.
+
+        For example, ``positions = [2, 0]`` and ``size = 2`` give the vector
+        ``[word[4], word[5], word[0], word[1]]``."""
         indices = array("Q", [j * size + t for j in positions for t in range(size)])
         return word.query(indices)
 
@@ -1067,7 +1070,8 @@ class FieldFoldableRS:
             or len(fibers) != count * size
         ):
             raise ValueError(
-                f"expected a vector of {count} fibers of {size} elements of the field"
+                f"expected a vector of {count * size} elements of the field "
+                f"({count} fiber(s) of {size}), end to end"
             )
         return fibers
 

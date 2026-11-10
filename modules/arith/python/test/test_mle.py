@@ -712,8 +712,8 @@ def test_table_from_uint64_refuses_a_value_above_its_prime():
 @pytest.mark.parametrize("d", [1, 4])
 @pytest.mark.parametrize("representation", [repr.coeff, repr.ntt])
 def test_table_uint64_rows_follow_the_ring_prime_order(d, representation):
-    # Of a ring and the one listing its primes reversed, one lists them out
-    # of the shared base's order; the rows follow `ring.primes` in both.
+    # Of a ring and the one listing its primes reversed, at least one lists
+    # them out of the shared base's order; the rows follow `ring.primes` in both.
     first = Ring(64, prime_size=[28, 31, 50], split_degree=d)
     for ring in (first, Ring(64, primes=list(reversed(first.primes)), split_degree=d)):
         table = _random_table(ring, 2)

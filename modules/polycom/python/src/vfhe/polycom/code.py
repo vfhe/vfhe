@@ -903,10 +903,13 @@ class FoldableRS:
         return tuple(word[i * size : (i + 1) * size])
 
     def fibers_at(self, word: list, positions, size: int) -> list[RNSPolynomial]:
-        """Gather the fibers of `size` symbols at `positions`, end to end in
-        that order: for each `j` of `positions`, the symbols of
+        """Gather the fibers of `size` symbols at fiber indices `positions`,
+        end to end in that order: for each `j` of `positions`, the symbols of
         `fiber_at(word, j, size)`. The entries are `word`'s own elements,
-        not copies."""
+        not copies.
+
+        For example, ``positions = [2, 0]`` and ``size = 2`` give
+        ``[word[4], word[5], word[0], word[1]]``."""
         return [e for j in positions for e in word[j * size : (j + 1) * size]]
 
     def check_fibers(self, fibers, count: int, size: int) -> list[RNSPolynomial]:
@@ -925,7 +928,8 @@ class FoldableRS:
             )
         ):
             raise ValueError(
-                f"expected {count} fibers of {size} elements of the ring, end to end"
+                f"expected {count * size} elements of the ring "
+                f"({count} fiber(s) of {size}), end to end"
             )
         return list(fibers)
 

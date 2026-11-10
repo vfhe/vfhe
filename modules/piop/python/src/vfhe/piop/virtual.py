@@ -83,7 +83,7 @@ def resolve_table(oracle, witnesses: dict | None = None) -> Any:
     the oracle's variables and scaled by the term's coefficient: the slice
     of a sparse table (`SparseMLE.restrict`) when the fixed values are bits,
     the partial evaluation of a dense one (a sparse table is materialized
-    first) otherwise. A dense field table fixed at bits is sliced by one
+    first) otherwise. A dense field table fixed at bits is restricted by one
     gather (`restrict_boolean`). Any other oracle has no table on this side
     and raises."""
     if witnesses is not None and oracle in witnesses:
@@ -463,7 +463,7 @@ def expand_table(table, variables: list) -> MLE:
     own, in any order — holding the same polynomial (constant in the added
     variables). When `variables` are the table's own, in order, the new
     table shares its entries (`table_view`). A field table is expanded by
-    one native pass (`FieldVector.reindex`). A table of ring elements or
+    one `FieldVector.reindex` call. A table of ring elements or
     Python values holds the same entry objects, picked by position.
     Evaluation basis only: the entries are read as values."""
     if getattr(table, "basis", MLE_Basis.eval) is not MLE_Basis.eval:
@@ -471,19 +471,20 @@ def expand_table(table, variables: list) -> MLE:
     own = [variables.index(v) for v in table.variables]
     if own == list(range(len(variables))):  # the same variables, in order
         return table_view(table, variables)
-    # bits[j]: the position in `table` of variable j, None for an added one.
-    bits: list[int | None] = [None] * len(variables)
+    # source_bits[j]: the position in `table` of variable j, None for an
+    # added one.
+    source_bits: list[int | None] = [None] * len(variables)
     for k, j in enumerate(own):
-        bits[j] = k
+        source_bits[j] = k
     if vector_table(table):
         return MLE(
             field=table.field,
             variables=variables,
-            evaluations=table.table.reindex(bits),
+            evaluations=table.table.reindex(source_bits),
         )
     # sources[i]: the position in `table` of entry i, one variable at a time.
     sources = [0]
-    for b in bits:
+    for b in source_bits:
         sources += sources if b is None else [s | 1 << b for s in sources]
     entries = table.table
     return table_like([table], variables, [entries[s] for s in sources])
@@ -496,7 +497,10 @@ def restrict_boolean(table, fixed: dict) -> MLE | None:
     `fixed` maps variables of `table` to 0 or 1, as ints or as the field's
     zero and one. The result is a table over the other variables, in their
     order, holding the entries where the fixed variables take those values:
-    the table `table.evaluate(fixed, in_place=False)` gives.
+    the table `table.evaluate(fixed, in_place=False)` gives. For example,
+    for `table` over `(a0, a1, a2)` with entries `t` (`a0` the lowest index
+    bit) and `fixed = {a0: 1}`, the result is over `(a1, a2)` with entries
+    `[t[1], t[3], t[5], t[7]]`.
 
     Returns None when this does not apply: `table` is not a field table, a
     value is not 0 or 1, or `fixed` names a variable `table` does not have.

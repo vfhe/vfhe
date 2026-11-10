@@ -388,6 +388,19 @@ def test_basefold_rejects_answer_from_the_wrong_position():
     assert not _replay_with_tamper(honest, ring, scheme, fields, tamper)
 
 
+def test_malformed_layer_answers_still_have_a_digest():
+    """Answers whose leaves are not a tuple of words are digested whole, so
+    a malformed message has a digest of its own instead of raising."""
+    _, _, honest, _ = _honest_run()
+    first = honest.transcript.entries["basefold/answers"].result()[0]
+    honest_digest = first.digest()
+    for leaves in (None, 5, list(first.leaves), b"leaves"):
+        digest = LayerAnswers(leaves, first.paths).digest()
+        assert isinstance(digest, bytes)
+        assert len(digest) == DIGEST_LEN
+        assert digest != honest_digest
+
+
 def test_pair_leaves_authenticate_both_fold_operands():
     # One leaf, one path, both operands of a fold check: the leaf digest is
     # over the pair, so the tree has n/2 leaves and Merkle.verify accepts

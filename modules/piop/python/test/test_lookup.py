@@ -49,16 +49,6 @@ BETA = 8
 NUM_VARS = 6
 
 
-def _bumped(value, one):
-    """`value`, a table message, with `one` added to its first entry: a
-    copy of a vector, or a new tuple."""
-    if isinstance(value, FieldVector):
-        out = value.copy()
-        out[0] = out[0] + one
-        return out
-    return (value[0] + one, *value[1:])
-
-
 @pytest.fixture
 def field():
     return PseudoMersenneField.generate(260, two_adicity=8)
@@ -480,7 +470,7 @@ def test_the_product_identity_is_what_catches_an_unbounded_entry(field):
     assert not iop.run(_statement(field, values))
 
 
-def test_the_sumcheck_is_what_catches_a_mislayered_tree(field):
+def test_the_sumcheck_is_what_catches_a_mislayered_tree(field, bump_first_entry):
     """A prover that sends an internal node inconsistent with the leaves
     keeps the four products intact, so the product identity still passes --
     the zerocheck is the only thing that notices."""
@@ -492,7 +482,7 @@ def test_the_sumcheck_is_what_catches_a_mislayered_tree(field):
         # Index 0 is not the entry the evaluation claim reads (that is
         # 2^n - 2), so the four products survive this edit untouched.
         if label == "lookup/f1_WSmu":
-            return _bumped(value, field.one)
+            return bump_first_entry(value, field.one)
         return value
 
     assert not _replay_with_tamper(honest, field, values, tamper)
@@ -523,7 +513,7 @@ def test_replay_harness_accepts_an_untampered_transcript(field):
     assert _replay_with_tamper(honest, field, values, lambda _label, value: value)
 
 
-def test_every_prover_message_is_load_bearing(field):
+def test_every_prover_message_is_load_bearing(field, bump_first_entry):
     """Rewriting any single prover message, anywhere in the reduction, makes
     the run reject -- the lookup's own messages and those of the sumchecks
     and virtual-oracle openings it reduces to."""
@@ -551,7 +541,7 @@ def test_every_prover_message_is_load_bearing(field):
         def tamper(label, value, target=target):
             if label != target:
                 return value
-            return _bumped(value, field.one)
+            return bump_first_entry(value, field.one)
 
         assert not _replay_with_tamper(honest, field, values, tamper), target
 

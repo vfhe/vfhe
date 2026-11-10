@@ -39,22 +39,18 @@ def interpolate_evals(evals: tuple, r):
 
     Over a ring the Lagrange denominators are (products of) integers up to
     deg, inverted per RNS prime — sound because {0..deg} is an exceptional
-    set there [Sor22, fn. 12]. Over a field they are inverted in the field.
-    Over plain integers the division is exact (g has integer coefficients),
-    computed with Fractions.
+    set there [Sor22, fn. 12]. Over a field (of characteristic above deg)
+    they share one inversion. Over plain integers the division is exact (g
+    has integer coefficients), computed with Fractions.
     """
     k = len(evals) - 1
     if k == 1:  # linear: no division needed
         return evals[0] + r * (evals[1] - evals[0])
     if not isinstance(evals[0], Polynomial | int) and hasattr(evals[0], "field"):
-        # One field inversion per call. Each denoms[t] = prod_{j != t} (t - j)
-        # divides product = prod_t denoms[t], so
-        # 1 / denoms[t] = (product // denoms[t]) * (1 / product).
-        denoms = [
-            math.prod(t - j for j in range(k + 1) if j != t) for t in range(k + 1)
-        ]
-        product = math.prod(denoms)
-        inverse = (r.field.one * product).inverse()
+        # Lagrange denominators on the nodes 0..k are (-1)^(k-t) t!(k-t)!, so
+        # one inversion of k! gives them all:
+        # 1 / denoms[t] = (-1)^(k-t) C(k, t) / k!.
+        inverse = (r.field.one * math.factorial(k)).inverse()
         total = None
         for t in range(k + 1):
             num = None  # prod_{j != t} (r - j), a field element
@@ -63,7 +59,8 @@ def interpolate_evals(evals: tuple, r):
                     continue
                 factor = r - j
                 num = factor if num is None else num * factor
-            term = evals[t] * num * (inverse * (product // denoms[t]))
+            weight = (-1) ** (k - t) * math.comb(k, t)
+            term = evals[t] * num * (inverse * weight)
             total = term if total is None else total + term
         return total
     if isinstance(evals[0], RNSPolynomial):

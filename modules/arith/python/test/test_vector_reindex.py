@@ -6,10 +6,10 @@ Each implementation's native kernel is checked against the definition:
 element ``offset + sum_j ((i >> j) & 1) * 2^bits[j]``, gathered with
 `query`. The maps cover each way the kernel copies: runs of consecutive
 source words, one lookup per position (a dropped or permuted low bit),
-fixed source bits, lengths below and around a vector's 8 lanes, and long
-vectors split across threads. The generic default is checked against the
-native kernel, and maps that read past the vector or read a bit twice are
-refused.
+fixed source bits, lengths below and around the 8 lanes of an AVX-512
+gather, and long vectors split across threads. The generic default is
+checked against the native kernel, and maps that read past the vector or
+read a source bit twice are refused.
 """
 
 from __future__ import annotations
@@ -46,7 +46,8 @@ def _by_definition(vector: FieldVector, bits: list, offset: int) -> FieldVector:
     return vector.query(sources)
 
 
-#: (source bits, map, offset): every shape of map the kernel distinguishes.
+#: (log2 of the vector's length, bits, offset): every shape of map the
+#: kernel distinguishes.
 MAPS = [
     (5, [0, 1, 2, 3, 4], 0),  # the identity: one run
     (6, [0, 1, 2, 3, 4], 1 << 5),  # a run, the top bit fixed to 1
@@ -57,7 +58,7 @@ MAPS = [
     (6, [2, 0, 4], 0b100010),  # a restriction and a renaming at once
     (4, [], 0b1011),  # one element
     (3, [0, 1, None], 0),  # shorter than a vector's lanes
-    (10, [3, 4, 5, 6, 7, 8, 9, 0, 1, 2], 0),  # a run of 2^7 words, wrapped
+    (10, [3, 4, 5, 6, 7, 8, 9, 0, 1, 2], 0),  # a rotation: lookups 8 apart
     (10, [0, 1, 2, None, None, 3, 4, 5, 6, 7, 8, 9], 0),  # a run of 8, repeated
 ]
 
@@ -82,15 +83,17 @@ def test_reindex_reads_a_vector_of_any_length(field):
     assert vector.reindex(bits) == _by_definition(vector, bits, 0)
 
 
-def test_reindex_writes_into_out(field):
+@pytest.mark.parametrize("generic", [False, True], ids=["native", "generic"])
+def test_reindex_writes_into_out(field, generic):
     vector = _sampled(field, 16)
+    reindex = FieldVector.reindex if generic else type(vector).reindex
     out = _sampled(field, 8, b"out")
-    assert vector.reindex([1, 2, 3], 1, out=out) is out
+    assert reindex(vector, [1, 2, 3], 1, out=out) is out
     assert out == _by_definition(vector, [1, 2, 3], 1)
     with pytest.raises(ValueError, match="elements"):
-        vector.reindex([1, 2], out=out)
+        reindex(vector, [1, 2], out=out)
     with pytest.raises(ValueError, match="cannot write over"):
-        vector.reindex([0, 1, 2, 3], out=vector)
+        reindex(vector, [0, 1, 2, 3], out=vector)
 
 
 @pytest.mark.parametrize(
@@ -101,6 +104,7 @@ def test_reindex_writes_into_out(field):
         ([0, 4], 0, "reads index 17"),
         ([0, 1], 16, "reads index 19"),
         ([0, -2], 0, "non-negative or None"),
+        ([0, -1], 0, "non-negative or None"),
         ([0], -1, "offset must be non-negative"),
         ([None] * 64, 0, "2\\^64"),
     ],
@@ -116,15 +120,16 @@ def test_reindex_refuses_what_is_not_a_map_onto_the_vector(
 
 
 #: Long enough to be split across threads by every implementation's grain,
-#: for each kernel shape: runs, lookups, and runs of a few words.
+#: for each kernel shape: runs of 2^17 words that chunk boundaries cut,
+#: lookups, and runs of 16 words.
 LONG_MAPS = [
-    [*range(1, 19), 0],
+    [*range(17), None, *range(17, 19)],
     [None, *range(19)],
     [*range(4), None, *range(4, 19)],
 ]
 
 
-@pytest.mark.parametrize("bits", LONG_MAPS, ids=["runs", "lookups", "short-runs"])
+@pytest.mark.parametrize("bits", LONG_MAPS, ids=["long-runs", "lookups", "runs-of-16"])
 def test_reindex_on_threads_is_the_serial_one(field, bits):
     vector = _sampled(field, 1 << 19)
     try:

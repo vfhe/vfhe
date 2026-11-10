@@ -33,7 +33,7 @@ class Party:
         Both parties run this same deterministic traversal, so their DAGs,
         paths, and transcript labels agree.
         """
-        worklist = _Frontier(self)
+        worklist = _Worklist(self)
         worklist.extend([statement])
         terminal = []
         while worklist:
@@ -67,7 +67,7 @@ class Party:
             return (type(stmt.relation), id(protocol), protocol.bundle_key(subject))
         return (type(stmt.relation),)
 
-    def _parked(self, stmt: Statement, worklist: _Frontier) -> bool:
+    def _parked(self, stmt: Statement, worklist: _Worklist) -> bool:
         """The parking rule (piop.md §5): a claim on an oracle headed for a
         bundle protocol waits while any other frontier statement, outside
         its own bundle, can still produce a claim that would join the bundle
@@ -78,17 +78,17 @@ class Party:
         (the Composer consumes them), so this concerns committed and plain
         oracles.
 
-        Decided by a lookup in the frontier's index (`_Frontier.reaching`).
+        Decided by a lookup in the worklist's index (`_Worklist.reaching`).
         """
-        bundle_protocol = worklist.bundle_protocol(stmt)
-        if bundle_protocol is None:
+        bundle_target = worklist.bundle_target(stmt)
+        if bundle_target is None:
             return False
-        protocol, subject_key = bundle_protocol
+        protocol, subject_key = bundle_target
         key = worklist.bundle_key(stmt)
         reaching = worklist.reaching(protocol, subject_key)
         return any(count and other != key for other, count in reaching.items())
 
-    def _next(self, worklist: _Frontier) -> Statement:
+    def _next(self, worklist: _Worklist) -> Statement:
         """The first frontier statement not parked, in worklist order."""
         for stmt in worklist:
             if not self._parked(stmt, worklist):
@@ -96,9 +96,10 @@ class Party:
         raise RuntimeError("every frontier statement is parked (cyclic definitions?)")
 
 
-class _Frontier:
+class _Worklist:
     """The driver's worklist: the statements waiting to be discharged, in
-    the order they were added.
+    the order they were added. They are the frontier of the reduction DAG,
+    and the parking rule calls them the frontier statements.
 
     Each statement's bundle key (`Party._bundle_key`), oracle closure and,
     for a claim headed for a bundle protocol, that protocol and its
@@ -106,7 +107,7 @@ class _Frontier:
     Statements and oracle definitions do not change while they wait, so
     neither do these.
 
-    For each bundle protocol the parking rule has asked about, the frontier
+    For each bundle protocol the parking rule has asked about, the worklist
     also keeps an index for `reaching`. It is built on the first question
     and updated as statements are added and removed.
     """
@@ -114,11 +115,11 @@ class _Frontier:
     def __init__(self, party: Party):
         self._party = party
         self._order: dict[int, Statement] = {}  # id -> statement, in order
-        self._keys: dict[int, tuple] = {}
+        self._bundle_keys: dict[int, tuple] = {}
         self._closures: dict[int, list] = {}
-        self._bundled: dict[int, tuple | None] = {}
+        self._bundle_targets: dict[int, tuple | None] = {}
         # id(protocol) -> (protocol, {subject key: {bundle key: count}})
-        self._indices: dict[int, tuple[object, dict]] = {}
+        self._reach_counts: dict[int, tuple[object, dict]] = {}
 
     def __bool__(self) -> bool:
         return bool(self._order)
@@ -128,47 +129,53 @@ class _Frontier:
 
     def bundle_key(self, stmt: Statement) -> tuple:
         """The bundle `stmt` belongs to (`Party._bundle_key`)."""
-        return self._keys[id(stmt)]
+        return self._bundle_keys[id(stmt)]
 
-    def bundle_protocol(self, stmt: Statement) -> tuple | None:
+    def bundle_target(self, stmt: Statement) -> tuple | None:
         """`(protocol, protocol.bundle_key(subject))` for a claim on an
         oracle headed for a bundle protocol; None for any other statement."""
-        return self._bundled[id(stmt)]
+        return self._bundle_targets[id(stmt)]
 
     def extend(self, statements) -> None:
-        """Add `statements` at the end of the worklist."""
+        """Add `statements` at the end of the worklist. Raises ValueError
+        when one of them is already on it."""
         for stmt in statements:
             sid = id(stmt)
             if sid in self._order:
-                raise ValueError("a statement already on the frontier was added again")
+                raise ValueError("a statement already on the worklist was added again")
             self._order[sid] = stmt
-            self._keys[sid] = self._party._bundle_key(stmt)
+            self._bundle_keys[sid] = self._party._bundle_key(stmt)
             self._closures[sid] = oracle_closure(statement_oracles(stmt))
             subject = stmt.relation.subject(stmt)
             protocol = None if subject is None else self._party.iop.protocol_for(stmt)
-            self._bundled[sid] = (
+            self._bundle_targets[sid] = (
                 (protocol, protocol.bundle_key(subject))
                 if protocol is not None and protocol.batching
                 else None
             )
-            for protocol, index in self._indices.values():
+            for protocol, index in self._reach_counts.values():
                 self._update_index(protocol, index, sid, 1)
 
     def remove(self, stmt: Statement) -> None:
         """Take `stmt` off the worklist."""
         sid = id(stmt)
-        for protocol, index in self._indices.values():
+        for protocol, index in self._reach_counts.values():
             self._update_index(protocol, index, sid, -1)
-        del self._order[sid], self._keys[sid], self._closures[sid], self._bundled[sid]
+        del (
+            self._order[sid],
+            self._bundle_keys[sid],
+            self._closures[sid],
+            self._bundle_targets[sid],
+        )
 
     def reaching(self, protocol, subject_key) -> dict:
         """Count, by bundle key, the frontier statements that have in their
         oracle closure an oracle `o` with `protocol.bundle_key(o)` equal to
         `subject_key`. Returns a dict from bundle key to that count; a count
         can be 0 once the statements it counted are gone."""
-        entry = self._indices.get(id(protocol))
+        entry = self._reach_counts.get(id(protocol))
         if entry is None:
-            entry = self._indices[id(protocol)] = (protocol, {})
+            entry = self._reach_counts[id(protocol)] = (protocol, {})
             for sid in self._order:
                 self._update_index(protocol, entry[1], sid, 1)
         return entry[1].get(subject_key, {})
@@ -176,7 +183,7 @@ class _Frontier:
     def _update_index(self, protocol, index: dict, sid: int, delta: int) -> None:
         """Add `delta` to the count of statement `sid`'s bundle key under
         each `protocol.bundle_key` of an oracle in its closure."""
-        key = self._keys[sid]
+        key = self._bundle_keys[sid]
         for reached in {protocol.bundle_key(o) for o in self._closures[sid]}:
             counts = index.setdefault(reached, {})
             counts[key] = counts.get(key, 0) + delta
