@@ -305,11 +305,10 @@ def test_parking_gathers_a_claim_produced_later(dom):
     assert "basefold/0/alpha" in _labels(iop)
 
 
-def test_the_claims_weight_holds_one_eq_table_at_a_time(dom, monkeypatch):
-    """Many claims on one polynomial: their eq~ tables are added up as they
-    are built, so when the next one is made no more than one table built
-    from an earlier one (the sum so far) is alive, however many claims
-    there are."""
+def test_batched_eq_weight_builds_one_eq_table_at_a_time(dom, monkeypatch):
+    """Many claims on one polynomial: each eq~ table is added into the
+    running sum as it is built, so when the next one is built at most one
+    table derived from the earlier ones, the sum, is alive."""
     claims = [dom.claim("f") for _ in range(6)]
     built: list = []
     alive_at_build: list[int] = []

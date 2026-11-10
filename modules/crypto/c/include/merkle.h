@@ -65,19 +65,21 @@ extern "C"
     void merkle_open(uint8_t *out, Merkle mk, uint64_t index);
     // The openings of leaves indices[0 .. count), each as merkle_open writes
     // it, end to end: the opening of indices[k] starts at
-    // out + k * log_size * MERKLE_DIGEST_LEN. Every index is below the
-    // tree's size.
+    // out + k * log_size * MERKLE_DIGEST_LEN. Every index is below
+    // 1 << log_size, as for merkle_open.
     void merkle_open_many(uint8_t *out, Merkle mk, const uint64_t *indices, uint64_t count);
 
     // Recompute the root from a leaf digest and its opening, and compare:
     // `path_len` sibling digests, `index` the leaf position they belong to.
     bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path, uint64_t path_len,
                        const uint8_t *leaf_digest);
-    // Checks the openings of `count` leaves of one tree, each as merkle_verify
+    // Check the openings of `count` leaves of one tree, each as merkle_verify
     // does. Leaf k sits at position indices[k], its digest is at
     // leaf_digests + k * MERKLE_DIGEST_LEN, and its opening is the `path_len`
-    // sibling digests at paths + k * path_len * MERKLE_DIGEST_LEN. Returns -1
-    // when every opening authenticates, else the first k that does not.
+    // sibling digests at paths + k * path_len * MERKLE_DIGEST_LEN. `path_len`
+    // is not checked against the tree's depth, which the caller knows.
+    // Returns -1 when every opening authenticates, else the first k that
+    // does not.
     int64_t merkle_verify_many(const uint8_t *root, const uint64_t *indices, const uint8_t *paths,
                                uint64_t path_len, const uint8_t *leaf_digests, uint64_t count);
 

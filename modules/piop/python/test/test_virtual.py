@@ -437,7 +437,7 @@ def test_parking_rule_sees_an_oracle_read_through_the_index():
 
 
 def _scanning_next(party, worklist):
-    """The parking rule as a scan of the whole frontier per candidate, the
+    """The parking rule as a scan of the whole worklist per candidate, the
     reference the driver's index must agree with."""
     from vfhe.piop.oracle import oracle_closure
     from vfhe.piop.relation import statement_oracles
@@ -466,7 +466,7 @@ def _scanning_next(party, worklist):
 def test_the_parking_index_picks_what_the_scan_picks(monkeypatch):
     """Many oracles, each with an Eval claim that must wait for a Sum claim
     on it: every statement the driver picks is the one a scan of the
-    frontier would pick, and the protocols' bundle keys are computed a
+    worklist would pick, and the protocols' bundle keys are computed a
     number of times linear in the claims, not quadratic."""
     from vfhe.piop.party import Party
 
@@ -1135,3 +1135,25 @@ def test_a_table_oracle_keeps_its_digest_until_the_table_changes(monkeypatch):
     assert oracle.digest() != renamed and len(calls) == 3
     oracle.polynomial = MLE(variables=_vars("a0", "a1"), evaluations=[1, 2, 3, 4])
     assert oracle.digest() == first and len(calls) == 4
+
+
+def test_a_table_oracle_digest_follows_successive_renames():
+    """The kept digest holds the variables it was computed for, so variables
+    created after a rename can never be mistaken for them, and each rename
+    gives the digest of the renamed table."""
+    import gc
+    import weakref
+
+    table = MLE(variables=_vars("a0", "a1"), evaluations=[1, 2, 3, 4])
+    oracle = TableOracle(table)
+    oracle.digest()
+    kept = [weakref.ref(v) for v in table.variables]
+    table.variables = _vars("b0", "b1")
+    table.variables = _vars("c0", "c1")
+    gc.collect()
+    assert all(ref() is not None for ref in kept)
+    fresh = MLE(variables=table.variables, evaluations=[1, 2, 3, 4])
+    assert oracle.digest() == TableOracle(fresh).digest()
+    table.variables = _vars("d0", "d1")
+    fresh = MLE(variables=table.variables, evaluations=[1, 2, 3, 4])
+    assert oracle.digest() == TableOracle(fresh).digest()

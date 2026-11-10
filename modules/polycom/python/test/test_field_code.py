@@ -258,9 +258,9 @@ def test_fold_fibers_agrees_with_the_fold_chain(field, instantiation, twist_fiel
         code.fold_fibers(FieldVector(field, 6), challenges[:2], code.d, [0, 1])
     with pytest.raises(ValueError, match="folds from level"):
         code.fold_fibers(FieldVector(field, 8), challenges[:3], 2, [0])
-    with pytest.raises(ValueError, match="1 fibers of 4"):
+    with pytest.raises(ValueError, match=r"vector of 4 .* \(1 fiber\(s\) of 4\)"):
         code.check_fibers(FieldVector(field, 2), 1, 4)
-    with pytest.raises(ValueError, match="a vector of 1 fibers of 2"):
+    with pytest.raises(ValueError, match=r"vector of 2 .* \(1 fiber\(s\) of 2\)"):
         code.check_fibers((field.one, field.one), 1, 2)
 
 

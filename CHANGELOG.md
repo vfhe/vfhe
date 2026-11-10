@@ -16,7 +16,7 @@ versions may contain breaking changes.
 
 - `Merkle.open_many(indices)` opens several leaves in one C call
   (`merkle_open_many`) and returns their paths packed end to end in one
-  `bytes`. `Merkle.verify_many(root, indices, paths, digests)` checks such
+  `bytes`. `Merkle.verify_many(root, indices, paths, leaf_digests)` checks such
   packed paths in one C call (`merkle_verify_many`). It returns `None`, or
   the first leaf whose opening does not authenticate. The Basefold and
   BatchFold verifiers check each layer's query paths with it.
@@ -31,7 +31,7 @@ versions may contain breaking changes.
 
 - `FieldVector.reindex(bits, offset=0, out=None)` reads a vector through a
   map of index bits: element `i` of the result is element
-  `offset + sum_j ((i >> j) & 1) * 2^bits[j]`, and a `None` in `bits`
+  `offset + sum_j ((i >> j) & 1) * 2^bits[j]`, and `bits[j] = None`
   ignores bit `j` of `i`. On multilinear tables, one call restricts a
   table to 0/1 values of some variables, renames the others and adds
   variables the result does not depend on. It is native for
@@ -906,7 +906,7 @@ versions may contain breaking changes.
   model's `OracleMessages`, `BasefoldMessages`' tables sent in the clear,
   the range proofs' `psi` messages) travels as the table's `FieldVector`,
   digested with one hash, instead of a tuple of its entries
-  (`piop.messages.entries_message` / `entries_table`). Proof digests that
+  (`piop.messages.table_message` / `table_from_message`). Proof digests that
   include such a message change.
 
 - The sumcheck's `interpolate_evals` over a field inverts one element per
@@ -1512,13 +1512,14 @@ versions may contain breaking changes.
 ### Fixed
 
 - Fix `RNSPolynomial.to_uint64` / `from_uint64` and `MLE.to_uint64` /
-  `from_uint64` on a ring that lists its primes in another order than the
-  shared base registered them in. That happens to a ring built after
-  another of the same `N` and split degree whose primes it reuses out of
-  order. The rows came in the base's order instead of `ring.primes`'s,
-  silently permuted, and a value above its prime was reported against the
-  wrong prime. The range protocols read the rows of `to_uint64` in the
-  ring's order, so they rejected honest claims over such a ring.
+  `from_uint64` on a ring that lists its primes in an order other than
+  the one the shared base registered them in. That happens to a ring
+  built after another of the same `N` and split degree whose primes it
+  reuses out of order. The rows came in the base's order instead of
+  `ring.primes`'s, silently permuted, and a value above its prime was
+  reported against the wrong prime. The range protocols read the rows of
+  `to_uint64` in the ring's order, so they rejected honest claims over
+  such a ring.
 
 - Fix `vfhe.vfhe.computation.Division.remainder` when the divisor exceeds
   the quotient's modulus: it was computed modulo the quotient's ring, which

@@ -68,7 +68,7 @@ from vfhe.arith import (
 )
 from vfhe.arith.mle import native_table, vector_table
 from vfhe.piop.evaluation import Relation_Eval
-from vfhe.piop.messages import OracleMessages, entries_message, entries_table
+from vfhe.piop.messages import OracleMessages, table_from_message, table_message
 from vfhe.piop.protocol import Protocol, Rejection
 from vfhe.piop.relations import Relation_Lookup, Relation_Range, Relation_ResidueRange
 from vfhe.piop.relations.range import residue_primes
@@ -182,10 +182,9 @@ def digit_count(bound: int, max_digit_bits: int) -> int:
     `c` is the smallest power of two whose digits (`digit_alphabets(bound,
     c)`) have at most `max_digit_bits` bits each, that is
     `beta <= 2^max_digit_bits`, with the most significant digit keeping at
-    least one bit. Fewer digits mean a smaller digit oracle, so this is the
-    cheapest `c` whose lookup table `t_beta` has at most
-    `2^max_digit_bits` entries. For example, `digit_count(2**44, 16)` is 4
-    (four digits of 11 bits) and `digit_count(2**87, 16)` is 8 (seven
+    least one bit: the fewest digits whose lookup table `t_beta` has at
+    most `2^max_digit_bits` entries. For example, `digit_count(2**44, 16)`
+    is 4 (four digits of 11 bits) and `digit_count(2**87, 16)` is 8 (seven
     digits of 11 bits and one of 10).
 
     `bound` must be a power of two `B = 2^b > 1`. Raises ValueError when no
@@ -204,7 +203,8 @@ def digit_count(bound: int, max_digit_bits: int) -> int:
         chunks *= 2
     raise ValueError(
         f"no power-of-two number of digits of at most {max_digit_bits} bits "
-        f"decomposes log2(B) = {bits} bits with a bit left for the top digit"
+        f"decomposes log2(B) = {bits} bits with a bit left for the most "
+        f"significant digit"
     )
 
 
@@ -288,10 +288,10 @@ class RangeDecomposition(Protocol):
     of two at most the smallest prime of `q`; `kappa`, the number of
     repetitions (soundness `((ell + nu) / sigma)^kappa`); `ring`, the `R_q`
     of the claims; `chunks`, the number `c` of digits per coefficient
-    (`digit_alphabets`); or, instead of `chunks`, `max_digit_bits`, the
-    widest digit allowed, and then each claim gets the `c` that
-    `digit_count` gives for its bound; `messages`, how `mu'` travels
-    (`OracleMessages`).
+    (`digit_alphabets`); `messages`, how `mu'` travels (`OracleMessages`).
+    Instead of `chunks`, one may give `max_digit_bits`, the widest digit
+    allowed in bits; each claim then gets
+    `c = digit_count(bound, max_digit_bits)`.
     """
 
     name = "range"
@@ -329,7 +329,7 @@ class RangeDecomposition(Protocol):
         self.alphabet = alphabet
         self.kappa = kappa
         # c, the number of base-beta digits each coefficient splits into;
-        # None when it follows from each claim's bound (`chunks_for`).
+        # None when it follows from each claim's bound (`digit_count_for`).
         self.chunks = chunks
         # The widest digit allowed, in bits, when `chunks` is None.
         self.max_digit_bits = max_digit_bits
@@ -353,7 +353,7 @@ class RangeDecomposition(Protocol):
             self.messages,
         )
 
-    def chunks_for(self, bound: int) -> int:
+    def digit_count_for(self, bound: int) -> int:
         """Return the number of digits `c` for a claim with bound `bound`:
         `chunks` when it was given, else `digit_count(bound,
         max_digit_bits)`."""
@@ -377,7 +377,7 @@ class RangeDecomposition(Protocol):
         ring = self.ring
         ell = v.num_vars
         nu = ring.N.bit_length() - 1
-        chunks = self.chunks_for(relation.bound)
+        chunks = self.digit_count_for(relation.bound)
         gamma = chunks.bit_length() - 1
         beta, top_beta = digit_alphabets(relation.bound, chunks)
         shape = _Shape(
@@ -467,7 +467,7 @@ class RangeDecomposition(Protocol):
         psis, values = [], []
         for eta, r in enumerate(points):
             psi = mu_table.evaluate(self._bind_prefix(shape, r), in_place=False)
-            iop.transcript.write(f"{label}/psi{eta}", entries_message(psi))
+            iop.transcript.write(f"{label}/psi{eta}", table_message(psi))
             psis.append(psi)
             w = self._query(statement, prover, shape, r)
             iop.transcript.write(f"{label}/w{eta}", w)
@@ -495,7 +495,7 @@ class RangeDecomposition(Protocol):
         free = shape.variables[self.m :]
         psis, values = [], []
         for eta in range(self.kappa):
-            psi = entries_table(
+            psi = table_from_message(
                 await iop.transcript.read(f"{label}/psi{eta}"), free, self.field
             )
             if psi is None:
@@ -805,9 +805,9 @@ class ResidueRangeDecomposition(RangeDecomposition):
     `kappa U` evaluation claims on the residue oracles at the integer
     points, in place of the `kappa` claims on the ring oracle.
 
-    The constructor takes `RangeDecomposition`'s parameters without the
-    ring, `(field, m, alphabet, kappa, chunks)` or `max_digit_bits` instead
-    of `chunks`. The primes come from the oracles' domains
+    The constructor takes `RangeDecomposition`'s parameters except `ring`:
+    `(field, m, alphabet, kappa, chunks, messages)`, with `max_digit_bits`
+    accepted in place of `chunks`. The primes come from the oracles' domains
     (`Oracle.domain`).
     """
 
@@ -845,7 +845,7 @@ class ResidueRangeDecomposition(RangeDecomposition):
             )
         primes = residue_primes(oracles)
         ell = oracles[0].num_vars
-        chunks = self.chunks_for(relation.bound)
+        chunks = self.digit_count_for(relation.bound)
         gamma = chunks.bit_length() - 1
         beta, top_beta = digit_alphabets(relation.bound, chunks)
         shape = _Shape(

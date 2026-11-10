@@ -52,8 +52,8 @@ answered once, by the leaves of the committed ring codewords, which the
 verifier authenticates against the ring commitments and maps to the leaves
 of every u_i. Each later layer is committed once for all primes: one Merkle
 tree whose leaf j joins every prime's leaf j (`vfhe.crypto.join_digests`),
-built when every prime has folded to that layer, so a query answers it with
-every prime's fiber and a single path.
+built when every prime has folded to that layer, so a layer's answers carry
+every prime's fibers and one authentication path per query.
 
 [CCCFGS26, §7] instead commits to each of the k*L component polynomials
 separately and runs each prime with its own query positions; see
@@ -81,9 +81,9 @@ from .basefold import (
     BasefoldEval,
     BasefoldOpening,
     LayerAnswers,
-    _answer_words,
     _check_layer,
     _check_paths,
+    _checked_leaf_words,
     _committed_table,
     _layer_answers,
     _ProverRun,
@@ -633,18 +633,18 @@ def _no_answer(_positions: list[int]) -> None:
 
 
 def _check_joint_layer(
-    codes: list, label: str, level: int, root: bytes, answer, positions, size: int
+    codes: list, label: str, level: int, root: bytes, answers, positions, size: int
 ) -> list:
     """Check a later layer's answers to `positions` against the layer's
     shared tree, and return each prime's leaves as one word, in query order,
     as `_check_layer` does for a tree of one codeword.
 
-    `answer` is a `LayerAnswers` with one word of leaves per prime, each
+    `answers` is a `LayerAnswers` with one word of leaves per prime, each
     leaf a fiber of `size` symbols. A leaf of the shared tree joins the
     primes' leaf digests (`vfhe.crypto.join_digests`). Raises `Rejection`
-    when the answer is malformed or a path does not authenticate its leaf.
+    when the answers are malformed or a path does not authenticate its leaf.
     """
-    words = _answer_words(label, level, answer, len(codes))
+    words = _checked_leaf_words(label, level, answers, len(codes))
     blocks = []
     prime = 0
     try:
@@ -660,7 +660,7 @@ def _check_joint_layer(
             for code, block in zip(codes, blocks, strict=True)
         ]
     )
-    _check_paths(label, level, root, positions, answer.paths, digests)
+    _check_paths(label, level, root, positions, answers.paths, digests)
     return blocks
 
 

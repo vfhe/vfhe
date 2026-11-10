@@ -299,11 +299,14 @@ class Merkle:
 
     def open_many(self, indices: Sequence[int]) -> bytes:
         """Open several leaves in one call: the opening of each of `indices`,
-        as `open` gives it, packed end to end in that order.
+        as `open(i).to_bytes()` gives it, packed end to end in that order.
 
-        The opening of `indices[k]` is bytes ``k * 32 * depth`` to
-        ``(k + 1) * 32 * depth - 1``, for `depth` the tree's `log_size`; it
-        is empty for a tree of one leaf. `verify_many` reads this layout.
+        Returns one `bytes` buffer. The opening of `indices[k]` is bytes
+        ``k * 32 * depth`` to ``(k + 1) * 32 * depth - 1``, for `depth` the
+        tree's `log_size`; it is empty for a tree of one leaf. The openings
+        are concatenated, not compressed: siblings shared by several paths,
+        and repeated indices, are sent once per index. `verify_many` reads
+        this layout.
         """
         for index in indices:
             if not 0 <= index < self._size:
@@ -337,24 +340,32 @@ class Merkle:
         )
 
     @staticmethod
-    def verify_many(root: bytes, indices: Sequence[int], paths, digests) -> int | None:
-        """Check the openings of several leaves of one tree in one call, as
-        `verify` checks one.
+    def verify_many(
+        root: bytes,
+        indices: Sequence[int],
+        paths: bytes | bytearray | memoryview,
+        leaf_digests: bytes | bytearray | memoryview,
+    ) -> int | None:
+        """Check the openings of several leaves of one tree in one call,
+        given their leaf digests (`leaf_digest`) rather than the leaves.
 
+        An opening is the leaf's authentication path, as `open` gives it.
         Leaf `k` sits at position `indices[k]` and has its digest at bytes
-        ``32 k`` to ``32 k + 31`` of `digests`, the leaf digests packed end
-        to end. `paths` holds the openings packed end to end in the same
+        ``32 k`` to ``32 k + 31`` of `leaf_digests`, the leaf digests packed
+        end to end. `paths` holds the openings packed end to end in the same
         order, as `open_many` writes them: every opening of one tree has the
         same number of siblings, so the opening of leaf `k` is the `k`-th of
-        ``len(indices)`` equal parts of `paths`.
+        ``len(indices)`` equal parts of `paths`. The number of siblings is
+        taken from `paths`; it is not checked against the tree's depth,
+        which the caller knows.
 
         Returns None when every opening authenticates, else the first `k`
-        whose opening does not. Raises ValueError when `digests` does not
-        hold one digest per index, or when `paths` does not split into
+        whose opening does not. Raises ValueError when `leaf_digests` does
+        not hold one digest per index, or when `paths` does not split into
         whole openings of 32-byte siblings.
         """
         count = len(indices)
-        if len(digests) != DIGEST_LEN * count:
+        if len(leaf_digests) != DIGEST_LEN * count:
             raise ValueError("one 32-byte digest per index")
         if count == 0:
             if len(paths):
@@ -370,7 +381,7 @@ class Merkle:
             ffi.new("uint64_t[]", list(indices)),
             ffi.from_buffer("uint8_t[]", paths),
             len(paths) // (DIGEST_LEN * count),
-            ffi.from_buffer("uint8_t[]", digests),
+            ffi.from_buffer("uint8_t[]", leaf_digests),
             count,
         )
         return None if failed < 0 else int(failed)

@@ -51,16 +51,6 @@ ALPHABET = 1 << 8
 KAPPA = 2
 
 
-def _bumped(value, one):
-    """`value`, a table message, with `one` added to its first entry: a
-    copy of a vector, or a new tuple."""
-    if isinstance(value, FieldVector):
-        out = value.copy()
-        out[0] = out[0] + one
-        return out
-    return (value[0] + one, *value[1:])
-
-
 @pytest.fixture
 def ring():
     return Ring(1 << NU, prime_size=[30, 30], split_degree=1)
@@ -249,8 +239,8 @@ def test_max_digit_bits_sets_the_digit_count_per_bound(ring, field):
 
 
 def test_decomposition_over_a_ring_listing_its_primes_out_of_base_order(ring, field):
-    """The verifier reads the rows of `to_uint64` by the ring's prime order;
-    a ring listing the base's primes the other way round proves as well."""
+    """A ring that lists its primes in another order than its RNS base
+    proves and verifies."""
     reversed_ring = Ring(ring.N, primes=list(reversed(ring.primes)), split_degree=1)
     assert sorted(reversed_ring.prime_indices) != reversed_ring.prime_indices or (
         sorted(ring.prime_indices) != ring.prime_indices
@@ -921,7 +911,7 @@ def test_replay_harness_accepts_an_untampered_transcript(ring, field):
     )
 
 
-def test_every_prover_message_is_load_bearing(ring, field):
+def test_every_prover_message_is_load_bearing(ring, field, bump_first_entry):
     """Rewriting any single prover message makes the run reject.
 
     `mu` and `psi` are tables of field elements, `w` a ring element; the
@@ -950,7 +940,7 @@ def test_every_prover_message_is_load_bearing(ring, field):
             if label != target:
                 return value
             if isinstance(value, tuple | FieldVector):
-                return _bumped(value, field.one)
+                return bump_first_entry(value, field.one)
             return value + Polynomial(value.ring).from_array([1])
 
         assert not _replay_with_tamper(honest, ring, field, statement, tamper), target
@@ -985,14 +975,14 @@ def test_fiat_shamir_is_deterministic(ring, field):
     assert digests[0] == digests[1]
 
 
-def test_fiat_shamir_rejects_a_tampered_proof(ring, field):
+def test_fiat_shamir_rejects_a_tampered_proof(ring, field, bump_first_entry):
     v = _witness(ring, seed=10)
     statement = _statement(v)
     proof = _iop(ring, field, fiat_shamir=True).prove(statement)
     messages = list(proof.messages)
     label, table = messages[0]
     assert label == "range/mu"
-    messages[0] = (label, _bumped(table, field.one))
+    messages[0] = (label, bump_first_entry(table, field.one))
     assert not _iop(ring, field, fiat_shamir=True).verify(
         statement, type(proof)(messages)
     )

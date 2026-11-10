@@ -493,23 +493,13 @@ def _replay_with_tamper(honest, make_iop, statement, tamper, swallow=()):
     return iop.loop.run_until_complete(iop.verifier.verify(statement._fork()))
 
 
-def _bumped(value, one):
-    """`value`, a table message, with `one` added to its first entry: a
-    copy of a vector, or a new tuple."""
-    if isinstance(value, FieldVector):
-        out = value.copy()
-        out[0] = out[0] + one
-        return out
-    return (value[0] + one, *value[1:])
-
-
-def _bump(field, target):
+def _bump(field, target, bump_first_entry):
     """A tamper adding one to the first entry of the message `target`."""
 
     def tamper(label, value):
         if label != target:
             return value
-        return _bumped(value, field.one)
+        return bump_first_entry(value, field.one)
 
     return tamper
 
@@ -550,14 +540,14 @@ def test_gkr_checks_catch_a_tampered_tree_value(field):
             ), (label, index)
 
 
-def test_the_evaluation_claim_on_m_is_what_catches_a_wrong_m(field):
+def test_the_evaluation_claim_on_m_is_what_catches_a_wrong_m(field, bump_first_entry):
     """`m` enters the trees only through its leaves: a wrong `m` sent with
     the honest trees is caught by the evaluation claim on `m`, and accepted
     once that claim is swallowed."""
     statement = _statement(field, _bounded(seed=13))
     honest = _iop(field)
     assert honest.run(statement)
-    tamper = _bump(field, "logup/m3")
+    tamper = _bump(field, "logup/m3", bump_first_entry)
     assert not _replay_with_tamper(honest, lambda: _iop(field), statement, tamper)
     assert _replay_with_tamper(
         honest, lambda: _iop(field), statement, tamper, swallow=(Relation_Eval,)
@@ -759,7 +749,7 @@ def _grouped(field):
 
 
 @pytest.mark.parametrize("case", [_single, _grouped], ids=["single", "grouped"])
-def test_every_prover_message_is_load_bearing(field, case):
+def test_every_prover_message_is_load_bearing(field, case, bump_first_entry):
     """Rewriting any single prover message, anywhere in the reduction, makes
     the run reject -- the lookup's own messages and those of the sumchecks
     and virtual-oracle openings it reduces to. An empty message (the leaves
@@ -774,7 +764,7 @@ def test_every_prover_message_is_load_bearing(field, case):
         assert any(m.startswith("virtual/") for m in messages)
     for target in messages:
         assert not _replay_with_tamper(
-            honest, make_iop, statement, _bump(field, target)
+            honest, make_iop, statement, _bump(field, target, bump_first_entry)
         ), target
 
 

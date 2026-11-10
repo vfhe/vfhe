@@ -470,11 +470,13 @@ extern "C"
     // the sum over the j with bits[j] >= 0 (a negative bits[j] ignores bit j
     // of i). For example, bits = {-1, 0} and offset = 2 give
     // out = {a[2], a[2], a[3], a[3]}. As multilinear tables, variable j of
-    // out is variable bits[j] of a, or one out does not depend on, and a's
-    // other variables are fixed to their bits in `offset`.
-    // Returns false, having written nothing, unless the mapped bits are
-    // distinct, `offset` sets none of them and every index read is below
-    // a->n. `out` holds 2^count elements and does not alias `a`.
+    // out is variable bits[j] of a; where bits[j] is negative, it is a
+    // variable out does not depend on. The variables of a that no bits[j]
+    // names are fixed to their bits in `offset`.
+    // Returns false, having written nothing, unless count is at most 63, the
+    // source bits (the bits[j] >= 0) are distinct, `offset` sets none of
+    // them and every index read is below a->n. `out` is over the same field
+    // as `a`, holds 2^count elements and does not alias `a`.
     bool field_vec_reindex(FieldVector out, const FieldVector a, const int64_t *bits,
                            uint64_t count, uint64_t offset);
     // out[i] = a[2i] + r * (a[2i+1] - a[2i]) for i < a->n / 2, in one pass: the
@@ -760,8 +762,9 @@ extern "C"
     void pmf_sub(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
     void pmf_neg(uint64_t *out, const uint64_t *a, PMFParams params);
     void pmf_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, PMFParams params);
-    // Sets out to the inverse of a, computed as a^(p-2) (Fermat). Returns 1,
-    // or 0 when a is zero, in which case out is not written. out may alias a.
+    // For prime p, sets out to the inverse of a, a^(p-2) (Fermat's little
+    // theorem). Returns 0, writing nothing, when a is zero, and 1 otherwise.
+    // out may alias a.
     int pmf_inverse(uint64_t *out, const uint64_t *a, PMFParams params);
     int pmf_is_equal(const uint64_t *a, const uint64_t *b, PMFParams params);
     // in: L limbs each below 2^52, not necessarily below p. out: canonical.
@@ -1276,10 +1279,11 @@ extern "C"
     void polynomial_RNS_lift_mod_2_128(uint64_t *low, uint64_t *high, RNS_Polynomial *in,
                                        uint64_t count);
     /* The active rows of `p` as words, in natural order: N words per row,
-       in the order of `rows`, which names each active base index once. Word
-       u + s t of a row is the residue at (u, t) of the native layout,
-       u * (N / s) + t, for split_degree s. In the coefficient domain
-       that is coefficient order; in the mul domain the s residues of each
+       in the order of `rows`. `rows` must list each active base index of
+       `p` exactly once and nothing else; the behaviour is undefined
+       otherwise. Word u + s t of a row is the residue at (u, t) of the
+       native layout, u * (N / s) + t, for split_degree s. In the
+       coefficient domain that is coefficient order; in the mul domain the s residues of each
        slot are adjacent. Either domain, as the rows are; narrow rows are
        widened. */
     void polynomial_RNS_get_natural(uint64_t *out, RNS_Polynomial p, const uint64_t *rows);

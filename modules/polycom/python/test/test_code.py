@@ -137,7 +137,9 @@ def test_fold_fibers_agrees_with_the_fold_chain(instantiation):
     assert code.leaf_digests(words[code.d]) == b"".join(
         code_module.pair_digest(pair) for pair in code.pair_leaves(words[code.d])
     )
-    with pytest.raises(ValueError, match="1 fibers of 4"):
+    with pytest.raises(
+        ValueError, match=r"4 elements of the ring \(1 fiber\(s\) of 4\)"
+    ):
         code.check_fibers(list(words[code.d][:2]), 1, 4)
 
 

@@ -86,6 +86,7 @@ struct PMFVecJob
     uint8_t *bytes;
     uint64_t *partials; // a reduction's `slots` elements per chunk
     uint64_t slots;
+    const VecReindex *reindex;
 };
 
 static void pmf_vec_chunk(void *ctx, uint64_t chunk)
@@ -1760,8 +1761,7 @@ static void pmf_vec_reindex_range(const PMFVecJob *job, uint64_t begin, uint64_t
 {
     (void)chunk;
     for (uint64_t k = 0; k < job->params->limbs; k++)
-        vec_reindex_u64(job->out->limbs[k], job->a->limbs[k], (const VecReindex *)job->shape, begin,
-                        end);
+        vec_reindex_u64(job->out->limbs[k], job->a->limbs[k], job->reindex, begin, end);
 }
 
 bool pmf_vec_reindex(PMFVector out, const PMFVector a, const int64_t *bits, uint64_t count,
@@ -1772,7 +1772,7 @@ bool pmf_vec_reindex(PMFVector out, const PMFVector a, const int64_t *bits, uint
     VecReindex *plan = (VecReindex *)safe_malloc(sizeof(VecReindex));
     vec_reindex_plan(plan, bits, count, offset);
     PMFVecJob job = {
-        .range = pmf_vec_reindex_range, .params = a->params, .out = out, .a = a, .shape = plan};
+        .range = pmf_vec_reindex_range, .params = a->params, .out = out, .a = a, .reindex = plan};
     pmf_vec_run(&job, 1ULL << count, pmf_vec_move_grain(a->params));
     free(plan);
     return true;

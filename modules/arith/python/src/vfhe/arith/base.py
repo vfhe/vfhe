@@ -1140,29 +1140,32 @@ def _check_reindex(bits, offset: int, length: int) -> list[int]:
     `length` elements, and return `bits` as the kernels take it: one int per
     bit of the result's indices, -1 where `bits` has None.
 
-    Raises ValueError when the map would read a source bit twice, when
-    `offset` sets a bit the map reads, or when it would read past the end.
+    Raises ValueError when `bits` has more than 63 entries, when an entry
+    is a negative int, when `offset` is negative, when the map would read a
+    source bit twice, when `offset` sets a source bit, or when the map would
+    read past the end.
     """
-    bits = [-1 if b is None else int(b) for b in bits]
+    bits = [None if b is None else int(b) for b in bits]
     if len(bits) > 63:
         raise ValueError(f"cannot reindex onto 2^{len(bits)} elements")
     if offset < 0:
         raise ValueError(f"offset must be non-negative, got {offset}")
     mapped = 0
     for b in bits:
-        if b < -1:
+        if b is None:
+            continue
+        if b < 0:
             raise ValueError(f"a source bit must be non-negative or None, got {b}")
-        if b >= 0:
-            if mapped >> b & 1:
-                raise ValueError(f"source bit {b} is read twice")
-            mapped |= 1 << b
+        if mapped >> b & 1:
+            raise ValueError(f"source bit {b} is read twice")
+        mapped |= 1 << b
     if offset & mapped:
-        raise ValueError("offset sets a bit the map reads")
+        raise ValueError("offset sets a source bit")
     if offset | mapped >= length:
         raise ValueError(
             f"the map reads index {offset | mapped} of a vector of {length}"
         )
-    return bits
+    return [-1 if b is None else b for b in bits]
 
 
 def _check_bit_field(
@@ -2022,18 +2025,22 @@ class FieldVector(metaclass=_ImplementationDispatch):
         then ignored. For example, with ``bits = [None, 0]`` and
         ``offset = 2``, the result is ``[v[2], v[2], v[3], v[3]]``.
 
-        Read as multilinear tables, bit ``j`` of an index being variable
-        ``j``: variable ``j`` of the result is variable ``bits[j]`` of this
-        table, or, where ``bits[j]`` is None, a variable the result does not
-        depend on. The variables of this table that `bits` does not name are
-        fixed to their bits in `offset`. One call thus restricts a table to
-        0/1 values of some variables, renames the others and adds new ones.
+        Read the vectors as multilinear tables, with bit ``j`` of an index as
+        variable ``j``. Then variable ``j`` of the result is variable
+        ``bits[j]`` of this table, or, where ``bits[j]`` is None, a variable
+        the result does not depend on. The variables of this table that
+        `bits` does not name are fixed to their bits in `offset`. One call
+        thus restricts a table to 0/1 values of some variables, renames the
+        others and adds new ones.
 
-        Raises ValueError unless the named bits are distinct, `offset` sets
-        none of them, and every index read is below the length.
+        Raises ValueError when `bits` has more than 63 entries or a negative
+        one, when `offset` is negative, when a source bit (an entry of `bits`
+        that is not None) appears twice or is set in `offset`, or when an
+        index read is past the end. Also raises ValueError when `out` is this
+        vector or does not hold ``2^len(bits)`` elements.
 
-        :param bits: one entry per bit of the result's indices: the bit of
-            this vector's indices it supplies, or None.
+        :param bits: one entry per bit of the result's indices: its source
+            bit, the bit of this vector's indices it supplies, or None.
         :param offset: the bits of this vector's indices that are the same
             for every element read.
         :param out: where to write: a vector of ``2^len(bits)`` elements,
@@ -2041,6 +2048,10 @@ class FieldVector(metaclass=_ImplementationDispatch):
         :returns: `out`, or the vector allocated for the result.
         """
         checked = _check_reindex(bits, offset, len(self))
+        if out is self:
+            raise ValueError("reindex cannot write over the vector it reads")
+        if out is not None and len(out) != 1 << len(checked):
+            raise ValueError(f"out holds {len(out)} elements, not {1 << len(checked)}")
         sources = [offset]
         for b in checked:
             sources += sources if b < 0 else [s | 1 << b for s in sources]

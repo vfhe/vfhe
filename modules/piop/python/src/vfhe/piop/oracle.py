@@ -138,23 +138,26 @@ class TableOracle(Oracle):
 
         For a dense table the digest is kept and reused until the oracle
         holds another table, or the table holds another entries object or
-        has other variables or another basis. Entries are never written in
-        place: the framework binds tables out of place.
+        has other variables or another basis. The kept digest assumes nobody
+        writes into the entries object while the oracle holds it; replacing
+        the entries object, the variables or the basis is detected.
         """
         table = self.polynomial
         if not isinstance(table, MLE):
             return element_digest(table)
-        state = (table, table.table, tuple(map(id, table.variables)), table.basis)
+        variables = tuple(table.variables)
         kept = self._digest
         if (
             kept is not None
-            and kept[0] is state[0]
-            and kept[1] is state[1]
-            and kept[2:4] == state[2:4]
+            and kept[0] is table
+            and kept[1] is table.table
+            and len(kept[2]) == len(variables)
+            and all(a is b for a, b in zip(kept[2], variables, strict=True))
+            and kept[3] is table.basis
         ):
             return kept[4]
         value = element_digest(table)
-        self._digest = (*state, value)
+        self._digest = (table, table.table, variables, table.basis, value)
         return value
 
     def __repr__(self) -> str:
