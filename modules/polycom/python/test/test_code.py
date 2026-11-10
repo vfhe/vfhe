@@ -124,8 +124,10 @@ def test_fold_fibers_agrees_with_the_fold_chain(instantiation):
         size = 1 << steps
         below = words[code.d - steps]
         indices = list(range(0, len(below), 3))
-        fibers = [code.fiber_at(words[code.d], j, size) for j in indices]
-        block = code.join_fibers(fibers, size)
+        block = code.fibers_at(words[code.d], indices, size)
+        fibers = [e for j in indices for e in code.fiber_at(words[code.d], j, size)]
+        assert _equal(block, fibers)
+        assert _equal(code.check_fibers(block, len(indices), size), block)
         folded = code.fold_fibers(block, challenges[:steps], code.d, indices)
         assert _equal(folded, [below[j] for j in indices]), f"{steps} folds"
         digests = code.leaf_digests(words[code.d], size)
@@ -135,8 +137,8 @@ def test_fold_fibers_agrees_with_the_fold_chain(instantiation):
     assert code.leaf_digests(words[code.d]) == b"".join(
         code_module.pair_digest(pair) for pair in code.pair_leaves(words[code.d])
     )
-    with pytest.raises(ValueError, match="tuple of 4"):
-        code.join_fibers([tuple(words[code.d][:2])], 4)
+    with pytest.raises(ValueError, match="1 fibers of 4"):
+        code.check_fibers(list(words[code.d][:2]), 1, 4)
 
 
 def test_parameter_validation(instantiation):

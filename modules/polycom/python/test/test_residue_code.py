@@ -147,7 +147,7 @@ def test_a_field_twisted_ring_code_decodes_and_folds(field_twisted):
     assert all(a == folded[i] for a, i in zip(pairs, indices, strict=True))
     r2 = ring.random_exceptional()
     twice = code.fold(folded, r2, code.d - 1)
-    fibers = code.join_fibers([code.fiber_at(word, j, 4) for j in indices], 4)
+    fibers = code.fibers_at(word, indices, 4)
     refolded = code.fold_fibers(fibers, [r, r2], code.d, indices)
     assert all(a == twice[j] for a, j in zip(refolded, indices, strict=True))
 

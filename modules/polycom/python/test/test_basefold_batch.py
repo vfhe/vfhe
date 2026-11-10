@@ -28,7 +28,13 @@ from vfhe.piop import (
 )
 from vfhe.piop.protocols import Sumcheck
 from vfhe.piop.relations import Relation_Sum
-from vfhe.polycom import Basefold, BasefoldEval, FieldFoldableRS, FoldableRS
+from vfhe.polycom import (
+    Basefold,
+    BasefoldEval,
+    FieldFoldableRS,
+    FoldableRS,
+    LayerAnswers,
+)
 
 
 class _Claims(Relation):
@@ -200,6 +206,17 @@ def _replay(dom: _Domain, honest: IOP, claims, tamper) -> bool:
     return iop.loop.run_until_complete(iop.verifier.verify(_statement(claims)))
 
 
+def _first_leaf_from(target: LayerAnswers, source: LayerAnswers, count: int):
+    """`target`, the answers of one tree to `count` queries, with the first
+    query's leaf and path taken from `source`'s."""
+    (word,), (other,) = target.leaves, source.leaves
+    size, width = len(word) // count, len(target.paths) // count
+    word = word.copy() if isinstance(word, FieldVector) else list(word)
+    for t in range(size):
+        word[t] = other[t]
+    return LayerAnswers((word,), source.paths[:width] + target.paths[width:])
+
+
 def test_tampered_batching_messages_are_rejected(dom):
     claims = _bundles(dom)["two polynomials, three points"]
     honest = dom.iop()
@@ -222,19 +239,18 @@ def test_tampered_batching_messages_are_rejected(dom):
         return value
 
     def swap_first_layer(label, value):
-        # The second commitment's leaf answered with the first's, path and
-        # all: authenticated against the wrong root.
+        # The first query's leaf of the second commitment answered with the
+        # first commitment's, path and all: authenticated against the wrong
+        # root. (Three queries: `dom.iop`'s rep.)
         if label == "basefold/0/answers":
-            first = list(value[0])
-            first[0] = (first[0][0], first[0][0])
-            return (tuple(first), *value[1:])
+            first, second = value[0]
+            swapped = _first_leaf_from(second, first, 3)
+            return ((first, swapped), *value[1:])
         return value
 
     def truncate_first_layer(label, value):
         if label == "basefold/0/answers":
-            first = list(value[0])
-            first[0] = first[0][:1]
-            return (tuple(first), *value[1:])
+            return (value[0][:1], *value[1:])
         return value
 
     for tamper in (

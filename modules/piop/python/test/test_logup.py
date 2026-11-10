@@ -493,13 +493,23 @@ def _replay_with_tamper(honest, make_iop, statement, tamper, swallow=()):
     return iop.loop.run_until_complete(iop.verifier.verify(statement._fork()))
 
 
+def _bumped(value, one):
+    """`value`, a table message, with `one` added to its first entry: a
+    copy of a vector, or a new tuple."""
+    if isinstance(value, FieldVector):
+        out = value.copy()
+        out[0] = out[0] + one
+        return out
+    return (value[0] + one, *value[1:])
+
+
 def _bump(field, target):
     """A tamper adding one to the first entry of the message `target`."""
 
     def tamper(label, value):
         if label != target:
             return value
-        return (value[0] + field.one, *value[1:])
+        return _bumped(value, field.one)
 
     return tamper
 

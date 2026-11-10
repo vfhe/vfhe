@@ -68,7 +68,7 @@ from vfhe.arith import (
 )
 from vfhe.arith.mle import native_table, vector_table
 from vfhe.piop.evaluation import Relation_Eval
-from vfhe.piop.messages import OracleMessages
+from vfhe.piop.messages import OracleMessages, entries_message, entries_table
 from vfhe.piop.protocol import Protocol, Rejection
 from vfhe.piop.relations import Relation_Lookup, Relation_Range, Relation_ResidueRange
 from vfhe.piop.relations.range import residue_primes
@@ -467,7 +467,7 @@ class RangeDecomposition(Protocol):
         psis, values = [], []
         for eta, r in enumerate(points):
             psi = mu_table.evaluate(self._bind_prefix(shape, r), in_place=False)
-            iop.transcript.write(f"{label}/psi{eta}", tuple(psi.table))
+            iop.transcript.write(f"{label}/psi{eta}", entries_message(psi))
             psis.append(psi)
             w = self._query(statement, prover, shape, r)
             iop.transcript.write(f"{label}/w{eta}", w)
@@ -495,11 +495,14 @@ class RangeDecomposition(Protocol):
         free = shape.variables[self.m :]
         psis, values = [], []
         for eta in range(self.kappa):
-            entries = await iop.transcript.read(f"{label}/psi{eta}")
-            self._expect(len(entries), 1 << len(free), f"{label}/psi{eta}")
-            psis.append(
-                MLE(field=self.field, variables=free, evaluations=list(entries))
+            psi = entries_table(
+                await iop.transcript.read(f"{label}/psi{eta}"), free, self.field
             )
+            if psi is None:
+                raise Rejection(
+                    f"{label}/psi{eta}: expected {1 << len(free)} entries over the field"
+                )
+            psis.append(psi)
             values.append(await iop.transcript.read(f"{label}/w{eta}"))
 
         spot = await self._draw_spot(iop, label, shape)
@@ -570,11 +573,6 @@ class RangeDecomposition(Protocol):
         return out
 
     # --- the pieces both halves share --------------------------------------
-
-    @staticmethod
-    def _expect(got: int, want: int, label: str) -> None:
-        if got != want:
-            raise Rejection(f"{label}: expected {want} entries, got {got}")
 
     def _digit_table(self, v: MLE, shape: _Shape) -> list[int]:
         """The integer digit table of `mu` from the prover's table `v`,

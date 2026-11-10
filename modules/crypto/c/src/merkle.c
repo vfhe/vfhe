@@ -147,6 +147,12 @@ void merkle_open(uint8_t *out, Merkle mk, uint64_t index)
     }
 }
 
+void merkle_open_many(uint8_t *out, Merkle mk, const uint64_t *indices, uint64_t count)
+{
+    for (uint64_t k = 0; k < count; k++)
+        merkle_open(out + k * mk->log_size * MERKLE_DIGEST_LEN, mk, indices[k]);
+}
+
 bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path, uint64_t path_len,
                    const uint8_t *leaf_digest)
 {

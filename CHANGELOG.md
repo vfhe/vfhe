@@ -14,11 +14,17 @@ versions may contain breaking changes.
 
 ### Added
 
-- `Merkle.verify_many(root, indices, paths, digests)` checks the openings
-  of several leaves of one tree in one C call (`merkle_verify_many`). It
-  returns `None`, or the first leaf whose opening does not authenticate.
-  The Basefold and BatchFold verifiers check each layer's query paths with
-  it.
+- `Merkle.open_many(indices)` opens several leaves in one C call
+  (`merkle_open_many`) and returns their paths packed end to end in one
+  `bytes`. `Merkle.verify_many(root, indices, paths, digests)` checks such
+  packed paths in one C call (`merkle_verify_many`). It returns `None`, or
+  the first leaf whose opening does not authenticate. The Basefold and
+  BatchFold verifiers check each layer's query paths with it.
+- `polycom.LayerAnswers`, one committed layer's answers to a run's query
+  positions: the queried leaves as one word per codeword under the layer's
+  tree (a `FieldVector`, or a list of ring elements), and their paths as
+  one packed `bytes`. A transcript digests it with one hash per word and
+  one for the paths.
 - `pmf_inverse` inverts one pseudo-Mersenne element in one C call.
   `PseudoMersenneElement.inverse` uses it instead of a square-and-multiply
   in Python.
@@ -413,8 +419,10 @@ versions may contain breaking changes.
   `FoldableRS.fold_fibers`: fibers of `2^s` adjacent symbols, end to end,
   folded `s = len(challenges)` times to the one symbol each determines --
   over a field as whole-vector operations. With them, on both codes,
-  `fiber_at(word, i, size)`, `join_fibers(fibers, size)` and
-  `leaf_digests(word, size)` for fibers of `size` symbols.
+  `fiber_at(word, i, size)`, `fibers_at(word, positions, size)` (the
+  fibers at several positions end to end, in one gather),
+  `check_fibers(fibers, count, size)` (checks a received word of fibers)
+  and `leaf_digests(word, size)` for fibers of `size` symbols.
 - `FieldVector.digest()`: a 32-byte digest of the vector, its `hash()` under
   a tag of its own, so a vector can appear in a transcript entry or a
   statement field.
@@ -884,6 +892,22 @@ versions may contain breaking changes.
   occurs, or None when a value is out of range.
 
 ### Changed
+
+- **BREAKING (proof format)**: the answers of a Basefold or BatchFold
+  opening are layer-major. The `.../answers` message holds one entry per
+  layer: a `LayerAnswers` (for a batched opening's first layer, one per
+  commitment) with every queried leaf of the layer in one word and every
+  path in one buffer, instead of one `(leaf, path)` per query and layer.
+  A transcript digests a layer with a few hashes instead of one per field
+  element and one per path, and the verifier checks a layer's leaves
+  without rebuilding them. Every proof digest that includes an opening
+  changes.
+- **BREAKING (proof format)**: a field table sent as a message (the ideal
+  model's `OracleMessages`, `BasefoldMessages`' tables sent in the clear,
+  the range proofs' `psi` messages) travels as the table's `FieldVector`,
+  digested with one hash, instead of a tuple of its entries
+  (`piop.messages.entries_message` / `entries_table`). Proof digests that
+  include such a message change.
 
 - The sumcheck's `interpolate_evals` over a field inverts one element per
   call instead of one per Lagrange term (same values).

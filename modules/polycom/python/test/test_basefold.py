@@ -32,8 +32,9 @@ from vfhe.polycom import (
     BasefoldCommitment,
     BasefoldEval,
     FoldableRS,
+    LayerAnswers,
 )
-from vfhe.polycom.basefold import Word, pair_digest
+from vfhe.polycom.basefold import Word, _layer_answers, pair_digest
 
 
 def _setup(num_vars: int, k0: int, c: int, d: int, prime_size=None, schedule=None):
@@ -350,9 +351,11 @@ def test_basefold_rejects_tampered_answer():
 
     def tamper(label: str, val):
         if label == "basefold/answers":
+            # The low symbol of the first query's first-layer pair.
             first, *rest = val
-            (lo, hi), path = first[0]
-            return ((((lo + one, hi), path), *first[1:]), *rest)
+            word = list(first.leaves[0])
+            word[0] = word[0] + one
+            return (LayerAnswers((word,), first.paths), *rest)
         return val
 
     assert not _replay_with_tamper(honest, ring, scheme, fields, tamper)
@@ -368,13 +371,18 @@ def test_basefold_rejects_answer_from_the_wrong_position():
     queries = proto.query_positions(
         honest.transcript.entries["basefold/queries"].result()
     )
-    other = 1 if queries[0] != 1 else 2
+    positions = [proto._walk(q)[0][0] for q in queries]
+    moved = list(positions)
+    moved[0] = 1 if positions[0] != 1 else 2
 
     def tamper(label: str, val):
         if label == "basefold/answers":
-            first, *rest = val
-            moved = (scheme.code.pair_at(opening.word, other), opening.tree.open(other))
-            return (((moved, *first[1:])), *rest)
+            _, *rest = val
+            first = LayerAnswers(
+                (scheme.code.fibers_at(opening.word, moved, 2),),
+                opening.tree.open_many(moved),
+            )
+            return (first, *rest)
         return val
 
     assert not _replay_with_tamper(honest, ring, scheme, fields, tamper)
@@ -555,6 +563,7 @@ def test_basefold_rejects_a_consistently_committed_wrong_fold():
     queries = BasefoldEval(scheme, rep=4).query_positions(
         honest.transcript.entries["basefold/queries"].result()
     )
+    positions = [q // 2 for q in queries]
 
     def tamper(label: str, val):
         if label == "basefold/pi1":
@@ -562,10 +571,8 @@ def test_basefold_rejects_a_consistently_committed_wrong_fold():
         if label == "basefold/answers":
             # Keep the honest level-d answers; re-answer level 1 from the
             # bad tree, so every path verifies against the root above it.
-            return tuple(
-                (top, (scheme.code.pair_at(bad_word, j), bad_tree.open(j)))
-                for (top, (_, _)), j in zip(val, (q // 2 for q in queries), strict=True)
-            )
+            top, _ = val
+            return (top, _layer_answers(scheme.code, bad_word, bad_tree, positions, 2))
         return val
 
     assert not _replay_with_tamper(honest, ring, scheme, fields, tamper)
@@ -602,11 +609,17 @@ def test_rep_must_fit_the_base_codeword():
 @pytest.mark.parametrize("schedule", [[2, 1], [1, 2], [3]], ids=str)
 def test_layer_schedules_over_the_ring(schedule):
     """Several folds per committed codeword: honest runs accept with one leaf
-    of `2^s` ring elements per layer, a false claim is rejected, and so are a
-    changed symbol in a leaf and a leaf of the wrong width."""
+    of `2^s` ring elements per query and layer, a false claim is rejected, and
+    so are a changed symbol in a leaf and a leaf of the wrong width."""
     ring, scheme, honest, fields = _honest_run(num_vars=5, d=3, schedule=schedule)
     answers = honest.transcript.entries["basefold/answers"].result()
-    assert [len(leaf) for leaf, _ in answers[0]] == [1 << s for s in schedule]
+    queries = BasefoldEval(scheme, rep=4).query_positions(
+        honest.transcript.entries["basefold/queries"].result()
+    )
+    assert [len(layer.leaves) for layer in answers] == [1] * len(schedule)
+    assert [len(layer.leaves[0]) for layer in answers] == [
+        len(queries) << s for s in schedule
+    ]
     wrong = dict(fields, value=fields["value"] + ring.random_element())
     assert not _iop(ring, scheme, None, None).run(Statement(Relation_Eval(), **wrong))
 
@@ -614,17 +627,22 @@ def test_layer_schedules_over_the_ring(schedule):
         def tamper(label, val):
             if label != "basefold/answers":
                 return val
-            (top, *rest), *others = val
-            leaf, path = top
-            return (((change(leaf), path), *rest), *others)
+            # The first query's leaf is the first `2^s` symbols of the
+            # first layer's word.
+            first, *rest = val
+            word = change(list(first.leaves[0]), 1 << schedule[0])
+            return (LayerAnswers((word,), first.paths), *rest)
 
         return tamper
 
-    def bump(leaf):
-        return (leaf[0] + ring.random_element(), *leaf[1:])
+    def bump(word, _size):
+        return [word[0] + ring.random_element(), *word[1:]]
+
+    def drop_last(word, size):
+        return word[: size - 1] + word[size:]
 
     assert _replay_with_tamper(honest, ring, scheme, fields, lambda _l, v: v)
-    for tamper in (first_leaf(bump), first_leaf(lambda leaf: leaf[:-1])):
+    for tamper in (first_leaf(bump), first_leaf(drop_last)):
         assert not _replay_with_tamper(honest, ring, scheme, fields, tamper)
 
 

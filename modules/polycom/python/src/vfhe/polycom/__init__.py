@@ -7,6 +7,7 @@ from .basefold import (
     BasefoldEval,
     BasefoldMessages,
     BasefoldOpening,
+    LayerAnswers,
     pair_digest,
 )
 from .batchfold import BatchFoldEval
@@ -39,6 +40,7 @@ __all__ = [
     "BatchFoldEval",
     "FieldFoldableRS",
     "FoldableRS",
+    "LayerAnswers",
     "basefold_messages",
     "basefold_parameters",
     "batch_inverse",

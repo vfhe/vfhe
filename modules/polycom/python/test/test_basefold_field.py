@@ -24,8 +24,14 @@ from vfhe.piop import (
 )
 from vfhe.piop.protocols import Sumcheck
 from vfhe.piop.relations import Relation_Sum
-from vfhe.polycom import INSTANTIATIONS, Basefold, BasefoldEval, FieldFoldableRS
-from vfhe.polycom.basefold import Word  # noqa: TC002
+from vfhe.polycom import (
+    INSTANTIATIONS,
+    Basefold,
+    BasefoldEval,
+    FieldFoldableRS,
+    LayerAnswers,
+)
+from vfhe.polycom.basefold import Word, _layer_answers
 
 _PRIME, _W = 562949948178433, 5  # 50 bits, 2-adicity 20; x^2 - 5 irreducible
 
@@ -251,9 +257,11 @@ def test_rejects_tampered_answer(field):
 
     def tamper(label, val):
         if label == "basefold/answers":
-            (pair, path), *rest = val[0]
-            bad = ((pair[0] + field.one, pair[1]), path)
-            return ((bad, *rest), *val[1:])
+            # The low symbol of the first query's first-layer pair.
+            first, *rest = val
+            word = first.leaves[0].copy()
+            word[0] = word[0] + field.one
+            return (LayerAnswers((word,), first.paths), *rest)
         return val
 
     assert not _replay_with_tamper(honest, field, scheme, fields, tamper)
@@ -272,15 +280,14 @@ def test_rejects_a_consistently_committed_wrong_fold(field):
     queries = BasefoldEval(scheme, rep=4).query_positions(
         honest.transcript.entries["basefold/queries"].result()
     )
+    positions = [q // 2 for q in queries]
 
     def tamper(label, val):
         if label == "basefold/pi1":
             return bad_tree.root
         if label == "basefold/answers":
-            return tuple(
-                (top, (scheme.code.pair_at(bad_word, j), bad_tree.open(j)))
-                for (top, _), j in zip(val, (q // 2 for q in queries), strict=True)
-            )
+            top, _ = val
+            return (top, _layer_answers(scheme.code, bad_word, bad_tree, positions, 2))
         return val
 
     assert not _replay_with_tamper(honest, field, scheme, fields, tamper)
@@ -313,9 +320,16 @@ def test_layer_schedules_accept_with_one_root_per_layer(field, schedule):
     ends = [sum(schedule[: i + 1]) for i in range(len(schedule) - 1)]
     roots = [label for label in iop.transcript.order if "/pi" in label]
     assert roots == [f"basefold/pi{k}" for k in ends]
-    # Each answer opens one leaf per layer, of 2^s symbols.
-    for answer in iop.transcript.entries["basefold/answers"].result():
-        assert [len(leaf) for leaf, _ in answer] == [1 << s for s in schedule]
+    # Each layer answers with one leaf of 2^s symbols per query, end to end
+    # in one word.
+    queries = BasefoldEval(scheme, rep=4).query_positions(
+        iop.transcript.entries["basefold/queries"].result()
+    )
+    answers = iop.transcript.entries["basefold/answers"].result()
+    assert [len(layer.leaves) for layer in answers] == [1] * len(schedule)
+    assert [len(layer.leaves[0]) for layer in answers] == [
+        len(queries) << s for s in schedule
+    ]
 
 
 def test_default_schedule_is_one_fold_per_layer(field):
@@ -361,29 +375,32 @@ def test_layer_schedule_rejects_tampering(field):
     assert _replay_with_tamper(honest, field, scheme, fields, lambda _l, v: v)
 
     def first_leaf(change):
-        """Replace the first query's top-layer leaf by `change(leaf)`."""
+        """Replace the top layer's word, whose first four symbols are the
+        first query's leaf, by `change(word)`."""
 
         def tamper(label, val):
             if label != "basefold/answers":
                 return val
-            (top, rest), *others = val
-            leaf, path = top
-            return (((change(leaf), path), rest), *others)
+            top, *rest = val
+            return (LayerAnswers((change(top.leaves[0]),), top.paths), *rest)
 
         return tamper
 
-    def bump(leaf):
-        changed = FieldVector.concat([leaf])
+    def bump(word):
+        changed = word.copy()
         changed[1] = changed[1] + field.one
         return changed
+
+    def narrow(word):  # the first leaf two symbols wide
+        return word.query([0, 1, *range(4, len(word))])
 
     def bad_root(label, val):
         return bytes(DIGEST_LEN) if label == "basefold/pi2" else val
 
     for tamper in (
         first_leaf(bump),
-        first_leaf(lambda leaf: leaf.query(range(2))),
-        first_leaf(lambda leaf: tuple(leaf.to_list())),
+        first_leaf(narrow),
+        first_leaf(lambda word: tuple(word.to_list())),
         bad_root,
     ):
         assert not _replay_with_tamper(honest, field, scheme, fields, tamper)
@@ -403,17 +420,14 @@ def test_layer_schedule_rejects_a_consistently_committed_wrong_fold(field):
     bad_tree = scheme.merkle_commit(bad_word, 2)
     proto = BasefoldEval(scheme, rep=4)
     queries = proto.query_positions(entries["basefold/queries"].result())
+    positions = [proto._walk(q)[1][0] for q in queries]
 
     def tamper(label, val):
         if label == "basefold/pi2":
             return bad_tree.root
         if label == "basefold/answers":
-            return tuple(
-                (top, (code.fiber_at(bad_word, j, 4), bad_tree.open(j)))
-                for (top, _), j in zip(
-                    val, (proto._walk(q)[1][0] for q in queries), strict=True
-                )
-            )
+            top, _ = val
+            return (top, _layer_answers(code, bad_word, bad_tree, positions, 4))
         return val
 
     assert not _replay_with_tamper(honest, field, scheme, fields, tamper)
@@ -453,12 +467,9 @@ def test_layer_schedule_checks_the_value_entering_each_layer(field):
         if label == "basefold/pi2":
             return tree.root
         if label == "basefold/answers":
-            return tuple(
-                (top, (code.fiber_at(word, j, 4), tree.open(j)))
-                for (top, _), j in zip(
-                    val, (proto._walk(q)[1][0] for q in queries), strict=True
-                )
-            )
+            top, _ = val
+            positions = [proto._walk(q)[1][0] for q in queries]
+            return (top, _layer_answers(code, word, tree, positions, 4))
         return val
 
     assert not _replay_with_tamper(honest, field, scheme, fields, tamper)

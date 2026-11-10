@@ -49,6 +49,16 @@ BETA = 8
 NUM_VARS = 6
 
 
+def _bumped(value, one):
+    """`value`, a table message, with `one` added to its first entry: a
+    copy of a vector, or a new tuple."""
+    if isinstance(value, FieldVector):
+        out = value.copy()
+        out[0] = out[0] + one
+        return out
+    return (value[0] + one, *value[1:])
+
+
 @pytest.fixture
 def field():
     return PseudoMersenneField.generate(260, two_adicity=8)
@@ -482,7 +492,7 @@ def test_the_sumcheck_is_what_catches_a_mislayered_tree(field):
         # Index 0 is not the entry the evaluation claim reads (that is
         # 2^n - 2), so the four products survive this edit untouched.
         if label == "lookup/f1_WSmu":
-            return (value[0] + field.one, *value[1:])
+            return _bumped(value, field.one)
         return value
 
     assert not _replay_with_tamper(honest, field, values, tamper)
@@ -541,7 +551,7 @@ def test_every_prover_message_is_load_bearing(field):
         def tamper(label, value, target=target):
             if label != target:
                 return value
-            return (value[0] + field.one, *value[1:])
+            return _bumped(value, field.one)
 
         assert not _replay_with_tamper(honest, field, values, tamper), target
 

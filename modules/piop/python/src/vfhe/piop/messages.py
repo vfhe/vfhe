@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from vfhe.arith import MLE
+from vfhe.arith import MLE, FieldVector
+from vfhe.arith.mle import vector_table
 from vfhe.crypto import hash_bytes
 
 from .oracle import Oracle, TableOracle
@@ -23,6 +24,29 @@ from .protocol import Rejection
 
 if TYPE_CHECKING:
     from .party import Prover, Verifier
+
+
+def entries_message(table: MLE):
+    """Return the message that carries the entries of `table`: its
+    `FieldVector` for a field table, which a transcript digests with one
+    hash, and a tuple of its entries otherwise. `entries_table` reads it
+    back."""
+    return table.table if vector_table(table) else tuple(table.table)
+
+
+def entries_table(message, variables: list, field: Any) -> MLE | None:
+    """Read a table over `field` with `variables` from a message that
+    `entries_message` wrote. Returns None when the message is not one:
+    a vector over another field, or a count of entries other than
+    ``2^len(variables)``."""
+    count = 1 << len(variables)
+    if isinstance(message, FieldVector):
+        if message.field != field or len(message) != count:
+            return None
+        return MLE(field=field, variables=variables, evaluations=message)
+    if not isinstance(message, tuple | list) or len(message) != count:
+        return None
+    return MLE(field=field, variables=variables, evaluations=list(message))
 
 
 class OracleMessages:
@@ -42,7 +66,7 @@ class OracleMessages:
 
     def send(self, prover: Prover, label: str, table: MLE) -> Oracle:
         """Write `table` under `label` and return the prover's oracle to it."""
-        prover.iop.transcript.write(label, tuple(table.table))
+        prover.iop.transcript.write(label, entries_message(table))
         return TableOracle(table)
 
     async def receive(
@@ -50,11 +74,11 @@ class OracleMessages:
     ) -> Oracle:
         """Read the table sent under `label`, a table over `field` with
         `variables`, and return the verifier's oracle to it."""
-        entries = await verifier.iop.transcript.read(label)
-        if len(entries) != 1 << len(variables):
-            raise Rejection(
-                f"{label}: expected {1 << len(variables)} entries, got {len(entries)}"
-            )
-        return TableOracle(
-            MLE(field=field, variables=variables, evaluations=list(entries))
+        table = entries_table(
+            await verifier.iop.transcript.read(label), variables, field
         )
+        if table is None:
+            raise Rejection(
+                f"{label}: expected {1 << len(variables)} entries over the field"
+            )
+        return TableOracle(table)

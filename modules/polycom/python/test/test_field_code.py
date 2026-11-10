@@ -238,8 +238,10 @@ def test_fold_fibers_agrees_with_the_fold_chain(field, instantiation, twist_fiel
             size = 1 << steps
             below = words[level - steps]
             indices = list(range(0, len(below), 3))
-            fibers = [code.fiber_at(words[level], j, size) for j in indices]
-            block = code.join_fibers(fibers, size)
+            block = code.fibers_at(words[level], indices, size)
+            fibers = [e for j in indices for e in code.fiber_at(words[level], j, size)]
+            assert list(block) == fibers
+            assert code.check_fibers(block, len(indices), size) is block
             before = FieldVector.concat([block])
             rs = challenges[code.d - level : code.d - level + steps]
             folded = code.fold_fibers(block, rs, level, indices)
@@ -256,10 +258,10 @@ def test_fold_fibers_agrees_with_the_fold_chain(field, instantiation, twist_fiel
         code.fold_fibers(FieldVector(field, 6), challenges[:2], code.d, [0, 1])
     with pytest.raises(ValueError, match="folds from level"):
         code.fold_fibers(FieldVector(field, 8), challenges[:3], 2, [0])
-    with pytest.raises(ValueError, match="vector of 4"):
-        code.join_fibers([FieldVector(field, 2)], 4)
-    with pytest.raises(ValueError, match="tuple of two"):
-        code.join_fibers([(field.one,)], 2)
+    with pytest.raises(ValueError, match="1 fibers of 4"):
+        code.check_fibers(FieldVector(field, 2), 1, 4)
+    with pytest.raises(ValueError, match="a vector of 1 fibers of 2"):
+        code.check_fibers((field.one, field.one), 1, 2)
 
 
 def test_leaf_digests_go_straight_into_a_tree(field, instantiation):
