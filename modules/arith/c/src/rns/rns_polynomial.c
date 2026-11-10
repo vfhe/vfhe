@@ -816,6 +816,22 @@ void polynomial_scale_addto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in
     polynomial_scale_addto_RNSc_polynomial((RNSc_Polynomial)out, (RNSc_Polynomial)in1, scale);
 }
 
+void polynomial_scale_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, uint64_t scale)
+{
+    // out - scale * in1 is out + (p - scale mod p) * in1 in the row of p.
+    out->rns_mask = in1->rns_mask;
+    for (size_t i = 0; i < out->base->l; i++)
+    {
+        if (out->rns_mask & (1ULL << i))
+        {
+            const Modulus mod = out->base->mods[i];
+            const uint64_t reduced = scale % mod->q;
+            const uint64_t negated = reduced ? mod->q - reduced : 0;
+            RNS_ROW_SCALAROP(mod_eltwise_fma, out, in1, negated, i, out->base->N, mod);
+        }
+    }
+}
+
 void polynomial_scale_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, uint64_t scale)
 {
     polynomial_scale_RNSc_polynomial((RNSc_Polynomial)out, (RNSc_Polynomial)in1, scale);

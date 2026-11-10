@@ -13,7 +13,14 @@ from vfhe.arith import (
     RNSRing,
     repr,
 )
-from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, SchemeParameters
+from vfhe.mlwe.mlwe import (
+    MLWE,
+    IntegerMatrix,
+    MLWE_Key,
+    MLWE_Scheme,
+    MLWE_Set,
+    SchemeParameters,
+)
 from vfhe.util.bindings import ffi
 
 if TYPE_CHECKING:
@@ -275,18 +282,27 @@ class CKKS_Scheme(MLWE_Scheme):
     def linear_combinations(
         self,
         cts: Sequence[CKKS_Ciphertext],
-        rows: Sequence[Sequence[RNSPolynomial | None]] | PlaintextMatrix,
+        rows: Sequence[Sequence[RNSPolynomial | None]]
+        | PlaintextMatrix
+        | IntegerMatrix,
         n_threads: int = 0,
         *,
         scale: float | None = None,
     ) -> list[CKKS_Ciphertext]:
         """One :meth:`linear_combination` of ``cts`` per row of coefficients.
-        ``None`` skips a term.
+        ``None`` skips a term. With an `IntegerMatrix` the weights are
+        integers, not encoded at a scale: the outputs keep the ciphertexts'
+        scaling factor, and `scale` must be None.
         """
         if any(c.delta != cts[0].delta for c in cts):
             raise ValueError("the ciphertexts must share one scaling factor")
+        if isinstance(rows, IntegerMatrix) and scale is not None:
+            raise ValueError("integer weights have no scale")
         outs = super().linear_combinations(cts, rows, n_threads)
-        delta = cts[0].delta * (self.scaling_factor if scale is None else scale)
+        if isinstance(rows, IntegerMatrix):
+            delta = cts[0].delta
+        else:
+            delta = cts[0].delta * (self.scaling_factor if scale is None else scale)
         for out in outs:
             out.delta = delta
         return outs

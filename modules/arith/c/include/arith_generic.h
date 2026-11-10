@@ -129,6 +129,8 @@ extern "C"
                                  const ArithElement *b);
         ArithStatus (*scale_addto)(ArithRing ring, ArithElement *out, const ArithElement *a,
                                    uint64_t scale);
+        ArithStatus (*scale_subto)(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                   uint64_t scale);
         ArithStatus (*scale_by)(ArithRing ring, ArithElement *out, const ArithElement *a,
                                 ArithScalar scale);
 
@@ -231,6 +233,8 @@ extern "C"
     ArithStatus arith_mul_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
                                 const ArithElement *b);
     ArithStatus arith_scale_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  uint64_t scale);
+    ArithStatus arith_scale_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
                                   uint64_t scale);
     ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
                                ArithScalar scale);

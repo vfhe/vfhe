@@ -30,6 +30,7 @@ is the same answer `require` gives from the capability flags, one level later.
 
 from __future__ import annotations
 
+import math
 from abc import ABC, ABCMeta, abstractmethod
 from array import array
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -412,6 +413,10 @@ class Polynomial(metaclass=_ImplementationDispatch):
 
     def get_polynomial(self, signed: bool = False) -> list[int]:
         """The coefficients as Python integers, low degree first.
+
+        Over several primes, each coefficient is rebuilt from its residues as
+        a Python integer, one big-integer computation per coefficient. When
+        the residues are enough, `to_uint64` returns them in one native call.
 
         :param signed: Report each coefficient as the representative of
             smallest absolute value, in ``(-q/2, q/2]``, rather than in
@@ -831,6 +836,55 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         parts = [b"field", int_digest(int(self.prime)), int_digest(int(self.degree))]
         parts.append(int_digest(int(getattr(self, "w", 0))))
         return chain_digest(parts)
+
+    def lagrange_interpolate(self, values, x) -> FieldElement:
+        """Evaluate at `x` the polynomial that takes the value ``values[t]`` at
+        the integer ``t``, for ``t = 0, 1, ..., k`` with ``k = len(values) -
+        1``.
+
+        That polynomial is the Lagrange interpolant on the nodes ``0, ...,
+        k``, of degree at most `k`. For example, ``values = [3, 4, 7]`` are
+        the values of ``t^2 + 3`` at 0, 1 and 2, so at ``x = 5`` the result
+        is 28.
+
+        The Lagrange denominator of node `t` is ``prod_{j != t} (t - j) =
+        (-1)^(k-t) t! (k-t)!``. All of them are therefore known from the
+        integer ``k!``, whose inverse is computed modulo `prime`: no field
+        element is inverted.
+
+        This definition works for any field. An implementation may replace it
+        with a native one.
+
+        Raises ValueError when `values` is empty, or when the nodes are not
+        distinct in this field (``len(values) > prime``).
+
+        :param values: the polynomial's values at ``0, 1, ..., k``, elements
+            of this field.
+        :param x: the point to evaluate at, an element of this field.
+        """
+        count = len(values)
+        if count == 0:
+            raise ValueError("lagrange_interpolate needs at least one value")
+        if count > self.prime:
+            raise ValueError(
+                f"{count} integer nodes are not distinct modulo {self.prime}"
+            )
+        k = count - 1
+        if k == 0:
+            return values[0]
+        diffs = [x - j for j in range(count)]
+        suffix = [self.one] * count  # suffix[t] = prod_{j > t} (x - j)
+        for t in range(k, 0, -1):
+            suffix[t - 1] = suffix[t] * diffs[t]
+        total = self.zero
+        prefix = self.one
+        binomial = 1
+        for t in range(count):
+            term = values[t] * (prefix * suffix[t]) * binomial
+            total = total - term if (k - t) & 1 else total + term
+            prefix = prefix * diffs[t]
+            binomial = binomial * (k - t) // (t + 1)
+        return total * pow(math.factorial(k), -1, self.prime)
 
     def _uniform_from_seed(self, seed: bytes) -> FieldElement:
         """One uniform element, a pure function of ``seed``.

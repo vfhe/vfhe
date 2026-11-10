@@ -38,6 +38,8 @@ ArithStatus arith_rns_mul_subto(ArithRing ring, ArithElement *out, const ArithEl
                                 const ArithElement *b);
 ArithStatus arith_rns_scale_addto(ArithRing ring, ArithElement *out, const ArithElement *a,
                                   uint64_t scale);
+ArithStatus arith_rns_scale_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  uint64_t scale);
 ArithStatus arith_rns_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
                                ArithScalar scale);
 ArithStatus arith_rns_permute(ArithRing ring, ArithElement *out, const ArithElement *a,

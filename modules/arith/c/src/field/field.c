@@ -376,6 +376,64 @@ void field_hash_element(uint8_t *out, const uint64_t *a, uint64_t d)
     blake3_hasher_finalize(&hasher, out, BLAKE3_OUT_LEN);
 }
 
+int field_ext_lagrange_interpolate(uint64_t *out, const uint64_t *const *values, uint64_t count,
+                                   const uint64_t *x, uint64_t d, uint64_t w, Modulus mod)
+{
+    const uint64_t q = mod->q;
+    if (count == 0 || count > ARITH_LAGRANGE_MAX_VALUES || d == 0 || d > FIELD_MAX_STACK_D)
+        return 0;
+    const uint64_t k = count - 1;
+    // The nodes 0, ..., k are distinct modulo q exactly when k < q, and then
+    // k! is invertible.
+    if (k >= q)
+        return 0;
+    uint64_t factorial = 1;
+    for (uint64_t j = 2; j <= k; j++)
+        factorial = mul_modq(factorial, j % q, mod);
+    const uint64_t inverse_factorial = inverse_mod(factorial, q);
+
+    // differences[j] = x - j, which changes only the constant coefficient;
+    // suffix[t] = prod_{t < j <= k} (x - j).
+    uint64_t differences[ARITH_LAGRANGE_MAX_VALUES][FIELD_MAX_STACK_D];
+    uint64_t suffix[ARITH_LAGRANGE_MAX_VALUES][FIELD_MAX_STACK_D];
+    for (uint64_t j = 0; j <= k; j++)
+    {
+        memcpy(differences[j], x, d * sizeof(uint64_t));
+        differences[j][0] = sub_modq(x[0], j, q);
+    }
+    memset(suffix[k], 0, d * sizeof(uint64_t));
+    suffix[k][0] = 1;
+    for (uint64_t t = k; t > 0; t--)
+        field_ext_mul(suffix[t - 1], suffix[t], differences[t], d, w, mod);
+
+    // The Lagrange denominator of node t, prod_{j != t} (t - j), is
+    // (-1)^(k-t) t! (k-t)!. So the result is
+    //     (1/k!) sum_t (-1)^(k-t) C(k, t) values[t] prod_{j != t} (x - j),
+    // with prefix = prod_{j < t} (x - j) built along the loop.
+    uint64_t prefix[FIELD_MAX_STACK_D] = {1};
+    uint64_t total[FIELD_MAX_STACK_D] = {0};
+    uint64_t term[FIELD_MAX_STACK_D];
+    uint64_t binomial = 1; // C(k, t), exact in 64 bits: C(31, 15) < 2^30
+    for (uint64_t t = 0; t <= k; t++)
+    {
+        field_ext_mul(term, prefix, suffix[t], d, w, mod);
+        field_ext_mul(term, term, values[t], d, w, mod);
+        const uint64_t weight = mul_modq(binomial % q, inverse_factorial, mod);
+        for (uint64_t i = 0; i < d; i++)
+        {
+            const uint64_t scaled = mul_modq(term[i], weight, mod);
+            if ((k - t) & 1)
+                total[i] = sub_modq(total[i], scaled, q);
+            else
+                total[i] = add_modq(total[i], scaled, q);
+        }
+        field_ext_mul(prefix, prefix, differences[t], d, w, mod);
+        binomial = binomial * (k - t) / (t + 1);
+    }
+    memcpy(out, total, d * sizeof(uint64_t));
+    return 1;
+}
+
 int field_ext_is_equal(const uint64_t *a, const uint64_t *b, uint64_t d)
 {
     for (uint64_t i = 0; i < d; i++)

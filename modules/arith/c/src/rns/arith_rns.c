@@ -162,6 +162,15 @@ ArithStatus arith_rns_scale_addto(ArithRing ring, ArithElement *out, const Arith
     return ARITH_OK;
 }
 
+ArithStatus arith_rns_scale_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                                  uint64_t scale)
+{
+    (void)ring;
+    polynomial_scale_subto_RNS_polynomial(arith_rns_polynomial(out), arith_rns_polynomial(a),
+                                          scale);
+    return ARITH_OK;
+}
+
 ArithStatus arith_rns_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
                                ArithScalar scale)
 {
@@ -459,6 +468,7 @@ static const ArithMethods RNS_NTT_METHODS = {
     .scale_int = arith_rns_scale_int,
     .mul_subto = arith_rns_mul_subto,
     .scale_addto = arith_rns_scale_addto,
+    .scale_subto = arith_rns_scale_subto,
     .scale_by = arith_rns_scale_by,
     .permute = arith_rns_permute,
     .mul_by_monomial = arith_rns_mul_by_monomial,

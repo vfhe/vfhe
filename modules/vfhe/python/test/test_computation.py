@@ -11,7 +11,7 @@ from typing import cast
 import pytest
 from vfhe.arith import Ring
 from vfhe.fhe import CKKS_Ciphertext, CKKS_Scheme
-from vfhe.mlwe import MLWE_Scheme
+from vfhe.mlwe import IntegerMatrix, MLWE_Scheme
 from vfhe.util import trace
 from vfhe.vfhe.computation import Computation, Division
 
@@ -255,6 +255,44 @@ def test_lazy_relinearization_reads_tensors_a_linear_step_and_a_key_switch():
         switch,
     ]
     assert [linear.layer, switch.layer, computation.rescales[0].layer] == [1, 1, 1]
+    assert computation.unread == []
+
+
+def test_integer_weights_are_read_as_terms_with_an_integer_plaintext():
+    # A row whose first weight is negative starts by zeroing its sums; a
+    # zero weight is no term; an output used with a weight stays a step.
+    scheme, key, _rlk = _disjoint_chain()
+    xs = [scheme.encrypt(scheme.encode([v]), key) for v in (0.5, 0.25, 0.125)]
+    rows = [[3, -5, 0], [-1, 2, 7], [0, 0, 0], [2, 2, -4]]
+    with trace.recording() as t:
+        squares = [scheme.multiply(x, x, None) for x in xs]
+        combined = scheme.linear_combinations(squares, IntegerMatrix(rows))
+        [again] = scheme.linear_combinations(combined[:2], IntegerMatrix([[2, -3]]))
+    assert all(c.delta == squares[0].delta for c in combined)
+    computation = Computation(t.operations())
+    *firsts, second = computation.linears
+    assert [
+        [(term.sign, term.plaintext) for term in step.terms] for step in firsts
+    ] == [
+        [(1, 3), (-1, 5)],
+        [(-1, 1), (1, 2), (1, 7)],
+        [],
+        [(1, 2), (1, 2), (-1, 4)],
+    ]
+    assert [(term.sign, term.plaintext) for term in second.terms] == [(1, 2), (-1, 3)]
+    assert [computation.written_by(term.versions[0]) for term in second.terms] == (
+        firsts[:2]
+    )
+    for step, out in zip([*firsts, second], [*combined, again], strict=True):
+        output = [out.get_a_poly(0), out.get_a_poly(1), out.get_b_poly()]
+        assert step.output == output
+        for i, component in enumerate(output):
+            total = component * 0
+            for term in step.terms:
+                value = term.ciphertext[i] * term.plaintext
+                total = total + value if term.sign > 0 else total - value
+            assert total == component
+    assert all(term.plaintext_version is None for term in second.terms)
     assert computation.unread == []
 
 

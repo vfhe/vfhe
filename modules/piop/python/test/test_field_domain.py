@@ -248,9 +248,10 @@ def test_interpolation_over_a_field(field):
 
 
 @pytest.mark.parametrize("degree", [2, 4, 6])
-def test_interpolation_inverts_once_per_call(field, degree, monkeypatch):
-    """Higher degrees are exact, and the Lagrange denominators cost one field
-    inversion per call, whatever the degree."""
+def test_interpolation_makes_no_field_inversion(field, degree, monkeypatch):
+    """Higher degrees are exact, and the Lagrange denominators cost no field
+    inversion, whatever the degree: their one inverse is that of the integer
+    degree!, taken modulo the characteristic."""
     cs = _random_elements(field, degree + 1, seed=degree)
 
     def g(t):
@@ -272,7 +273,7 @@ def test_interpolation_inverts_once_per_call(field, degree, monkeypatch):
 
     monkeypatch.setattr(element_type, "inverse", counted)
     assert interpolate_evals(evals, r) == g(r)
-    assert len(calls) == 1
+    assert calls == []
 
 
 def test_challenge_sampling(field):

@@ -221,6 +221,8 @@ void field_ext_mul(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d
 void field_ext_pow(uint64_t *res, const uint64_t *base, const uint64_t *exp, uint64_t exp_words,
                    uint64_t d, uint64_t w, void *mod);
 int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, void *mod);
+int field_ext_lagrange_interpolate(uint64_t *out, const uint64_t *const *values, uint64_t count,
+                                   const uint64_t *x, uint64_t d, uint64_t w, void *mod);
 void field_ext_frobenius(uint64_t *res, const uint64_t *a, uint64_t k, uint64_t d, uint64_t w,
                          void *mod);
 uint64_t field_ext_root_subfield_degree(uint64_t n, void *mod);
@@ -335,6 +337,7 @@ bool field_vec_reindex(FieldVector out, const FieldVector a, const int64_t *bits
 void field_vec_fold(FieldVector out, const FieldVector a, const uint64_t *r);
 void field_vec_fold_blocks(FieldVector out, const FieldVector a, uint64_t block, const uint64_t *r);
 void field_vec_split_blocks(FieldVector lo, FieldVector hi, const FieldVector a, uint64_t block);
+#define ARITH_LAGRANGE_MAX_VALUES ...
 #define FIELD_FOLD_MAX_TABLES ...
 #define FIELD_FOLD_MAX_NODES ...
 #define FIELD_FOLD_MAX_SUMS ...
@@ -385,6 +388,8 @@ void pmf_sub(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
 void pmf_neg(uint64_t *out, const uint64_t *a, void *params);
 void pmf_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, void *params);
 int pmf_inverse(uint64_t *out, const uint64_t *a, void *params);
+int pmf_lagrange_interpolate(uint64_t *out, const uint64_t *const *values, uint64_t count,
+                             const uint64_t *x, const uint64_t *inverse_factorial, void *params);
 int pmf_is_equal(const uint64_t *a, const uint64_t *b, void *params);
 void pmf_canonicalize(uint64_t *out, const uint64_t *in, void *params);
 void pmf_to_bytes(uint8_t *out, const uint64_t *a, void *params);
@@ -493,6 +498,7 @@ typedef enum
     ARITH_TRACE_MUL_SUBTO,
     ARITH_TRACE_SCALE_INT,
     ARITH_TRACE_SCALE_ADDTO,
+    ARITH_TRACE_SCALE_SUBTO,
     ARITH_TRACE_SCALE_BY,
     ARITH_TRACE_PERMUTE,
     ARITH_TRACE_MUL_BY_MONOMIAL,

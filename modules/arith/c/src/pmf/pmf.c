@@ -359,6 +359,53 @@ int pmf_inverse(uint64_t *out, const uint64_t *a, PMFParams params)
     return 1;
 }
 
+int pmf_lagrange_interpolate(uint64_t *out, const uint64_t *const *values, uint64_t count,
+                             const uint64_t *x, const uint64_t *inverse_factorial, PMFParams params)
+{
+    if (count == 0 || count > ARITH_LAGRANGE_MAX_VALUES)
+        return 0;
+    const uint64_t k = count - 1;
+    // Every element below is a whole PMF_LANES-word buffer, the size the
+    // pmf_ref_* kernels read and write. differences[j] = x - j;
+    // suffix[t] = prod_{t < j <= k} (x - j).
+    uint64_t differences[ARITH_LAGRANGE_MAX_VALUES][PMF_LANES];
+    uint64_t suffix[ARITH_LAGRANGE_MAX_VALUES][PMF_LANES];
+    uint64_t integer[PMF_LANES] = {0};
+    for (uint64_t j = 0; j <= k; j++)
+    {
+        integer[0] = j; // j < 2^52 and j < p: one canonical limb
+        pmf_ref_sub(differences[j], x, integer, params);
+    }
+    memset(suffix[k], 0, sizeof(suffix[k]));
+    suffix[k][0] = 1;
+    for (uint64_t t = k; t > 0; t--)
+        pmf_ref_mul(suffix[t - 1], suffix[t], differences[t], params);
+
+    // The Lagrange denominator of node t, prod_{j != t} (t - j), is
+    // (-1)^(k-t) t! (k-t)!. So the result is
+    //     (1/k!) sum_t (-1)^(k-t) C(k, t) values[t] prod_{j != t} (x - j),
+    // with prefix = prod_{j < t} (x - j) built along the loop.
+    uint64_t prefix[PMF_LANES] = {1};
+    uint64_t total[PMF_LANES] = {0};
+    uint64_t term[PMF_LANES];
+    uint64_t binomial = 1; // C(k, t), below 2^52 so one limb: C(31, 15) < 2^30
+    for (uint64_t t = 0; t <= k; t++)
+    {
+        pmf_ref_mul(term, prefix, suffix[t], params);
+        pmf_ref_mul(term, term, values[t], params);
+        integer[0] = binomial;
+        pmf_ref_mul(term, term, integer, params);
+        if ((k - t) & 1)
+            pmf_ref_sub(total, total, term, params);
+        else
+            pmf_ref_add(total, total, term, params);
+        pmf_ref_mul(prefix, prefix, differences[t], params);
+        binomial = binomial * (k - t) / (t + 1);
+    }
+    pmf_ref_mul(out, total, inverse_factorial, params);
+    return 1;
+}
+
 int pmf_is_equal(const uint64_t *a, const uint64_t *b, PMFParams params)
 {
     // A plain limb comparison is valid only because every output is canonical, so

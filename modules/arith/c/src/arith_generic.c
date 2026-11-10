@@ -287,6 +287,20 @@ ArithStatus arith_scale_addto(ArithRing ring, ArithElement *out, const ArithElem
     return status;
 }
 
+ArithStatus arith_scale_subto(ArithRing ring, ArithElement *out, const ArithElement *a,
+                              uint64_t scale)
+{
+    ArithStatus status = check_same_domain(out, a);
+    if (status != ARITH_OK)
+    {
+        return status;
+    }
+    TRACE_BEGIN(ARITH_TRACE_SCALE_SUBTO, out, a, NULL, scale, 0, 0.0, NULL);
+    status = ARITH_DISPATCH(ring, scale_subto, ring, out, a, scale);
+    TRACE_END(status, out);
+    return status;
+}
+
 ArithStatus arith_scale_by(ArithRing ring, ArithElement *out, const ArithElement *a,
                            ArithScalar scale)
 {

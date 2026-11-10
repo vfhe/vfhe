@@ -337,6 +337,74 @@ void mlwe_RNS_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const ArithElemen
     vfhe_parallel_for(n_out, one_thread_on_generic_path(n_threads), linear_combination_job, &lc);
 }
 
+// out += w * in, or out -= |w| * in when w < 0; `start` writes instead, which
+// for a negative w means zeroing out first. Each step runs over all the
+// components before the next, so a term is one run of events on the tape.
+static void integer_term(RNS_MLWE out, RNS_MLWE in, int64_t w, int start)
+{
+    // |w| as uint64_t, which holds |INT64_MIN| too.
+    const uint64_t magnitude = w < 0 ? (uint64_t)(-(w + 1)) + 1 : (uint64_t)w;
+    if (start && w < 0)
+    {
+        for (size_t i = 0; i < out->r; i++)
+            arith_zero_in(out->ring, &out->a[i], in->a[i].domain);
+        arith_zero_in(out->ring, &out->b, in->b.domain);
+    }
+    for (size_t i = 0; i <= out->r; i++)
+    {
+        ArithElement *o = i < out->r ? &out->a[i] : &out->b;
+        const ArithElement *x = i < out->r ? &in->a[i] : &in->b;
+        if (start && w > 0)
+            arith_scale_int(out->ring, o, x, magnitude);
+        else if (w > 0)
+            arith_scale_addto(out->ring, o, x, magnitude);
+        else
+            arith_scale_subto(out->ring, o, x, magnitude);
+    }
+}
+
+void mlwe_RNS_integer_linear_combination(RNS_MLWE out, RNS_MLWE *in, const int64_t *weights,
+                                         uint64_t n)
+{
+    int started = 0;
+    for (uint64_t i = 0; i < n; i++)
+    {
+        if (weights[i] == 0)
+            continue;
+        integer_term(out, in[i], weights[i], !started);
+        started = 1;
+    }
+    if (!started)
+    {
+        const ArithDomain d = n > 0 ? in[0]->b.domain : arith_mul_domain(out->ring);
+        for (size_t i = 0; i < out->r; i++)
+            arith_zero_in(out->ring, &out->a[i], d);
+        arith_zero_in(out->ring, &out->b, d);
+    }
+}
+
+typedef struct
+{
+    RNS_MLWE *out;
+    RNS_MLWE *in;
+    const int64_t *weights;
+    uint64_t n_in;
+} IntegerLinearCombinations;
+
+static void integer_linear_combination_job(void *ctx, uint64_t j)
+{
+    IntegerLinearCombinations *lc = (IntegerLinearCombinations *)ctx;
+    mlwe_RNS_integer_linear_combination(lc->out[j], lc->in, &lc->weights[j * lc->n_in], lc->n_in);
+}
+
+void mlwe_RNS_integer_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const int64_t *weights,
+                                          uint64_t n_out, uint64_t n_in, uint64_t n_threads)
+{
+    IntegerLinearCombinations lc = {out, in, weights, n_in};
+    vfhe_parallel_for(n_out, one_thread_on_generic_path(n_threads), integer_linear_combination_job,
+                      &lc);
+}
+
 RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key)
 {
     RNSc_MLWE res = mlwe_alloc_sample(key->ring, key->r);

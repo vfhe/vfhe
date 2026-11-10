@@ -14,6 +14,7 @@ from vfhe.arith import Polynomial, Ring
 from vfhe.arith.residue_selection import search_log_residues_minq0
 from vfhe.crypto import entropy
 from vfhe.fhe import CKKS_Ciphertext, CKKS_Scheme
+from vfhe.mlwe import IntegerMatrix
 from vfhe.util import parallel
 from vfhe.util.bindings import ffi
 
@@ -47,6 +48,25 @@ def test_encode_decode(split_degree):
     values = rand_values(N // 2)
     dec = scheme.decode(scheme.encode(values))
     assert all(abs(v - dv) < 1e-3 for v, dv in zip(values, dec, strict=False))
+
+
+def test_integer_linear_combinations_keep_the_scaling_factor():
+    scheme = CKKS_Scheme(Ring(N, 300, split_degree=1), scaling_factor=2**25)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    vectors = [rand_values(N // 2) for _ in range(3)]
+    cts = [scheme.encrypt(scheme.encode(v), key) for v in vectors]
+    rows = [[3, -2, 0], [0, 1, -1]]
+    outs = scheme.linear_combinations(cts, IntegerMatrix(rows))
+    for row, out in zip(rows, outs, strict=True):
+        assert out.delta == cts[0].delta
+        expected = [
+            sum(w * v[k] for w, v in zip(row, vectors, strict=True))
+            for k in range(N // 2)
+        ]
+        decoded = scheme.decode(scheme.decrypt(out, key))
+        assert all(abs(e - d) < 0.05 for e, d in zip(expected, decoded, strict=True))
+    with pytest.raises(ValueError, match="no scale"):
+        scheme.linear_combinations(cts, IntegerMatrix(rows), scale=2.0)
 
 
 @pytest.mark.parametrize("n", [1, 4, 32, N // 2])

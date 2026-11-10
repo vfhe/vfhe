@@ -21,6 +21,7 @@ from vfhe.arith import (
     Ring,
     repr,
 )
+from vfhe.arith.number_theory import crt
 from vfhe.util.bindings import ffi
 
 N = 16
@@ -325,6 +326,24 @@ def test_short_arrays_are_padded_with_zeros():
             *zeros,
         ]
         assert Polynomial(R).from_array([0, 5]).get_polynomial() == [0, 5, *zeros]
+
+
+@pytest.mark.parametrize("sizes", [[50], [60, 50], [60, 50, 40, 61]])
+def test_get_polynomial_is_the_crt_of_the_rows(sizes):
+    # Against number_theory.crt, coefficient by coefficient, including the
+    # values at the edges of the signed range.
+    R = Ring(64, prime_size=sizes, split_degree=1)
+    q = R.q_l
+    values = [rng.randrange(q) for _ in range(R.N - 6)]
+    values += [0, 1, q // 2, q // 2 + 1, q - 1, q - 2]
+    poly = Polynomial(R).from_bigint_array(values)
+    rows = list(poly)
+    expected = [crt([row[j] for row in rows], R.primes) for j in range(R.N)]
+    assert expected == values
+    assert poly.get_polynomial() == values
+    signed = poly.get_polynomial(signed=True)
+    assert signed == [v - q if 2 * v > q else v for v in values]
+    assert all(-q < 2 * v <= q for v in signed)
 
 
 def test_encode_rounding_is_round_half_to_even():

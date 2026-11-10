@@ -26,6 +26,7 @@ from vfhe.mlwe import (
     MLWE,
     CMUX_batch,
     GadgetParams,
+    IntegerMatrix,
     LWE_Key,
     MGSW_Scheme,
     MLWE_Key,
@@ -2410,6 +2411,74 @@ def test_linear_combinations_with_a_prepared_matrix(bv, n_threads):
     other = Polynomial(scheme.rings[1]).from_array(_ternary(N))
     with pytest.raises(ValueError, match="one ring"):
         PlaintextMatrix([[small[0], other]])
+
+
+#: Rows of integer weights: negative, zero, the int64 extremes, a row whose
+#: first term subtracts, and a row with no terms.
+INTEGER_ROWS = [
+    [3, -5, 0],
+    [-1, 2, 7],
+    [0, 0, 0],
+    [2**63 - 1, -(2**63), 1],
+    [0, -4, -4],
+]
+
+
+@pytest.mark.parametrize("domain", ["coeff", "ntt", "mixed"])
+@pytest.mark.parametrize("n_threads", [1, 0])
+@pytest.mark.usefixtures("threads")
+def test_integer_linear_combinations(bv, domain, n_threads):
+    # Integer weights scale the linear decryption exactly, in either domain.
+    _Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    ring = scheme.rings[0]
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    for k, c in enumerate(cts):
+        if domain == "coeff" or (domain == "mixed" and k == 1):
+            c.to_coeff()
+        else:
+            c.to_NTT()
+    decryptions = [scheme.linear_decrypt(c.copy(), key) for c in cts]
+    outs = scheme.linear_combinations(cts, IntegerMatrix(INTEGER_ROWS), n_threads)
+    expected_repr = repr.coeff if domain == "coeff" else repr.ntt
+    assert all(c.repr == expected_repr for c in cts)
+    for row, out in zip(INTEGER_ROWS, outs, strict=True):
+        assert out.repr == expected_repr
+        expected = sum(
+            (d * w for w, d in zip(row, decryptions, strict=True)),
+            start=Polynomial(ring).from_array([0] * N),
+        )
+        assert scheme.linear_decrypt(out, key) == expected
+
+
+def test_integer_matrix_from_a_buffer(bv):
+    np = pytest.importorskip("numpy")
+    _Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    weights = np.array(INTEGER_ROWS, dtype=np.int64)
+    from_buffer = scheme.linear_combinations(cts, IntegerMatrix(weights))
+    from_rows = scheme.linear_combinations(cts, IntegerMatrix(INTEGER_ROWS))
+    for a, b in zip(from_buffer, from_rows, strict=True):
+        assert _same_sample(a, b)
+    with pytest.raises(TypeError, match="C-contiguous"):
+        IntegerMatrix(weights[:, ::2])
+    with pytest.raises(TypeError, match="int64"):
+        IntegerMatrix(weights.astype(np.int32))
+
+
+def test_integer_matrix_refusals(bv):
+    _Rq, Rp, scheme = bv
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    with pytest.raises(ValueError, match="one length"):
+        IntegerMatrix([[1, 2], [3]])
+    with pytest.raises(ValueError, match="signed 64-bit"):
+        IntegerMatrix([[2**63]])
+    with pytest.raises(ValueError, match="at least one row"):
+        IntegerMatrix([])
+    with pytest.raises(ValueError, match="one weight per ciphertext"):
+        scheme.linear_combinations(cts[:2], IntegerMatrix([[1, 2, 3]]))
 
 
 @pytest.mark.parametrize("scheme_fixture", ["bv", "ghs"])

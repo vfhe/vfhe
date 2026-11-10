@@ -23,7 +23,8 @@ None of this is constant-time: exponents and seeds are public values.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import math
+from typing import TYPE_CHECKING, cast
 
 from vfhe.arith._alloc import aligned64
 from vfhe.arith.base import Field, FieldElement
@@ -149,10 +150,12 @@ class PseudoMersenneField(Field):
         self.two = self(2)
 
         # Memoized on demand: the least quadratic non-residue, the roots of
-        # unity by order, and the transform plans by length.
+        # unity by order, the transform plans by length, and the inverse of
+        # k! by k (`lagrange_interpolate`).
         self._non_residue: int | None = None
         self._roots: dict[int, PseudoMersenneElement] = {}
         self._plans: dict[int, PseudoMersenneNTT] = {}
+        self._inverse_factorials: dict[int, PseudoMersenneElement] = {}
 
     @property
     def order(self) -> int:
@@ -313,6 +316,36 @@ class PseudoMersenneField(Field):
             plan = PseudoMersenneNTT(self, n)
             self._plans[n] = plan
         return plan
+
+    def lagrange_interpolate(self, values, x) -> PseudoMersenneElement:
+        """`Field.lagrange_interpolate`, computed in one native call
+        (`pmf_lagrange_interpolate`) for up to ``ARITH_LAGRANGE_MAX_VALUES``
+        values, and by the generic definition for more."""
+        count = len(values)
+        if not 0 < count <= lib.ARITH_LAGRANGE_MAX_VALUES:
+            return cast(
+                "PseudoMersenneElement", super().lagrange_interpolate(values, x)
+            )
+        if not all(
+            isinstance(v, PseudoMersenneElement) and v.field.prime == self.prime
+            for v in (*values, x)
+        ):
+            raise TypeError("lagrange_interpolate takes elements of this field")
+        k = count - 1
+        inverse = self._inverse_factorials.get(k)
+        if inverse is None:
+            inverse = self(pow(math.factorial(k), -1, self.prime))
+            self._inverse_factorials[k] = inverse
+        out = self._new_buffer()
+        lib.pmf_lagrange_interpolate(
+            out,
+            ffi.new("uint64_t *[]", [v._buf for v in values]),
+            count,
+            x._buf,
+            inverse._buf,
+            self._params,
+        )
+        return self._wrap(out)
 
     def _wrap(self, buf) -> PseudoMersenneElement:
         """Adopt a C output buffer as an element, without copying."""

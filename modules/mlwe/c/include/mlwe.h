@@ -205,6 +205,16 @@ extern "C"
     // library limit, see vfhe_threads_for).
     void mlwe_RNS_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const ArithElement *coeff,
                                       uint64_t n_out, uint64_t n_in, uint64_t n_threads);
+    // out = sum_i weights[i] * in[i], with integer weights, all in one domain
+    // (either) over out's ring and rank; `out` is in that domain and must not
+    // alias any in[i]. A zero weight skips its term; with no terms, out = 0.
+    void mlwe_RNS_integer_linear_combination(RNS_MLWE out, RNS_MLWE *in, const int64_t *weights,
+                                             uint64_t n);
+    // out[j] = sum_i weights[j * n_in + i] * in[i] for j < n_out: an integer
+    // matrix times a vector of samples, each term one pass over the sample.
+    // Up to `n_threads` threads (0: the library limit, see vfhe_threads_for).
+    void mlwe_RNS_integer_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const int64_t *weights,
+                                              uint64_t n_out, uint64_t n_in, uint64_t n_threads);
     void mlwe_scale_RNSc_mlwe(RNSc_MLWE c, uint64_t scale);
     void mlwe_addto_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in);
     RNS_MLWE *mlwe_alloc_RNS_sample_array(uint64_t size, uint64_t N, uint64_t r, uint64_t mask,

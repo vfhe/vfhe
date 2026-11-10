@@ -25,6 +25,7 @@ from vfhe.util.parallel import local_num_threads
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from typing_extensions import Buffer
     from vfhe.arith.impl.rns.polynomial import RingParameters
 
     from .lwe import LWE, LWE_Key
@@ -967,14 +968,23 @@ class MLWE_Scheme:
     def linear_combinations(
         self,
         cts: Sequence[CtT],
-        rows: Sequence[Sequence[RNSPolynomial | None]] | PlaintextMatrix,
+        rows: Sequence[Sequence[RNSPolynomial | None]]
+        | PlaintextMatrix
+        | IntegerMatrix,
         n_threads: int = 0,
     ) -> list[CtT]:
         """One :meth:`linear_combination` of ``cts`` per row of coefficients (a
         plaintext matrix times a vector of ciphertexts). ``None`` skips a term. A
         matrix applied to many vectors can be prepared once as a
         :class:`PlaintextMatrix`.
+
+        With an :class:`IntegerMatrix`, the coefficients are integers: each
+        term is one pass over the ciphertext in the domain it is in (the
+        NTT domain if ``cts`` are not all in one), and a zero weight skips
+        the term.
         """
+        if isinstance(rows, IntegerMatrix):
+            return self._integer_linear_combinations(cts, rows, n_threads)
         matrix = rows if isinstance(rows, PlaintextMatrix) else PlaintextMatrix(rows)
         if not cts or matrix.n_columns != len(cts):
             raise ValueError("expected one coefficient per ciphertext in every row")
@@ -995,6 +1005,29 @@ class MLWE_Scheme:
         )
         for out in outs:
             out.repr = repr.ntt
+        return outs
+
+    def _integer_linear_combinations(
+        self, cts: Sequence[CtT], matrix: IntegerMatrix, n_threads: int
+    ) -> list[CtT]:
+        if not cts or matrix.n_columns != len(cts):
+            raise ValueError("expected one weight per ciphertext in every row")
+        ring = cts[0].ring
+        if any(c.ring != ring or c.r != cts[0].r for c in cts):
+            raise ValueError("every ciphertext must be over one ring and rank")
+        if any(c.repr != cts[0].repr for c in cts):
+            self._to_ntt_batch(cts, n_threads)
+        outs = [cts[0].new_like() for _ in range(matrix.n_rows)]
+        lib_rlwe.lib.mlwe_RNS_integer_linear_combinations(
+            ffi.new("void *[]", [out.obj for out in outs]),
+            ffi.new("void *[]", [c.obj for c in cts]),
+            matrix.weights,
+            matrix.n_rows,
+            len(cts),
+            n_threads,
+        )
+        for out in outs:
+            out.repr = cts[0].repr
         return outs
 
     def trace(self, c: CtT, ksk: MLWE_Set | list[MLWE_Set]) -> CtT:
@@ -1704,6 +1737,44 @@ class PlaintextMatrix:
                 if p is not None:
                     self.elements[j * self.n_columns + i].handle = p.obj
                     self.elements[j * self.n_columns + i].domain = ntt
+
+
+class IntegerMatrix:
+    """Integer coefficients for :meth:`MLWE_Scheme.linear_combinations`, laid
+    out once for a matrix applied to many vectors of ciphertexts.
+
+    ``rows`` is a sequence of rows of integers, or a C-contiguous
+    two-dimensional buffer of signed 64-bit integers (such as a
+    ``numpy.int64`` array), which is used without a copy and must not change
+    while the matrix is in use. Every weight must fit in a signed 64-bit
+    integer.
+    """
+
+    def __init__(self, rows: Sequence[Sequence[int]] | Buffer) -> None:
+        try:
+            view = memoryview(rows)  # type: ignore[arg-type]
+        except TypeError:
+            view = None
+        if view is not None:
+            if view.ndim != 2 or view.itemsize != 8 or view.format not in ("q", "l"):
+                raise TypeError("expected a two-dimensional buffer of int64")
+            if not view.c_contiguous:
+                raise TypeError("the buffer must be C-contiguous")
+            self.n_rows, self.n_columns = view.shape or (0, 0)
+            self._source = rows
+            self.weights = ffi.from_buffer("int64_t[]", view.cast("B"))
+        else:
+            rows = cast("Sequence[Sequence[int]]", rows)
+            self.n_rows = len(rows)
+            self.n_columns = len(rows[0]) if rows else 0
+            if any(len(row) != self.n_columns for row in rows):
+                raise ValueError("expected rows of one length")
+            flat = [int(w) for row in rows for w in row]
+            if any(not -(2**63) <= w < 2**63 for w in flat):
+                raise ValueError("every weight must fit in a signed 64-bit integer")
+            self.weights = ffi.new("int64_t[]", flat)
+        if self.n_rows == 0 or self.n_columns == 0:
+            raise ValueError("expected at least one row and one column")
 
 
 class MLWE_Key:

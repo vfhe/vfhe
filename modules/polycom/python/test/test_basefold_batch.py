@@ -34,6 +34,7 @@ from vfhe.polycom import (
     FieldFoldableRS,
     FoldableRS,
     LayerAnswers,
+    basefold,
 )
 
 
@@ -347,3 +348,113 @@ def test_soundness_error_adds_the_batching_terms(dom):
         statement, dom.domain, 0.01, 0.5, claims=3, polynomials=2
     )
     assert batched == pytest.approx(single + (2 * 4 + 3 - 1) / size + 1 / size)
+
+
+class _Pieces:
+    """One committed polynomial over a field on 8 variables, read as 8
+    pieces of 32 entries: a claim on a piece fixes the top 3 variables to
+    the piece's bits."""
+
+    def __init__(self):
+        self.domain = Field(562949948178433, 2, 5)
+        self.scheme = Basefold(FieldFoldableRS(self.domain, k0=4, c=4, d=6))
+        variables = [MLE_Variable(f"x{i}") for i in range(8)]
+        vector = FieldVector(self.domain, 256)
+        vector.sample_random(b"pieces")
+        self.f = MLE(field=self.domain, variables=variables, evaluations=vector)
+        self.oracle, _ = self.scheme.commit(self.f)
+        self._count = 0
+
+    def point(self, piece: int | None) -> list:
+        """A point whose top 3 coordinates are `piece`'s bits (all free when
+        `piece` is None)."""
+        free = 8 if piece is None else 5
+        coordinates = []
+        for _ in range(free):
+            self._count += 1
+            coordinates.append(
+                self.domain.random_element(f"piece-{self._count}".encode())
+            )
+        if piece is not None:
+            one, zero = self.domain.one, self.domain.zero
+            coordinates += [one if piece >> j & 1 else zero for j in range(3)]
+        return coordinates
+
+    def claim(self, piece: int | None) -> tuple:
+        point = dict(zip(self.f.variables, self.point(piece), strict=True))
+        return (self.oracle, point, self.f.evaluate(point, in_place=False).constant())
+
+    def iop(self) -> IOP:
+        iop = IOP(domain=self.domain, fiat_shamir=True)
+        iop.register(_Claims, _FanOut())
+        iop.register(Relation_Eval, BasefoldEval(self.scheme, rep=3))
+        return iop
+
+
+def _dense_eq_combination(domain, points, coefficients, variables) -> MLE:
+    total = MLE.eq(domain, points[0], variables=variables).scale(coefficients[0])
+    for point, coefficient in zip(points[1:], coefficients[1:], strict=True):
+        term = MLE.eq(domain, point, variables=variables)
+        total.table.fma(term.table, coefficient, out=total.table)
+    return total
+
+
+def test_eq_combination_on_pieces_matches_the_dense_tables():
+    pieces = _Pieces()
+    field = pieces.domain
+    # Pieces, whole-table points, a repeated piece, and Boolean coordinates
+    # below the top ones (which stay in the built table).
+    points = [pieces.point(p) for p in (0, 5, 5, 7, None, 3)]
+    points.append([field.one] * 8)
+    points.append([field.zero] * 4 + pieces.point(None)[:1] + [field.one] * 3)
+    coefficients = [field.random_element(f"c{m}".encode()) for m in range(8)]
+    variables = pieces.f.variables
+    got = basefold._eq_combination(field, points, coefficients, variables)
+    want = _dense_eq_combination(field, points, coefficients, variables)
+    assert got.variables == variables
+    assert got.table == want.table
+
+
+def test_a_claim_on_a_piece_builds_eq_over_the_piece_only(monkeypatch):
+    pieces = _Pieces()
+    claims = [pieces.claim(p) for p in (1, 1, 6, 2)] + [pieces.claim(None)]
+    sizes: list[int] = []
+    eq = MLE.eq.__func__
+
+    def tracked_eq(cls, domain, point, *args, **kwargs):
+        sizes.append(len(point))
+        return eq(cls, domain, point, *args, **kwargs)
+
+    monkeypatch.setattr(MLE, "eq", classmethod(tracked_eq))
+    proof = pieces.iop().prove(_statement(claims))
+    monkeypatch.undo()
+    # The batching weight: four tables over a piece's 5 variables, one over
+    # all 8 (the basefold run's own eq~ comes after).
+    assert sizes[:5] == [5, 5, 5, 5, 8]
+    assert pieces.iop().verify(_statement(claims), proof)
+
+
+def test_claims_on_pieces_accept_and_a_false_one_is_rejected():
+    pieces = _Pieces()
+    claims = [pieces.claim(p) for p in (0, 0, 4, 7, 3)] + [pieces.claim(None)]
+    proof = pieces.iop().prove(_statement(claims))
+    assert pieces.iop().verify(_statement(claims), proof)
+    for m in (0, 3):
+        oracle, point, value = claims[m]
+        wrong = list(claims)
+        wrong[m] = (oracle, point, value + 1)
+        assert not pieces.iop().verify(_statement(wrong), proof), m
+
+
+@pytest.mark.parametrize("count", [1, 7, 8, 9, 21])
+def test_eq_combination_at_matches_the_claim_by_claim_sum(count):
+    pieces = _Pieces()
+    field = pieces.domain
+    points = [pieces.point(m % 9 if m % 3 else None) for m in range(count)]
+    coefficients = [field.random_element(f"s{m}".encode()) for m in range(count)]
+    values = [field.random_element(f"v{m}".encode()) for m in range(count)]
+    r = pieces.point(None)
+    want = field.zero
+    for coefficient, value, z in zip(coefficients, values, points, strict=True):
+        want = want + coefficient * value * basefold._eq_at(z, r, field.one)
+    assert basefold._eq_combination_at(field, points, coefficients, values, r) == want

@@ -108,6 +108,8 @@ void mlwe_round_division_batch(void *io, void *to, uint64_t n, uint64_t n_thread
 void mlwe_RNSc_to_RNS_batch(void *io, uint64_t n, uint64_t n_threads);
 void mlwe_RNS_linear_combinations(void *out, void *in, ArithElement *coeff, uint64_t n_out,
                                   uint64_t n_in, uint64_t n_threads);
+void mlwe_RNS_integer_linear_combinations(void *out, void *in, const int64_t *weights,
+                                          uint64_t n_out, uint64_t n_in, uint64_t n_threads);
 void mlwe_scale_RNS_mlwe_RNS(void *c, uint64_t *per_component);
 void mlwe_add_RNSc_sample(void *out, void *in1, void *in2);
 void mlwe_sub_RNSc_sample(void *out, void *in1, void *in2);
