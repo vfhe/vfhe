@@ -920,10 +920,15 @@ class BasefoldEval(Protocol):
             values = await iop.transcript.read(f"{label}/point/q")
             if not _elements_of(domain, values, len(commitments)):
                 raise Rejection(f"{label}: malformed values at the common point")
-            expected = None
-            for power, c, z in zip(powers, owners, points, strict=True):
-                term = power * _eq_at(z, point, one) * values[c]
-                expected = term if expected is None else expected + term
+            if isinstance(domain, Field):
+                expected = _eq_combination_at(
+                    domain, points, powers, [values[c] for c in owners], point
+                )
+            else:
+                expected = None
+                for power, c, z in zip(powers, owners, points, strict=True):
+                    term = power * _eq_at(z, point, one) * values[c]
+                    expected = term if expected is None else expected + term
             if not (expected == claim):
                 raise Rejection(f"{label}: the common-point values do not match")
 
@@ -1068,7 +1073,25 @@ def _eq_combination(domain, points: list, coefficients: list, variables: list) -
     the sum only one eq~ table exists at a time, whatever the number of
     points. Over a field the sum is updated in place; over a ring it is
     rebuilt on each addition, so a third table exists while that happens.
+
+    Over a field, a point whose last coordinates are each 0 or 1 adds into
+    one block of the table only. Those coordinates are the table's top
+    index bits, and eq~(z, b) is zero unless b agrees with z on them. So
+    the point's eq~ table is built over the other variables and added into
+    the block of entries whose top bits equal those coordinates.
     """
+    if isinstance(domain, Field):
+        n = len(variables)
+        total = FieldVector(domain, 1 << n)
+        # `view` takes blocks whose start and length are multiples of the
+        # padding unit, so at least log2(padding unit) variables stay free.
+        min_free = min(n, (total.padding_unit - 1).bit_length())
+        for point, coefficient in zip(points, coefficients, strict=True):
+            free = _boolean_tail_start(point, min_free, domain)
+            offset = sum(1 << j for j in range(free, n) if point[j] == domain.one)
+            block = total.view(offset, 1 << free)
+            block.fma(MLE.eq(domain, point[:free]).table, coefficient, out=block)
+        return MLE(field=domain, variables=variables, evaluations=total)
     total = MLE.eq(domain, points[0], variables=variables).scale(coefficients[0])
     for point, coefficient in zip(points[1:], coefficients[1:], strict=True):
         term = MLE.eq(domain, point, variables=variables)
@@ -1078,6 +1101,55 @@ def _eq_combination(domain, points: list, coefficients: list, variables: list) -
             total = MLE.linear_combination([total, term], [1, coefficient])
         del term  # freed before the next one is built
     return total
+
+
+def _boolean_tail_start(point: list, min_free: int, field: Field) -> int:
+    """Return the smallest ``f >= min_free`` such that every coordinate of
+    `point` from index `f` on is 0 or 1 in `field`.
+
+    For example, with ``min_free = 1``, the point ``[r, 1, 0]`` (r neither
+    0 nor 1) gives 1, ``[0, r, 1]`` gives 2, and ``[0, 1]`` gives 1.
+    """
+    free = len(point)
+    while free > min_free and (
+        point[free - 1] == field.zero or point[free - 1] == field.one
+    ):
+        free -= 1
+    return free
+
+
+def _eq_combination_at(
+    field: Field, points: list, coefficients: list, values: list, r: list
+) -> FieldElement:
+    """Return ``sum_m coefficients[m] * values[m] * eq~(points[m], r)`` over
+    a field, computed with whole-vector operations across the points.
+
+    The running vector starts as the products ``coefficients[m] *
+    values[m]``. For each coordinate k, the vector of the points' k-th
+    coordinates ``z_mk`` becomes ``z_mk (2 r_k - 1) + (1 - r_k)``, which is
+    ``eq~(z_mk, r_k)``, and multiplies into the running vector. The result
+    is the running vector's sum.
+
+    The coordinates sit in one vector, one row per k. Each row is padded
+    with zeros to a multiple of the padding unit, so that each row is a
+    `view`. The padding entries of the running vector are zero, so they add
+    nothing to the sum.
+    """
+    count = len(points)
+    unit = FieldVector(field, 0).padding_unit
+    stride = -(-count // unit) * unit
+    pad = [field.zero] * (stride - count)
+    total = FieldVector(field, list(coefficients) + pad)
+    total.mul(FieldVector(field, list(values) + pad), out=total)
+    coordinates = FieldVector(
+        field, [x for k in range(len(r)) for x in [z[k] for z in points] + pad]
+    )
+    for k, r_k in enumerate(r):
+        row = coordinates.view(k * stride, stride)
+        row.scale(r_k + r_k - field.one, out=row)
+        row.add(field.one - r_k, out=row)
+        total.mul(row, out=total)
+    return total.sum()
 
 
 def _eq_at(a: list, b: list, one):

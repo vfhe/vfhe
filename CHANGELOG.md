@@ -28,6 +28,27 @@ versions may contain breaking changes.
 - `pmf_inverse` inverts one pseudo-Mersenne element in one C call.
   `PseudoMersenneElement.inverse` uses it instead of a square-and-multiply
   in Python.
+- `Field.lagrange_interpolate(values, x)` evaluates at `x` the polynomial
+  that takes the value `values[t]` at the integer `t`, for
+  `t = 0, ..., len(values) - 1`. No field element is inverted: the one
+  inverse it needs is that of the integer `(len(values) - 1)!`, computed
+  modulo the characteristic. It is one native call for pseudo-Mersenne and
+  extension fields up to `ARITH_LAGRANGE_MAX_VALUES` (32) values
+  (`pmf_lagrange_interpolate`, `field_ext_lagrange_interpolate`), and the
+  generic definition beyond.
+- `IntegerMatrix(rows)` holds integer weights for
+  `MLWE_Scheme.linear_combinations`, which then computes each output as
+  `sum_j W[i][j] * cts[j]`, one pass per term, in the domain the
+  ciphertexts are in (`mlwe_RNS_integer_linear_combinations`). The rows
+  are lists of integers or a C-contiguous two-dimensional `int64` buffer,
+  such as a NumPy array, used without a copy. Under CKKS the outputs keep
+  the ciphertexts' scaling factor. On the execution tape the terms are
+  `scale_int`, `scale_addto` and `scale_subto` events, and
+  `vfhe.vfhe.Computation` reads them as plaintext-linear terms whose
+  plaintext is the integer weight.
+- `arith_scale_subto(ring, out, a, scale)`, the generic operation
+  `out -= scale * a` in either domain, recorded on the execution tape as
+  `"scale_subto"`.
 
 - `FieldVector.reindex(bits, offset=0, out=None)` reads a vector through a
   map of index bits: element `i` of the result is element
@@ -909,8 +930,20 @@ versions may contain breaking changes.
   (`piop.messages.table_message` / `table_from_message`). Proof digests that
   include such a message change.
 
-- The sumcheck's `interpolate_evals` over a field inverts one element per
-  call instead of one per Lagrange term (same values).
+- The sumcheck's `interpolate_evals` over a field calls
+  `Field.lagrange_interpolate`: one native call and no field inversion, in
+  place of an inversion and the Lagrange products in Python. The values
+  are the same.
+- In a batched Basefold opening over a field, a claim whose point ends in
+  coordinates that are each 0 or 1 touches only the block of the batching
+  weight that those coordinates select. Its eq~ table is built over the
+  other variables and added into that block, so a claim on a block of a
+  table costs the block, not the table. The verifier computes the sum of
+  the claims' `s^m eq~(z_m, r)` with whole-vector operations across the
+  claims. Transcripts are unchanged.
+- `RNSPolynomial.get_polynomial` computes the CRT constants once per call
+  instead of once per coefficient, and centers each value with one
+  comparison. The values are the same.
 - The IOP driver computes each pending statement's bundle key and oracle
   closure once, when the statement is added, and keeps an index for the
   parking rule. Deciding whether a claim waits is a lookup, where it was a

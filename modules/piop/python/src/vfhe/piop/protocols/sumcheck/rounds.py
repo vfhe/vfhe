@@ -24,7 +24,6 @@ other messages (a commitment scheme's folding rounds).
 
 from __future__ import annotations
 
-import math
 from fractions import Fraction
 from typing import Any, cast
 
@@ -40,29 +39,14 @@ def interpolate_evals(evals: tuple, r):
     Over a ring the Lagrange denominators are (products of) integers up to
     deg, inverted per RNS prime — sound because {0..deg} is an exceptional
     set there [Sor22, fn. 12]. Over a field (of characteristic above deg)
-    they share one inversion. Over plain integers the division is exact (g
+    it calls `Field.lagrange_interpolate`. Over plain integers the division is exact (g
     has integer coefficients), computed with Fractions.
     """
     k = len(evals) - 1
     if k == 1:  # linear: no division needed
         return evals[0] + r * (evals[1] - evals[0])
     if not isinstance(evals[0], Polynomial | int) and hasattr(evals[0], "field"):
-        # Lagrange denominators on the nodes 0..k are (-1)^(k-t) t!(k-t)!, so
-        # one inversion of k! gives them all:
-        # 1 / denoms[t] = (-1)^(k-t) C(k, t) / k!.
-        inverse = (r.field.one * math.factorial(k)).inverse()
-        total = None
-        for t in range(k + 1):
-            num = None  # prod_{j != t} (r - j), a field element
-            for j in range(k + 1):
-                if j == t:
-                    continue
-                factor = r - j
-                num = factor if num is None else num * factor
-            weight = (-1) ** (k - t) * math.comb(k, t)
-            term = evals[t] * num * (inverse * weight)
-            total = term if total is None else total + term
-        return total
+        return r.field.lagrange_interpolate(evals, r)
     if isinstance(evals[0], RNSPolynomial):
         ring = evals[0].ring
         total = None

@@ -270,6 +270,11 @@ extern "C"
     uint64_t next_special_prime(uint64_t x, uint64_t n, bool primitive);
 
     // field arithmetic
+
+// The most values field_ext_lagrange_interpolate and pmf_lagrange_interpolate
+// accept.
+#define ARITH_LAGRANGE_MAX_VALUES 32
+
     void field_ext_add(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q);
     void field_ext_sub(uint64_t *c, const uint64_t *a, const uint64_t *b, uint64_t d, uint64_t q);
     void field_ext_neg(uint64_t *c, const uint64_t *a, uint64_t d, uint64_t q);
@@ -284,6 +289,15 @@ extern "C"
     void field_ext_pow(uint64_t *res, const uint64_t *base, const uint64_t *exp, uint64_t exp_words,
                        uint64_t d, uint64_t w, Modulus mod);
     int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Modulus mod);
+    // Evaluates at x the polynomial that takes the value values[t] at the
+    // integer t, for t = 0, ..., count - 1 (the Lagrange interpolant on those
+    // nodes, of degree below count), and writes it to out. values[t], x and
+    // out are elements of d coefficients each.
+    // Returns 1, or 0 without writing out when count is 0 or above
+    // ARITH_LAGRANGE_MAX_VALUES, when d is above 16, or when the nodes are not
+    // distinct modulo q (count > q). out may alias any input.
+    int field_ext_lagrange_interpolate(uint64_t *out, const uint64_t *const *values, uint64_t count,
+                                       const uint64_t *x, uint64_t d, uint64_t w, Modulus mod);
     // The Frobenius x -> x^(p^k), computed as the F_p-linear coefficient map it
     // is -- one permutation of the d positions with one constant each -- and not
     // by exponentiation. `k` is taken modulo d, the order of the Galois group;
@@ -766,6 +780,15 @@ extern "C"
     // theorem). Returns 0, writing nothing, when a is zero, and 1 otherwise.
     // out may alias a.
     int pmf_inverse(uint64_t *out, const uint64_t *a, PMFParams params);
+    // Evaluates at x the polynomial that takes the value values[t] at the
+    // integer t, for t = 0, ..., count - 1 (the Lagrange interpolant on those
+    // nodes, of degree below count), and writes it to out. inverse_factorial
+    // must be the inverse of (count - 1)! in the field.
+    // Returns 1, or 0 without writing out when count is 0 or above
+    // ARITH_LAGRANGE_MAX_VALUES. out may alias any input.
+    int pmf_lagrange_interpolate(uint64_t *out, const uint64_t *const *values, uint64_t count,
+                                 const uint64_t *x, const uint64_t *inverse_factorial,
+                                 PMFParams params);
     int pmf_is_equal(const uint64_t *a, const uint64_t *b, PMFParams params);
     // in: L limbs each below 2^52, not necessarily below p. out: canonical.
     void pmf_canonicalize(uint64_t *out, const uint64_t *in, PMFParams params);
@@ -1512,6 +1535,9 @@ extern "C"
     void polynomial_scale_addto_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1,
                                                 uint64_t scale);
     void polynomial_scale_addto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
+                                               uint64_t scale);
+    // out = out - scale * in1, in either domain.
+    void polynomial_scale_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
                                                uint64_t scale);
     void polynomial_mul_subto_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1,
                                              RNS_Polynomial in2);

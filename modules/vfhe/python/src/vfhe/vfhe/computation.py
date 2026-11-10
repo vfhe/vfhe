@@ -27,7 +27,8 @@ The steps:
 A plaintext-linear step is a ciphertext computed as
 ``sum_j sign_j * plaintext_j * ciphertext_j``, read from products by a
 plaintext (``MLWE.multiply_poly``), linear combinations
-(``MLWE_Scheme.linear_combinations``, with or without a `PlaintextMatrix`)
+(``MLWE_Scheme.linear_combinations``, with or without a `PlaintextMatrix`,
+or with an `IntegerMatrix`, whose terms have an integer for a plaintext)
 and additions and subtractions of ciphertexts; a ciphertext added as is
 is a term without a plaintext. The ciphertexts may have any number of
 components, such as the three of an extended product. Additions are
@@ -93,6 +94,13 @@ LINEAR = {
     "MLWE.add_MLWE": 1,
     "MLWE.sub_MLWE": -1,
 }
+
+#: The event kinds of a term by an integer weight, the first writing its
+#: sum and the others accumulating into it.
+SCALES = frozenset({"scale_int", "scale_addto", "scale_subto"})
+
+#: The event kinds that accumulate a term into a sum, with its sign.
+ACCUMULATIONS = {"mul_addto": 1, "scale_addto": 1, "scale_subto": -1}
 
 #: Event kinds of operations that are not read as plaintext-linear.
 FOREIGN = frozenset({"permute", "decompose_digit"})
@@ -266,9 +274,11 @@ class Multiplication:
 
 @dataclass
 class Term:
-    """``sign * plaintext * ciphertext``, ``plaintext`` None for a
-    ciphertext added as is. ``ciphertext`` is the list of its components,
-    the body last; the versions are the plaintext's and the components'."""
+    """``sign * plaintext * ciphertext``. ``plaintext`` is a polynomial, an
+    integer for a term of an integer weight, or None for a ciphertext added
+    as is. ``ciphertext`` is the list of its components, the body last; the
+    versions are the plaintext's (None for an integer or no plaintext) and
+    the components'."""
 
     plaintext: Any | None
     ciphertext: list[Any]
@@ -649,14 +659,27 @@ class Computation:
             [origin(c) for c in components],
         )
 
+    def _integer_term(self, weight: int, components: list[int], sign: int) -> Term:
+        origin, values = self._origin, self.value
+        return Term(
+            weight,
+            [values(c) for c in components],
+            sign,
+            None,
+            [origin(c) for c in components],
+        )
+
     def _read_linear(self, operation: Operation, sign: int) -> list[_Sum]:
         # The mlwe kernels write a ciphertext's components one after the
         # other, so a term is a run of events of one kind: a product by a
         # plaintext is (component, plaintext), an accumulation
         # (accumulator, component, plaintext), an addition (left, right).
+        # A term of an integer weight carries the weight as the event's
+        # parameter: (component) to write, (accumulator, component) to
+        # accumulate.
         events = [e for e in operation.all_events() if e.kind not in ("input", "mark")]
         for e in events:
-            if e.kind not in ("zero", "mul", "mul_addto", "add", "sub"):
+            if e.kind not in ("zero", "mul", "mul_addto", "add", "sub", *SCALES):
                 raise ValueError(f"{operation.name} holds a {e.kind!r}, not read")
         width = _component_count(operation, events)
         if width == 0 or len(events) % width:
@@ -676,17 +699,29 @@ class Computation:
                     raise ValueError(f"{operation.name}: its ciphertexts are not read")
                 term = self._term(group[0].inputs[1], [e.inputs[0] for e in group], 1)
                 current = _Sum(operation, group, [term], versions)
-            elif kind == "mul_addto":
+            elif kind == "scale_int":
+                if any(e.param != group[0].param for e in group):
+                    raise ValueError(f"{operation.name}: its ciphertexts are not read")
+                term = self._integer_term(
+                    group[0].param, [e.inputs[0] for e in group], 1
+                )
+                current = _Sum(operation, group, [term], versions)
+            elif kind in ACCUMULATIONS:
                 accumulators = tuple(e.inputs[0] for e in group)
                 continued = by_output.pop(accumulators, None)
                 if continued is None or any(
-                    e.inputs[2] != group[0].inputs[2] for e in group
+                    _factor(e) != _factor(group[0]) for e in group
                 ):
                     raise ValueError("an accumulation does not continue its sum")
                 continued.events += group
-                continued.terms.append(
-                    self._term(group[0].inputs[2], [e.inputs[1] for e in group], 1)
-                )
+                components = [e.inputs[1] for e in group]
+                if kind == "mul_addto":
+                    term = self._term(group[0].inputs[2], components, 1)
+                else:
+                    term = self._integer_term(
+                        group[0].param, components, ACCUMULATIONS[kind]
+                    )
+                continued.terms.append(term)
                 continued.versions = versions
                 by_output[versions] = continued
                 continue
@@ -718,14 +753,13 @@ class Computation:
         def added_into(s: _Sum, user: int) -> bool:
             other = owner.get(user)
             return other is not None and any(
-                t.plaintext_version is None and tuple(t.versions) == s.versions
-                for t in other.terms
+                _added_as_is(t) and tuple(t.versions) == s.versions for t in other.terms
             )
 
         def expand(s: _Sum, sign: int) -> Iterator[Term]:
             for t in s.terms:
                 inner = by_output.get(tuple(t.versions))
-                if t.plaintext_version is None and inner is not None:
+                if _added_as_is(t) and inner is not None:
                     yield from expand(inner, sign * t.sign)
                 else:
                     yield Term(
@@ -798,7 +832,8 @@ def _component_count(operation: Operation, events: list[Event]) -> int:
     components:
 
     - a run of accumulations is exactly one term, since the row's next term
-      continues the sums this run wrote and a row starts with a product, so
+      continues the sums this run wrote and a row starts with a product (or
+      zeroes its sums, for a first integer weight that is negative), so
       its length is the answer;
     - without accumulations (rows of one term), consecutive rows with the
       same plaintext form one run, so the answer is the greatest common
@@ -810,13 +845,18 @@ def _component_count(operation: Operation, events: list[Event]) -> int:
     previous: Event | None = None
     seen: set[int] = set()  # the run's components, and the sums it wrote
     for e in events:
-        component = e.inputs[-2] if e.kind in ("mul", "mul_addto") else e.sequence
+        if e.kind in ("mul", "mul_addto"):
+            component = e.inputs[-2]
+        elif e.kind in SCALES:
+            component = e.inputs[-1]
+        else:
+            component = e.sequence
         continues = (
             previous is not None
             and e.kind == previous.kind
-            and e.inputs[-1:] == previous.inputs[-1:]  # the same plaintext
+            and _factor(e) == _factor(previous)  # the same plaintext or weight
             and component not in seen
-            and not (e.kind == "mul_addto" and e.inputs[0] in seen)
+            and not (e.kind in ACCUMULATIONS and e.inputs[0] in seen)
         )
         if continues:
             runs[-1] = (e.kind, runs[-1][1] + 1)
@@ -824,13 +864,24 @@ def _component_count(operation: Operation, events: list[Event]) -> int:
             runs.append((e.kind, 1))
             seen = set()
         seen.add(component)
-        if e.kind == "mul_addto":
+        if e.kind in ACCUMULATIONS:
             seen.add(e.sequence)
         previous = e
-    accumulations = [n for kind, n in runs if kind == "mul_addto"]
+    accumulations = [n for kind, n in runs if kind in ACCUMULATIONS]
     if accumulations:
         return min(accumulations)
     return gcd(*(n for _, n in runs))
+
+
+def _factor(e: Event) -> object:
+    """What multiplies the component in a term's event: the plaintext's
+    version, or the integer weight of a term of one."""
+    return e.param if e.kind in SCALES else e.inputs[-1:]
+
+
+def _added_as_is(t: Term) -> bool:
+    """Whether ``t`` is a ciphertext added without a plaintext or a weight."""
+    return t.plaintext is None and t.plaintext_version is None
 
 
 def _last_before(events: list[Event], sequence: int) -> Event | None:

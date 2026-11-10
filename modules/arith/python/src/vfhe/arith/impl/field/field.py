@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from vfhe.arith.base import Field, FieldElement
 from vfhe.arith.number_theory import is_prime
@@ -56,6 +56,37 @@ class ExtensionField(Field):
     def __call__(self, value: int) -> ExtensionFieldElement:
         """``value`` reduced into the field, as its constant coefficient."""
         return ExtensionFieldElement(self, value)
+
+    def lagrange_interpolate(self, values, x) -> ExtensionFieldElement:
+        """`Field.lagrange_interpolate`, computed in one native call
+        (`field_ext_lagrange_interpolate`) for up to
+        ``ARITH_LAGRANGE_MAX_VALUES`` values, and by the generic definition
+        for more."""
+        count = len(values)
+        if not 0 < count <= lib.ARITH_LAGRANGE_MAX_VALUES or count > self.prime:
+            return cast(
+                "ExtensionFieldElement", super().lagrange_interpolate(values, x)
+            )
+        if not all(
+            isinstance(v, ExtensionFieldElement)
+            and (v.field.prime, v.field.d, v.field.w) == (self.prime, self.d, self.w)
+            for v in (*values, x)
+        ):
+            raise TypeError("lagrange_interpolate takes elements of this field")
+        out = ffi.new("uint64_t[]", self.d)
+        if not lib.field_ext_lagrange_interpolate(
+            out,
+            ffi.new("uint64_t *[]", [v.value for v in values]),
+            count,
+            x.value,
+            self.d,
+            self.w,
+            self.mod,
+        ):
+            return cast(
+                "ExtensionFieldElement", super().lagrange_interpolate(values, x)
+            )
+        return ExtensionFieldElement(self, out)
 
     @property
     def degree(self) -> int:

@@ -351,6 +351,34 @@ void test_mul_subto_and_scale_addto_match_the_kernels(void)
     arith_free(ring, &out);
 }
 
+/* out - s * a, against scale_int then sub, for factors below the primes, above
+   them and zero, over the base's wide and narrow rows. */
+void test_scale_subto_subtracts_the_scaled_operand(void)
+{
+    const uint64_t factors[] = {7, 0, UINT64_MAX, (1ULL << 63) + 5};
+    ArithElement a, out, scaled, expected;
+    arith_new(ring, &a);
+    arith_new(ring, &out);
+    arith_new(ring, &scaled);
+    arith_new(ring, &expected);
+    fill(arith_rns_polynomial(&a), 95);
+    fill(arith_rns_polynomial(&out), 96);
+    a.domain = out.domain = ARITH_DOMAIN_MUL;
+    for (size_t k = 0; k < sizeof(factors) / sizeof(factors[0]); k++)
+    {
+        TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_scale_int(ring, &scaled, &a, factors[k]));
+        TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_sub(ring, &expected, &out, &scaled));
+        TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_scale_subto(ring, &out, &a, factors[k]));
+        assert_same(arith_rns_polynomial(&expected), arith_rns_polynomial(&out));
+    }
+    a.domain = ARITH_DOMAIN_CANONICAL;
+    TEST_ASSERT_EQUAL_INT(ARITH_BAD_DOMAIN, arith_scale_subto(ring, &out, &a, 7));
+    arith_free(ring, &a);
+    arith_free(ring, &out);
+    arith_free(ring, &scaled);
+    arith_free(ring, &expected);
+}
+
 void test_scale_by_a_per_prime_scalar(void)
 {
     ArithElement a, out;
@@ -1237,6 +1265,7 @@ int main(void)
     RUN_TEST(test_mismatched_domains_are_refused);
     RUN_TEST(test_multiplication_refuses_the_canonical_domain);
     RUN_TEST(test_mul_subto_and_scale_addto_match_the_kernels);
+    RUN_TEST(test_scale_subto_subtracts_the_scaled_operand);
     RUN_TEST(test_scale_by_a_per_prime_scalar);
     RUN_TEST(test_scale_by_a_scalar_of_a_ring_that_skips_base_rows);
     RUN_TEST(test_permute_and_monomial_match_the_kernels);

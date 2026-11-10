@@ -5,8 +5,8 @@ from __future__ import annotations
 import array
 import contextlib
 import dataclasses
-import itertools
 import math
+import operator
 from enum import Enum
 from numbers import Integral
 from typing import TYPE_CHECKING, Any
@@ -15,7 +15,7 @@ from vfhe.arith.base import FieldVector, Polynomial, Ring, check_spec_keywords
 from vfhe.arith.impl.field.field import ExtensionField
 from vfhe.arith.impl.field.vector import ExtensionFieldVector
 from vfhe.arith.impl.mp.multiprecision import Multiprecision
-from vfhe.arith.number_theory import crt, is_prime
+from vfhe.arith.number_theory import is_prime
 from vfhe.arith.registry import register
 from vfhe.arith.spec import Capability, Constraints, Spec
 from vfhe.crypto import chain_digest, int_digest
@@ -1478,20 +1478,23 @@ class RNSPolynomial(Polynomial):
 
     # returns the list of coefficients of a Polynomial element
     def get_polynomial(self, signed: bool = False) -> list[int]:
-        rns = list(self)
+        rows = list(self)
+        q = self.ring.q_l
         if self.ring.ell == 1:
-            unsigned_res = list(itertools.chain.from_iterable(rns))
+            values = rows[0]
         else:
-            unsigned_res = [
-                crt([rns[i][j] for i in range(self.ring.ell)], self.ring.primes)
-                for j in range(self.ring.N)
+            # The CRT: x = sum_i r_i w_i mod q, where r_i is x's residue
+            # modulo p_i and w_i = (q/p_i) * ((q/p_i)^-1 mod p_i).
+            weights = [(q // p) * pow(q // p, -1, p) for p in self.ring.primes]
+            values = [
+                sum(map(operator.mul, column, weights)) % q
+                for column in zip(*rows, strict=True)
             ]
         if not signed:
-            return unsigned_res
-        else:
-            return [
-                min(i, -(self.ring.q_l - i), key=lambda x: abs(x)) for i in unsigned_res
-            ]
+            return values
+        # q is odd, so (-q/2, q/2] holds the representatives up to (q - 1) / 2.
+        half = q // 2
+        return [v - q if v > half else v for v in values]
 
     def as_element(self):
         """This polynomial as an `ArithElement` for the generic C interface.

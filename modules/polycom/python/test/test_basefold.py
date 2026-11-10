@@ -395,7 +395,7 @@ def test_malformed_layer_answers_still_have_a_digest():
     first = honest.transcript.entries["basefold/answers"].result()[0]
     honest_digest = first.digest()
     for leaves in (None, 5, list(first.leaves), b"leaves"):
-        digest = LayerAnswers(leaves, first.paths).digest()
+        digest = LayerAnswers(leaves, first.paths).digest()  # pyright: ignore[reportArgumentType]
         assert isinstance(digest, bytes)
         assert len(digest) == DIGEST_LEN
         assert digest != honest_digest

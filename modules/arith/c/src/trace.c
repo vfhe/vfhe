@@ -333,8 +333,8 @@ static uint64_t begin(ArithTraceKind kind, ArithRing ring, const ArithElement *o
     uint64_t inputs[ARITH_TRACE_INPUTS] = {0, 0, 0};
     uint32_t n = 0;
     if (kind == ARITH_TRACE_MUL_ADDTO || kind == ARITH_TRACE_MUL_SUBTO ||
-        kind == ARITH_TRACE_SCALE_ADDTO || kind == ARITH_TRACE_ROUND_DIVISION ||
-        kind == ARITH_TRACE_ROUND_DIVISION_APPROXIMATE)
+        kind == ARITH_TRACE_SCALE_ADDTO || kind == ARITH_TRACE_SCALE_SUBTO ||
+        kind == ARITH_TRACE_ROUND_DIVISION || kind == ARITH_TRACE_ROUND_DIVISION_APPROXIMATE)
         inputs[n++] = version_of(t, out);
     if (a != NULL)
         inputs[n++] = version_of(t, a);
