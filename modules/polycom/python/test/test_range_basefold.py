@@ -366,7 +366,7 @@ def test_sizes_without_a_scheme_can_be_sent_as_their_entries(field, ring):
     assert iop.run(setup.statement)
     sizes = {name: _sent(iop, name) for name in SENT}
     assert all(isinstance(sizes[name], bytes) for name in ("range/mu", "read_ts"))
-    tables = [entry for entry in sizes.values() if isinstance(entry, tuple)]
+    tables = [entry for entry in sizes.values() if isinstance(entry, FieldVector)]
     assert tables and all(len(entry) == 1 << 3 for entry in tables)
     proof = setup.iop(fiat_shamir=True).prove(setup.statement)
     assert setup.iop(fiat_shamir=True).verify(setup.statement, proof)
@@ -375,10 +375,12 @@ def test_sizes_without_a_scheme_can_be_sent_as_their_entries(field, ring):
         i
         for i, (label, _) in enumerate(messages)
         if any(label.endswith(name) for name in SENT)
-        and isinstance(messages[i][1], tuple)
+        and isinstance(messages[i][1], FieldVector)
     )
     label, table = messages[at]
-    messages[at] = (label, (table[0] + 1, *table[1:]))
+    bumped = table.copy()
+    bumped[0] = bumped[0] + 1
+    messages[at] = (label, bumped)
     assert not setup.iop(fiat_shamir=True).verify(setup.statement, Proof(messages))
 
 

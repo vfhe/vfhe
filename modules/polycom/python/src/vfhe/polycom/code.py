@@ -902,25 +902,32 @@ class FoldableRS:
         `pair_at`'s tuple."""
         return tuple(word[i * size : (i + 1) * size])
 
-    def join_fibers(self, fibers, size: int) -> list:
-        """`fibers`, as `fiber_at` returns them, end to end in one list.
+    def fibers_at(self, word: list, positions, size: int) -> list[RNSPolynomial]:
+        """Gather the fibers of `size` symbols at `positions`, end to end in
+        that order: for each `j` of `positions`, the symbols of
+        `fiber_at(word, j, size)`. The entries are `word`'s own elements,
+        not copies."""
+        return [e for j in positions for e in word[j * size : (j + 1) * size]]
 
-        Raises `ValueError` when an entry is not a tuple of `size` elements of
-        this code's ring.
+    def check_fibers(self, fibers, count: int, size: int) -> list[RNSPolynomial]:
+        """Check that `fibers` is `count` fibers of `size` symbols end to end,
+        as `fibers_at` gathers them: a list or tuple of ``count * size``
+        elements of this code's ring. Returns them as a list.
+
+        Raises `ValueError` otherwise.
         """
-        joined = []
-        for fiber in fibers:
-            if (
-                not isinstance(fiber, tuple)
-                or len(fiber) != size
-                or any(
-                    not isinstance(e, RNSPolynomial) or e.ring is not self.ring
-                    for e in fiber
-                )
-            ):
-                raise ValueError(f"a fiber is a tuple of {size} elements of the ring")
-            joined.extend(fiber)
-        return joined
+        if (
+            not isinstance(fibers, list | tuple)
+            or len(fibers) != count * size
+            or any(
+                not isinstance(e, RNSPolynomial) or e.ring is not self.ring
+                for e in fibers
+            )
+        ):
+            raise ValueError(
+                f"expected {count} fibers of {size} elements of the ring, end to end"
+            )
+        return list(fibers)
 
     def pair_at(self, word: list, i: int) -> tuple[RNSPolynomial, RNSPolynomial]:
         """Position i's pair, `(word[2i], word[2i + 1])` — the unit the fold

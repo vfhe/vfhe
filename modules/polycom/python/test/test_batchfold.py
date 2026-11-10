@@ -29,6 +29,7 @@ from vfhe.polycom import (
     BatchFoldEval,
     FieldFoldableRS,
     FoldableRS,
+    LayerAnswers,
     batchfold,
 )
 
@@ -238,8 +239,9 @@ def test_the_primes_run_in_lockstep(setting):
 
 def test_each_later_layer_has_one_tree_for_every_prime(setting):
     """A later fold layer is committed once, by one root for all primes,
-    written after the fold that ends the previous layer; each query answers
-    it with every prime's fiber and one path."""
+    written after the fold that ends the previous layer; its answers carry
+    one word of fibers per prime, one fiber per query, and the paths of the
+    one tree."""
     iop = setting.iop()
     assert iop.run(_statement(_bundles(setting)["two polynomials, three points"]))
     labels = _labels(iop)
@@ -251,10 +253,13 @@ def test_each_later_layer_has_one_tree_for_every_prime(setting):
     root = labels.index("batchfold/0/pi1")
     assert labels[root + 1] == "batchfold/0/p0/g1"
     answers = iop.transcript.entries["batchfold/0/answers"].result()
-    for _ring_top, later in answers:
-        assert len(later) == d - 1
-        for fibers, _path in later:
-            assert len(fibers) == setting.ring.ell
+    schedule = setting.scheme.schedule
+    assert len(answers) == len(schedule) == d
+    for layer in range(1, d):
+        assert isinstance(answers[layer], LayerAnswers)
+        words = answers[layer].leaves
+        assert len(words) == setting.ring.ell
+        assert all(len(word) == 3 << schedule[layer] for word in words)  # rep 3
 
 
 def test_a_false_value_anywhere_is_rejected(setting):
@@ -282,6 +287,15 @@ def _replay(setting: _Setting, honest: IOP, claims, tamper) -> bool:
         value = honest.transcript.entries[label].result()
         iop.transcript.write(label, tamper(label, value))
     return iop.loop.run_until_complete(iop.verifier.verify(_statement(claims)))
+
+
+def _first_leaf_from(target: LayerAnswers, source: LayerAnswers, count: int):
+    """`target`, the answers of one ring tree to `count` queries, with the
+    first query's leaf and path taken from `source`'s."""
+    (word,), (other,) = target.leaves, source.leaves
+    size, width = len(word) // count, len(target.paths) // count
+    word = [*other[:size], *word[size:]]
+    return LayerAnswers((word,), source.paths[:width] + target.paths[width:])
 
 
 def test_tampered_messages_are_rejected(setting):
@@ -312,38 +326,39 @@ def test_tampered_messages_are_rejected(setting):
         return value
 
     def swap_ring_leaf(label, value):
-        # The second commitment's leaf answered with the first's, path and
-        # all: authenticated against the wrong root.
+        # The first query's leaf of the second commitment answered with the
+        # first commitment's, path and all: authenticated against the wrong
+        # root. (Three queries: `setting.iop`'s rep.)
         if label == "batchfold/0/answers":
-            ring_top, layers = value[0]
-            return ((ring_top[0], ring_top[0]), layers), *value[1:]
+            (first, second), *layers = value
+            return ((first, _first_leaf_from(second, first, 3)), *layers)
         return value
 
     def shift_prime_leaf(label, value):
         # The second layer's leaf at prime 1, for the first query.
         if label == "batchfold/0/answers":
-            ring_top, later = value[0]
-            (fibers, path), *rest = later
-            fiber = fibers[1]
-            fibers = (fibers[0], (fiber[0] + 1, *fiber[1:]), *fibers[2:])
-            return ((ring_top, ((fibers, path), *rest)), *value[1:])
+            ring_top, layer, *rest = value
+            words = list(layer.leaves)
+            words[1] = words[1].copy()
+            words[1][0] = words[1][0] + 1
+            return (ring_top, LayerAnswers(tuple(words), layer.paths), *rest)
         return value
 
     def drop_prime(label, value):
-        # The second layer answered without prime 1's fiber.
+        # The second layer answered without prime 1's fibers.
         if label == "batchfold/0/answers":
-            ring_top, later = value[0]
-            (fibers, path), *rest = later
-            return ((ring_top, ((fibers[:1], path), *rest)), *value[1:])
+            ring_top, layer, *rest = value
+            return (ring_top, LayerAnswers(layer.leaves[:1], layer.paths), *rest)
         return value
 
     def swap_layer_path(label, value):
-        # The second layer's path of another query.
+        # The second layer's path of the first query replaced by the second
+        # query's.
         if label == "batchfold/0/answers":
-            (ring_top, later), (_, other), *rest = value
-            (fibers, _path), *tail = later
-            changed = ((fibers, other[0][1]), *tail)
-            return ((ring_top, changed), (_, other), *rest)
+            ring_top, layer, *rest = value
+            width = len(layer.paths) // 3  # one path per query, rep 3
+            paths = layer.paths[width : 2 * width] + layer.paths[width:]
+            return (ring_top, LayerAnswers(layer.leaves, paths), *rest)
         return value
 
     def shift_root(label, value):

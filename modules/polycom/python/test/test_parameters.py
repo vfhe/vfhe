@@ -35,6 +35,7 @@ from vfhe.polycom import (
     BasefoldEval,
     FieldFoldableRS,
     FoldableRS,
+    LayerAnswers,
     basefold_messages,
     basefold_parameters,
 )
@@ -172,6 +173,8 @@ def _count(message) -> tuple[int, int]:
         return 0, 1
     if isinstance(message, MerklePath):
         return 0, len(message.siblings)
+    if isinstance(message, LayerAnswers):
+        return _count(message.leaves)[0], len(message.paths) // DIGEST_LEN
     if isinstance(message, MLE):
         return len(message.table), 0
     elements = digests = 0

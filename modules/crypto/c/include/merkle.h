@@ -63,6 +63,11 @@ extern "C"
     // node on the path at height i. `out` holds log_size * MERKLE_DIGEST_LEN
     // bytes.
     void merkle_open(uint8_t *out, Merkle mk, uint64_t index);
+    // The openings of leaves indices[0 .. count), each as merkle_open writes
+    // it, end to end: the opening of indices[k] starts at
+    // out + k * log_size * MERKLE_DIGEST_LEN. Every index is below the
+    // tree's size.
+    void merkle_open_many(uint8_t *out, Merkle mk, const uint64_t *indices, uint64_t count);
 
     // Recompute the root from a leaf digest and its opening, and compare:
     // `path_len` sibling digests, `index` the leaf position they belong to.

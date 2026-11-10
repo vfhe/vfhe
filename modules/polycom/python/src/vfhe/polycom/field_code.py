@@ -1047,27 +1047,29 @@ class FieldFoldableRS:
             return self.pair_at(word, i)
         return word.query(array("Q", range(i * size, (i + 1) * size)))
 
-    def join_fibers(self, fibers, size: int) -> FieldVector:
-        """`fibers`, as `fiber_at` returns them, end to end in one vector.
+    def fibers_at(self, word: FieldVector, positions, size: int) -> FieldVector:
+        """Gather the fibers of `size` symbols at `positions` into one
+        vector, end to end in that order: for each `j` of `positions`, the
+        symbols of `fiber_at(word, j, size)`. One gather (`query`)."""
+        indices = array("Q", [j * size + t for j in positions for t in range(size)])
+        return word.query(indices)
 
-        Raises `ValueError` when an entry is not a fiber of `size` symbols of
-        this code's field.
+    def check_fibers(self, fibers, count: int, size: int) -> FieldVector:
+        """Check that `fibers` is `count` fibers of `size` symbols end to end,
+        as `fibers_at` gathers them: a vector of ``count * size`` elements
+        of this code's field. Returns it.
+
+        Raises `ValueError` otherwise.
         """
-        if size == 2:
-            if any(not isinstance(pair, tuple) or len(pair) != 2 for pair in fibers):
-                raise ValueError("a pair is a tuple of two field elements")
-            try:
-                return FieldVector(self.field, [e for pair in fibers for e in pair])
-            except (TypeError, ValueError) as error:
-                raise ValueError(f"a pair is not over this field: {error}") from error
-        for fiber in fibers:
-            if (
-                not isinstance(fiber, FieldVector)
-                or fiber.field is not self.field
-                or len(fiber) != size
-            ):
-                raise ValueError(f"a fiber is a vector of {size} elements of the field")
-        return FieldVector.concat(list(fibers))
+        if (
+            not isinstance(fibers, FieldVector)
+            or fibers.field is not self.field
+            or len(fibers) != count * size
+        ):
+            raise ValueError(
+                f"expected a vector of {count} fibers of {size} elements of the field"
+            )
+        return fibers
 
     def pair_at(self, word: FieldVector, i: int) -> tuple[FieldElement, FieldElement]:
         """Position i's pair, `(word[2i], word[2i + 1])` — the unit the fold

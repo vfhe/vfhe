@@ -52,27 +52,41 @@ def test_verify_rejects_tampering():
     assert not Merkle.verify(bytes(DIGEST_LEN), index, path, leaves[index])
 
 
+@pytest.mark.parametrize("size", [1, 2, 8, 64])
+def test_open_many_is_open_on_each_leaf_end_to_end(size):
+    tree = Merkle(random_leaves(size))
+    indices = [size - 1, 0, size // 2, 0]
+    packed = tree.open_many(indices)
+    assert packed == b"".join(tree.open(i).to_bytes() for i in indices)
+    assert tree.open_many([]) == b""
+    if size == 1:
+        assert packed == b""
+
+
 def test_verify_many_is_verify_on_each_leaf():
     leaves = random_leaves(32)
     tree = Merkle(leaves)
     indices = [3, 17, 3, 31, 0]
-    paths = [tree.open(i) for i in indices]
+    paths = tree.open_many(indices)
+    width = len(paths) // len(indices)
     digests = b"".join(leaf_digest(leaves[i]) for i in indices)
     assert Merkle.verify_many(tree.root, indices, paths, digests) is None
-    assert Merkle.verify_many(tree.root, [], [], b"") is None
+    assert Merkle.verify_many(tree.root, [], b"", b"") is None
     # The first leaf that does not authenticate, wherever it is.
     for bad in range(len(indices)):
         moved = list(indices)
         moved[bad] = (moved[bad] + 1) % 32
         assert Merkle.verify_many(tree.root, moved, paths, digests) == bad
-        tampered = list(paths)
-        tampered[bad] = MerklePath(packed=bytes(len(paths[bad].to_bytes())))
-        assert Merkle.verify_many(tree.root, indices, tampered, digests) == bad
-        short = list(paths)
-        short[bad] = MerklePath(packed=paths[bad].to_bytes()[DIGEST_LEN:])
-        assert Merkle.verify_many(tree.root, indices, short, digests) == bad
-    with pytest.raises(ValueError, match="one path"):
-        Merkle.verify_many(tree.root, indices, paths[:-1], digests)
+        tampered = bytearray(paths)
+        tampered[bad * width] ^= 1
+        assert Merkle.verify_many(tree.root, indices, bytes(tampered), digests) == bad
+        # One opening a sibling short: the buffer no longer splits into one
+        # opening per index.
+        short = paths[: bad * width] + paths[bad * width + DIGEST_LEN :]
+        with pytest.raises(ValueError, match="do not split"):
+            Merkle.verify_many(tree.root, indices, short, digests)
+    with pytest.raises(ValueError, match="one 32-byte digest"):
+        Merkle.verify_many(tree.root, indices, paths, digests[:-DIGEST_LEN])
 
 
 def test_root_is_deterministic_and_binding():

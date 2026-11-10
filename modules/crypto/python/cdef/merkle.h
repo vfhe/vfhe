@@ -12,6 +12,7 @@ void merkle_free(void *mk);
 void merkle_commit(void *mk, const uint8_t *leaf_digests);
 void merkle_get_root(uint8_t *out, void *mk);
 void merkle_open(uint8_t *out, void *mk, uint64_t index);
+void merkle_open_many(uint8_t *out, void *mk, const uint64_t *indices, uint64_t count);
 bool merkle_verify(const uint8_t *root, uint64_t index, const uint8_t *path, uint64_t path_len,
                    const uint8_t *leaf_digest);
 int64_t merkle_verify_many(const uint8_t *root, const uint64_t *indices, const uint8_t *paths,

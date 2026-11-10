@@ -80,10 +80,12 @@ from .basefold import (
     Basefold,
     BasefoldEval,
     BasefoldOpening,
+    LayerAnswers,
+    _answer_words,
     _check_layer,
     _check_paths,
     _committed_table,
-    _layer_answer,
+    _layer_answers,
     _ProverRun,
     _VerifierRun,
 )
@@ -314,29 +316,34 @@ class BatchFoldEval(BasefoldEval):
         queries = self.query_positions(
             await iop.verifier.challenge_bits(f"{label}/queries")
         )
-        answers = tuple(self._query_answer(openings, runs, trees, q) for q in queries)
+        answers = self._answers(openings, runs, trees, queries)
         iop.transcript.write(f"{label}/answers", answers)
         return []
 
-    def _query_answer(self, openings, runs, trees: dict[int, Merkle], q: int):
-        """The answer to query `q`: the ring leaves, which answer the first
-        layer for every prime; then, for each later layer, every prime's
-        fiber and the one path of the shared tree."""
+    def _answers(self, openings, runs, trees: dict[int, Merkle], queries) -> tuple:
+        """The answers of every layer to `queries`, first layer first. The
+        first layer is answered by the ring leaves, one `LayerAnswers` per
+        commitment, which answer it for every prime. Each later layer is one
+        `LayerAnswers` of its shared tree, with one word of leaves per
+        prime."""
         schedule = self.scheme.schedule
+        walks = [self._walk(q) for q in queries]
         top = tuple(
-            _layer_answer(self.code, opening.word, opening.tree, q, 1 << schedule[0])
+            _layer_answers(
+                self.code, opening.word, opening.tree, list(queries), 1 << schedule[0]
+            )
             for opening in openings
         )
-        later = []
-        for layer, (j, _) in enumerate(self._walk(q)):
-            if layer == 0:
-                continue
-            fibers = tuple(
-                protocol.code.fiber_at(run.words[layer], j, 1 << schedule[layer])
+        out: list = [top]
+        for layer in range(1, len(schedule)):
+            positions = [steps[layer][0] for steps in walks]
+            size = 1 << schedule[layer]
+            words = tuple(
+                protocol.code.fibers_at(run.words[layer], positions, size)
                 for protocol, run in zip(self.residue_protocols, runs, strict=True)
             )
-            later.append((fibers, trees[layer].open(j)))
-        return top, tuple(later)
+            out.append(LayerAnswers(words, trees[layer].open_many(positions)))
+        return tuple(out)
 
     async def _prove_prime(
         self,
@@ -497,25 +504,17 @@ class BatchFoldEval(BasefoldEval):
         schedule = self.scheme.schedule
         if (
             not isinstance(answers, tuple)
-            or len(answers) != len(queries)
-            or any(
-                not _answer_shape(a, count, self.ring.ell, len(schedule) - 1)
-                for a in answers
-            )
+            or len(answers) != len(schedule)
+            or not isinstance(answers[0], tuple)
+            or len(answers[0]) != count
         ):
             raise Rejection(f"{label}: malformed answers")
         size = 1 << schedule[0]
         blocks = [
             _check_layer(
-                self.code,
-                label,
-                self.code.d,
-                commitment.root,
-                [a[0][c] for a in answers],
-                queries,
-                size,
+                self.code, label, self.code.d, commitment.root, answer, queries, size
             )
-            for c, commitment in enumerate(commitments)
+            for answer, commitment in zip(answers[0], commitments, strict=True)
         ]
         walks = [self._walk(q) for q in queries]
         codes = [protocol.code for protocol in self.residue_protocols]
@@ -527,7 +526,7 @@ class BatchFoldEval(BasefoldEval):
                 label,
                 self.scheme.levels[layer],
                 runs[0].roots[layer - 1],
-                [a[1][layer - 1] for a in answers],
+                answers[layer],
                 [walk[layer][0] for walk in walks],
                 1 << schedule[layer],
             )
@@ -627,52 +626,33 @@ class BatchFoldEval(BasefoldEval):
         return run, alphas
 
 
-def _no_answer(_leaf: int) -> None:
-    """A per-prime run's first-layer answer: none, since the ring leaves
+def _no_answer(_positions: list[int]) -> None:
+    """A per-prime run's first-layer answers: none, since the ring leaves
     answer that layer for every prime."""
     return None
 
 
-def _answer_shape(answer, commitments: int, primes: int, layers: int) -> bool:
-    """Whether one query's answer is ``(ring leaves, later layers)``: a tuple
-    of one entry per commitment, and a tuple of one ``(fibers, path)`` per
-    later layer, with one fiber per prime."""
-    return (
-        isinstance(answer, tuple)
-        and len(answer) == 2
-        and isinstance(answer[0], tuple)
-        and len(answer[0]) == commitments
-        and isinstance(answer[1], tuple)
-        and len(answer[1]) == layers
-        and all(
-            isinstance(entry, tuple)
-            and len(entry) == 2
-            and isinstance(entry[0], tuple)
-            and len(entry[0]) == primes
-            for entry in answer[1]
-        )
-    )
-
-
 def _check_joint_layer(
-    codes: list, label: str, level: int, root: bytes, answers, positions, size: int
+    codes: list, label: str, level: int, root: bytes, answer, positions, size: int
 ) -> list:
-    """Every prime's leaves of a later layer at the query positions, checked
-    against the layer's shared tree: each answer is ``(fibers, path)``, one
-    fiber per prime, and the leaf the path authenticates joins the primes'
-    leaf digests (`vfhe.crypto.join_digests`). Returns, per prime, its
-    fibers joined into one word in query order, as `_check_layer` does for a
-    tree of one codeword. Raises `Rejection` on a malformed fiber or a path
-    that does not authenticate."""
+    """Check a later layer's answers to `positions` against the layer's
+    shared tree, and return each prime's leaves as one word, in query order,
+    as `_check_layer` does for a tree of one codeword.
+
+    `answer` is a `LayerAnswers` with one word of leaves per prime, each
+    leaf a fiber of `size` symbols. A leaf of the shared tree joins the
+    primes' leaf digests (`vfhe.crypto.join_digests`). Raises `Rejection`
+    when the answer is malformed or a path does not authenticate its leaf.
+    """
+    words = _answer_words(label, level, answer, len(codes))
     blocks = []
     prime = 0
     try:
         for prime, code in enumerate(codes):
-            fibers = [answer[0][prime] for answer in answers]
-            blocks.append(code.join_fibers(fibers, size))
+            blocks.append(code.check_fibers(words[prime], len(positions), size))
     except ValueError as error:
         raise Rejection(
-            f"{label}: malformed leaf at level {level}, prime {prime}: {error}"
+            f"{label}: malformed leaves at level {level}, prime {prime}: {error}"
         ) from error
     digests = join_digests(
         [
@@ -680,7 +660,7 @@ def _check_joint_layer(
             for code, block in zip(codes, blocks, strict=True)
         ]
     )
-    _check_paths(label, level, root, positions, answers, digests)
+    _check_paths(label, level, root, positions, answer.paths, digests)
     return blocks
 
 

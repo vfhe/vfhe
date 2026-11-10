@@ -9,7 +9,14 @@ import math
 import random
 
 import pytest
-from vfhe.arith import MLE, MLE_Variable, Polynomial, PseudoMersenneField, Ring
+from vfhe.arith import (
+    MLE,
+    FieldVector,
+    MLE_Variable,
+    Polynomial,
+    PseudoMersenneField,
+    Ring,
+)
 from vfhe.piop import (
     IOP,
     CommittedOracle,
@@ -42,6 +49,16 @@ NU = 5
 M = 2
 ALPHABET = 1 << 8
 KAPPA = 2
+
+
+def _bumped(value, one):
+    """`value`, a table message, with `one` added to its first entry: a
+    copy of a vector, or a new tuple."""
+    if isinstance(value, FieldVector):
+        out = value.copy()
+        out[0] = out[0] + one
+        return out
+    return (value[0] + one, *value[1:])
 
 
 @pytest.fixture
@@ -574,18 +591,18 @@ def _full_iop(ring, field, protocol=None, **kw):
 _PINNED = {
     (6, 2): (
         "b1df74e7e7c1dc262130cf0cbbd8cd2e11e9a43b8517a92580ec6db2fc7d581a",
-        "4c05f5c813dd4729323ada6f9785def641140130b2232d6d17d2c6a63912e686",
+        "1999a82153eafd198748e489116a112193ade909502d0403bbfd91ac840e4b67",
     ),
     (8, 4): (
         "8f7897eea66213ced30d145daee1196e91b8d640629e8825ab5404df91ed2713",
-        "240f763b6979849863f11190c0954610e808ae4a673329e8992d06f77747cdd9",
+        "4ce7d6b78be4ac2240375387a33cf59bc7561638719a7c1de7c368e699703106",
     ),
     (8, 1): (
         "8f7897eea66213ced30d145daee1196e91b8d640629e8825ab5404df91ed2713",
-        "83999b1188337f63908a9ba58a24286b445b4d718de33586950f49466242e60c",
+        "6761a090e800c1a598f88300beba52306669281d68f60d337f25d7a41e4e1a75",
     ),
 }
-_PINNED_WITH_LOOKUP = "0d86754c683f58bb64c97bbb82168d8d2d71644344bc00d5e279980d4d3a28b2"
+_PINNED_WITH_LOOKUP = "71bee3c89188bd8fd961e232e04de46e7dbbe15ff93db182618c0815367b665a"
 
 
 @pytest.mark.parametrize(("bits", "chunks"), list(_PINNED))
@@ -932,8 +949,8 @@ def test_every_prover_message_is_load_bearing(ring, field):
         def tamper(label, value, target=target):
             if label != target:
                 return value
-            if isinstance(value, tuple):
-                return (value[0] + field.one, *value[1:])
+            if isinstance(value, tuple | FieldVector):
+                return _bumped(value, field.one)
             return value + Polynomial(value.ring).from_array([1])
 
         assert not _replay_with_tamper(honest, ring, field, statement, tamper), target
@@ -975,7 +992,7 @@ def test_fiat_shamir_rejects_a_tampered_proof(ring, field):
     messages = list(proof.messages)
     label, table = messages[0]
     assert label == "range/mu"
-    messages[0] = (label, (table[0] + field.one, *table[1:]))
+    messages[0] = (label, _bumped(table, field.one))
     assert not _iop(ring, field, fiat_shamir=True).verify(
         statement, type(proof)(messages)
     )
