@@ -19,6 +19,7 @@ from .impl.rns.polynomial import (
     domain_of,
     repr,
 )
+from .integer_matrix import IntegerMatrix
 from .mle import MLE, MLE_Basis, MLE_Variable, SparseMLE
 from .number_theory import crt, gen_pseudo_mersenne_prime, is_prime
 from .registry import (
@@ -46,6 +47,7 @@ __all__ = [
     "Field",
     "FieldElement",
     "FieldVector",
+    "IntegerMatrix",
     "MLE_Basis",
     "MLE_Variable",
     "Multiprecision",

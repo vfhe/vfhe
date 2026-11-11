@@ -3,6 +3,8 @@
 #include <arith.h>
 #include "arith_internal.h"
 
+#include <string.h>
+
 #if VFHE_HAVE_AVX512IFMA
 
 static inline __m512i _mm512_hexl_reduce_prod_50(__m512i v_prod_hi, __m512i v_prod_lo, Modulus mod)
@@ -189,6 +191,114 @@ void mod_eltwise_inner_product_addto_50(uint64_t *out, uint64_t *const *a, uint6
             hi = _mm512_madd52hi_epu64(hi, x, y);
         }
         outv[i] = inner_product_reduce_50(lo, hi, outv[i], mod);
+    }
+}
+
+/* Linear combinations: the inner product above, with one operand of each product a matrix entry
+   broadcast to every lane.
+
+   The outputs are computed in tiles of LC_ROWS outputs by LC_VECS vectors. A tile keeps its sums
+   in registers, a low and a high half for each of its LC_ROWS * LC_VECS output vectors. For each
+   term it loads LC_VECS vectors of the term's array and one matrix entry per output, and issues two
+   madd52 for every pair of an entry and a vector.
+
+   The terms are taken in blocks. A block holds at most MOD_INNER_PRODUCT_MAX_TERMS terms, the
+   most one unreduced sum may take, and at most LC_PANEL_WORDS words of arrays, so that they stay
+   in L2 while every tile of outputs reads them. Each block's sums are reduced into the outputs
+   once. */
+#define LC_ROWS 3
+#define LC_VECS 4
+#define LC_PANEL_WORDS (1 << 15)
+
+// Sums `terms` terms into the tile of `rows` outputs by `vecs` vectors that starts at word `off`,
+// then reduces the sums into the outputs, replacing what they hold when `first` and adding to
+// it otherwise. A term whose matrix entries are zero for all of the tile's outputs is skipped.
+static inline __attribute__((always_inline)) void
+lc_tile_50(const int rows, const int vecs, uint64_t *const *out, uint64_t *const *x, uint64_t off,
+           const uint64_t *matrix, uint64_t matrix_stride, uint64_t terms, int first, Modulus mod)
+{
+    const __m512i zero = _mm512_setzero_si512();
+    __m512i lo[LC_ROWS][LC_VECS], hi[LC_ROWS][LC_VECS];
+    for (int r = 0; r < rows; r++)
+        for (int v = 0; v < vecs; v++)
+            lo[r][v] = hi[r][v] = zero;
+    for (uint64_t t = 0; t < terms; t++)
+    {
+        uint64_t entry[LC_ROWS], nonzero = 0;
+        for (int r = 0; r < rows; r++)
+        {
+            entry[r] = matrix[r * matrix_stride + t];
+            nonzero |= entry[r];
+        }
+        if (nonzero == 0)
+            continue;
+        const __m512i *xt = (const __m512i *)(x[t] + off);
+        __m512i xv[LC_VECS];
+        for (int v = 0; v < vecs; v++)
+            xv[v] = xt[v];
+        for (int r = 0; r < rows; r++)
+        {
+            const __m512i broadcast = _mm512_set1_epi64((long long)entry[r]);
+            for (int v = 0; v < vecs; v++)
+            {
+                lo[r][v] = _mm512_madd52lo_epu64(lo[r][v], broadcast, xv[v]);
+                hi[r][v] = _mm512_madd52hi_epu64(hi[r][v], broadcast, xv[v]);
+            }
+        }
+    }
+    for (int r = 0; r < rows; r++)
+        for (int v = 0; v < vecs; v++)
+        {
+            __m512i *o = (__m512i *)(out[r] + off) + v;
+            *o = inner_product_reduce_50(lo[r][v], hi[r][v], first ? zero : *o, mod);
+        }
+}
+
+// Runs one block of terms over every tile of `rows` <= LC_ROWS outputs: tiles of LC_VECS vectors
+// as far as they fit, then tiles of one vector.
+static inline __attribute__((always_inline)) void lc_rows_50(const int rows, uint64_t *const *out,
+                                                             uint64_t *const *x, uint64_t offset,
+                                                             const uint64_t *matrix,
+                                                             uint64_t matrix_stride, uint64_t terms,
+                                                             uint64_t n_vec, int first, Modulus mod)
+{
+    uint64_t v = 0;
+    for (; v + LC_VECS <= n_vec; v += LC_VECS)
+        lc_tile_50(rows, LC_VECS, out, x, offset + 8 * v, matrix, matrix_stride, terms, first, mod);
+    for (; v < n_vec; v++)
+        lc_tile_50(rows, 1, out, x, offset + 8 * v, matrix, matrix_stride, terms, first, mod);
+}
+
+void mod_eltwise_linear_combinations_50(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
+                                        const uint64_t *matrix, uint64_t rows, uint64_t terms,
+                                        uint64_t n, int accumulate, Modulus mod)
+{
+    const uint64_t n_vec = n / 8;
+    if (terms == 0)
+    {
+        if (!accumulate)
+            for (uint64_t r = 0; r < rows; r++)
+                memset(out[r] + offset, 0, n * sizeof(uint64_t));
+        return;
+    }
+    uint64_t block = LC_PANEL_WORDS / (n > 0 ? n : 1);
+    block = block < 1                             ? 1
+            : block > MOD_INNER_PRODUCT_MAX_TERMS ? MOD_INNER_PRODUCT_MAX_TERMS
+                                                  : block;
+    for (uint64_t t0 = 0; t0 < terms; t0 += block)
+    {
+        const uint64_t len = terms - t0 < block ? terms - t0 : block;
+        const int first = !accumulate && t0 == 0;
+        uint64_t r = 0;
+        for (; r + LC_ROWS <= rows; r += LC_ROWS)
+            lc_rows_50(LC_ROWS, out + r, x + t0, offset, matrix + r * terms + t0, terms, len, n_vec,
+                       first, mod);
+        if (rows - r == 2)
+            lc_rows_50(2, out + r, x + t0, offset, matrix + r * terms + t0, terms, len, n_vec,
+                       first, mod);
+        else if (rows - r == 1)
+            lc_rows_50(1, out + r, x + t0, offset, matrix + r * terms + t0, terms, len, n_vec,
+                       first, mod);
     }
 }
 

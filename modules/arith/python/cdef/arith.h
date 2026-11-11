@@ -279,6 +279,10 @@ void polynomial_RNS_sample_exceptional(void *out, const uint8_t *seed, uint64_t 
 void rns_crt_maps_free(RNS_CrtMaps maps);
 void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
                                    RNS_CrtMaps maps, bool element_major);
+void polynomial_integer_linear_combinations_RNS_polynomial(RNS_Polynomial *out,
+                                                           RNS_Polynomial const *in,
+                                                           const int64_t *matrix, uint64_t n_out,
+                                                           uint64_t n_in);
 void polynomial_RNS_crt_linear_combination(FieldVector out, RNS_Polynomial *const *parts,
                                            uint64_t part_count, uint64_t count,
                                            const FieldVector coefficients, RNS_CrtMaps maps);

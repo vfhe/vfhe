@@ -179,3 +179,31 @@ void mod_eltwise_lifted_combination_gen(uint64_t *out, const uint64_t *const *in
         out[j] = acc - (p & (0 - (uint64_t)(acc >= p)));
     }
 }
+
+// mod_eltwise_linear_combinations for nonzero modulus below 2^62. Products of values below q are
+// below 2^124, so 15 of them are summed in 128 bits before each reduction, as in the inner
+// product above.
+void mod_eltwise_linear_combinations_gen(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
+                                         const uint64_t *matrix, uint64_t rows, uint64_t terms,
+                                         uint64_t n, int accumulate, Modulus mod)
+{
+    const uint64_t q = mod->q;
+    for (uint64_t r = 0; r < rows; r++)
+    {
+        const uint64_t *matrix_row = matrix + r * terms;
+        uint64_t *o = out[r] + offset;
+        for (size_t i = 0; i < n; i++)
+        {
+            uint64_t acc = accumulate ? o[i] : 0;
+            for (uint64_t t0 = 0; t0 < terms; t0 += 15)
+            {
+                const uint64_t t1 = terms - t0 < 15 ? terms : t0 + 15;
+                unsigned __int128 sum = 0;
+                for (uint64_t t = t0; t < t1; t++)
+                    sum += (unsigned __int128)matrix_row[t] * x[t][offset + i];
+                acc = add_modq(acc, modq_wide((uint64_t)(sum >> 64), (uint64_t)sum, mod), q);
+            }
+            o[i] = acc;
+        }
+    }
+}

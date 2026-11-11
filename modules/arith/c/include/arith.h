@@ -239,6 +239,17 @@ extern "C"
     // below q; `out` aliases no input.
     void mod_eltwise_inner_product_addto(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
                                          uint64_t terms, uint64_t n, Modulus mod);
+    // Multiplies a matrix of scalars by a vector of arrays, on positions offset .. offset + n - 1:
+    // for every r < rows and every such position i,
+    //     out[r][i] = sum_(t < terms) matrix[r * terms + t] * x[t][i] (mod q).
+    // For example, with rows = 1, terms = 2 and matrix = {2, 3}, out[0][i] = 2 x[0][i] + 3 x[1][i].
+    // With `accumulate`, the sums are added to what out[r] holds instead of replacing it.
+    // Every matrix entry and every array value must be below q, and no row of `out` may be a row of
+    // x. On the avx512ifma engine with 2^26 < q < 2^50, the sums are reduced once per block of up
+    // to 4096 terms; otherwise they are reduced once per 15 terms.
+    void mod_eltwise_linear_combinations(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
+                                         const uint64_t *matrix, uint64_t rows, uint64_t terms,
+                                         uint64_t n, int accumulate, Modulus mod);
     void mod_eltwise_scale(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
     void mod_eltwise_fma(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
     void mod_eltwise_add_scalar(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
@@ -1239,6 +1250,23 @@ extern "C"
     void polynomial_matrix_mul_addto_RNS_polynomial(RNS_Polynomial *out, RNS_Polynomial const *a,
                                                     RNS_Polynomial const *b, uint64_t rows,
                                                     uint64_t inner, uint64_t cols);
+    // Multiplies an integer matrix by a vector of ring elements: for every r < n_out,
+    //     out[r] = sum_(j < n_in) matrix[r * n_in + j] * in[j],
+    // with `matrix` the n_out x n_in matrix in row-major order. Each entry is reduced modulo
+    // each prime, so any int64 works.
+    //
+    // The inputs may be in either domain, all in the same one, and the outputs are in that
+    // domain: multiplying by a scalar commutes with the transform. Only the rows in out[0]'s mask
+    // are computed. Every output must have that mask, which is kept, and every input must hold
+    // those rows. No output may be one of the inputs.
+    //
+    // Each prime's rows are split into column tiles, which run in parallel within the library
+    // limit, and each tile of the inputs is read from memory once for all the outputs. The work
+    // is that of the dense product: a zero entry does not avoid reading its input.
+    void polynomial_integer_linear_combinations_RNS_polynomial(RNS_Polynomial *out,
+                                                               RNS_Polynomial const *in,
+                                                               const int64_t *matrix,
+                                                               uint64_t n_out, uint64_t n_in);
 
     void free_polynomial(void *p);
     void array_to_RNS(RNS_Polynomial out, uint64_t **in);

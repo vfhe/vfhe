@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from typing import Self
 
     from typing_extensions import Buffer
+    from vfhe.arith.integer_matrix import IntegerMatrix
 
 
 #: The fields `RNSRing.residue_field` returns, one per (N, split_degree, prime).
@@ -487,6 +488,59 @@ class RNSRing(Ring):
                 len(views),
             )
         return low, high
+
+    def integer_linear_combinations(
+        self, elements: Sequence[RNSPolynomial], matrix: IntegerMatrix
+    ) -> list[RNSPolynomial]:
+        """Multiply the integer matrix ``matrix`` by the vector ``elements``.
+
+        Returns one element of this ring per row of ``matrix``: element ``r``
+        is the sum over ``j`` of ``matrix[r][j] * elements[j]``. For example,
+        the rows ``[[1, 2], [0, -1]]`` and the elements ``[a, b]`` give
+        ``[a + 2*b, -b]``. Every entry of ``matrix`` is reduced modulo each prime, so any
+        signed 64-bit integer works.
+
+        The results are in the representation the elements hold, since
+        multiplying by an integer commutes with the transform. When the
+        elements do not all hold the same one, they are read in the NTT
+        representation, and so are the results; the elements themselves are
+        not converted.
+
+        Each prime's rows are split into column tiles, which run in parallel
+        within the library limit, and each tile of the elements is read once
+        for all the results. The work is that of the dense product: a zero
+        entry does not avoid reading its element.
+
+        ``elements`` must all be over this ring and hold every one of its
+        rows. ``matrix`` is an `IntegerMatrix` with one column per element.
+        """
+        if matrix.n_columns != len(elements):
+            raise ValueError("expected one matrix column per element")
+        for element in elements:
+            if element.ring != self:
+                raise ValueError("every element must be over this ring")
+            if element.repr == repr.empty:
+                raise ValueError("an element holds no value")
+            if element.rns_mask & self.mask != self.mask:
+                raise ValueError("an element does not hold every row of the ring")
+        target = elements[0].repr
+        if any(element.repr != target for element in elements):
+            target = repr.ntt
+        # The views own the rows the kernel reads, so they live until it returns.
+        views = [element._viewed_as(target) for element in elements]
+        outs = [RNSPolynomial(self, target) for _ in range(matrix.n_rows)]
+        self.lib.polynomial_integer_linear_combinations_RNS_polynomial(
+            ffi.new(
+                "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", o.obj) for o in outs]
+            ),
+            ffi.new(
+                "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", v.obj) for v in views]
+            ),
+            matrix.entries,
+            matrix.n_rows,
+            len(views),
+        )
+        return outs
 
     def crt_linear_combination(
         self,

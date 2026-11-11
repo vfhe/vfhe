@@ -389,6 +389,7 @@ typedef struct
     RNS_MLWE *in;
     const int64_t *weights;
     uint64_t n_in;
+    uint64_t n_out;
 } IntegerLinearCombinations;
 
 static void integer_linear_combination_job(void *ctx, uint64_t j)
@@ -397,10 +398,53 @@ static void integer_linear_combination_job(void *ctx, uint64_t j)
     mlwe_RNS_integer_linear_combination(lc->out[j], lc->in, &lc->weights[j * lc->n_in], lc->n_in);
 }
 
+// Computes component k of every output from component k of the inputs, in one matrix kernel.
+static void integer_combination_component_job(void *ctx, uint64_t k)
+{
+    IntegerLinearCombinations *lc = (IntegerLinearCombinations *)ctx;
+    RNS_Polynomial *polys =
+        (RNS_Polynomial *)safe_malloc((lc->n_out + lc->n_in) * sizeof(RNS_Polynomial));
+    for (uint64_t r = 0; r < lc->n_out; r++)
+        polys[r] = mlwe_component_rows(lc->out[r], k);
+    for (uint64_t j = 0; j < lc->n_in; j++)
+        polys[lc->n_out + j] = mlwe_component_rows(lc->in[j], k);
+    polynomial_integer_linear_combinations_RNS_polynomial(polys, polys + lc->n_out, lc->weights,
+                                                          lc->n_out, lc->n_in);
+    for (uint64_t r = 0; r < lc->n_out; r++)
+        mlwe_component(lc->out[r], k)->domain = mlwe_component(lc->in[0], k)->domain;
+    free(polys);
+}
+
+// Whether the matrix kernel applies: an RNS ring off the generic path, and per component one
+// domain over the inputs and one row mask over inputs and outputs.
+static bool integer_combinations_by_rows(RNS_MLWE *out, RNS_MLWE *in, uint64_t n_out, uint64_t n_in)
+{
+    if (n_out == 0 || n_in == 0 || out[0]->ring->impl != ARITH_IMPL_RNS || ARITH_GENERIC_PATH())
+        return false;
+    for (uint64_t k = 0; k <= out[0]->r; k++)
+    {
+        const ArithDomain d = mlwe_component(in[0], k)->domain;
+        const uint64_t mask = mlwe_component_rows(in[0], k)->rns_mask;
+        for (uint64_t j = 0; j < n_in; j++)
+            if (mlwe_component(in[j], k)->domain != d ||
+                mlwe_component_rows(in[j], k)->rns_mask != mask)
+                return false;
+        for (uint64_t r = 0; r < n_out; r++)
+            if (mlwe_component_rows(out[r], k)->rns_mask != mask)
+                return false;
+    }
+    return true;
+}
+
 void mlwe_RNS_integer_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const int64_t *weights,
                                           uint64_t n_out, uint64_t n_in, uint64_t n_threads)
 {
-    IntegerLinearCombinations lc = {out, in, weights, n_in};
+    IntegerLinearCombinations lc = {out, in, weights, n_in, n_out};
+    if (integer_combinations_by_rows(out, in, n_out, n_in))
+    {
+        vfhe_parallel_for(out[0]->r + 1, n_threads, integer_combination_component_job, &lc);
+        return;
+    }
     vfhe_parallel_for(n_out, one_thread_on_generic_path(n_threads), integer_linear_combination_job,
                       &lc);
 }

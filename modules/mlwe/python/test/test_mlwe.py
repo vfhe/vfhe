@@ -16,7 +16,7 @@ from collections import Counter
 from typing import cast
 
 import pytest
-from vfhe.arith import Polynomial, Ring, repr
+from vfhe.arith import Polynomial, Ring, repr, set_generic_only
 from vfhe.arith.number_theory import crt
 from vfhe.crypto import entropy
 from vfhe.mlwe import (
@@ -2449,6 +2449,33 @@ def test_integer_linear_combinations(bv, domain, n_threads):
             start=Polynomial(ring).from_array([0] * N),
         )
         assert scheme.linear_decrypt(out, key) == expected
+
+
+@pytest.mark.parametrize("rank", [1, 2])
+@pytest.mark.parametrize("domain", ["coeff", "ntt"])
+def test_integer_linear_combinations_kernel_matches_the_generic_path(rank, domain):
+    # One matrix kernel per component, or one pass per nonzero weight on the
+    # generic path: the same words, over a ring with narrow and split rows.
+    Rq = Ring(N, prime_size=[29, 45, 50], split_degree=2)
+    Rp = Rq.quotient_ring(ell=1)
+    scheme = MLWE_Scheme(Rq, special_primes=0, module_rank=rank)
+    key = scheme.key_gen_sparse(N // 8, 3.2)
+    cts = [enc(scheme, Rp, Rp.random_element(), key) for _ in range(3)]
+    for c in cts:
+        if domain == "coeff":
+            c.to_coeff()
+        else:
+            c.to_NTT()
+    matrix = IntegerMatrix(INTEGER_ROWS)
+    fast = scheme.linear_combinations(cts, matrix)
+    set_generic_only(True)
+    try:
+        generic = scheme.linear_combinations(cts, matrix)
+    finally:
+        set_generic_only(False)
+    for a, b in zip(fast, generic, strict=True):
+        assert a.repr == b.repr == cts[0].repr
+        assert _same_sample(a, b)
 
 
 def test_integer_matrix_from_a_buffer(bv):

@@ -36,16 +36,26 @@ versions may contain breaking changes.
   extension fields up to `ARITH_LAGRANGE_MAX_VALUES` (32) values
   (`pmf_lagrange_interpolate`, `field_ext_lagrange_interpolate`), and the
   generic definition beyond.
-- `IntegerMatrix(rows)` holds integer weights for
-  `MLWE_Scheme.linear_combinations`, which then computes each output as
-  `sum_j W[i][j] * cts[j]`, one pass per term, in the domain the
-  ciphertexts are in (`mlwe_RNS_integer_linear_combinations`). The rows
-  are lists of integers or a C-contiguous two-dimensional `int64` buffer,
-  such as a NumPy array, used without a copy. Under CKKS the outputs keep
-  the ciphertexts' scaling factor. On the execution tape the terms are
-  `scale_int`, `scale_addto` and `scale_subto` events, and
-  `vfhe.vfhe.Computation` reads them as plaintext-linear terms whose
+- `vfhe.arith.IntegerMatrix(rows)` (also exported by `vfhe.mlwe`) holds an
+  integer matrix for `RNSRing.integer_linear_combinations` and
+  `MLWE_Scheme.linear_combinations`, which then compute each output as
+  `sum_j W[i][j] * cts[j]` in the domain the ciphertexts are in
+  (`mlwe_RNS_integer_linear_combinations`). The rows are lists of integers
+  or a C-contiguous two-dimensional `int64` buffer, such as a NumPy array,
+  used without a copy. Under CKKS the outputs keep the ciphertexts'
+  scaling factor. On the generic path, and so on the execution tape, each
+  term is one pass: `scale_int`, `scale_addto` and `scale_subto` events,
+  which `vfhe.vfhe.Computation` reads as plaintext-linear terms whose
   plaintext is the integer weight.
+- `RNSRing.integer_linear_combinations(elements, matrix)` multiplies an
+  integer matrix by a vector of ring elements, in the domain the elements
+  are in (`polynomial_integer_linear_combinations_RNS_polynomial`). Each
+  prime's rows are split into column tiles that run in parallel, and each
+  tile of the elements is read once for all the outputs. On the avx512ifma
+  engine, for primes below 2^50, the sums are reduced once per block of up
+  to 4096 terms (`mod_eltwise_linear_combinations`); otherwise once per 15
+  terms. `MLWE_Scheme.linear_combinations` with an `IntegerMatrix` uses it
+  for each component, except on the generic path.
 - `arith_scale_subto(ring, out, a, scale)`, the generic operation
   `out -= scale * a` in either domain, recorded on the execution tape as
   `"scale_subto"`.
