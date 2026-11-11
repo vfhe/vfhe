@@ -979,10 +979,9 @@ class MLWE_Scheme:
         :class:`PlaintextMatrix`.
 
         With an :class:`IntegerMatrix`, the coefficients are integers. The
-        results are in the domain the ciphertexts are in. When the
-        ciphertexts are not all in one domain, they are moved to the NTT
-        domain first. Each component is one
-        integer-matrix product, as in
+        results are in the domain the ciphertexts are in. When the ciphertexts
+        are not all in one domain, they are moved to the NTT domain first.
+        Each component is one integer-matrix product, as in
         :meth:`RNSRing.integer_linear_combinations`. On the generic path
         instead, each nonzero weight is one pass over its ciphertext; that is
         the path taken under `vfhe.arith.set_generic_only` and while the
@@ -1023,14 +1022,17 @@ class MLWE_Scheme:
         if any(c.repr != cts[0].repr for c in cts):
             self._to_ntt_batch(cts, n_threads)
         outs = [cts[0].new_like() for _ in range(matrix.n_rows)]
-        lib_rlwe.lib.mlwe_RNS_integer_linear_combinations(
-            ffi.new("void *[]", [out.obj for out in outs]),
-            ffi.new("void *[]", [c.obj for c in cts]),
-            matrix.entries,
-            matrix.n_rows,
-            len(cts),
-            n_threads,
-        )
+        out_objs = ffi.new("void *[]", [out.obj for out in outs])
+        in_objs = ffi.new("void *[]", [c.obj for c in cts])
+        if lib.arith_generic_only() or lib.arith_trace_is_enabled():
+            # The generic path reads the integers only: no preparation.
+            lib_rlwe.lib.mlwe_RNS_integer_linear_combinations(
+                out_objs, in_objs, matrix.entries, matrix.n_rows, len(cts), n_threads
+            )
+        else:
+            lib_rlwe.lib.mlwe_RNS_integer_matrix_linear_combinations(
+                out_objs, in_objs, matrix.prepared(ring), n_threads
+            )
         for out in outs:
             out.repr = cts[0].repr
         return outs

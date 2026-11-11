@@ -84,11 +84,28 @@ void mod_eltwise_mul_addto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint
                                Modulus mod);
 void mod_eltwise_mul_subto_gen(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n,
                                Modulus mod);
+/* Linear combinations for an output group: at most MOD_COMBINATION_ROWS outputs, summed over a
+   list of terms. For every output r < outputs and every coefficient i in offset .. offset + n - 1,
+       out[r][i] = sum_(k < count) entries[r][k] * x[terms[k]][i] (mod q),
+   replacing what out[r][i] holds when `first` and added to it otherwise. `entries[r][k]` is the
+   matrix entry of output r for the input terms[k], below q; count <= MOD_INNER_PRODUCT_MAX_TERMS.
+   Every coefficient of x is below q, no row of `out` is a row of x, and the rows of `out` and x
+   are 64-byte aligned with `offset` a multiple of 8. `shoup[r][k]` is
+   floor(entries[r][k] 2^64 / q), read only where mod_linear_combination_uses_shoup(mod) holds
+   (NULL otherwise). */
+#define MOD_COMBINATION_ROWS 3
+bool mod_linear_combination_uses_shoup(Modulus mod);
+void mod_eltwise_linear_combination_group(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
+                                          const uint64_t *const *entries,
+                                          const uint64_t *const *shoup, const uint32_t *terms,
+                                          uint64_t count, uint64_t outputs, uint64_t n, int first,
+                                          Modulus mod);
+void mod_eltwise_linear_combination_group_gen(uint64_t *const *out, uint64_t *const *x,
+                                              uint64_t offset, const uint64_t *const *entries,
+                                              const uint32_t *terms, uint64_t count,
+                                              uint64_t outputs, uint64_t n, int first, Modulus mod);
 void mod_eltwise_inner_product_addto_gen(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
                                          uint64_t terms, uint64_t n, Modulus mod);
-void mod_eltwise_linear_combinations_gen(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
-                                         const uint64_t *matrix, uint64_t rows, uint64_t terms,
-                                         uint64_t n, int accumulate, Modulus mod);
 void mod_eltwise_scale_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_fma_gen(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_gen(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,
@@ -431,9 +448,11 @@ void mod_eltwise_mul_subto_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint
                                Modulus mod);
 void mod_eltwise_scale_w32(uint32_t *out, uint32_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_fma_w32(uint32_t *out, uint32_t *in, uint64_t scale, uint64_t n, Modulus mod);
-void mod_eltwise_linear_combinations_w32(uint32_t *const *out, uint32_t *const *x, uint64_t offset,
-                                         const uint64_t *matrix, uint64_t rows, uint64_t terms,
-                                         uint64_t n, int accumulate, Modulus mod);
+// mod_eltwise_linear_combination_group on narrow rows: 32-bit coefficients, q < 2^30.
+void mod_eltwise_linear_combination_group_w32(uint32_t *const *out, uint32_t *const *x,
+                                              uint64_t offset, const uint64_t *const *entries,
+                                              const uint32_t *terms, uint64_t count,
+                                              uint64_t outputs, uint64_t n, int first, Modulus mod);
 void mod_eltwise_add_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_sub_w32(uint32_t *out, uint32_t *in1, uint32_t *in2, uint64_t n, Modulus mod);
 void mod_eltwise_negate_w32(uint32_t *out, uint32_t *in, uint64_t n, Modulus mod);
@@ -502,9 +521,15 @@ void mod_eltwise_mul_subto_50(uint64_t *out, uint64_t *in1, uint64_t *in2, uint6
 #define MOD_INNER_PRODUCT_MAX_TERMS 4096
 void mod_eltwise_inner_product_addto_50(uint64_t *out, uint64_t *const *a, uint64_t *const *b,
                                         uint64_t terms, uint64_t n, Modulus mod);
-void mod_eltwise_linear_combinations_50(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
-                                        const uint64_t *matrix, uint64_t rows, uint64_t terms,
-                                        uint64_t n, int accumulate, Modulus mod);
+void mod_eltwise_linear_combination_group_50(uint64_t *const *out, uint64_t *const *x,
+                                             uint64_t offset, const uint64_t *const *entries,
+                                             const uint32_t *terms, uint64_t count,
+                                             uint64_t outputs, uint64_t n, int first, Modulus mod);
+void mod_eltwise_linear_combination_group_64(uint64_t *const *out, uint64_t *const *x,
+                                             uint64_t offset, const uint64_t *const *entries,
+                                             const uint64_t *const *shoup, const uint32_t *terms,
+                                             uint64_t count, uint64_t outputs, uint64_t n,
+                                             int first, Modulus mod);
 void mod_eltwise_scale_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_fma_50(uint64_t *out, uint64_t *in, uint64_t scale, uint64_t n, Modulus mod);
 void mod_eltwise_add_scalar_50(uint64_t *out, uint64_t *in, uint64_t scalar, uint64_t n,

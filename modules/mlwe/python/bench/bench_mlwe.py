@@ -30,7 +30,10 @@ BATCH_SHAPES = [
 ]
 
 #: An integer matrix times a vector of samples: ``outputs`` x ``inputs``
-#: weights, a ring of degree 2^log_n. The second is a dense layer's shape.
+#: entries, a ring of degree 2^log_n. ``pattern`` (default dense) is the
+#: matrix's shape: ``sparse`` holds one nonzero entry in about 33, ``select``
+#: one entry of 1 per row. Beside the dense layer, the shapes isolate primes of
+#: 59 bits, a sparse matrix, a selection matrix and very few inputs.
 MATRIX_SHAPES = [
     Shape(
         "n10-2p-8x64",
@@ -48,7 +51,59 @@ MATRIX_SHAPES = [
         outputs=138,
         inputs=1024,
     ),
+    Shape(
+        "n12-59b-138x1024",
+        log_n=12,
+        prime_bits=[59, 59],
+        special_bits=[60],
+        outputs=138,
+        inputs=1024,
+    ),
+    Shape(
+        "n12-2p-138x1024-sparse",
+        log_n=12,
+        prime_bits=[50, 50],
+        special_bits=[50],
+        outputs=138,
+        inputs=1024,
+        pattern="sparse",
+    ),
+    Shape(
+        "n12-2p-512x512-select",
+        log_n=12,
+        prime_bits=[50, 50],
+        special_bits=[50],
+        outputs=512,
+        inputs=512,
+        pattern="select",
+    ),
+    Shape(
+        "n12-2p-138x2",
+        log_n=12,
+        prime_bits=[50, 50],
+        special_bits=[50],
+        outputs=138,
+        inputs=2,
+    ),
 ]
+
+
+def matrix_rows(shape: Shape) -> list[list[int]]:
+    """Returns the integer matrix of a ``MATRIX_SHAPES`` shape, row by row."""
+    n_out, n_in = shape["outputs"], shape["inputs"]
+    pattern = shape.get("pattern", "dense")
+    if pattern == "select":
+        return [[int(j == (7 * r) % n_in) for j in range(n_in)] for r in range(n_out)]
+    dense = [
+        [(31 * r + 17 * j) % 2049 - 1024 for j in range(n_in)] for r in range(n_out)
+    ]
+    if pattern == "sparse":
+        return [
+            [v | 1 if (7 * r + 13 * j) % 33 == 0 else 0 for j, v in enumerate(row)]
+            for r, row in enumerate(dense)
+        ]
+    return dense
+
 
 # A generator of the cyclic part of the Galois group of X^N + 1.
 ROTATION = 5
@@ -210,9 +265,7 @@ def _integer_linear_combinations(shape: Shape, generic: bool) -> Case:
     top = scheme.rings[0]
     n_out, n_in = shape["outputs"], shape["inputs"]
     cts = [scheme.sample(top.random_element(), key) for _ in range(n_in)]
-    rows = [
-        [(31 * r + 17 * j) % 2049 - 1024 for j in range(n_in)] for r in range(n_out)
-    ]
+    rows = matrix_rows(shape)
     matrix = IntegerMatrix(rows)
     decryptions = [scheme.linear_decrypt(c.copy(), key) for c in cts]
 

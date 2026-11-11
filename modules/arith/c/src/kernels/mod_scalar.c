@@ -180,30 +180,48 @@ void mod_eltwise_lifted_combination_gen(uint64_t *out, const uint64_t *const *in
     }
 }
 
-// mod_eltwise_linear_combinations for nonzero modulus below 2^62. Products of values below q are
-// below 2^124, so 15 of them are summed in 128 bits before each reduction, as in the inner
-// product above.
-void mod_eltwise_linear_combinations_gen(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
-                                         const uint64_t *matrix, uint64_t rows, uint64_t terms,
-                                         uint64_t n, int accumulate, Modulus mod)
+/* mod_eltwise_linear_combination_group for any modulus below 2^62. Products of values below q
+   are below 2^124, so runs of 15 terms are summed in 128 bits before each reduction, as in the
+   inner product above. The coefficients are taken in spans of SCALAR_COMBINATION_SPAN, whose sums
+   stay in stack arrays while each term streams its span of coefficients. */
+#define SCALAR_COMBINATION_SPAN 32
+
+void mod_eltwise_linear_combination_group_gen(uint64_t *const *out, uint64_t *const *x,
+                                              uint64_t offset, const uint64_t *const *entries,
+                                              const uint32_t *terms, uint64_t count,
+                                              uint64_t outputs, uint64_t n, int first, Modulus mod)
 {
     const uint64_t q = mod->q;
-    for (uint64_t r = 0; r < rows; r++)
+    unsigned __int128 sum[SCALAR_COMBINATION_SPAN];
+    uint64_t acc[SCALAR_COMBINATION_SPAN];
+    for (uint64_t r = 0; r < outputs; r++)
     {
-        const uint64_t *matrix_row = matrix + r * terms;
+        const uint64_t *e = entries[r];
         uint64_t *o = out[r] + offset;
-        for (size_t i = 0; i < n; i++)
+        for (uint64_t i0 = 0; i0 < n; i0 += SCALAR_COMBINATION_SPAN)
         {
-            uint64_t acc = accumulate ? o[i] : 0;
-            for (uint64_t t0 = 0; t0 < terms; t0 += 15)
+            const uint64_t len =
+                n - i0 < SCALAR_COMBINATION_SPAN ? n - i0 : SCALAR_COMBINATION_SPAN;
+            for (uint64_t i = 0; i < len; i++)
+                acc[i] = first ? 0 : o[i0 + i];
+            for (uint64_t k0 = 0; k0 < count; k0 += 15)
             {
-                const uint64_t t1 = terms - t0 < 15 ? terms : t0 + 15;
-                unsigned __int128 sum = 0;
-                for (uint64_t t = t0; t < t1; t++)
-                    sum += (unsigned __int128)matrix_row[t] * x[t][offset + i];
-                acc = add_modq(acc, modq_wide((uint64_t)(sum >> 64), (uint64_t)sum, mod), q);
+                const uint64_t k1 = count - k0 < 15 ? count : k0 + 15;
+                for (uint64_t i = 0; i < len; i++)
+                    sum[i] = 0;
+                for (uint64_t k = k0; k < k1; k++)
+                {
+                    const uint64_t entry = e[k];
+                    const uint64_t *xt = x[terms[k]] + offset + i0;
+                    for (uint64_t i = 0; i < len; i++)
+                        sum[i] += (unsigned __int128)entry * xt[i];
+                }
+                for (uint64_t i = 0; i < len; i++)
+                    acc[i] = add_modq(
+                        acc[i], modq_wide((uint64_t)(sum[i] >> 64), (uint64_t)sum[i], mod), q);
             }
-            o[i] = acc;
+            for (uint64_t i = 0; i < len; i++)
+                o[i0 + i] = acc[i];
         }
     }
 }

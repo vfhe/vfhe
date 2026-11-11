@@ -3,8 +3,6 @@
 #include <arith.h>
 #include "arith_internal.h"
 
-#include <string.h>
-
 #if VFHE_HAVE_AVX512IFMA
 
 static inline __m512i _mm512_hexl_reduce_prod_50(__m512i v_prod_hi, __m512i v_prod_lo, Modulus mod)
@@ -194,51 +192,50 @@ void mod_eltwise_inner_product_addto_50(uint64_t *out, uint64_t *const *a, uint6
     }
 }
 
-/* Linear combinations: the inner product above, with one operand of each product a matrix entry
-   broadcast to every lane.
+/* Linear combinations for an output group: the inner product above, with one operand of each
+   product a matrix entry broadcast to every lane.
 
-   The outputs are computed in tiles of LC_ROWS outputs by LC_VECS vectors. A tile keeps its sums
-   in registers, a low and a high half for each of its LC_ROWS * LC_VECS output vectors. For each
-   term it loads LC_VECS vectors of the term's array and one matrix entry per output, and issues two
-   madd52 for every pair of an entry and a vector.
+   A register tile covers the group's outputs by COMBINATION_TILE_VECTORS vectors of coefficients
+   and keeps its sums in registers: a low and a high half for each output vector. For each listed
+   term it loads the term's vectors and one entry per output, and issues two madd52 for every pair
+   of an entry and a vector. The sums hold at most MOD_INNER_PRODUCT_MAX_TERMS terms and are
+   reduced into the outputs once.
 
-   The terms are taken in blocks. A block holds at most MOD_INNER_PRODUCT_MAX_TERMS terms, the
-   most one unreduced sum may take, and at most LC_PANEL_WORDS words of arrays, so that they stay
-   in L2 while every tile of outputs reads them. Each block's sums are reduced into the outputs
-   once. */
-#define LC_ROWS 3
-#define LC_VECS 4
-#define LC_PANEL_WORDS (1 << 15)
+   While it sums a term, a register tile prefetches the coefficients it will read
+   COMBINATION_PREFETCH_TERMS terms later in the list: consecutive terms are inputs far apart in
+   memory, which the hardware prefetchers do not follow. */
+#define COMBINATION_TILE_VECTORS 4
+#define COMBINATION_PREFETCH_TERMS 8
 
-// Sums `terms` terms into the tile of `rows` outputs by `vecs` vectors that starts at word `off`,
-// then reduces the sums into the outputs, replacing what they hold when `first` and adding to
-// it otherwise. A term whose matrix entries are zero for all of the tile's outputs is skipped.
+// Sums the listed terms into the register tile of `outputs` outputs by `vecs` vectors that starts
+// at coefficient `off`, then reduces the sums into the outputs, replacing what they hold when
+// `first` and adding to it otherwise.
 static inline __attribute__((always_inline)) void
-lc_tile_50(const int rows, const int vecs, uint64_t *const *out, uint64_t *const *x, uint64_t off,
-           const uint64_t *matrix, uint64_t matrix_stride, uint64_t terms, int first, Modulus mod)
+linear_combination_tile_50(const int outputs, const int vecs, uint64_t *const *out,
+                           uint64_t *const *x, uint64_t off, const uint64_t *const *entries,
+                           const uint32_t *terms, uint64_t count, int first, Modulus mod)
 {
     const __m512i zero = _mm512_setzero_si512();
-    __m512i lo[LC_ROWS][LC_VECS], hi[LC_ROWS][LC_VECS];
-    for (int r = 0; r < rows; r++)
+    __m512i lo[MOD_COMBINATION_ROWS][COMBINATION_TILE_VECTORS],
+        hi[MOD_COMBINATION_ROWS][COMBINATION_TILE_VECTORS];
+    for (int r = 0; r < outputs; r++)
         for (int v = 0; v < vecs; v++)
             lo[r][v] = hi[r][v] = zero;
-    for (uint64_t t = 0; t < terms; t++)
+    for (uint64_t k = 0; k < count; k++)
     {
-        uint64_t entry[LC_ROWS], nonzero = 0;
-        for (int r = 0; r < rows; r++)
+        if (k + COMBINATION_PREFETCH_TERMS < count)
         {
-            entry[r] = matrix[r * matrix_stride + t];
-            nonzero |= entry[r];
+            const char *ahead = (const char *)(x[terms[k + COMBINATION_PREFETCH_TERMS]] + off);
+            for (int v = 0; v < vecs; v++)
+                _mm_prefetch(ahead + 64 * v, _MM_HINT_T0);
         }
-        if (nonzero == 0)
-            continue;
-        const __m512i *xt = (const __m512i *)(x[t] + off);
-        __m512i xv[LC_VECS];
+        const __m512i *xt = (const __m512i *)(x[terms[k]] + off);
+        __m512i xv[COMBINATION_TILE_VECTORS];
         for (int v = 0; v < vecs; v++)
             xv[v] = xt[v];
-        for (int r = 0; r < rows; r++)
+        for (int r = 0; r < outputs; r++)
         {
-            const __m512i broadcast = _mm512_set1_epi64((long long)entry[r]);
+            const __m512i broadcast = _mm512_set1_epi64((long long)entries[r][k]);
             for (int v = 0; v < vecs; v++)
             {
                 lo[r][v] = _mm512_madd52lo_epu64(lo[r][v], broadcast, xv[v]);
@@ -246,7 +243,7 @@ lc_tile_50(const int rows, const int vecs, uint64_t *const *out, uint64_t *const
             }
         }
     }
-    for (int r = 0; r < rows; r++)
+    for (int r = 0; r < outputs; r++)
         for (int v = 0; v < vecs; v++)
         {
             __m512i *o = (__m512i *)(out[r] + off) + v;
@@ -254,52 +251,35 @@ lc_tile_50(const int rows, const int vecs, uint64_t *const *out, uint64_t *const
         }
 }
 
-// Runs one block of terms over every tile of `rows` <= LC_ROWS outputs: tiles of LC_VECS vectors
-// as far as they fit, then tiles of one vector.
-static inline __attribute__((always_inline)) void lc_rows_50(const int rows, uint64_t *const *out,
-                                                             uint64_t *const *x, uint64_t offset,
-                                                             const uint64_t *matrix,
-                                                             uint64_t matrix_stride, uint64_t terms,
-                                                             uint64_t n_vec, int first, Modulus mod)
+// Runs linear_combination_tile_50 over the coefficients: register tiles of
+// COMBINATION_TILE_VECTORS vectors as far as they fit, then of one vector.
+static inline __attribute__((always_inline)) void
+linear_combination_tiles_50(const int outputs, uint64_t *const *out, uint64_t *const *x,
+                            uint64_t offset, const uint64_t *const *entries, const uint32_t *terms,
+                            uint64_t count, uint64_t n_vec, int first, Modulus mod)
 {
     uint64_t v = 0;
-    for (; v + LC_VECS <= n_vec; v += LC_VECS)
-        lc_tile_50(rows, LC_VECS, out, x, offset + 8 * v, matrix, matrix_stride, terms, first, mod);
+    for (; v + COMBINATION_TILE_VECTORS <= n_vec; v += COMBINATION_TILE_VECTORS)
+        linear_combination_tile_50(outputs, COMBINATION_TILE_VECTORS, out, x, offset + 8 * v,
+                                   entries, terms, count, first, mod);
     for (; v < n_vec; v++)
-        lc_tile_50(rows, 1, out, x, offset + 8 * v, matrix, matrix_stride, terms, first, mod);
+        linear_combination_tile_50(outputs, 1, out, x, offset + 8 * v, entries, terms, count, first,
+                                   mod);
 }
 
-void mod_eltwise_linear_combinations_50(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
-                                        const uint64_t *matrix, uint64_t rows, uint64_t terms,
-                                        uint64_t n, int accumulate, Modulus mod)
+// `n` is a multiple of 8.
+void mod_eltwise_linear_combination_group_50(uint64_t *const *out, uint64_t *const *x,
+                                             uint64_t offset, const uint64_t *const *entries,
+                                             const uint32_t *terms, uint64_t count,
+                                             uint64_t outputs, uint64_t n, int first, Modulus mod)
 {
     const uint64_t n_vec = n / 8;
-    if (terms == 0)
-    {
-        if (!accumulate)
-            for (uint64_t r = 0; r < rows; r++)
-                memset(out[r] + offset, 0, n * sizeof(uint64_t));
-        return;
-    }
-    uint64_t block = LC_PANEL_WORDS / (n > 0 ? n : 1);
-    block = block < 1                             ? 1
-            : block > MOD_INNER_PRODUCT_MAX_TERMS ? MOD_INNER_PRODUCT_MAX_TERMS
-                                                  : block;
-    for (uint64_t t0 = 0; t0 < terms; t0 += block)
-    {
-        const uint64_t len = terms - t0 < block ? terms - t0 : block;
-        const int first = !accumulate && t0 == 0;
-        uint64_t r = 0;
-        for (; r + LC_ROWS <= rows; r += LC_ROWS)
-            lc_rows_50(LC_ROWS, out + r, x + t0, offset, matrix + r * terms + t0, terms, len, n_vec,
-                       first, mod);
-        if (rows - r == 2)
-            lc_rows_50(2, out + r, x + t0, offset, matrix + r * terms + t0, terms, len, n_vec,
-                       first, mod);
-        else if (rows - r == 1)
-            lc_rows_50(1, out + r, x + t0, offset, matrix + r * terms + t0, terms, len, n_vec,
-                       first, mod);
-    }
+    if (outputs == 3)
+        linear_combination_tiles_50(3, out, x, offset, entries, terms, count, n_vec, first, mod);
+    else if (outputs == 2)
+        linear_combination_tiles_50(2, out, x, offset, entries, terms, count, n_vec, first, mod);
+    else if (outputs == 1)
+        linear_combination_tiles_50(1, out, x, offset, entries, terms, count, n_vec, first, mod);
 }
 
 /* `scale` and `fma` multiply by a scalar that does not vary over the array,

@@ -640,105 +640,525 @@ void polynomial_matrix_mul_addto_RNS_polynomial(RNS_Polynomial *out, RNS_Polynom
     free(a_rows);
 }
 
-// The column tiles of polynomial_integer_linear_combinations_RNS_polynomial: the widest power
-// of two between these that still leaves every thread two tiles or more.
+/* Integer linear combinations: an integer matrix M times a vector of ring elements.
+
+   Preparation (rns_integer_matrix_new) splits M's rows into output groups of one to
+   MOD_COMBINATION_ROWS consecutive rows: group g is rows group_rows[g] .. group_rows[g + 1] - 1.
+   A row with at most COMBINATION_SHORT_ROW nonzero entries is a group of its own, a short row,
+   which the product computes apart from the tiles, one residue row at a time and over its whole
+   length, with element-wise operations: a Shoup scale or fma per entry, or a copy, add, subtract
+   or negate for an entry of 1 or -1. The other rows are grouped greedily: k consecutive
+   rows (three, else two) form a group when k times the number of columns where one of them is
+   nonzero is at most COMBINATION_GROUP_SLACK_NUM / COMBINATION_GROUP_SLACK_DEN times the sum of
+   their own nonzero counts. A group multiplies each of its rows by every column it lists, so
+   rows whose nonzero columns barely overlap stay apart. Group g lists, ascending, the inputs
+   (columns of M) where one of its rows has a nonzero entry: group_columns[group_start[g] ..
+   group_start[g + 1] - 1]. Its entries at those columns are stored compactly, row after row: for
+   the residue row of active index k, entry p of the list for the group's row r is reduced[k * S +
+   entry_start[g] + r * listed + p], with S = entry_start[groups] and `listed` the group's list
+   length; shoup[k] holds their Shoup factors in the same layout, or is NULL when that row's kernel
+   does not use them. union_columns lists, ascending, the inputs some group lists. So storage and
+   work follow the nonzero entries.
+
+   A product splits each residue row into coefficient tiles of COMBINATION_TILE_MIN to
+   COMBINATION_TILE_MAX coefficients, and the inputs into term blocks: runs of consecutive
+   union_columns holding at most COMBINATION_PANEL_BYTES of a coefficient tile, so that they stay
+   in L2 while every output group reads them. For each coefficient tile and term block, each
+   output group runs its family's kernel on its listed inputs inside the block; the first block
+   writes the outputs and the later ones add to them. The parallel unit is a run of coefficient
+   tiles of one residue row, about four per thread; when there are too few tiles for the
+   threads, the output groups are split into ranges as a second parallel dimension. A product
+   with less than COMBINATION_SERIAL_WORK multiply-adds runs on the calling thread. */
 #define COMBINATION_TILE_MAX 256
 #define COMBINATION_TILE_MIN 32
+#define COMBINATION_PANEL_BYTES (1 << 18)
+#define COMBINATION_SERIAL_WORK (1 << 17)
+#define COMBINATION_SHORT_ROW 2
+#define COMBINATION_GROUP_SLACK_NUM 5
+#define COMBINATION_GROUP_SLACK_DEN 4
+
+static uint64_t group_outputs(RNS_IntegerMatrix m, uint64_t g)
+{
+    return m->group_rows[g + 1] - m->group_rows[g];
+}
+
+static bool is_short_row(RNS_IntegerMatrix m, uint64_t g)
+{
+    return group_outputs(m, g) == 1 &&
+           m->group_start[g + 1] - m->group_start[g] <= COMBINATION_SHORT_ROW;
+}
+
+// The nonzero entries of rows r0 .. r1 - 1: the sum of each row's count goes to *rows_sum, and
+// the number of columns where one of the rows is nonzero is returned.
+static uint64_t row_supports(RNS_IntegerMatrix m, uint64_t r0, uint64_t r1, uint64_t *rows_sum)
+{
+    uint64_t covered = 0, sum = 0;
+    for (uint64_t j = 0; j < m->n_in; j++)
+    {
+        int64_t any = 0;
+        for (uint64_t r = r0; r < r1; r++)
+        {
+            const int64_t e = m->entries[r * m->n_in + j];
+            sum += e != 0;
+            any |= e;
+        }
+        covered += any != 0;
+    }
+    *rows_sum = sum;
+    return covered;
+}
+
+// Splits the rows into output groups (see above): sets m->groups and m->group_rows.
+static void choose_groups(RNS_IntegerMatrix m, const uint64_t *nonzeros)
+{
+    m->group_rows = (uint64_t *)safe_malloc((m->n_out + 1) * sizeof(uint64_t));
+    uint64_t g = 0, r = 0;
+    while (r < m->n_out)
+    {
+        uint64_t size = 1;
+        for (uint64_t k = MOD_COMBINATION_ROWS; k > 1 && size == 1; k--)
+        {
+            if (r + k > m->n_out)
+                continue;
+            bool long_rows = true;
+            for (uint64_t i = r; i < r + k; i++)
+                long_rows &= nonzeros[i] > COMBINATION_SHORT_ROW;
+            if (!long_rows)
+                continue;
+            uint64_t sum;
+            const uint64_t covered = row_supports(m, r, r + k, &sum);
+            if (COMBINATION_GROUP_SLACK_DEN * k * covered <= COMBINATION_GROUP_SLACK_NUM * sum)
+                size = k;
+        }
+        m->group_rows[g++] = r;
+        r += size;
+    }
+    m->group_rows[g] = m->n_out;
+    m->groups = g;
+}
 
 typedef struct
 {
-    RNS_Base base;
-    uint64_t n_out, n_in, tile, tiles;
-    const uint64_t *rows;  // the active base rows, `count` of them
-    const int64_t *matrix; // n_out x n_in, row-major
-    uint64_t *reduced;     // per active row, the matrix modulo its prime
-    void **x;              // per active row, the n_in input rows
-    void **o;              // per active row, the n_out output rows
-} IntegerCombinations;
+    RNS_IntegerMatrix m;
+    uint64_t *nonzeros;
+} RowCounts;
 
-static void reduce_matrix_job(void *ctx, uint64_t item)
+static void count_row_job(void *ctx, uint64_t r)
 {
-    const IntegerCombinations *c = (const IntegerCombinations *)ctx;
-    const uint64_t k = item / c->n_out, r = item % c->n_out;
-    Modulus mod = c->base->mods[c->rows[k]];
-    const int64_t *entries = c->matrix + r * c->n_in;
-    uint64_t *out = c->reduced + (k * c->n_out + r) * c->n_in;
-    for (uint64_t j = 0; j < c->n_in; j++)
+    const RowCounts *c = (const RowCounts *)ctx;
+    uint64_t sum;
+    row_supports(c->m, r, r + 1, &sum);
+    c->nonzeros[r] = sum;
+}
+
+static bool row_uses_shoup(RNS_Base base, uint64_t row)
+{
+    return !rns_row_is_narrow(base, row) && mod_linear_combination_uses_shoup(base->mods[row]);
+}
+
+typedef struct
+{
+    RNS_IntegerMatrix m;
+    uint64_t *listed; // per group, how many inputs it lists
+} MatrixPreparation;
+
+// The inputs group g lists: counted when `columns` is NULL, written to `columns` otherwise.
+static uint64_t group_columns(RNS_IntegerMatrix m, uint64_t g, uint32_t *columns)
+{
+    const uint64_t r0 = m->group_rows[g], r1 = m->group_rows[g + 1];
+    uint64_t found = 0;
+    for (uint64_t j = 0; j < m->n_in; j++)
     {
-        // |entries| as uint64_t, which holds |INT64_MIN| too.
-        const uint64_t m =
-            modq(entries[j] < 0 ? (uint64_t)(-(entries[j] + 1)) + 1 : (uint64_t)entries[j], mod);
-        out[j] = entries[j] < 0 && m != 0 ? mod->q - m : m;
+        int64_t any = 0;
+        for (uint64_t r = r0; r < r1; r++)
+            any |= m->entries[r * m->n_in + j];
+        if (any != 0)
+        {
+            if (columns)
+                columns[found] = (uint32_t)j;
+            found++;
+        }
+    }
+    return found;
+}
+
+static void count_group_job(void *ctx, uint64_t g)
+{
+    MatrixPreparation *p = (MatrixPreparation *)ctx;
+    p->listed[g] = group_columns(p->m, g, NULL);
+}
+
+static void list_group_job(void *ctx, uint64_t g)
+{
+    const RNS_IntegerMatrix m = ((const MatrixPreparation *)ctx)->m;
+    group_columns(m, g, m->group_columns + m->group_start[g]);
+}
+
+// The listed entries of group g at residue row k, reduced modulo its prime, with their Shoup
+// factors where the row uses them; item = k * groups + g.
+static void reduce_group_job(void *ctx, uint64_t item)
+{
+    const RNS_IntegerMatrix m = ((const MatrixPreparation *)ctx)->m;
+    const uint64_t groups = m->groups;
+    const uint64_t k = item / groups, g = item % groups;
+    const Modulus mod = m->base->mods[m->rows[k]];
+    const uint64_t listed = m->group_start[g + 1] - m->group_start[g];
+    const uint32_t *columns = m->group_columns + m->group_start[g];
+    const uint64_t at = k * m->entry_start[groups] + m->entry_start[g];
+    for (uint64_t r = 0; r < group_outputs(m, g); r++)
+    {
+        const int64_t *row = m->entries + (m->group_rows[g] + r) * m->n_in;
+        uint64_t *out = m->reduced + at + r * listed;
+        for (uint64_t p = 0; p < listed; p++)
+        {
+            const int64_t e = row[columns[p]];
+            // |e| as uint64_t, which holds |INT64_MIN| too.
+            const uint64_t v = modq(e < 0 ? (uint64_t)(-(e + 1)) + 1 : (uint64_t)e, mod);
+            out[p] = e < 0 && v != 0 ? mod->q - v : v;
+        }
+        if (m->shoup[k])
+            for (uint64_t p = 0; p < listed; p++)
+                m->shoup[k][m->entry_start[g] + r * listed + p] =
+                    (uint64_t)(((unsigned __int128)out[p] << 64) / mod->q);
     }
 }
 
-static void combination_tile_job(void *ctx, uint64_t unit)
+RNS_IntegerMatrix rns_integer_matrix_new(RNS_Base base, uint64_t mask, const int64_t *matrix,
+                                         uint64_t n_out, uint64_t n_in)
+{
+    assert(n_in < (1ULL << 32));
+    RNS_IntegerMatrix m = (RNS_IntegerMatrix)safe_malloc(sizeof(*m));
+    m->base = base;
+    m->mask = mask;
+    m->n_out = n_out;
+    m->n_in = n_in;
+    m->count = 0;
+    for (uint64_t i = 0; i < 64; i++)
+        m->row_index[i] = -1;
+    for (uint64_t i = 0; i < base->l; i++)
+        if (mask & (1ULL << i))
+        {
+            m->row_index[i] = (int64_t)m->count;
+            m->rows[m->count++] = i;
+        }
+    const uint64_t size = n_out * n_in;
+    // The prepared matrix lives as long as its owner keeps it and may be freed on another
+    // thread, so its tables come from the allocator, not the per-thread pool.
+    m->entries = (int64_t *)safe_malloc((size > 0 ? size : 1) * sizeof(int64_t));
+    if (size > 0)
+        memcpy(m->entries, matrix, size * sizeof(int64_t));
+    RowCounts counts = {m, (uint64_t *)safe_malloc((n_out > 0 ? n_out : 1) * sizeof(uint64_t))};
+    vfhe_parallel_for(n_out, 0, count_row_job, &counts);
+    choose_groups(m, counts.nonzeros);
+    free(counts.nonzeros);
+    const uint64_t groups = m->groups;
+
+    MatrixPreparation p = {m,
+                           (uint64_t *)safe_malloc((groups > 0 ? groups : 1) * sizeof(uint64_t))};
+    vfhe_parallel_for(groups, 0, count_group_job, &p);
+    m->group_start = (uint64_t *)safe_malloc((groups + 1) * sizeof(uint64_t));
+    m->entry_start = (uint64_t *)safe_malloc((groups + 1) * sizeof(uint64_t));
+    m->group_start[0] = m->entry_start[0] = 0;
+    for (uint64_t g = 0; g < groups; g++)
+    {
+        m->group_start[g + 1] = m->group_start[g] + p.listed[g];
+        m->entry_start[g + 1] = m->entry_start[g] + group_outputs(m, g) * p.listed[g];
+    }
+    const uint64_t listed = m->group_start[groups], stored = m->entry_start[groups];
+    m->group_columns = (uint32_t *)safe_malloc((listed > 0 ? listed : 1) * sizeof(uint32_t));
+    vfhe_parallel_for(groups, 0, list_group_job, &p);
+
+    // The union of the lists, ascending.
+    uint8_t *used = (uint8_t *)safe_malloc(n_in > 0 ? n_in : 1);
+    memset(used, 0, n_in > 0 ? n_in : 1);
+    for (uint64_t c = 0; c < listed; c++)
+        used[m->group_columns[c]] = 1;
+    m->union_count = 0;
+    for (uint64_t j = 0; j < n_in; j++)
+        m->union_count += used[j];
+    m->union_columns =
+        (uint32_t *)safe_malloc((m->union_count > 0 ? m->union_count : 1) * sizeof(uint32_t));
+    for (uint64_t j = 0, u = 0; j < n_in; j++)
+        if (used[j])
+            m->union_columns[u++] = (uint32_t)j;
+    free(used);
+
+    m->reduced =
+        (uint64_t *)safe_malloc((m->count * stored > 0 ? m->count * stored : 1) * sizeof(uint64_t));
+    m->shoup = (uint64_t **)safe_malloc((m->count > 0 ? m->count : 1) * sizeof(uint64_t *));
+    for (uint64_t k = 0; k < m->count; k++)
+        m->shoup[k] = row_uses_shoup(base, m->rows[k])
+                          ? (uint64_t *)safe_malloc((stored > 0 ? stored : 1) * sizeof(uint64_t))
+                          : NULL;
+    vfhe_parallel_for(m->count * groups, 0, reduce_group_job, &p);
+    free(p.listed);
+    return m;
+}
+
+void rns_integer_matrix_free(RNS_IntegerMatrix m)
+{
+    if (!m)
+        return;
+    for (uint64_t k = 0; k < m->count; k++)
+        free(m->shoup[k]);
+    free(m->shoup);
+    free(m->entries);
+    free(m->reduced);
+    free(m->group_rows);
+    free(m->group_start);
+    free(m->group_columns);
+    free(m->entry_start);
+    free(m->union_columns);
+    free(m);
+}
+
+typedef struct
+{
+    RNS_IntegerMatrix m;
+    const uint64_t *active; // the residue rows computed, as indices into m->rows
+    uint64_t tile, tiles, tiles_per_unit, runs; // coefficient tiles, and units per residue row
+    uint64_t ranges, groups_per_range;          // output-group ranges
+    uint64_t blocks;                            // term blocks
+    // Per group g and block b <= blocks, the list position where the block starts, at
+    // g * (blocks + 1) + b.
+    const uint64_t *offsets;
+    const uint64_t *short_rows; // the groups that are short rows, short_count of them
+    uint64_t short_count;
+    void **x; // per active residue row, the n_in input rows
+    void **o; // per active residue row, the n_out output rows
+} IntegerCombinations;
+
+// The first position in the ascending `list` of `count` columns that is at least `column`.
+static uint64_t first_at_least(const uint32_t *list, uint64_t count, uint64_t column)
+{
+    uint64_t lo = 0, hi = count;
+    while (lo < hi)
+    {
+        const uint64_t mid = lo + (hi - lo) / 2;
+        if (list[mid] < column)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+// A short row (at most COMBINATION_SHORT_ROW listed terms) on coefficients start .. start + n - 1
+// of one residue row: out = (first ? 0 : out) + sum_k entries[k] * x[terms[k]], term by term with
+// the element-wise kernels, an entry of 1 or q - 1 without a multiply.
+static void short_row_wide(uint64_t *out, uint64_t *const *x, uint64_t start,
+                           const uint64_t *entries, const uint32_t *terms, uint64_t count,
+                           uint64_t n, int first, Modulus mod)
+{
+    uint64_t *o = out + start;
+    if (count == 0 && first)
+        memset(o, 0, n * sizeof(uint64_t));
+    for (uint64_t k = 0; k < count; k++)
+    {
+        uint64_t *xt = x[terms[k]] + start;
+        const uint64_t e = entries[k];
+        if (first && k == 0)
+        {
+            if (e == 1)
+                memcpy(o, xt, n * sizeof(uint64_t));
+            else if (e == mod->q - 1)
+                mod_eltwise_negate(o, xt, n, mod);
+            else
+                mod_eltwise_scale(o, xt, e, n, mod);
+        }
+        else if (e == 1)
+            mod_eltwise_add(o, o, xt, n, mod);
+        else if (e == mod->q - 1)
+            mod_eltwise_sub(o, o, xt, n, mod);
+        else
+            mod_eltwise_fma(o, xt, e, n, mod);
+    }
+}
+
+// short_row_wide on a narrow row.
+static void short_row_narrow(uint32_t *out, uint32_t *const *x, uint64_t start,
+                             const uint64_t *entries, const uint32_t *terms, uint64_t count,
+                             uint64_t n, int first, Modulus mod)
+{
+    uint32_t *o = out + start;
+    if (count == 0 && first)
+        memset(o, 0, n * sizeof(uint32_t));
+    for (uint64_t k = 0; k < count; k++)
+    {
+        uint32_t *xt = x[terms[k]] + start;
+        const uint64_t e = entries[k];
+        if (first && k == 0)
+        {
+            if (e == 1)
+                memcpy(o, xt, n * sizeof(uint32_t));
+            else if (e == mod->q - 1)
+                mod_eltwise_negate_w32(o, xt, n, mod);
+            else
+                mod_eltwise_scale_w32(o, xt, e, n, mod);
+        }
+        else if (e == 1)
+            mod_eltwise_add_w32(o, o, xt, n, mod);
+        else if (e == mod->q - 1)
+            mod_eltwise_sub_w32(o, o, xt, n, mod);
+        else
+            mod_eltwise_fma_w32(o, xt, e, n, mod);
+    }
+}
+
+static void combination_unit_job(void *ctx, uint64_t unit)
 {
     const IntegerCombinations *c = (const IntegerCombinations *)ctx;
-    const uint64_t k = unit / c->tiles, start = (unit % c->tiles) * c->tile;
-    const uint64_t N = c->base->N, len = N - start < c->tile ? N - start : c->tile;
-    const uint64_t row = c->rows[k];
-    const uint64_t *entries = c->reduced + k * c->n_out * c->n_in;
-    void **x = c->x + k * c->n_in, **o = c->o + k * c->n_out;
-    if (rns_row_is_narrow(c->base, row))
-        mod_eltwise_linear_combinations_w32((uint32_t *const *)o, (uint32_t *const *)x, start,
-                                            entries, c->n_out, c->n_in, len, 0, c->base->mods[row]);
+    const RNS_IntegerMatrix m = c->m;
+    const uint64_t a = unit / (c->runs * c->ranges), rest = unit % (c->runs * c->ranges);
+    const uint64_t run = rest / c->ranges, range = rest % c->ranges;
+    const uint64_t k = c->active[a], row = m->rows[k], groups = m->groups;
+    const uint64_t g0 = range * c->groups_per_range;
+    const uint64_t g1 = g0 + c->groups_per_range < groups ? g0 + c->groups_per_range : groups;
+    const uint64_t t0 = run * c->tiles_per_unit;
+    const uint64_t t1 = t0 + c->tiles_per_unit < c->tiles ? t0 + c->tiles_per_unit : c->tiles;
+    const Modulus mod = m->base->mods[row];
+    const bool narrow = rns_row_is_narrow(m->base, row);
+    const uint64_t stored = m->entry_start[groups], N = m->base->N;
+    void **x = c->x + a * m->n_in, **o = c->o + a * m->n_out;
+
+    for (uint64_t t = t0; t < t1; t++)
+    {
+        const uint64_t start = t * c->tile, len = N - start < c->tile ? N - start : c->tile;
+        for (uint64_t b = 0; b < c->blocks; b++)
+            for (uint64_t g = g0; g < g1; g++)
+            {
+                if (is_short_row(m, g))
+                    continue;
+                const uint64_t lo = c->offsets[g * (c->blocks + 1) + b];
+                const uint64_t count = c->offsets[g * (c->blocks + 1) + b + 1] - lo;
+                if (count == 0 && b > 0)
+                    continue;
+                const uint64_t outputs = group_outputs(m, g);
+                const uint64_t listed = m->group_start[g + 1] - m->group_start[g];
+                const uint64_t at = k * stored + m->entry_start[g] + lo;
+                const uint64_t *entries[MOD_COMBINATION_ROWS], *shoup[MOD_COMBINATION_ROWS];
+                for (uint64_t r = 0; r < outputs; r++)
+                {
+                    entries[r] = m->reduced + at + r * listed;
+                    shoup[r] =
+                        m->shoup[k] ? m->shoup[k] + m->entry_start[g] + lo + r * listed : NULL;
+                }
+                const uint32_t *terms = m->group_columns + m->group_start[g] + lo;
+                void **out = o + m->group_rows[g];
+                if (narrow)
+                    mod_eltwise_linear_combination_group_w32(
+                        (uint32_t *const *)out, (uint32_t *const *)x, start, entries, terms, count,
+                        outputs, len, b == 0, mod);
+                else
+                    mod_eltwise_linear_combination_group(
+                        (uint64_t *const *)out, (uint64_t *const *)x, start, entries, shoup, terms,
+                        count, outputs, len, b == 0, mod);
+            }
+    }
+}
+
+// One short row on one residue row, over its whole length; item = active index * short_count +
+// position in short_rows.
+static void short_row_job(void *ctx, uint64_t item)
+{
+    const IntegerCombinations *c = (const IntegerCombinations *)ctx;
+    const RNS_IntegerMatrix m = c->m;
+    const uint64_t a = item / c->short_count, g = c->short_rows[item % c->short_count];
+    const uint64_t k = c->active[a], row = m->rows[k];
+    const uint64_t *entries = m->reduced + k * m->entry_start[m->groups] + m->entry_start[g];
+    const uint32_t *terms = m->group_columns + m->group_start[g];
+    const uint64_t count = m->group_start[g + 1] - m->group_start[g];
+    void **x = c->x + a * m->n_in, *out = c->o[a * m->n_out + m->group_rows[g]];
+    if (rns_row_is_narrow(m->base, row))
+        short_row_narrow((uint32_t *)out, (uint32_t *const *)x, 0, entries, terms, count,
+                         m->base->N, 1, m->base->mods[row]);
     else
-        mod_eltwise_linear_combinations((uint64_t *const *)o, (uint64_t *const *)x, start, entries,
-                                        c->n_out, c->n_in, len, 0, c->base->mods[row]);
+        short_row_wide((uint64_t *)out, (uint64_t *const *)x, 0, entries, terms, count, m->base->N,
+                       1, m->base->mods[row]);
 }
 
 void polynomial_integer_linear_combinations_RNS_polynomial(RNS_Polynomial *out,
                                                            RNS_Polynomial const *in,
-                                                           const int64_t *matrix, uint64_t n_out,
-                                                           uint64_t n_in)
+                                                           RNS_IntegerMatrix m)
 {
-    if (n_out == 0)
-        return;
-    RNS_Base base = out[0]->base;
-    const uint64_t N = base->N, mask = out[0]->rns_mask;
-    uint64_t rows[64], count = 0;
-    for (uint64_t i = 0; i < base->l; i++)
+    const uint64_t mask = m->n_out > 0 ? out[0]->rns_mask : 0;
+    assert((mask & ~m->mask) == 0);
+    uint64_t active[64], n_active = 0;
+    for (uint64_t i = 0; i < 64; i++)
         if (mask & (1ULL << i))
-            rows[count++] = i;
-    if (count == 0)
+            active[n_active++] = (uint64_t)m->row_index[i];
+    if (n_active == 0)
         return;
+    const uint64_t N = m->base->N, groups = m->groups;
 
-    const uint64_t per_row = n_out * n_in;
-    void **pointers = (void **)safe_malloc(count * (n_in + n_out) * sizeof(void *));
-    uint64_t *reduced =
-        (uint64_t *)safe_malloc((per_row > 0 ? count * per_row : 1) * sizeof(uint64_t));
-    IntegerCombinations c = {
-        .base = base,
-        .n_out = n_out,
-        .n_in = n_in,
-        .rows = rows,
-        .matrix = matrix,
-        .reduced = reduced,
-        .x = pointers,
-        .o = pointers + count * n_in,
-    };
-    for (uint64_t k = 0; k < count; k++)
-    {
-        const uint64_t row = rows[k];
-        const bool narrow = rns_row_is_narrow(base, row);
-        for (uint64_t j = 0; j < n_in; j++)
-            c.x[k * n_in + j] = narrow ? (void *)in[j]->rows32[row] : (void *)in[j]->rows64[row];
-        for (uint64_t r = 0; r < n_out; r++)
-            c.o[k * n_out + r] = narrow ? (void *)out[r]->rows32[row] : (void *)out[r]->rows64[row];
-    }
-    if (per_row > 0)
-        vfhe_parallel_for(count * n_out, 0, reduce_matrix_job, &c);
-
-    const uint64_t threads = vfhe_threads_for(0, count * N);
+    // Threads: none beside the caller for a small product, then coefficient tiles that leave
+    // every thread two or more.
+    const uint64_t work = m->entry_start[groups] * N * n_active;
+    const uint64_t threads = work < COMBINATION_SERIAL_WORK ? 1 : vfhe_threads_for(0, n_active * N);
     uint64_t tile = COMBINATION_TILE_MAX;
-    while (tile > COMBINATION_TILE_MIN && count * (N / tile) < 2 * threads)
+    while (tile > COMBINATION_TILE_MIN && n_active * (N / tile) < 2 * threads)
         tile /= 2;
+    IntegerCombinations c = {.m = m, .active = active};
     c.tile = tile < N ? tile : N;
     c.tiles = (N + c.tile - 1) / c.tile;
-    vfhe_parallel_for(count * c.tiles, 0, combination_tile_job, &c);
-    free(reduced);
-    free(pointers);
+    const uint64_t all_tiles = n_active * c.tiles;
+    c.tiles_per_unit = all_tiles >= 4 * threads ? all_tiles / (4 * threads) : 1;
+    c.runs = (c.tiles + c.tiles_per_unit - 1) / c.tiles_per_unit;
+    c.ranges = 1;
+    if (all_tiles < 2 * threads && groups > 1)
+    {
+        c.ranges = (2 * threads + all_tiles - 1) / all_tiles;
+        c.ranges = c.ranges < groups ? c.ranges : groups;
+    }
+    c.groups_per_range = (groups + c.ranges - 1) / c.ranges;
+
+    // Term blocks: runs of union columns, and where each group's list enters each block.
+    uint64_t block = COMBINATION_PANEL_BYTES / (c.tile * sizeof(uint64_t));
+    block = block < 1                             ? 1
+            : block > MOD_INNER_PRODUCT_MAX_TERMS ? MOD_INNER_PRODUCT_MAX_TERMS
+                                                  : block;
+    c.blocks = m->union_count == 0 ? 1 : (m->union_count + block - 1) / block;
+    const size_t offset_bytes = groups * (c.blocks + 1) * sizeof(uint64_t);
+    uint64_t *offsets = (uint64_t *)mempool_aligned_malloc(offset_bytes);
+    for (uint64_t g = 0; g < groups; g++)
+    {
+        const uint32_t *list = m->group_columns + m->group_start[g];
+        const uint64_t listed = m->group_start[g + 1] - m->group_start[g];
+        for (uint64_t b = 0; b < c.blocks; b++)
+            offsets[g * (c.blocks + 1) + b] =
+                b == 0 ? 0 : first_at_least(list, listed, m->union_columns[b * block]);
+        offsets[g * (c.blocks + 1) + c.blocks] = listed;
+    }
+    c.offsets = offsets;
+
+    const size_t pointer_bytes = n_active * (m->n_in + m->n_out) * sizeof(void *);
+    void **pointers = (void **)mempool_aligned_malloc(pointer_bytes);
+    c.x = pointers;
+    c.o = pointers + n_active * m->n_in;
+    for (uint64_t a = 0; a < n_active; a++)
+    {
+        const uint64_t row = m->rows[active[a]];
+        const bool narrow = rns_row_is_narrow(m->base, row);
+        for (uint64_t j = 0; j < m->n_in; j++)
+            c.x[a * m->n_in + j] = narrow ? (void *)in[j]->rows32[row] : (void *)in[j]->rows64[row];
+        for (uint64_t r = 0; r < m->n_out; r++)
+            c.o[a * m->n_out + r] =
+                narrow ? (void *)out[r]->rows32[row] : (void *)out[r]->rows64[row];
+    }
+    const size_t short_bytes = groups * sizeof(uint64_t);
+    uint64_t *short_rows = (uint64_t *)mempool_aligned_malloc(short_bytes);
+    c.short_count = 0;
+    for (uint64_t g = 0; g < groups; g++)
+        if (is_short_row(m, g))
+            short_rows[c.short_count++] = g;
+    c.short_rows = short_rows;
+    if (c.short_count < groups)
+        vfhe_parallel_for(n_active * c.runs * c.ranges, threads, combination_unit_job, &c);
+    if (c.short_count > 0)
+        vfhe_parallel_for(n_active * c.short_count, threads, short_row_job, &c);
+    mempool_free(short_rows, short_bytes);
+    mempool_free(pointers, pointer_bytes);
+    mempool_free(offsets, offset_bytes);
 }
 
 RNS_Polynomial polynomial_new_RNS_polynomial_rows(uint64_t N, uint64_t rns_mask, RNS_Base base)
