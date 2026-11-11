@@ -12,6 +12,7 @@ deeper one, or of depth 0). Around it: the two helpers on their own
 the reduction, the grouping of several claims, Fiat-Shamir, and which check
 rejects which lie."""
 
+import math
 import random
 from array import array
 
@@ -824,18 +825,39 @@ def test_soundness_error_is_the_draw_of_xi(field, num_vars, beta):
 # --- under the range protocol, which is what produces these claims ------------
 
 
-def _range_iop(field, ring, chunks):
+def _range_protocol(field, ring, chunks):
     from vfhe.piop.protocols import RangeDecomposition
+
+    return RangeDecomposition(
+        field, m=2, alphabet=1 << 8, kappa=2, ring=ring, chunks=chunks
+    )
+
+
+def _range_iop(field, ring, chunks):
     from vfhe.piop.relations import Relation_Range
 
     iop = _iop(field)
-    iop.register(
-        Relation_Range,
-        RangeDecomposition(
-            field, m=2, alphabet=1 << 8, kappa=2, ring=ring, chunks=chunks
-        ),
-    )
+    iop.register(Relation_Range, _range_protocol(field, ring, chunks))
     return iop
+
+
+def _most_acceptances(runs, error, false_failure=1e-6):
+    """The most of `runs` independent cheating runs a protocol of soundness
+    error `error` accepts, except with probability below `false_failure`
+    (the binomial tail)."""
+    tail = 1.0
+    for t in range(runs + 1):
+        tail -= math.comb(runs, t) * error**t * (1 - error) ** (runs - t)
+        if tail < false_failure:
+            return t
+    return runs
+
+
+def _assert_rarely_accepted(make_iop, statement, error, runs=64):
+    """Run the false `statement` on `runs` fresh IOPs from `make_iop` and
+    hold the acceptances to what a soundness error of `error` allows."""
+    accepted = sum(bool(make_iop().run(statement)) for _ in range(runs))
+    assert accepted <= _most_acceptances(runs, error)
 
 
 @pytest.mark.parametrize(
@@ -846,10 +868,11 @@ def _range_iop(field, ring, chunks):
 def test_range_proof_end_to_end(field, bound, bad):
     """The whole chain: a range claim over R_q reduces to lookups on the
     digits, proven by this protocol, which reduce to evaluation claims on
-    the real oracles. Accepted exactly when the coefficients are in range. A
-    bound of 7 bits in two digits adds a lookup into the smaller table of
-    the top digit (two tables in one run); a coefficient of `B` has digits
-    in `t_beta` and is caught by that one."""
+    the real oracles. Accepted when the coefficients are in range; otherwise
+    accepted at most as often as the soundness error allows, over repeated
+    runs. A bound of 7 bits in two digits adds a lookup into the smaller
+    table of the top digit (two tables in one run); a coefficient of `B` has
+    digits in `t_beta` and is caught by that one."""
     from vfhe.arith import Polynomial, Ring
     from vfhe.piop.relations import Relation_Range
 
@@ -873,8 +896,13 @@ def test_range_proof_end_to_end(field, bound, bad):
     statement = Statement(Relation_Range(bound), oracles=[v])
     bounded = bad is None
     assert statement.check() is bounded
+    if not bounded:
+        error = _range_protocol(field, ring, chunks).soundness_error(statement)
+        _assert_rarely_accepted(
+            lambda: _range_iop(field, ring, chunks), statement, error
+        )
+        return
     iop = _range_iop(field, ring, chunks)
-    assert iop.run(statement) is bounded
-    if bounded:
-        tables = 1 if bound == 1 << 6 else 2
-        assert len(_m_labels(iop)) == tables
+    assert iop.run(statement)
+    tables = 1 if bound == 1 << 6 else 2
+    assert len(_m_labels(iop)) == tables

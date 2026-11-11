@@ -134,13 +134,16 @@ foreach engine_name : engines.keys()
             ]
         endif
 
+        # gcov's counters slow the multithreaded native code several times over.
+        timeout = get_option('b_coverage') ? spec['timeout'] * 2 : spec['timeout']
+
         test(
             test_name,
             py,
             args: ['-m', 'pytest', '-q'] + spec['args'] + cov_args,
             env: pytest_env,
             workdir: meson.project_source_root(),
-            timeout: spec['timeout'],
+            timeout: timeout,
         )
     endforeach
 endforeach
