@@ -1248,10 +1248,84 @@ void test_matrix_product_over_a_ring_that_is_not_fully_split(void)
     rns_base_free(split);
 }
 
+/* Checks out[r] = sum_j m[r][j] in[j] against a 128-bit oracle, over `over` and on the rows of
+ * `mask` only; the other rows must come back untouched. Among the matrix entries are both ends of
+ * int64, zero, -1 and a multiple of a prime. At N = 64 the kernel splits more than 512 inputs into
+ * blocks of terms. */
+static void check_integer_combinations(RNS_Base over, uint64_t mask, uint64_t n_out, uint64_t n_in)
+{
+    RNS_Polynomial *in = malloc((n_in + 1) * sizeof(RNS_Polynomial));
+    RNS_Polynomial *out = malloc(n_out * sizeof(RNS_Polynomial));
+    int64_t *m = malloc((n_out * n_in + 1) * sizeof(int64_t));
+    for (uint64_t j = 0; j < n_in; j++)
+    {
+        in[j] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        fill(in[j], 400 + j);
+        in[j]->rns_mask = mask;
+    }
+    for (uint64_t r = 0; r < n_out; r++)
+    {
+        out[r] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+        fill(out[r], 500 + r);
+        out[r]->rns_mask = mask;
+    }
+    for (uint64_t k = 0; k < n_out * n_in; k++)
+    {
+        const int64_t special[] = {INT64_MIN, INT64_MAX, -1, 0, (int64_t)PRIMES[0], -3};
+        m[k] = k % 7 < 6 ? special[k % 7] : (int64_t)(k * 0x9E3779B97F4A7C15ULL) >> (k % 40);
+    }
+    polynomial_integer_linear_combinations_RNS_polynomial(out, in, m, n_out, n_in);
+    RNS_Polynomial before = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
+    for (uint64_t r = 0; r < n_out; r++)
+    {
+        TEST_ASSERT_EQUAL_UINT64(mask, out[r]->rns_mask);
+        fill(before, 500 + r);
+        for (uint64_t i = 0; i < TEST_L; i++)
+            for (uint64_t c = 0; c < TEST_N; c++)
+            {
+                const uint64_t p = PRIMES[i];
+                uint64_t expected = mask & (1ULL << i) ? 0 : coeff(before, i, c);
+                for (uint64_t j = 0; j < n_in && (mask & (1ULL << i)); j++)
+                {
+                    const int64_t x = m[r * n_in + j];
+                    const uint64_t m = (uint64_t)((x % (int64_t)p + (int64_t)p) % (int64_t)p);
+                    expected =
+                        (uint64_t)((expected + (unsigned __int128)m * coeff(in[j], i, c)) % p);
+                }
+                TEST_ASSERT_EQUAL_UINT64(expected, coeff(out[r], i, c));
+            }
+        free_RNS_polynomial(out[r]);
+    }
+    free_RNS_polynomial(before);
+    for (uint64_t j = 0; j < n_in; j++)
+        free_RNS_polynomial(in[j]);
+    free(in);
+    free(out);
+    free(m);
+}
+
+void test_integer_combinations_match_a_wide_oracle(void)
+{
+    check_integer_combinations(base, TEST_MASK, 7, 5);
+    check_integer_combinations(base, TEST_MASK, 2, 1100);
+    check_integer_combinations(base, 1ULL << (TEST_L - 1), 4, 9); // the narrow row alone
+    check_integer_combinations(base, 0x5, 3, 0);
+}
+
+void test_integer_combinations_over_a_ring_that_is_not_fully_split(void)
+{
+    RNS_Base split = new_rns_base(PRIMES, 2, TEST_N, TEST_L);
+    check_integer_combinations(split, TEST_MASK, 5, 6);
+    check_integer_combinations(split, 0x6, 1, 3);
+    rns_base_free(split);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_matrix_product_matches_the_term_by_term_products);
+    RUN_TEST(test_integer_combinations_match_a_wide_oracle);
+    RUN_TEST(test_integer_combinations_over_a_ring_that_is_not_fully_split);
     RUN_TEST(test_matrix_product_over_a_ring_that_is_not_fully_split);
     RUN_TEST(test_capabilities_and_names);
     RUN_TEST(test_new_starts_empty_and_zero_is_canonical);

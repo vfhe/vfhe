@@ -214,6 +214,26 @@ void mod_eltwise_inner_product_addto(uint64_t *out, uint64_t *const *a, uint64_t
         mod_eltwise_mul_addto(out, a[t], b[t], head, mod);
 }
 
+void mod_eltwise_linear_combinations(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
+                                     const uint64_t *matrix, uint64_t rows, uint64_t terms,
+                                     uint64_t n, int accumulate, Modulus mod)
+{
+    const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;
+    if (head < n)
+        mod_eltwise_linear_combinations_gen(out, x, offset + head, matrix, rows, terms, n - head,
+                                            accumulate, mod);
+    if (head == 0)
+        return;
+    // The block sums of mod50.c need the IFMA family and q > 2^26, as the inner product's do;
+    // every other modulus takes the 128-bit sums of the scalar body.
+    if (mod_shoup_shift(mod->q) == MOD_SHIFT_50 && mod->q > (1ULL << 26))
+        mod_eltwise_linear_combinations_50(out, x, offset, matrix, rows, terms, head, accumulate,
+                                           mod);
+    else
+        mod_eltwise_linear_combinations_gen(out, x, offset, matrix, rows, terms, head, accumulate,
+                                            mod);
+}
+
 void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     const uint64_t head = n - n % MOD_MIN_VECTOR_LEN;

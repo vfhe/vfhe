@@ -143,6 +143,13 @@ void mod_eltwise_inner_product_addto(uint64_t *out, uint64_t *const *a, uint64_t
     mod_eltwise_inner_product_addto_gen(out, a, b, terms, n, mod);
 }
 
+void mod_eltwise_linear_combinations(uint64_t *const *out, uint64_t *const *x, uint64_t offset,
+                                     const uint64_t *matrix, uint64_t rows, uint64_t terms,
+                                     uint64_t n, int accumulate, Modulus mod)
+{
+    mod_eltwise_linear_combinations_gen(out, x, offset, matrix, rows, terms, n, accumulate, mod);
+}
+
 void mod_eltwise_mul_subto(uint64_t *out, uint64_t *in1, uint64_t *in2, uint64_t n, Modulus mod)
 {
     mod_eltwise_mul_subto_gen(out, in1, in2, n, mod);

@@ -640,6 +640,107 @@ void polynomial_matrix_mul_addto_RNS_polynomial(RNS_Polynomial *out, RNS_Polynom
     free(a_rows);
 }
 
+// The column tiles of polynomial_integer_linear_combinations_RNS_polynomial: the widest power
+// of two between these that still leaves every thread two tiles or more.
+#define COMBINATION_TILE_MAX 256
+#define COMBINATION_TILE_MIN 32
+
+typedef struct
+{
+    RNS_Base base;
+    uint64_t n_out, n_in, tile, tiles;
+    const uint64_t *rows;  // the active base rows, `count` of them
+    const int64_t *matrix; // n_out x n_in, row-major
+    uint64_t *reduced;     // per active row, the matrix modulo its prime
+    void **x;              // per active row, the n_in input rows
+    void **o;              // per active row, the n_out output rows
+} IntegerCombinations;
+
+static void reduce_matrix_job(void *ctx, uint64_t item)
+{
+    const IntegerCombinations *c = (const IntegerCombinations *)ctx;
+    const uint64_t k = item / c->n_out, r = item % c->n_out;
+    Modulus mod = c->base->mods[c->rows[k]];
+    const int64_t *entries = c->matrix + r * c->n_in;
+    uint64_t *out = c->reduced + (k * c->n_out + r) * c->n_in;
+    for (uint64_t j = 0; j < c->n_in; j++)
+    {
+        // |entries| as uint64_t, which holds |INT64_MIN| too.
+        const uint64_t m =
+            modq(entries[j] < 0 ? (uint64_t)(-(entries[j] + 1)) + 1 : (uint64_t)entries[j], mod);
+        out[j] = entries[j] < 0 && m != 0 ? mod->q - m : m;
+    }
+}
+
+static void combination_tile_job(void *ctx, uint64_t unit)
+{
+    const IntegerCombinations *c = (const IntegerCombinations *)ctx;
+    const uint64_t k = unit / c->tiles, start = (unit % c->tiles) * c->tile;
+    const uint64_t N = c->base->N, len = N - start < c->tile ? N - start : c->tile;
+    const uint64_t row = c->rows[k];
+    const uint64_t *entries = c->reduced + k * c->n_out * c->n_in;
+    void **x = c->x + k * c->n_in, **o = c->o + k * c->n_out;
+    if (rns_row_is_narrow(c->base, row))
+        mod_eltwise_linear_combinations_w32((uint32_t *const *)o, (uint32_t *const *)x, start,
+                                            entries, c->n_out, c->n_in, len, 0, c->base->mods[row]);
+    else
+        mod_eltwise_linear_combinations((uint64_t *const *)o, (uint64_t *const *)x, start, entries,
+                                        c->n_out, c->n_in, len, 0, c->base->mods[row]);
+}
+
+void polynomial_integer_linear_combinations_RNS_polynomial(RNS_Polynomial *out,
+                                                           RNS_Polynomial const *in,
+                                                           const int64_t *matrix, uint64_t n_out,
+                                                           uint64_t n_in)
+{
+    if (n_out == 0)
+        return;
+    RNS_Base base = out[0]->base;
+    const uint64_t N = base->N, mask = out[0]->rns_mask;
+    uint64_t rows[64], count = 0;
+    for (uint64_t i = 0; i < base->l; i++)
+        if (mask & (1ULL << i))
+            rows[count++] = i;
+    if (count == 0)
+        return;
+
+    const uint64_t per_row = n_out * n_in;
+    void **pointers = (void **)safe_malloc(count * (n_in + n_out) * sizeof(void *));
+    uint64_t *reduced =
+        (uint64_t *)safe_malloc((per_row > 0 ? count * per_row : 1) * sizeof(uint64_t));
+    IntegerCombinations c = {
+        .base = base,
+        .n_out = n_out,
+        .n_in = n_in,
+        .rows = rows,
+        .matrix = matrix,
+        .reduced = reduced,
+        .x = pointers,
+        .o = pointers + count * n_in,
+    };
+    for (uint64_t k = 0; k < count; k++)
+    {
+        const uint64_t row = rows[k];
+        const bool narrow = rns_row_is_narrow(base, row);
+        for (uint64_t j = 0; j < n_in; j++)
+            c.x[k * n_in + j] = narrow ? (void *)in[j]->rows32[row] : (void *)in[j]->rows64[row];
+        for (uint64_t r = 0; r < n_out; r++)
+            c.o[k * n_out + r] = narrow ? (void *)out[r]->rows32[row] : (void *)out[r]->rows64[row];
+    }
+    if (per_row > 0)
+        vfhe_parallel_for(count * n_out, 0, reduce_matrix_job, &c);
+
+    const uint64_t threads = vfhe_threads_for(0, count * N);
+    uint64_t tile = COMBINATION_TILE_MAX;
+    while (tile > COMBINATION_TILE_MIN && count * (N / tile) < 2 * threads)
+        tile /= 2;
+    c.tile = tile < N ? tile : N;
+    c.tiles = (N + c.tile - 1) / c.tile;
+    vfhe_parallel_for(count * c.tiles, 0, combination_tile_job, &c);
+    free(reduced);
+    free(pointers);
+}
+
 RNS_Polynomial polynomial_new_RNS_polynomial_rows(uint64_t N, uint64_t rns_mask, RNS_Base base)
 {
     RNS_Polynomial res = (RNS_Polynomial)safe_malloc(sizeof(*res));

@@ -10,8 +10,15 @@ Every scheme here is rank 1 with special primes, so key switches divide by them
 from __future__ import annotations
 
 from harness import Case, Shape, benchmark
-from vfhe.arith import Polynomial, Ring, RNSPolynomial, RNSRing
-from vfhe.mlwe import MLWE, CMUX_batch, MGSW_Scheme, MLWE_Key, MLWE_Scheme
+from vfhe.arith import Polynomial, Ring, RNSPolynomial, RNSRing, set_generic_only
+from vfhe.mlwe import (
+    MLWE,
+    CMUX_batch,
+    IntegerMatrix,
+    MGSW_Scheme,
+    MLWE_Key,
+    MLWE_Scheme,
+)
 
 SHAPES = ["ckks-n12-3p", "ckks-n13-7p", "ckks-n14-7p"]
 
@@ -20,6 +27,27 @@ SHAPES = ["ckks-n12-3p", "ckks-n13-7p", "ckks-n14-7p"]
 BATCH_SHAPES = [
     Shape("n10-2p-x16", log_n=10, prime_bits=[50, 50], special_bits=[50], count=16),
     Shape("n13-4p-x256", log_n=13, prime_bits=[50] * 4, special_bits=[50], count=256),
+]
+
+#: An integer matrix times a vector of samples: ``outputs`` x ``inputs``
+#: weights, a ring of degree 2^log_n. The second is a dense layer's shape.
+MATRIX_SHAPES = [
+    Shape(
+        "n10-2p-8x64",
+        log_n=10,
+        prime_bits=[50, 50],
+        special_bits=[50],
+        outputs=8,
+        inputs=64,
+    ),
+    Shape(
+        "n12-2p-138x1024",
+        log_n=12,
+        prime_bits=[50, 50],
+        special_bits=[50],
+        outputs=138,
+        inputs=1024,
+    ),
 ]
 
 # A generator of the cyclic part of the Galois group of X^N + 1.
@@ -174,3 +202,43 @@ def relinearization_key_generation(shape: Shape) -> Case:
     scheme = scheme_of(shape)
     key = scheme.key_gen_sparse(64, 3.2)
     return Case(lambda: scheme.gen_rlk(key, key, lvl=0))
+
+
+def _integer_linear_combinations(shape: Shape, generic: bool) -> Case:
+    scheme = scheme_of(shape)
+    key = scheme.key_gen_sparse(64, 3.2)
+    top = scheme.rings[0]
+    n_out, n_in = shape["outputs"], shape["inputs"]
+    cts = [scheme.sample(top.random_element(), key) for _ in range(n_in)]
+    rows = [
+        [(31 * r + 17 * j) % 2049 - 1024 for j in range(n_in)] for r in range(n_out)
+    ]
+    matrix = IntegerMatrix(rows)
+    decryptions = [scheme.linear_decrypt(c.copy(), key) for c in cts]
+
+    def op() -> list[MLWE]:
+        set_generic_only(generic)
+        try:
+            return scheme.linear_combinations(cts, matrix)
+        finally:
+            set_generic_only(False)
+
+    def check(result: list[MLWE]) -> None:
+        expected = decryptions[0] * rows[0][0]
+        for w, d in zip(rows[0][1:], decryptions[1:], strict=True):
+            expected = expected + d * w
+        assert scheme.linear_decrypt(result[0], key) == expected
+
+    return Case(op, check=check, items=n_out)
+
+
+@benchmark(shapes=MATRIX_SHAPES)
+def integer_linear_combinations(shape: Shape) -> Case:
+    """An integer matrix times a vector of samples, one matrix kernel per component."""
+    return _integer_linear_combinations(shape, generic=False)
+
+
+@benchmark(shapes=MATRIX_SHAPES)
+def integer_linear_combinations_generic_path(shape: Shape) -> Case:
+    """The same product on the generic path: one pass over a sample per weight."""
+    return _integer_linear_combinations(shape, generic=True)

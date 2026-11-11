@@ -4,6 +4,8 @@
 
 #include "arith_internal.h"
 
+#include <string.h>
+
 /* Element-wise modular arithmetic on coefficients held as `uint32_t`, so an
    AVX-512 vector covers 16 of them instead of 8.
  *
@@ -691,4 +693,204 @@ void mod_eltwise_reduce_centered_wide_from_narrow(uint64_t *out, uint32_t *in, u
     const uint64_t h = W32_HEAD(n, 8);
     W32_VEC(h, w32_reduce_centered_to_wide_vec(out, in, q_in, h, mod));
     w32_reduce_centered_to_wide_scalar(out + h, in + h, q_in, n - h, mod);
+}
+
+/* mod_eltwise_linear_combinations on narrow rows, whose values are 32-bit words. */
+
+/* The scalar body: the whole implementation without AVX-512, and the columns past the last whole
+   vector with it. Products of values below q <= 2^30 are below 2^60, so 15 of them are summed in
+   64 bits before each reduction. The columns are taken in blocks of W32_COMBINATION_BLOCK, whose
+   sums are kept in two stack arrays. */
+#define W32_COMBINATION_BLOCK 64
+
+static void w32_linear_combinations_scalar(uint32_t *const *out, uint32_t *const *x,
+                                           uint64_t offset, const uint64_t *matrix, uint64_t rows,
+                                           uint64_t terms, uint64_t n, int accumulate, Modulus mod)
+{
+    const uint64_t q = mod->q;
+    uint64_t sum[W32_COMBINATION_BLOCK], acc[W32_COMBINATION_BLOCK];
+    for (uint64_t r = 0; r < rows; r++)
+    {
+        const uint64_t *matrix_row = matrix + r * terms;
+        uint32_t *o = out[r] + offset;
+        for (uint64_t i0 = 0; i0 < n; i0 += W32_COMBINATION_BLOCK)
+        {
+            const uint64_t len = n - i0 < W32_COMBINATION_BLOCK ? n - i0 : W32_COMBINATION_BLOCK;
+            for (uint64_t i = 0; i < len; i++)
+                acc[i] = accumulate ? o[i0 + i] : 0;
+            for (uint64_t t0 = 0; t0 < terms; t0 += 15)
+            {
+                const uint64_t t1 = terms - t0 < 15 ? terms : t0 + 15;
+                for (uint64_t i = 0; i < len; i++)
+                    sum[i] = 0;
+                for (uint64_t t = t0; t < t1; t++)
+                {
+                    const uint64_t entry = matrix_row[t];
+                    const uint32_t *xt = x[t] + offset + i0;
+                    for (uint64_t i = 0; i < len; i++)
+                        sum[i] += entry * xt[i];
+                }
+                for (uint64_t i = 0; i < len; i++)
+                    acc[i] = add_modq(acc[i], modq(sum[i], mod), q);
+            }
+            for (uint64_t i = 0; i < len; i++)
+                o[i0 + i] = (uint32_t)acc[i];
+        }
+    }
+}
+
+#if VFHE_HAVE_AVX512IFMA
+
+/* The vector body. The outputs are computed in tiles of W32_LC_ROWS outputs by W32_LC_VECS vectors
+   of 16 words. `vpmuludq` multiplies the low 32-bit halves of 64-bit lanes, so the even and the
+   odd words of a vector are multiplied separately, and each output vector has two vectors of
+   eight 64-bit sums.
+
+   A group of terms is summed exactly in 64 bits: each product is at most (q - 1)^2, and a group
+   holds as many terms as fit below 2^64 (at least 16, since q <= 2^30). After each group, its sum
+   is split into its high and low 32-bit halves, which are added to two running sums. Those stay
+   below 2^60 over a whole block of terms, so the block is reduced once at its end, as
+   hi * (2^32 mod q) + lo, with three w32_reduce_prod calls.
+
+   The terms are taken in blocks of at most W32_LC_PANEL_WORDS words of arrays, so that they stay
+   in L2 while every tile of outputs reads them. */
+#define W32_LC_ROWS 2
+#define W32_LC_VECS 2
+#define W32_LC_PANEL_WORDS (1 << 16)
+#define W32_LC_MAX_GROUP 4096
+
+// Sums `terms` terms into the tile of `rows` outputs by `vecs` vectors that starts at word `off`,
+// in groups of `group` terms, then reduces the sums into the outputs, replacing what they hold
+// when `first` and adding to it otherwise. A term whose matrix entries are zero for all of the
+// tile's outputs is skipped.
+static inline __attribute__((always_inline)) void
+w32_lc_tile(const int rows, const int vecs, uint32_t *const *out, uint32_t *const *x, uint64_t off,
+            const uint64_t *matrix, uint64_t matrix_stride, uint64_t terms, uint64_t group,
+            int first, Modulus mod)
+{
+    W32_LOCALS;
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i low_mask = _mm512_set1_epi64(0xffffffffLL);
+    const __m512i two32 = _mm512_set1_epi64((long long)((1ULL << 32) % mod->q));
+    // [r][2 v] holds the even words of vector v, [r][2 v + 1] the odd ones.
+    __m512i sum[W32_LC_ROWS][2 * W32_LC_VECS], hi[W32_LC_ROWS][2 * W32_LC_VECS],
+        lo[W32_LC_ROWS][2 * W32_LC_VECS];
+    for (int r = 0; r < rows; r++)
+        for (int k = 0; k < 2 * vecs; k++)
+            hi[r][k] = lo[r][k] = zero;
+    for (uint64_t t0 = 0; t0 < terms; t0 += group)
+    {
+        const uint64_t t1 = terms - t0 < group ? terms : t0 + group;
+        for (int r = 0; r < rows; r++)
+            for (int k = 0; k < 2 * vecs; k++)
+                sum[r][k] = zero;
+        for (uint64_t t = t0; t < t1; t++)
+        {
+            uint64_t entry[W32_LC_ROWS], nonzero = 0;
+            for (int r = 0; r < rows; r++)
+            {
+                entry[r] = matrix[r * matrix_stride + t];
+                nonzero |= entry[r];
+            }
+            if (nonzero == 0)
+                continue;
+            __m512i xv[2 * W32_LC_VECS];
+            for (int v = 0; v < vecs; v++)
+            {
+                xv[2 * v] = _mm512_loadu_si512((const __m512i *)(x[t] + off) + v);
+                xv[2 * v + 1] = _mm512_srli_epi64(xv[2 * v], 32);
+            }
+            for (int r = 0; r < rows; r++)
+            {
+                const __m512i broadcast = _mm512_set1_epi64((long long)entry[r]);
+                for (int k = 0; k < 2 * vecs; k++)
+                    sum[r][k] = _mm512_add_epi64(sum[r][k], _mm512_mul_epu32(xv[k], broadcast));
+            }
+        }
+        for (int r = 0; r < rows; r++)
+            for (int k = 0; k < 2 * vecs; k++)
+            {
+                hi[r][k] = _mm512_add_epi64(hi[r][k], _mm512_srli_epi64(sum[r][k], 32));
+                lo[r][k] = _mm512_add_epi64(lo[r][k], _mm512_and_si512(sum[r][k], low_mask));
+            }
+    }
+    for (int r = 0; r < rows; r++)
+        for (int v = 0; v < vecs; v++)
+        {
+            __m512i half[2];
+            for (int e = 0; e < 2; e++)
+            {
+                const __m512i h = w32_reduce_prod(hi[r][2 * v + e], q64, barr_lo, prs);
+                const __m512i l = w32_reduce_prod(lo[r][2 * v + e], q64, barr_lo, prs);
+                __m512i s = _mm512_add_epi64(
+                    w32_reduce_prod(_mm512_mul_epu32(h, two32), q64, barr_lo, prs), l);
+                half[e] = _mm512_min_epu64(s, _mm512_sub_epi64(s, q64));
+            }
+            // both halves are below q < 2^32, so each fills the low half of its 64-bit lane
+            __m512i res = _mm512_or_si512(half[0], _mm512_slli_epi64(half[1], 32));
+            __m512i *o = (__m512i *)(out[r] + off) + v;
+            if (!first)
+                res = w32_add(_mm512_loadu_si512(o), res, q32);
+            _mm512_storeu_si512(o, res);
+        }
+}
+
+// Runs one block of terms over every tile of `rows` <= W32_LC_ROWS outputs: tiles of W32_LC_VECS
+// vectors as far as they fit, then tiles of one vector.
+static inline __attribute__((always_inline)) void
+w32_lc_rows(const int rows, uint32_t *const *out, uint32_t *const *x, uint64_t offset,
+            const uint64_t *matrix, uint64_t matrix_stride, uint64_t terms, uint64_t n_vec,
+            uint64_t group, int first, Modulus mod)
+{
+    uint64_t v = 0;
+    for (; v + W32_LC_VECS <= n_vec; v += W32_LC_VECS)
+        w32_lc_tile(rows, W32_LC_VECS, out, x, offset + W32_LANES * v, matrix, matrix_stride, terms,
+                    group, first, mod);
+    for (; v < n_vec; v++)
+        w32_lc_tile(rows, 1, out, x, offset + W32_LANES * v, matrix, matrix_stride, terms, group,
+                    first, mod);
+}
+
+// `n` is a multiple of W32_LANES.
+static void w32_linear_combinations_vec(uint32_t *const *out, uint32_t *const *x, uint64_t offset,
+                                        const uint64_t *matrix, uint64_t rows, uint64_t terms,
+                                        uint64_t n, int accumulate, Modulus mod)
+{
+    const uint64_t n_vec = n / W32_LANES;
+    if (terms == 0)
+    {
+        if (!accumulate)
+            for (uint64_t r = 0; r < rows; r++)
+                memset(out[r] + offset, 0, n * sizeof(uint32_t));
+        return;
+    }
+    const uint64_t largest = (mod->q - 1) * (mod->q - 1);
+    uint64_t group = largest == 0 ? W32_LC_MAX_GROUP : UINT64_MAX / largest;
+    group = group > W32_LC_MAX_GROUP ? W32_LC_MAX_GROUP : group;
+    uint64_t block = W32_LC_PANEL_WORDS / n;
+    block = block < 1 ? 1 : block;
+    for (uint64_t t0 = 0; t0 < terms; t0 += block)
+    {
+        const uint64_t len = terms - t0 < block ? terms - t0 : block;
+        const int first = !accumulate && t0 == 0;
+        uint64_t r = 0;
+        for (; r + W32_LC_ROWS <= rows; r += W32_LC_ROWS)
+            w32_lc_rows(W32_LC_ROWS, out + r, x + t0, offset, matrix + r * terms + t0, terms, len,
+                        n_vec, group, first, mod);
+        if (r < rows)
+            w32_lc_rows(1, out + r, x + t0, offset, matrix + r * terms + t0, terms, len, n_vec,
+                        group, first, mod);
+    }
+}
+
+#endif // VFHE_HAVE_AVX512IFMA
+
+void mod_eltwise_linear_combinations_w32(uint32_t *const *out, uint32_t *const *x, uint64_t offset,
+                                         const uint64_t *matrix, uint64_t rows, uint64_t terms,
+                                         uint64_t n, int accumulate, Modulus mod)
+{
+    const uint64_t h = W32_HEAD(n, W32_LANES);
+    W32_VEC(h,
+            w32_linear_combinations_vec(out, x, offset, matrix, rows, terms, h, accumulate, mod));
+    w32_linear_combinations_scalar(out, x, offset + h, matrix, rows, terms, n - h, accumulate, mod);
 }

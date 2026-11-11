@@ -211,8 +211,13 @@ extern "C"
     void mlwe_RNS_integer_linear_combination(RNS_MLWE out, RNS_MLWE *in, const int64_t *weights,
                                              uint64_t n);
     // out[j] = sum_i weights[j * n_in + i] * in[i] for j < n_out: an integer
-    // matrix times a vector of samples, each term one pass over the sample.
-    // Up to `n_threads` threads (0: the library limit, see vfhe_threads_for).
+    // matrix times a vector of samples. Over an RNS ring, when each component
+    // has one domain over the inputs and one row mask over the inputs and
+    // the outputs, every component is one call to
+    // polynomial_integer_linear_combinations_RNS_polynomial. Otherwise, and
+    // always on the generic path, each nonzero weight is one pass over its
+    // sample. Up to `n_threads` threads (0: the library limit, see
+    // vfhe_threads_for).
     void mlwe_RNS_integer_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const int64_t *weights,
                                               uint64_t n_out, uint64_t n_in, uint64_t n_threads);
     void mlwe_scale_RNSc_mlwe(RNSc_MLWE c, uint64_t scale);
