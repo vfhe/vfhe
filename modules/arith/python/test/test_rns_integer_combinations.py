@@ -5,6 +5,7 @@ ring elements, against the products computed coefficient by coefficient."""
 
 import pytest
 from vfhe.arith import IntegerMatrix, Polynomial, Ring, repr
+from vfhe.util import parallel
 
 # (N, split_degree, prime sizes): narrow and wide rows, both IFMA-family and
 # wider primes, d = 1, 2, 4, and rows shorter than one column tile.
@@ -90,3 +91,76 @@ def test_refusals():
         ring.integer_linear_combinations(
             [elements[0], Polynomial(ring)], IntegerMatrix([[1, 2]])
         )
+
+
+def test_sparse_matrix_and_a_zero_group(ring):
+    # Groups of three rows read only their nonzero columns; rows 3-5 are all zero.
+    n_in = 20
+    rows = [
+        [
+            0 if (r in (3, 4, 5) or (r + j) % 6) else (r + 1) * (j - 7)
+            for j in range(n_in)
+        ]
+        for r in range(8)
+    ]
+    elements = [ring.random_element() for _ in range(n_in)]
+    outs = ring.integer_linear_combinations(elements, IntegerMatrix(rows))
+    for r, out in enumerate(outs):
+        assert out.get_coeff_matrix(out.repr) == _expected(ring, elements, rows, r)
+
+
+def test_the_prepared_matrix_is_kept_per_base():
+    # One prepared form per base: a ring with fewer primes reuses it, one with
+    # a prime it does not cover rebuilds it for both.
+    matrix = IntegerMatrix([[1, -2], [3, 4]])
+    ring = Ring(16, prime_size=[30, 50], split_degree=1)
+    lower = ring.quotient_ring(ell=1)
+    first = matrix.prepared(ring)
+    assert matrix.prepared(ring) is first
+    assert matrix.prepared(lower) is first
+    other = Ring(16, prime_size=[30, 50, 45], split_degree=1)
+    grown = matrix.prepared(other)
+    assert grown is not first
+    assert matrix.prepared(ring) is grown
+    for r in (lower, other):
+        a, b = r.random_element(), r.random_element()
+        x, y = r.integer_linear_combinations([a, b], matrix)
+        assert x == a - b - b
+        assert y == a + a + a + b + b + b + b
+
+
+@pytest.mark.parametrize(
+    ("N", "threads", "n_out", "n_in"),
+    [
+        # Few coefficient tiles for the threads: the output groups split in ranges.
+        (1024, 96, 9, 300),
+        # Many coefficient tiles per thread: units of several tiles.
+        (16384, 2, 4, 200),
+    ],
+)
+def test_the_work_splits_across_threads(N, threads, n_out, n_in):
+    np = pytest.importorskip("numpy")
+    ring = Ring(N, prime_size=[50, 28], split_degree=1)
+    rng = np.random.default_rng(N)
+    entries = rng.integers(-(2**20), 2**20, size=(n_out, n_in), dtype=np.int64)
+    elements = [ring.random_element() for _ in range(n_in)]
+    previous = parallel.num_threads()
+    parallel.set_num_threads(threads)
+    try:
+        outs = ring.integer_linear_combinations(elements, IntegerMatrix(entries))
+    finally:
+        parallel.set_num_threads(previous)
+    words = np.stack(
+        [
+            np.frombuffer(e.to_uint64(repr.ntt), np.uint64).reshape(2, N)
+            for e in elements
+        ]
+    )
+    for k, p in enumerate(ring.primes):
+        reduced = [[int(v) % p for v in row] for row in entries.tolist()]
+        columns = [[int(v) for v in words[j, k]] for j in range(n_in)]
+        for r in (0, n_out - 1):
+            got = np.frombuffer(outs[r].to_uint64(repr.ntt), np.uint64).reshape(2, N)[k]
+            for i in (0, 1, N // 2, N - 1):
+                expected = sum(reduced[r][j] * columns[j][i] for j in range(n_in)) % p
+                assert int(got[i]) == expected

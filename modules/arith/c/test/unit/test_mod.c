@@ -773,33 +773,54 @@ void test_mod_eltwise_inner_product_addto_past_its_term_limit(void)
             check_inner_product(bits[i], 16, MOD_INNER_PRODUCT_MAX_TERMS + 5, extreme);
 }
 
-/* Checks linear combinations with a matrix of scalars against a 128-bit oracle, for every kernel
-   family. Moduli of 26 and 27 bits sit on either side of the IFMA family's lower bound. The
-   lengths cover whole vectors, fewer than one vector and a tail; the outputs are written at an
-   offset into longer rows, both replacing and accumulating. Every third term has zero matrix
-   entries for all the rows, which the IFMA tiles skip. Operands all q - 1 give the largest
-   unreduced sums. */
-static void check_linear_combinations_mod(uint64_t q, uint64_t n, uint64_t rows, uint64_t terms,
-                                          int extreme, int accumulate)
+/* Checks the linear combinations of a group of outputs over a list of terms against a 128-bit
+   oracle, for every kernel family: moduli of 26 and 27 bits sit on either side of the IFMA
+   family's lower bound, and 50 bits and more take the Shoup body. The lengths cover whole
+   vectors, fewer than one vector and a tail; the outputs are written at an offset into longer
+   rows, both replacing and accumulating. The list skips every third input, and lists them out of
+   the order they are stored in. Operands all q - 1 give the largest unreduced sums. On a narrow
+   modulus the 32-bit body is checked on the same values. */
+static void check_group_mod(uint64_t q, uint64_t n, uint64_t rows, uint64_t inputs, int extreme,
+                            int first)
 {
     const uint64_t offset = 8, width = offset + n;
     Modulus mod = mod_new(q);
-    uint64_t **x = malloc((terms + 1) * sizeof(uint64_t *));
-    uint64_t **out = malloc(rows * sizeof(uint64_t *));
-    uint64_t *m = malloc((rows * terms + 1) * sizeof(uint64_t));
-    uint64_t *ref = malloc(rows * width * sizeof(uint64_t));
-    for (uint64_t t = 0; t < terms; t++)
+    uint64_t **x = malloc((inputs + 1) * sizeof(uint64_t *));
+    uint64_t *out[MOD_COMBINATION_ROWS];
+    const uint64_t *entries[MOD_COMBINATION_ROWS], *shoup[MOD_COMBINATION_ROWS];
+    uint64_t *m = malloc((MOD_COMBINATION_ROWS * inputs + 1) * sizeof(uint64_t));
+    uint64_t *f = malloc((MOD_COMBINATION_ROWS * inputs + 1) * sizeof(uint64_t));
+    uint64_t *listed = malloc((MOD_COMBINATION_ROWS * inputs + 1) * sizeof(uint64_t));
+    uint64_t *listed_shoup = malloc((MOD_COMBINATION_ROWS * inputs + 1) * sizeof(uint64_t));
+    uint32_t *terms = malloc((inputs + 1) * sizeof(uint32_t));
+    uint64_t *ref = malloc(MOD_COMBINATION_ROWS * width * sizeof(uint64_t));
+    uint64_t count = 0;
+    for (uint64_t t = 0; t < inputs; t++)
     {
         x[t] = safe_aligned_malloc(width * sizeof(uint64_t));
         for (uint64_t i = 0; i < width; i++)
             x[t][i] = extreme ? q - 1 : (0x9E3779B97F4A7C15ULL * (i + 1) ^ (t * 0x1337ULL)) % q;
         for (uint64_t r = 0; r < rows; r++)
-            m[r * terms + t] = t % 3 == 2 ? 0
-                               : extreme  ? q - 1
-                                          : (0xD1B54A32D192ED03ULL * (r + 3) ^ t) % q;
+        {
+            m[r * inputs + t] = extreme ? q - 1 : (0xD1B54A32D192ED03ULL * (r + 3) ^ t) % q;
+            f[r * inputs + t] = (uint64_t)(((unsigned __int128)m[r * inputs + t] << 64) / q);
+        }
     }
+    // Every input but each third, listed from the last back.
+    for (uint64_t t = inputs; t-- > 0;)
+        if (t % 3 != 1)
+            terms[count++] = (uint32_t)t;
+    // The kernels take each output's entries in list order.
+    for (uint64_t r = 0; r < rows; r++)
+        for (uint64_t k = 0; k < count; k++)
+        {
+            listed[r * inputs + k] = m[r * inputs + terms[k]];
+            listed_shoup[r * inputs + k] = f[r * inputs + terms[k]];
+        }
     for (uint64_t r = 0; r < rows; r++)
     {
+        entries[r] = listed + r * inputs;
+        shoup[r] = listed_shoup + r * inputs;
         out[r] = safe_aligned_malloc(width * sizeof(uint64_t));
         for (uint64_t i = 0; i < width; i++)
         {
@@ -807,22 +828,22 @@ static void check_linear_combinations_mod(uint64_t q, uint64_t n, uint64_t rows,
             ref[r * width + i] = out[r][i];
             if (i < offset)
                 continue;
-            uint64_t acc = accumulate ? out[r][i] : 0;
-            for (uint64_t t = 0; t < terms; t++)
-                acc = (uint64_t)((acc + (unsigned __int128)m[r * terms + t] * x[t][i]) % q);
+            uint64_t acc = first ? 0 : out[r][i];
+            for (uint64_t k = 0; k < count; k++)
+                acc = (uint64_t)((acc + (unsigned __int128)entries[r][k] * x[terms[k]][i]) % q);
             ref[r * width + i] = acc;
         }
     }
-    mod_eltwise_linear_combinations(out, x, offset, m, rows, terms, n, accumulate, mod);
+    mod_eltwise_linear_combination_group(out, x, offset, entries, shoup, terms, count, rows, n,
+                                         first, mod);
     for (uint64_t r = 0; r < rows; r++)
         TEST_ASSERT_EQUAL_UINT64_ARRAY(ref + r * width, out[r], width);
 
-    /* The narrow body, on the same values where they fit 32-bit words. */
     if (q < (1ULL << RNS_NARROW_MAX_BITS))
     {
-        uint32_t **x32 = malloc((terms + 1) * sizeof(uint32_t *));
-        uint32_t **out32 = malloc(rows * sizeof(uint32_t *));
-        for (uint64_t t = 0; t < terms; t++)
+        uint32_t **x32 = malloc((inputs + 1) * sizeof(uint32_t *));
+        uint32_t *out32[MOD_COMBINATION_ROWS];
+        for (uint64_t t = 0; t < inputs; t++)
         {
             x32[t] = malloc(width * sizeof(uint32_t));
             for (uint64_t i = 0; i < width; i++)
@@ -832,75 +853,70 @@ static void check_linear_combinations_mod(uint64_t q, uint64_t n, uint64_t rows,
         {
             out32[r] = malloc(width * sizeof(uint32_t));
             for (uint64_t i = 0; i < width; i++)
-                out32[r][i] =
-                    (uint32_t)(i < offset || accumulate ? (extreme ? q - 1 : (i * 31 + r) % q)
-                                                        : 12345 % q);
+                out32[r][i] = (uint32_t)(i < offset || !first ? (extreme ? q - 1 : (i * 31 + r) % q)
+                                                              : 12345 % q);
         }
-        mod_eltwise_linear_combinations_w32(out32, x32, offset, m, rows, terms, n, accumulate, mod);
+        mod_eltwise_linear_combination_group_w32(out32, x32, offset, entries, terms, count, rows, n,
+                                                 first, mod);
         for (uint64_t r = 0; r < rows; r++)
         {
             for (uint64_t i = 0; i < width; i++)
                 TEST_ASSERT_EQUAL_UINT64(ref[r * width + i], out32[r][i]);
             free(out32[r]);
         }
-        for (uint64_t t = 0; t < terms; t++)
+        for (uint64_t t = 0; t < inputs; t++)
             free(x32[t]);
         free(x32);
-        free(out32);
     }
-    for (uint64_t t = 0; t < terms; t++)
+    for (uint64_t t = 0; t < inputs; t++)
         free(x[t]);
     for (uint64_t r = 0; r < rows; r++)
         free(out[r]);
     free(x);
-    free(out);
     free(m);
+    free(f);
+    free(listed);
+    free(listed_shoup);
+    free(terms);
     free(ref);
     mod_free(mod);
 }
 
-static void check_linear_combinations(uint64_t q_bits, uint64_t n, uint64_t rows, uint64_t terms,
-                                      int extreme, int accumulate)
+static void check_group(uint64_t q_bits, uint64_t n, uint64_t rows, uint64_t inputs, int extreme,
+                        int first)
 {
-    check_linear_combinations_mod(next_special_prime(1ULL << q_bits, 1024, true), n, rows, terms,
-                                  extreme, accumulate);
+    check_group_mod(next_special_prime(1ULL << q_bits, 1024, true), n, rows, inputs, extreme,
+                    first);
 }
 
-void test_mod_eltwise_linear_combinations(void)
+void test_mod_eltwise_linear_combination_group(void)
 {
-    const uint64_t bits[] = {10, 20, 26, 27, 29, 30, 49, 50, 60, 61};
+    const uint64_t bits[] = {10, 20, 26, 27, 29, 30, 49, 50, 55, 60, 61};
     const uint64_t lengths[] = {1, 7, 8, 9, 40, 72};
-    const uint64_t rows[] = {1, 2, 3, 4, 7};
-    const uint64_t terms[] = {0, 1, 3, 16, 50};
+    const uint64_t inputs[] = {0, 1, 3, 16, 50};
     for (unsigned b = 0; b < sizeof(bits) / sizeof(*bits); b++)
         for (unsigned l = 0; l < sizeof(lengths) / sizeof(*lengths); l++)
-            for (unsigned r = 0; r < sizeof(rows) / sizeof(*rows); r++)
-                for (unsigned t = 0; t < sizeof(terms) / sizeof(*terms); t++)
+            for (uint64_t rows = 1; rows <= MOD_COMBINATION_ROWS; rows++)
+                for (unsigned t = 0; t < sizeof(inputs) / sizeof(*inputs); t++)
                     for (int extreme = 0; extreme < 2; extreme++)
-                        for (int accumulate = 0; accumulate < 2; accumulate++)
-                            check_linear_combinations(bits[b], lengths[l], rows[r], terms[t],
-                                                      extreme, accumulate);
+                        for (int first = 0; first < 2; first++)
+                            check_group(bits[b], lengths[l], rows, inputs[t], extreme, first);
 }
 
-/* More terms than one block holds. With 8 columns a block is MOD_INNER_PRODUCT_MAX_TERMS terms,
-   the most one unreduced sum may take; with 64 columns the L2 limit makes it 512
-   terms, and 1024 on narrow rows. */
-void test_mod_eltwise_linear_combinations_past_one_block(void)
+/* The longest lists: as many terms as one unreduced IFMA sum may take, and on a narrow prime just
+   below 2^30, whose 64-bit sums hold 16 products, lists of several groups of terms. */
+void test_mod_eltwise_linear_combination_group_long_lists(void)
 {
-    /* A narrow prime just below 2^30, whose 64-bit sums hold 16 products: 100 terms are several
-       groups inside one block of the vector body. */
-    for (int extreme = 0; extreme < 2; extreme++)
-        for (int accumulate = 0; accumulate < 2; accumulate++)
-        {
-            check_linear_combinations_mod(0x3FFFFE81ULL, 48, 3, 100, extreme, accumulate);
-            check_linear_combinations_mod(0x3FFFFE81ULL, 64, 2, 1100, extreme, accumulate);
-        }
-    const uint64_t bits[] = {27, 49, 61};
+    const uint64_t bits[] = {27, 49, 55, 61};
+    // Every third input is left out of the list, so this many inputs list the most terms.
+    const uint64_t inputs = MOD_INNER_PRODUCT_MAX_TERMS * 3 / 2;
     for (unsigned b = 0; b < sizeof(bits) / sizeof(*bits); b++)
-        for (int extreme = 0; extreme < 2; extreme++)
+        check_group(bits[b], 16, 3, inputs, 1, 1);
+    for (int extreme = 0; extreme < 2; extreme++)
+        for (int first = 0; first < 2; first++)
         {
-            check_linear_combinations(bits[b], 8, 2, MOD_INNER_PRODUCT_MAX_TERMS + 5, extreme, 0);
-            check_linear_combinations(bits[b], 64, 4, 1100, extreme, 1);
+            check_group_mod(0x3FFFFE81ULL, 48, 3, 100, extreme, first);
+            check_group_mod(0x3FFFFE81ULL, 64, 2, 1100, extreme, first);
         }
 }
 
@@ -913,8 +929,8 @@ int main(void)
     RUN_TEST(test_mod_eltwise_sweep_with_a_tail);
     RUN_TEST(test_mod_eltwise_inner_product_addto);
     RUN_TEST(test_mod_eltwise_inner_product_addto_past_its_term_limit);
-    RUN_TEST(test_mod_eltwise_linear_combinations);
-    RUN_TEST(test_mod_eltwise_linear_combinations_past_one_block);
+    RUN_TEST(test_mod_eltwise_linear_combination_group);
+    RUN_TEST(test_mod_eltwise_linear_combination_group_long_lists);
     RUN_TEST(test_mod_new_refuses_a_modulus_no_family_can_hold);
     RUN_TEST(test_mod_eltwise_reduce_centered);
 #if VFHE_HAVE_AVX512IFMA

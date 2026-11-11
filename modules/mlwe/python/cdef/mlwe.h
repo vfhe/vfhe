@@ -110,6 +110,8 @@ void mlwe_RNS_linear_combinations(void *out, void *in, ArithElement *coeff, uint
                                   uint64_t n_in, uint64_t n_threads);
 void mlwe_RNS_integer_linear_combinations(void *out, void *in, const int64_t *weights,
                                           uint64_t n_out, uint64_t n_in, uint64_t n_threads);
+void mlwe_RNS_integer_matrix_linear_combinations(void *out, void *in, void *matrix,
+                                                 uint64_t n_threads);
 void mlwe_scale_RNS_mlwe_RNS(void *c, uint64_t *per_component);
 void mlwe_add_RNSc_sample(void *out, void *in1, void *in2);
 void mlwe_sub_RNSc_sample(void *out, void *in1, void *in2);

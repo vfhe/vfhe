@@ -1248,11 +1248,54 @@ void test_matrix_product_over_a_ring_that_is_not_fully_split(void)
     rns_base_free(split);
 }
 
-/* Checks out[r] = sum_j m[r][j] in[j] against a 128-bit oracle, over `over` and on the rows of
- * `mask` only; the other rows must come back untouched. Among the matrix entries are both ends of
- * int64, zero, -1 and a multiple of a prime. At N = 64 the kernel splits more than 512 inputs into
+/* Deterministic contents below each prime of `over`, for bases other than the fixture's. */
+static void fill_over(RNS_Polynomial p, RNS_Base over, uint64_t seed)
+{
+    for (uint64_t i = 0; i < over->l; i++)
+        for (uint64_t j = 0; j < TEST_N; j++)
+            set_coeff(
+                p, i, j,
+                (seed * 6364136223846793005ULL + j * 1442695040888963407ULL + i * 1013904223ULL) %
+                    over->mods[i]->q);
+}
+
+/* Checks out[r] = sum_j m[r][j] in[j] against a 128-bit oracle, through a prepared matrix, over
+ * `over` and on the rows of `mask` only; the other rows must come back untouched. Dense matrices
+ * hold both ends of int64, zero, -1 and a multiple of a prime (pattern DENSE). SPARSE holds a
+ * nonzero entry at one position in seven and zero rows 3 to 5. SHORT rows hold at most two
+ * entries: 1, -1, a generic one, or none. DISJOINT rows are nonzero on columns no other row uses,
+ * so each is an output group of its own. At N = 64 the kernel splits more than 512 inputs into
  * blocks of terms. */
-static void check_integer_combinations(RNS_Base over, uint64_t mask, uint64_t n_out, uint64_t n_in)
+enum
+{
+    DENSE,
+    SPARSE,
+    SHORT,
+    DISJOINT
+};
+
+static int64_t pattern_entry(int pattern, uint64_t r, uint64_t j, uint64_t n_in, int64_t dense)
+{
+    const int64_t first[] = {1, -1, 5, -7};
+    switch (pattern)
+    {
+    case SPARSE:
+        return (j * 7 + r) % 7 == 2 && (r < 3 || r > 5) ? dense | 1 : 0;
+    case SHORT:
+        if (r % 5 == 4)
+            return 0;
+        if (j == r % n_in)
+            return first[r % 4];
+        return r % 3 == 0 && j == (r + 1) % n_in ? (r % 2 ? -1 : 3) : 0;
+    case DISJOINT:
+        return j % 8 == r % 8 ? dense | 1 : 0;
+    default:
+        return dense;
+    }
+}
+
+static void check_integer_combinations(RNS_Base over, uint64_t mask, uint64_t n_out, uint64_t n_in,
+                                       int pattern)
 {
     RNS_Polynomial *in = malloc((n_in + 1) * sizeof(RNS_Polynomial));
     RNS_Polynomial *out = malloc(n_out * sizeof(RNS_Polynomial));
@@ -1260,37 +1303,48 @@ static void check_integer_combinations(RNS_Base over, uint64_t mask, uint64_t n_
     for (uint64_t j = 0; j < n_in; j++)
     {
         in[j] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
-        fill(in[j], 400 + j);
+        fill_over(in[j], over, 400 + j);
         in[j]->rns_mask = mask;
     }
     for (uint64_t r = 0; r < n_out; r++)
     {
         out[r] = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
-        fill(out[r], 500 + r);
+        fill_over(out[r], over, 500 + r);
         out[r]->rns_mask = mask;
     }
     for (uint64_t k = 0; k < n_out * n_in; k++)
     {
         const int64_t special[] = {INT64_MIN, INT64_MAX, -1, 0, (int64_t)PRIMES[0], -3};
-        m[k] = k % 7 < 6 ? special[k % 7] : (int64_t)(k * 0x9E3779B97F4A7C15ULL) >> (k % 40);
+        const int64_t dense =
+            k % 7 < 6 ? special[k % 7] : (int64_t)(k * 0x9E3779B97F4A7C15ULL) >> (k % 40);
+        m[k] = pattern_entry(pattern, k / n_in, k % n_in, n_in, dense);
     }
-    polynomial_integer_linear_combinations_RNS_polynomial(out, in, m, n_out, n_in);
+    // Prepared for every prime of the base, computed on the rows of `mask`.
+    RNS_IntegerMatrix prepared = rns_integer_matrix_new(over, TEST_MASK, m, n_out, n_in);
+    if (pattern == SHORT || pattern == DISJOINT)
+        TEST_ASSERT_EQUAL_UINT64(n_out, prepared->groups); // every row a group of its own
+    if (pattern == DENSE && n_in > 0)
+        TEST_ASSERT_EQUAL_UINT64((n_out + 2) / 3, prepared->groups); // groups of three
+    polynomial_integer_linear_combinations_RNS_polynomial(out, in, prepared);
+    rns_integer_matrix_free(prepared);
     RNS_Polynomial before = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, over);
     for (uint64_t r = 0; r < n_out; r++)
     {
         TEST_ASSERT_EQUAL_UINT64(mask, out[r]->rns_mask);
-        fill(before, 500 + r);
+        fill_over(before, over, 500 + r);
         for (uint64_t i = 0; i < TEST_L; i++)
             for (uint64_t c = 0; c < TEST_N; c++)
             {
-                const uint64_t p = PRIMES[i];
+                const uint64_t p = over->mods[i]->q;
                 uint64_t expected = mask & (1ULL << i) ? 0 : coeff(before, i, c);
                 for (uint64_t j = 0; j < n_in && (mask & (1ULL << i)); j++)
                 {
-                    const int64_t x = m[r * n_in + j];
-                    const uint64_t m = (uint64_t)((x % (int64_t)p + (int64_t)p) % (int64_t)p);
+                    const int64_t entry = m[r * n_in + j];
+                    const uint64_t reduced =
+                        (uint64_t)((entry % (int64_t)p + (int64_t)p) % (int64_t)p);
                     expected =
-                        (uint64_t)((expected + (unsigned __int128)m * coeff(in[j], i, c)) % p);
+                        (uint64_t)((expected + (unsigned __int128)reduced * coeff(in[j], i, c)) %
+                                   p);
                 }
                 TEST_ASSERT_EQUAL_UINT64(expected, coeff(out[r], i, c));
             }
@@ -1306,18 +1360,53 @@ static void check_integer_combinations(RNS_Base over, uint64_t mask, uint64_t n_
 
 void test_integer_combinations_match_a_wide_oracle(void)
 {
-    check_integer_combinations(base, TEST_MASK, 7, 5);
-    check_integer_combinations(base, TEST_MASK, 2, 1100);
-    check_integer_combinations(base, 1ULL << (TEST_L - 1), 4, 9); // the narrow row alone
-    check_integer_combinations(base, 0x5, 3, 0);
+    check_integer_combinations(base, TEST_MASK, 7, 5, DENSE);
+    check_integer_combinations(base, TEST_MASK, 2, 1100, DENSE);
+    check_integer_combinations(base, 1ULL << (TEST_L - 1), 4, 9, DENSE); // the narrow row alone
+    check_integer_combinations(base, 0x5, 3, 0, DENSE);
+}
+
+void test_integer_combinations_of_a_sparse_matrix(void)
+{
+    check_integer_combinations(base, TEST_MASK, 8, 40, SPARSE);
+    check_integer_combinations(base, TEST_MASK, 7, 1100, SPARSE);
+}
+
+void test_integer_combinations_of_short_rows(void)
+{
+    check_integer_combinations(base, TEST_MASK, 20, 30, SHORT);
+    check_integer_combinations(base, 1ULL << (TEST_L - 1), 9, 4, SHORT); // the narrow row alone
+    check_integer_combinations(base, TEST_MASK, 12, 1100, SHORT);
+}
+
+void test_integer_combinations_of_rows_on_disjoint_columns(void)
+{
+    check_integer_combinations(base, TEST_MASK, 8, 64, DISJOINT);
+    check_integer_combinations(base, TEST_MASK, 6, 1100, DISJOINT);
 }
 
 void test_integer_combinations_over_a_ring_that_is_not_fully_split(void)
 {
     RNS_Base split = new_rns_base(PRIMES, 2, TEST_N, TEST_L);
-    check_integer_combinations(split, TEST_MASK, 5, 6);
-    check_integer_combinations(split, 0x6, 1, 3);
+    check_integer_combinations(split, TEST_MASK, 5, 6, DENSE);
+    check_integer_combinations(split, 0x6, 1, 3, DENSE);
     rns_base_free(split);
+}
+
+/* Primes of about 60 bits, which take the Shoup kernel on the avx512ifma engine. */
+void test_integer_combinations_over_primes_of_60_bits(void)
+{
+    uint64_t primes[TEST_L];
+    uint64_t candidate = 1ULL << 59;
+    for (uint64_t i = 0; i < TEST_L; i++)
+    {
+        primes[i] = next_special_prime(candidate, 2 * TEST_N, true);
+        candidate = primes[i] + 1;
+    }
+    RNS_Base wide = new_rns_base(primes, 1, TEST_N, TEST_L);
+    check_integer_combinations(wide, TEST_MASK, 5, 7, DENSE);
+    check_integer_combinations(wide, 0x6, 4, 1100, SPARSE);
+    rns_base_free(wide);
 }
 
 int main(void)
@@ -1325,7 +1414,11 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_matrix_product_matches_the_term_by_term_products);
     RUN_TEST(test_integer_combinations_match_a_wide_oracle);
+    RUN_TEST(test_integer_combinations_of_a_sparse_matrix);
+    RUN_TEST(test_integer_combinations_of_short_rows);
+    RUN_TEST(test_integer_combinations_of_rows_on_disjoint_columns);
     RUN_TEST(test_integer_combinations_over_a_ring_that_is_not_fully_split);
+    RUN_TEST(test_integer_combinations_over_primes_of_60_bits);
     RUN_TEST(test_matrix_product_over_a_ring_that_is_not_fully_split);
     RUN_TEST(test_capabilities_and_names);
     RUN_TEST(test_new_starts_empty_and_zero_is_canonical);

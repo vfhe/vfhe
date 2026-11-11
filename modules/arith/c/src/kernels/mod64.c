@@ -371,4 +371,106 @@ void mod_reduce_array_mp_64(uint64_t *out, uint64_t *in_high, uint64_t *in_low, 
         out[i] = modq_wide(in_high[i], in_low[i], mod);
 }
 
+/* Linear combinations for an output group, for primes of 50 bits and more: each product is a
+   Shoup product with the entry's precomputed factor, left in [0, 2q), and the sums are kept in
+   [0, 2q) by one conditional subtract of 2q per term (q < 2^62, so a sum below 4q fits a lane).
+
+   A register tile covers the group's outputs by COMBINATION64_TILE_VECTORS vectors of
+   coefficients; its sums stay in registers over the whole list of terms and are written once.
+   While it sums a term, it prefetches the coefficients it will read COMBINATION64_PREFETCH_TERMS
+   terms later in the list. */
+#define COMBINATION64_TILE_VECTORS 2
+#define COMBINATION64_PREFETCH_TERMS 8
+
+// Sums the listed terms into the register tile of `outputs` outputs by `vecs` vectors that starts
+// at coefficient `off`, then writes the sums into the outputs, replacing what they hold when
+// `first` and adding to it otherwise.
+static inline __attribute__((always_inline)) void
+linear_combination_tile_64(const int outputs, const int vecs, uint64_t *const *out,
+                           uint64_t *const *x, uint64_t off, const uint64_t *const *entries,
+                           const uint64_t *const *shoup, const uint32_t *terms, uint64_t count,
+                           int first, Modulus mod)
+{
+    const __m512i q_vec = _mm512_set1_epi64(mod->q);
+    const __m512i twice_q = _mm512_set1_epi64(2 * mod->q);
+    __m512i acc[MOD_COMBINATION_ROWS][COMBINATION64_TILE_VECTORS];
+    for (int r = 0; r < outputs; r++)
+        for (int v = 0; v < vecs; v++)
+            acc[r][v] = _mm512_setzero_si512();
+    for (uint64_t k = 0; k < count; k++)
+    {
+        if (k + COMBINATION64_PREFETCH_TERMS < count)
+        {
+            const char *ahead = (const char *)(x[terms[k + COMBINATION64_PREFETCH_TERMS]] + off);
+            for (int v = 0; v < vecs; v++)
+                _mm_prefetch(ahead + 64 * v, _MM_HINT_T0);
+        }
+        const __m512i *xt = (const __m512i *)(x[terms[k]] + off);
+        __m512i xv[COMBINATION64_TILE_VECTORS];
+        for (int v = 0; v < vecs; v++)
+            xv[v] = _mm512_loadu_si512(xt + v);
+        for (int r = 0; r < outputs; r++)
+        {
+            const __m512i s = _mm512_set1_epi64((long long)entries[r][k]);
+            const __m512i sp = _mm512_set1_epi64((long long)shoup[r][k]);
+            for (int v = 0; v < vecs; v++)
+            {
+                const __m512i q_hat = mulhi_64(sp, xv[v]);
+                const __m512i product = _mm512_sub_epi64(_mm512_mullo_epi64(s, xv[v]),
+                                                         _mm512_mullo_epi64(q_hat, q_vec));
+                const __m512i sum = _mm512_add_epi64(acc[r][v], product);
+                acc[r][v] = _mm512_min_epu64(sum, _mm512_sub_epi64(sum, twice_q));
+            }
+        }
+    }
+    for (int r = 0; r < outputs; r++)
+        for (int v = 0; v < vecs; v++)
+        {
+            __m512i *o = (__m512i *)(out[r] + off) + v;
+            __m512i res = _mm512_min_epu64(acc[r][v], _mm512_sub_epi64(acc[r][v], q_vec));
+            if (!first)
+            {
+                res = _mm512_add_epi64(res, _mm512_loadu_si512(o));
+                res = _mm512_min_epu64(res, _mm512_sub_epi64(res, q_vec));
+            }
+            _mm512_storeu_si512(o, res);
+        }
+}
+
+// Runs linear_combination_tile_64 over the coefficients: register tiles of
+// COMBINATION64_TILE_VECTORS vectors as far as they fit, then of one vector.
+static inline __attribute__((always_inline)) void
+linear_combination_tiles_64(const int outputs, uint64_t *const *out, uint64_t *const *x,
+                            uint64_t offset, const uint64_t *const *entries,
+                            const uint64_t *const *shoup, const uint32_t *terms, uint64_t count,
+                            uint64_t n_vec, int first, Modulus mod)
+{
+    uint64_t v = 0;
+    for (; v + COMBINATION64_TILE_VECTORS <= n_vec; v += COMBINATION64_TILE_VECTORS)
+        linear_combination_tile_64(outputs, COMBINATION64_TILE_VECTORS, out, x, offset + 8 * v,
+                                   entries, shoup, terms, count, first, mod);
+    for (; v < n_vec; v++)
+        linear_combination_tile_64(outputs, 1, out, x, offset + 8 * v, entries, shoup, terms, count,
+                                   first, mod);
+}
+
+// `n` is a multiple of 8.
+void mod_eltwise_linear_combination_group_64(uint64_t *const *out, uint64_t *const *x,
+                                             uint64_t offset, const uint64_t *const *entries,
+                                             const uint64_t *const *shoup, const uint32_t *terms,
+                                             uint64_t count, uint64_t outputs, uint64_t n,
+                                             int first, Modulus mod)
+{
+    const uint64_t n_vec = n / 8;
+    if (outputs == 3)
+        linear_combination_tiles_64(3, out, x, offset, entries, shoup, terms, count, n_vec, first,
+                                    mod);
+    else if (outputs == 2)
+        linear_combination_tiles_64(2, out, x, offset, entries, shoup, terms, count, n_vec, first,
+                                    mod);
+    else if (outputs == 1)
+        linear_combination_tiles_64(1, out, x, offset, entries, shoup, terms, count, n_vec, first,
+                                    mod);
+}
+
 #endif

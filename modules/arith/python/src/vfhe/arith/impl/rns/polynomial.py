@@ -497,8 +497,8 @@ class RNSRing(Ring):
         Returns one element of this ring per row of ``matrix``: element ``r``
         is the sum over ``j`` of ``matrix[r][j] * elements[j]``. For example,
         the rows ``[[1, 2], [0, -1]]`` and the elements ``[a, b]`` give
-        ``[a + 2*b, -b]``. Every entry of ``matrix`` is reduced modulo each prime, so any
-        signed 64-bit integer works.
+        ``[a + 2*b, -b]``. Every entry of ``matrix`` is reduced modulo each
+        prime, so any signed 64-bit integer works.
 
         The results are in the representation the elements hold, since
         multiplying by an integer commutes with the transform. When the
@@ -506,10 +506,10 @@ class RNSRing(Ring):
         representation, and so are the results; the elements themselves are
         not converted.
 
-        Each prime's rows are split into column tiles, which run in parallel
-        within the library limit, and each tile of the elements is read once
-        for all the results. The work is that of the dense product: a zero
-        entry does not avoid reading its element.
+        The work follows the nonzero entries of ``matrix`` and runs in
+        parallel within the library limit. The first call with this ring's
+        primes prepares ``matrix`` for them (`IntegerMatrix.prepared`); later
+        calls reuse that.
 
         ``elements`` must all be over this ring and hold every one of its
         rows. ``matrix`` is an `IntegerMatrix` with one column per element.
@@ -536,9 +536,7 @@ class RNSRing(Ring):
             ffi.new(
                 "RNS_Polynomial[]", [ffi.cast("RNS_Polynomial", v.obj) for v in views]
             ),
-            matrix.entries,
-            matrix.n_rows,
-            len(views),
+            matrix.prepared(self),
         )
         return outs
 
@@ -722,7 +720,9 @@ class RNSRing(Ring):
         return RingParameters(self.N, self.split_degree, tuple(self.primes))
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, RNSRing) and self.parameters == other.parameters
+        return self is other or (
+            isinstance(other, RNSRing) and self.parameters == other.parameters
+        )
 
     def __hash__(self) -> int:
         return hash(self.parameters)
