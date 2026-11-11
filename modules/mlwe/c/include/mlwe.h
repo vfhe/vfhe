@@ -237,11 +237,10 @@ extern "C"
     void mlwe_scale_RNS_mlwe_addto(RNS_MLWE out, RNS_MLWE in, uint64_t scale);
     void mlwe_RNS_mul_by_poly(RNS_MLWE out, RNS_MLWE in, const ArithElement *poly);
     // out = in1 + in2 or in1 - in2 for a polynomial in2: in2 is added to or subtracted from
-    // the b component, and out's mask is a copy of in1's. out may be in1.
+    // the b component, and out's mask is a copy of in1's. out may be in1. in1 and in2 may be
+    // in either representation, coefficients or NTT, as long as it is the same one.
     void mlwe_add_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
     void mlwe_sub_RNSc_polynomial(RNSc_MLWE out, RNSc_MLWE in1, const ArithElement *in2);
-    void mlwe_RNS_add_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2);
-    void mlwe_RNS_sub_polynomial(RNS_MLWE out, RNS_MLWE in1, const ArithElement *in2);
 
     // Rank of the extended (not-yet-relinearized) product of two rank-r ciphertexts:
     // r*(r+1)/2 quadratic components plus r linear ones.

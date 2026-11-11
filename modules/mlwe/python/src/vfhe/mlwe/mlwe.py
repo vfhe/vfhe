@@ -2089,19 +2089,13 @@ class MLWE:
             raise ValueError("trying to add things in different rings")
         if in1.repr != in2.repr:
             raise ValueError("failed: in1.repr != in2.repr")
-        if in1.repr == repr.ntt:
-            lib_rlwe.lib.mlwe_RNS_add_polynomial(self.obj, in1.obj, in2.as_element())
-        else:
-            lib_rlwe.lib.mlwe_add_RNSc_polynomial(self.obj, in1.obj, in2.as_element())
+        lib_rlwe.lib.mlwe_add_RNSc_polynomial(self.obj, in1.obj, in2.as_element())
         self.repr = in1.repr
 
     def sub_poly(self, in1, in2):
         if in1.repr != in2.repr:
             raise ValueError("failed: in1.repr != in2.repr")
-        if in1.repr == repr.ntt:
-            lib_rlwe.lib.mlwe_RNS_sub_polynomial(self.obj, in1.obj, in2.as_element())
-        else:
-            lib_rlwe.lib.mlwe_sub_RNSc_polynomial(self.obj, in1.obj, in2.as_element())
+        lib_rlwe.lib.mlwe_sub_RNSc_polynomial(self.obj, in1.obj, in2.as_element())
         self.repr = in1.repr
 
     def get_a_poly(self, j: int) -> RNSPolynomial:

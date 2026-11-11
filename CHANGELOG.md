@@ -1567,6 +1567,9 @@ versions may contain breaking changes.
   `b_prec`, and the native `gp25_RGSW_monomial_mul(_mt)` and
   `gp25_sub_a_mt`.
 - **BREAKING**: `CGGI16_Key.b_prec`, which nothing read.
+- The native `mlwe_RNS_add_polynomial` and `mlwe_RNS_sub_polynomial`, copies
+  of `mlwe_add_RNSc_polynomial` and `mlwe_sub_RNSc_polynomial`, which take
+  operands in either representation.
 
 ### Fixed
 

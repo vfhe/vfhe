@@ -119,8 +119,6 @@ void mlwe_RNSc_mul_by_xai(void *out, void *in, uint64_t a);
 void mlwe_RNSc_mul_by_xai_minus1(void *out, void *in, uint64_t a);
 void mlwe_add_RNSc_polynomial(void *out, void *in1, ArithElement *in2);
 void mlwe_sub_RNSc_polynomial(void *out, void *in1, ArithElement *in2);
-void mlwe_RNS_add_polynomial(void *out, void *in1, ArithElement *in2);
-void mlwe_RNS_sub_polynomial(void *out, void *in1, ArithElement *in2);
 void mlwe_round_division(void *out, void *to);
 void mlwe_mod_reduce(void *c, void *to);
 
