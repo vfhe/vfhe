@@ -984,9 +984,13 @@ static void *look_up_rings(void *unused)
 
 /* A child forked while another thread uses the ring cache can use it too. The
  * child arms an alarm, so a lock inherited held ends it with a signal instead
- * of hanging the test. */
+ * of hanging the test. Not run under Intel SDE (`VFHE_SDE_FLAGS` set): its fork
+ * of a process with another running thread can abort in the child, and the
+ * cache is the same code on every engine, tested natively. */
 void test_a_forked_child_uses_the_shared_rings(void)
 {
+    if (getenv("VFHE_SDE_FLAGS") != NULL)
+        TEST_IGNORE_MESSAGE("SDE can abort a child forked beside a running thread");
     ArithRing expected = arith_rns_ring_get(TEST_N, TEST_MASK, base);
     atomic_store(&stop_looking_up, false);
     pthread_t t;
