@@ -364,13 +364,6 @@ void mod_eltwise_reduce_centered_64(uint64_t *out, uint64_t *in, uint64_t q_in, 
     }
 }
 
-void mod_reduce_array_mp_64(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                            Modulus mod)
-{
-    for (size_t i = 0; i < n; i++)
-        out[i] = modq_wide(in_high[i], in_low[i], mod);
-}
-
 /* Linear combinations for an output group, for primes of 50 bits and more: each product is a
    Shoup product with the entry's precomputed factor, left in [0, 2q), and the sums are kept in
    [0, 2q) by one conditional subtract of 2q per term (q < 2^62, so a sum below 4q fits a lane).

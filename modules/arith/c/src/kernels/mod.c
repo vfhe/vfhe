@@ -534,7 +534,8 @@ void mod_reduce_array_mp(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uin
         mod_reduce_array_mp_50(out, in_high, in_low, n, mod);
         break;
     default:
-        mod_reduce_array_mp_64(out, in_high, in_low, n, mod);
+        // The 64-bit family has no vector body here: the scalar one serves it.
+        mod_reduce_array_mp_gen(out, in_high, in_low, n, mod);
         break;
     }
 }

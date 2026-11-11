@@ -565,8 +565,6 @@ void mod_eltwise_reduce_64(uint64_t *out, uint64_t *in, uint64_t n, Modulus mod)
 void mod_eltwise_reduce_signed_64(uint64_t *out, int64_t *in, uint64_t n, Modulus mod);
 void mod_eltwise_reduce_centered_64(uint64_t *out, uint64_t *in, uint64_t q_in, uint64_t n,
                                     Modulus mod);
-void mod_reduce_array_mp_64(uint64_t *out, uint64_t *in_high, uint64_t *in_low, uint64_t n,
-                            Modulus mod);
 
 // Exact unsigned __int128 reference for the pseudo-Mersenne field (pmf.c). Like
 // the _gen kernels above, these are compiled into every engine, and for a related
