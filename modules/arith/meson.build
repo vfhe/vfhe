@@ -56,6 +56,7 @@ vfhe_c_public_headers += files(
     'c/include/arith.h',
     'c/include/arith_generic.h',
     'c/include/arith_trace.h',
+    'c/include/arith_gpu.h',
     'c/include/mle.h',
 )
 vfhe_c_unit_tests += files(
@@ -68,10 +69,6 @@ vfhe_c_unit_tests += files(
     'c/test/unit/test_number_theory.c',
     'c/test/unit/test_pmf_ntt.c',
 )
-vfhe_c_benchmarks += files(
-    'c/bench/bench_mod.c',
-    'c/bench/bench_ntt.c',
-)
 vfhe_c_fuzz_tests += files(
     'c/test/fuzz/fuzz_ntt.c',
     'c/test/fuzz/fuzz_field_ext.c',
@@ -81,7 +78,19 @@ vfhe_python_cdefs += files(
     'python/cdef/mle.h',
 )
 
+vfhe_cuda_sources += files(
+    'c/src/cuda/arith_gpu.cu',
+)
+vfhe_cuda_cdefs += files(
+    'python/cdef/arith_gpu.h',
+)
+
 install_subdir(
     'python/src/vfhe',
     install_dir: py.get_install_dir(),
+)
+
+install_subdir(
+    'python/bench',
+    install_dir: py.get_install_dir() / 'vfhe' / 'arith',
 )

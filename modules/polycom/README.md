@@ -2,16 +2,24 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.polycom
 
-> **Under development.** The code is largely verified by the test suite, but
-> the documentation text — this file and [polycom.md](polycom.md) — has not
-> been reviewed yet and may be inaccurate or out of date.
-
 Polynomial commitment schemes for the multilinear oracles of `vfhe.piop`.
 The architecture and its derivation from the literature are documented in
 [polycom.md](polycom.md).
 
-- `code.py` + `c/src/rscode.c`: `FoldableRS`, a depth-d foldable
-  Reed-Solomon code over `R_q` applied per RNS prime — every level is
+> **Under development.** The code is largely verified by the test suite, but
+> the documentation text -- this file and [polycom.md](polycom.md) -- has not
+> been reviewed yet and may be inaccurate or out of date.
+
+Fiat-Shamir needs nothing from this module: `IOP(fiat_shamir=True)` derives
+the fold challenges and the query coins from the transcript and binds the
+commitment-carrying statement, so `iop.prove(statement)` yields a `Proof`
+another IOP checks with no prover present. A C kernel for the fold is
+roadmap (polycom.md §4).
+
+## Layout
+
+- `python/src/vfhe/polycom/code.py`: `FoldableRS`, a depth-d foldable
+  Reed-Solomon code over `R_q` applied per RNS prime -- every level is
   itself an RS code (FRI-style), messages are LSB-first coefficient
   vectors, and folding a codeword with a challenge binds the MLE's first
   variable. The transform is arith's negacyclic NTT through the `rs_*`
@@ -22,44 +30,55 @@ The architecture and its derivation from the literature are documented in
   length, `decode` adds the degree check, and `fold` / `fold_at` are the
   verifier-checkable fold. Codeword lengths run from 16 (arith's shortest
   vectorized transform) up to `N/split_degree`.
-- `basefold.py`: the basefold PCS in the standard four-algorithm shape
-  (Setup, Commit, Open, Eval), interactive or non-interactive — the
-  protocol is the same either way, since Fiat-Shamir lives in the piop
-  verifier (`IOP(fiat_shamir=True)`, then `prove` / `verify`).
-  `Basefold` is the scheme: `commit(f)` encodes and builds the Merkle tree
-  once, returning `(BasefoldCommitment, BasefoldOpening)` — a succinct
-  root (instance data: it rides on statements, never on the transcript, and
-  is reused by any number of evaluation claims across IOP runs) and the
-  prover data (codeword + tree) each proof reuses; `open` is the opening
-  decider (roots via `merkle_commit`, one leaf per `±x` pair, so one path
-  authenticates both operands of a fold check). `BasefoldEval` is the Eval
-  protocol, registered for `Relation_Eval` in place of the terminal oracle
-  query: the claim's commitment comes from its optional `commitment` field
-  or from the scheme's record for its oracle (witness = the
+- `python/src/vfhe/polycom/field_code.py`: `FieldFoldableRS`, the same
+  interface over a finite field, so `Basefold` runs over either; a codeword is
+  a `vfhe.arith.FieldVector` and every whole-codeword operation is a fixed
+  number of vector operations. `residue_code(code, index)` is the code a ring
+  code induces on the residue field at one of its primes.
+- `python/src/vfhe/polycom/queries.py`: `query_positions`, the sampler every
+  folding scheme's verifier shares: a published bit-string challenge expanded
+  into `rep` positions of the top oracle, rejecting a candidate whose walk
+  ends where an earlier one's does.
+- `python/src/vfhe/polycom/basefold.py`: the basefold PCS in the standard
+  four-algorithm shape (Setup, Commit, Open, Eval), interactive or
+  non-interactive -- the protocol is the same either way, since Fiat-Shamir
+  lives in the piop verifier (`IOP(fiat_shamir=True)`, then `prove` /
+  `verify`). `Basefold` is the scheme: `commit(f)` encodes and builds the
+  Merkle tree once, returning `(BasefoldCommitment, BasefoldOpening)` -- a
+  succinct root (instance data: it rides on statements, never on the
+  transcript, and is reused by any number of evaluation claims across IOP
+  runs) and the prover data (codeword + tree) each proof reuses; `open` is
+  the opening decider (roots via `merkle_commit`, one leaf per `±x` pair, so
+  one path authenticates both operands of a fold check). `BasefoldEval` is
+  the Eval protocol, registered for `Relation_Eval` in place of the terminal
+  oracle query: the claim's commitment comes from its optional `commitment`
+  field or from the scheme's record for its oracle (witness = the
   `BasefoldOpening` in `prover.witnesses[commitment]`, backfilled from the
-  scheme). It runs a
-  product sumcheck for `sum_b f(b)·eq~(z, b) == v` interleaved with folds of
-  the committed codeword (sharing challenges, round kernels, and wire format
-  with `vfhe.piop.sumcheck`), each fold published as a root -- or, with a
-  layer schedule (`Basefold(code, schedule)`), only the fold that ends a
-  layer, whose tree's leaves are the fibers that layer refolds -- a clear base
-  table the verifier re-encodes, and then a query phase — a published
-  bit-string challenge (`Verifier.challenge_bits`) that both parties expand
-  into positions with `query_positions` (counter-mode BLAKE3, rejection-
-  sampled to be distinct in the level-0 codeword, hence `rep < n0`), the
-  prover answering with pairs and paths that are checked against each
-  level's root and against the fold above. A chain like sumcheck composes
-  end-to-end with no bridge: `scheme.commit(f)`, then
-  `Relation_Sum -> Sumcheck -> Relation_Eval -> BasefoldEval`.
-- `batchfold.py`: `BatchFoldEval` [CCCFGS26, §7], a second Eval protocol
-  for basefold commitments over `R_q`: the claims are carried to the CRT
-  components at each prime and proved by one basefold run per prime over
-  the residue code (`FieldFoldableRS.residue_code`), the primes in lockstep
-  on one shared ring challenge per round (`IOP.and_composition`) and
-  the ring leaves answering every prime's first layer.
+  scheme). It runs a product sumcheck for `sum_b f(b)·eq~(z, b) == v`
+  interleaved with folds of the committed codeword (sharing challenges, round
+  kernels, and wire format with `vfhe.piop.sumcheck`), each fold published as
+  a root -- or, with a layer schedule (`Basefold(code, schedule)`), only the
+  fold that ends a layer, whose tree's leaves are the fibers that layer
+  refolds -- a clear base table the verifier re-encodes, and then a query
+  phase: a published bit-string challenge (`Verifier.challenge_bits`) that
+  both parties expand into positions with `query_positions`, the prover
+  answering with pairs and paths that are checked against each level's root
+  and against the fold above. A chain like sumcheck composes end-to-end with
+  no bridge: `scheme.commit(f)`, then `Relation_Sum -> Sumcheck ->
+  Relation_Eval -> BasefoldEval`.
+- `python/src/vfhe/polycom/batchfold.py`: `BatchFoldEval` [CCCFGS26, §7], a
+  second Eval protocol for basefold commitments over `R_q`: the claims are
+  carried to the CRT components at each prime and proved by one basefold run
+  per prime over the residue code (`FieldFoldableRS.residue_code`), the
+  primes in lockstep on one shared ring challenge per round
+  (`IOP.and_composition`) and the ring leaves answering every prime's first
+  layer.
+- `python/cdef/polycom.h`: what Python may call of the C below.
+- `c/include/rscode.h`, `c/src/rscode_rns.c`, `c/src/rscode_field.c`: the
+  `rs_*` kernels, over the ring's RNS rows and over a field.
 
-Fiat-Shamir needs nothing from this module — `IOP(fiat_shamir=True)` derives
-the fold challenges and the query coins from the transcript and binds the
-commitment-carrying statement, so `iop.prove(statement)` yields a `Proof`
-another IOP checks with no prover present. A C kernel for the fold is
-roadmap (polycom.md §4).
+## Dependencies
+
+`polycom` builds on `vfhe.arith` (the NTT, vectors and tables),
+`vfhe.crypto` (`Merkle`, the seeded sampler and digests) and `vfhe.piop`,
+whose `Relation_Eval` its protocols register for.

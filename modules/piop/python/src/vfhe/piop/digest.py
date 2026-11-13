@@ -15,14 +15,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from vfhe.crypto import (
-    DigestChain,
-    bytes_digest,
-    chain_digest,
-    hash_bytes,
-    int_digest,
-    str_digest,
-)
+from vfhe.crypto.hash import DigestChain, digest
 
 
 def element_digest(value) -> bytes:
@@ -34,28 +27,31 @@ def element_digest(value) -> bytes:
     is domain-separated by a tag."""
     if isinstance(value, type):
         name = f"{value.__module__}.{value.__qualname__}"
-        return hash_bytes(b"class" + name.encode())
+        return digest(b"class" + name.encode())
     if isinstance(value, bytes | bytearray | memoryview):
-        return bytes_digest(value)
-    if isinstance(value, bool | int):
-        return int_digest(value)
+        return digest(b"bytes" + bytes(value))
+    if isinstance(value, int):
+        return digest(
+            b"int"
+            + value.to_bytes((value.bit_length() + 8) // 8 or 1, "little", signed=True)
+        )
     if isinstance(value, str):
-        return str_digest(value)
+        return digest(b"str" + value.encode())
     if value is None:
-        return hash_bytes(b"none")
+        return digest(b"none")
     if isinstance(value, dict):
         parts = [b"dict"]
         for key, val in value.items():
             parts += [element_digest(key), element_digest(val)]
-        return chain_digest(parts)
+        return DigestChain(parts).digest()
     if isinstance(value, list | tuple):
         chain = DigestChain().absorb(b"seq")
         return chain.absorb_packed(b"".join(element_digest(v) for v in value)).digest()
     if hasattr(value, "SerializeToString"):  # a protobuf message, e.g. a circuit
-        return hash_bytes(b"proto" + value.SerializeToString())
-    digest = getattr(value, "digest", None)
-    if callable(digest):
-        return cast("bytes", digest())
+        return digest(b"proto" + value.SerializeToString())
+    own = getattr(value, "digest", None)
+    if callable(own):
+        return cast("bytes", own())
     raise TypeError(
         f"cannot digest a {type(value).__name__}; give it a digest() method"
     )

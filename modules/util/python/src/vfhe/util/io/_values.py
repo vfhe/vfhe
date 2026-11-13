@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Codecs of plain values and the combinators that build one codec from others: an optional, a list, a tuple, a dict.
 
-Counts and ints are 8 little-endian bytes and floats IEEE 754 doubles, so a
-stream reads the same on every machine. Every `decode` raises `EOFError` when
+Counts and ints are 8 little-endian bytes, so a stream reads the same on
+every machine. Every `decode` raises `EOFError` when
 the stream ends inside the value.
 """
 
@@ -24,7 +24,6 @@ V = TypeVar("V")
 
 _COUNT = struct.Struct("<Q")
 _INT = struct.Struct("<q")
-_FLOAT = struct.Struct("<d")
 
 
 class IntCodec(Codec[int]):
@@ -37,26 +36,6 @@ class IntCodec(Codec[int]):
         return _INT.unpack(read_exactly(stream, _INT.size))[0]
 
 
-class FloatCodec(Codec[float]):
-    """A float as an IEEE 754 double, little-endian."""
-
-    def encode(self, obj: float, stream: IO[bytes], /) -> None:
-        stream.write(_FLOAT.pack(obj))
-
-    def decode(self, stream: IO[bytes], /) -> float:
-        return _FLOAT.unpack(read_exactly(stream, _FLOAT.size))[0]
-
-
-class BoolCodec(Codec[bool]):
-    """A bool as one byte, ``0`` or ``1``; any other byte reads as ``True``."""
-
-    def encode(self, obj: bool, stream: IO[bytes], /) -> None:
-        stream.write(b"\x01" if obj else b"\x00")
-
-    def decode(self, stream: IO[bytes], /) -> bool:
-        return read_exactly(stream, 1) != b"\x00"
-
-
 class BytesCodec(Codec[bytes]):
     """Bytes behind their count."""
 
@@ -66,18 +45,6 @@ class BytesCodec(Codec[bytes]):
 
     def decode(self, stream: IO[bytes], /) -> bytes:
         return read_exactly(stream, _COUNT.unpack(read_exactly(stream, _COUNT.size))[0])
-
-
-class StrCodec(Codec[str]):
-    """A str as UTF-8 behind its byte count. `decode` raises `UnicodeDecodeError` on invalid UTF-8."""
-
-    _bytes = BytesCodec()
-
-    def encode(self, obj: str, stream: IO[bytes], /) -> None:
-        self._bytes.encode(obj.encode(), stream)
-
-    def decode(self, stream: IO[bytes], /) -> str:
-        return self._bytes.decode(stream).decode()
 
 
 class OptionalCodec(Codec[Any], Generic[T]):

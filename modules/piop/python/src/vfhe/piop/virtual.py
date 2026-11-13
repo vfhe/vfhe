@@ -37,7 +37,7 @@ from typing import Any
 
 from vfhe.arith import FieldElement
 from vfhe.arith.mle import MLE, MLE_Basis, MLE_Variable, SparseMLE, vector_table
-from vfhe.crypto import chain_digest
+from vfhe.crypto.hash import DigestChain
 
 from .digest import element_digest
 from .oracle import Oracle, OracleKind, TableOracle
@@ -435,7 +435,7 @@ class VirtualOracle(Oracle):
                 parts += [element_digest(cv), element_digest(src)]
         for coeff, idxs in self.terms:
             parts += [element_digest(coeff), element_digest(list(idxs))]
-        return chain_digest(parts)
+        return DigestChain(parts).digest()
 
     def __repr__(self) -> str:
         return (

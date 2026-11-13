@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from vfhe.arith import ExtensionField, Field, RNSRing
-from vfhe.crypto import DIGEST_LEN
+from vfhe.crypto.hash import DIGEST_LEN
 
 from .basefold import (
     Basefold,

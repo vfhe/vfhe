@@ -25,7 +25,7 @@
 #include <arith.h>
 #include <assert.h>
 #include <blake3.h>
-#include <crypto.h>
+#include <hash.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1884,11 +1884,11 @@ uint64_t pmf_vec_hash_count(const PMFVector a, uint64_t group, uint64_t stride)
 }
 
 // Digests [begin, end) of pmf_vec_hash_elements, into job->bytes. A window
-// past a BLAKE3 chunk, which hash_batch cannot take, gets one hasher each.
+// past a BLAKE3 chunk, which hash_blake3_batch cannot take, gets one hasher each.
 // Otherwise windows are staged because a digest covers canonical encodings,
 // which nothing holds, and batched by the same byte budget as a span; see
 // field_vector.c, which sizes its own staging the same way and for the same
-// reasons. hash_batch_fits caps a window at a chunk, so a batch is at least
+// reasons. hash_blake3_batch_fits caps a window at a chunk, so a batch is at least
 // 32.
 static void pmf_vec_hash_elements_range(const PMFVecJob *job, uint64_t begin, uint64_t end,
                                         uint64_t chunk)
@@ -1899,13 +1899,19 @@ static void pmf_vec_hash_elements_range(const PMFVecJob *job, uint64_t begin, ui
     const uint64_t nbytes = a->params->nbytes, leaf = group * nbytes;
     uint8_t *out = job->bytes;
 
-    if (!hash_batch_fits(leaf))
+    // A window the lanes cannot take: one hasher each, as before. Note this
+    // turns on the *encoded* width, so which windows qualify depends on the
+    // prime -- an element is nbytes here, not a machine word.
+    if (!hash_blake3_batch_fits(leaf))
     {
         for (uint64_t k = begin; k < end; k++)
             pmf_vec_hash_span(&out[k * BLAKE3_OUT_LEN], a, k * stride, group);
         return;
     }
 
+    // Staged because a digest covers canonical encodings, which nothing holds:
+    // pmf_to_bytes has to run per element whatever the hashing does with the
+    // result. hash_blake3_batch_fits caps `leaf` at a chunk, so this is at least 32.
     const uint64_t batch = PMF_VEC_HASH_STAGE_BYTES / leaf;
     uint8_t *staged = (uint8_t *)safe_aligned_malloc(batch * leaf);
     for (uint64_t k = begin; k < end;)
@@ -1916,7 +1922,7 @@ static void pmf_vec_hash_elements_range(const PMFVecJob *job, uint64_t begin, ui
         for (uint64_t j = 0; j < run; j++)
             for (uint64_t i = 0; i < group; i++)
                 pmf_vec_encode(&staged[(j * group + i) * nbytes], a, (k + j) * stride + i);
-        hash_batch(&out[k * BLAKE3_OUT_LEN], staged, run, leaf);
+        hash_blake3_batch(&out[k * BLAKE3_OUT_LEN], staged, run, leaf);
         k += run;
     }
     free(staged);

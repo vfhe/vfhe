@@ -5,3 +5,8 @@ install_subdir(
     'python/src/vfhe',
     install_dir: py.get_install_dir(),
 )
+
+install_subdir(
+    'python/bench',
+    install_dir: py.get_install_dir() / 'vfhe' / 'circuit',
+)

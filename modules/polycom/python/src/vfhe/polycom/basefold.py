@@ -18,7 +18,7 @@ on the transcript. The prover's opening data is stored under the commitment
 in `prover.witnesses`.
 
 The commitment is a **Merkle root** over the level-d codeword
-(`vfhe.crypto.Merkle`, BLAKE3): the RO-model instantiation of [ZCF24] §4's
+(`vfhe.crypto.merkle.Merkle`, BLAKE3): the RO-model instantiation of [ZCF24] §4's
 ideal oracle, via the BCS compiler [BCS16]. It commits to the codeword's
 adjacent *pairs*, one leaf each — the fold reads a pair, so a single path
 authenticates both operands of a fold check ([ZCF24, Remark 9]'s packed
@@ -72,7 +72,8 @@ from vfhe.arith import (
     RNSPolynomial,
 )
 from vfhe.arith.mle import native_table, vector_table
-from vfhe.crypto import DIGEST_LEN, Merkle, chain_digest, hash_bytes, int_digest
+from vfhe.crypto.hash import DIGEST_LEN, DigestChain, digest
+from vfhe.crypto.merkle import Merkle
 from vfhe.piop import (
     CommittedOracle,
     OracleMessages,
@@ -114,6 +115,11 @@ if TYPE_CHECKING:
 #: with the code matching its tables, so which of the two travels through the
 #: protocol is fixed by that pairing rather than by any one signature here.
 Word = Any
+
+
+def _int_bytes(n: int) -> bytes:
+    """An integer as the fewest two's-complement little-endian bytes that hold it: one part of a digest chain."""
+    return int(n).to_bytes((int(n).bit_length() + 8) // 8, "little", signed=True)
 
 
 def _gather(word: Word, positions: list[int]) -> Word:
@@ -184,7 +190,7 @@ class BasefoldCommitment:
         """The `piop.element_digest` hook: what a Fiat-Shamir chain absorbs
         when this commitment sits in a statement (the root already binds the
         codeword; the variables fix the point order)."""
-        return hash_bytes(
+        return digest(
             b"basefold-commitment" + self.root + element_digest(self.variables)
         )
 
@@ -270,8 +276,8 @@ class Basefold:
         (`FoldableRS.digest` / `FieldFoldableRS.digest`) and the layer
         schedule."""
         parts = [b"basefold", self.code.digest()]
-        parts += [int_digest(folds) for folds in self.schedule]
-        return chain_digest(parts)
+        parts += [_int_bytes(folds) for folds in self.schedule]
+        return DigestChain(parts).digest()
 
     def _check_polynomial(self, f) -> None:
         if not _committed_table(f):
@@ -299,7 +305,7 @@ class Basefold:
         well as once per commit.
         """
         folds = self.schedule[0] if folds is None else folds
-        return Merkle.from_digests(self.code.leaf_digests(word, 1 << folds))
+        return Merkle(self.code.leaf_digests(word, 1 << folds))
 
     def commit(
         self, f: MLE, prover: Prover | None = None
@@ -405,9 +411,12 @@ class BasefoldMessages(OracleMessages):
         """The schemes by table size and the sizes sent in the clear."""
         parts = [b"basefold-messages"]
         for num_vars in sorted(self.schemes):
-            parts += [int_digest(num_vars), self.schemes[num_vars].digest()]
-        parts += [int_digest(num_vars) for num_vars in sorted(self.sent)]
-        return chain_digest(parts)
+            parts += [
+                _int_bytes(num_vars),
+                self.schemes[num_vars].digest(),
+            ]
+        parts += [_int_bytes(num_vars) for num_vars in sorted(self.sent)]
+        return DigestChain(parts).digest()
 
     def _scheme(self, num_vars: int) -> Basefold:
         scheme = self.schemes.get(num_vars)
@@ -527,20 +536,20 @@ class BasefoldEval(Protocol):
         polynomials: int = 1,
     ) -> float | None:
         """The information-theoretic part,
-        2d / (gamma^3 |A|) + (1 - delta + gamma * d)^rep [ZCF24], per
-        RNS-prime component (|A| = the residue field size). `gamma` and
+        2d / (gamma^3 ``|A|``) + (1 - delta + gamma * d)^rep [ZCF24], per
+        RNS-prime component (``|A|`` = the residue field size). `gamma` and
         `delta` are the caller's, subject to the theorem's conditions
         (polycom.md): `delta` is the proximity parameter, which must satisfy
         delta < J_gamma(J_gamma(Delta)) and 3 delta - d gamma < Delta for the
         code's relative distance Delta (`self.code.relative_distance()`);
-        `basefold_parameters` gives the largest one. None if |A| is unknown.
+        `basefold_parameters` gives the largest one. None if ``|A|`` is unknown.
 
         For a bundle of `claims` evaluation claims on `polynomials` distinct
         polynomials, opened together, the batching adds
-        (2l + claims - 1) / |A| for the common-point sumcheck when
+        (2l + claims - 1) / ``|A|`` for the common-point sumcheck when
         claims > 1 [CCCFGS26, §7.1] (l = the number of variables; the bound
         holds whether or not the points coincide) and
-        (polynomials - 1) / |A| for the random linear combination
+        (polynomials - 1) / ``|A|`` for the random linear combination
         [CCCFGS26, §7.2, Lemma 5].
 
         With Merkle commitments this is no longer the whole story: binding
@@ -1018,7 +1027,7 @@ class LayerAnswers:
         else:
             parts.append(element_digest(self.leaves))
         parts.append(element_digest(self.paths))
-        return chain_digest(parts)
+        return DigestChain(parts).digest()
 
     def __repr__(self) -> str:
         return f"LayerAnswers({len(self.leaves)} word(s), {len(self.paths)} path bytes)"
@@ -1034,7 +1043,7 @@ def _word_digest(word) -> bytes:
     if isinstance(word, list | tuple) and all(
         isinstance(e, RNSPolynomial) for e in word
     ):
-        return hash_bytes(b"ring-word" + RNSPolynomial.digest_sequence(list(word)))
+        return digest(b"ring-word" + RNSPolynomial.digest_sequence(list(word)))
     return element_digest(word)
 
 

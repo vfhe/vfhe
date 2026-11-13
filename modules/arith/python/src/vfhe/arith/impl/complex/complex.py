@@ -27,6 +27,9 @@ _NOT_FINITE = "a value to round is NaN or infinite (a non-finite input or scale)
 
 
 class ComplexRing:
+    """The CKKS encoder's ring: polynomials of ``N`` complex coefficients and
+    the negacyclic FFT between coefficients and slots."""
+
     #: The (implementation, backend) this parent was built for.
     spec: ClassVar[Spec]
 
@@ -156,6 +159,9 @@ def _interleaved_values(v: object) -> tuple[ffi.CData, int]:
 
 
 class ComplexPolynomial:
+    """An element of a `ComplexRing`: ``N`` complex coefficients, held natively
+    in ``obj``."""
+
     def __init__(self, ring: ComplexRing):
         self.ring = ring
         self.obj = ring.alloc_polynomial()

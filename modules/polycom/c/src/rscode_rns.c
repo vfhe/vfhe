@@ -13,7 +13,7 @@
 #include <string.h>
 
 #include "alloc.h"
-#include "crypto.h"
+#include <hash.h>
 #include "parallel.h"
 
 // -------------------------------------------------------------
@@ -279,9 +279,9 @@ int rs_decode(ArithElement *out, ArithElement *in, uint64_t size, uint64_t degre
 // A leaf is `size` adjacent symbols, and its digest is the BLAKE3 digest of
 // the symbols' own digests concatenated in order, a symbol's digest being
 // polynomial_RNS_get_hash's. The symbols' digests are staged a block at a
-// time and the block's leaves hashed from them with one hash_batch call.
+// time and the block's leaves hashed from them with one hash_blake3_batch call.
 
-// Bytes of a digest, as hash_stream_digest and hash_batch write it.
+// Bytes of a digest, as hash_blake3_stream_digest and hash_blake3_batch write it.
 #define DIGEST_LEN 32
 // Symbols whose digests a block stages: 128 KiB of digests.
 #define LEAF_BLOCK_SYMBOLS 4096
@@ -297,17 +297,17 @@ static void leaf_digests_range(uint8_t *out, ArithElement *word, uint64_t leaf_s
 {
     const uint64_t block = leaf_size < LEAF_BLOCK_SYMBOLS ? LEAF_BLOCK_SYMBOLS / leaf_size : 1;
     uint8_t *staged = (uint8_t *)safe_malloc(block * leaf_size * DIGEST_LEN);
-    void *state = safe_malloc(hash_stream_size());
+    void *state = safe_malloc(hash_blake3_stream_size());
     for (uint64_t leaf = first; leaf < last; leaf += block)
     {
         const uint64_t leaves = last - leaf < block ? last - leaf : block;
         for (uint64_t s = 0; s < leaves * leaf_size; s++)
         {
-            hash_stream_init(state);
+            hash_blake3_stream_init(state);
             polynomial_RNS_hash_update(state, arith_rns_polynomial(&word[leaf * leaf_size + s]));
-            hash_stream_digest(state, &staged[s * DIGEST_LEN]);
+            hash_blake3_stream_digest(state, &staged[s * DIGEST_LEN]);
         }
-        hash_batch(&out[leaf * DIGEST_LEN], staged, leaves, leaf_size * DIGEST_LEN);
+        hash_blake3_batch(&out[leaf * DIGEST_LEN], staged, leaves, leaf_size * DIGEST_LEN);
     }
     free(state);
     free(staged);

@@ -62,11 +62,12 @@ typedef struct _RNS_MLWE_Key
 void *lwe_alloc_key(uint64_t n, uint64_t mask, void *base);
 void *lwe_alloc_sample(uint64_t n, uint64_t mask, void *base);
 void free_lwe_sample(void *c);
-void *lwe_new_key(uint64_t n, uint64_t mask, void *base, double sec_sigma, double err_sigma);
+void *lwe_new_key(uint64_t n, uint64_t mask, void *base, double sec_sigma, double err_sigma,
+                  void *source);
 void *lwe_new_sparse_ternary_key(uint64_t n, uint64_t mask, void *base, uint64_t h,
-                                 double err_sigma);
-void lwe_sample(void *c, uint64_t *m, void *key);
-void *lwe_new_sample(uint64_t *m, void *key);
+                                 double err_sigma, void *source);
+void lwe_sample(void *c, uint64_t *m, void *key, void *source);
+void *lwe_new_sample(uint64_t *m, void *key, void *source);
 void *lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t mask, void *base);
 void lwe_linear_decrypt(uint64_t *out, void *c, void *key);
 void lwe_subto(void *out, void *in);
@@ -75,26 +76,26 @@ void lwe_subto(void *out, void *in);
 void *mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r, uint64_t l, void *base,
                                   double sigma);
 void *mlwe_new_RNS_gaussian_key(uint64_t N, uint64_t r, uint64_t l, double key_sigma, void *base,
-                                double sigma);
+                                double sigma, void *source);
 void *mlwe_alloc_RNS_sample(uint64_t N, uint64_t r, uint64_t mask, void *base);
 void *mlwe_alloc_RNS_sample_array(uint64_t size, uint64_t N, uint64_t r, uint64_t mask, void *base);
 void *mlwe_create_copy_array(void *in, uint64_t size);
 void free_mlwe_RNS_sample(void *p);
 void free_mlwe_RNS_key(void *key);
 
-void mlwe_RNSc_sample(void *out, void *key, ArithElement *m);
+void mlwe_RNSc_sample(void *out, void *key, ArithElement *m, void *source);
 void mlwe_RNSc_sample_seeded(void *out, void *key, ArithElement *m, const uint8_t *seed,
-                             uint64_t seed_len);
+                             uint64_t seed_len, void *source);
 void mlwe_RNS_sample_scaled_batch(void *out, void *ring, void *key, ArithElement *msgs,
                                   uint64_t n_msgs, uint64_t **scales, uint64_t n_scales,
-                                  uint8_t *mask_seeds, uint64_t n_threads);
+                                  uint8_t *mask_seeds, uint64_t n_threads, void *source);
 void mlwe_RNS_linear_decrypt(ArithElement *out, void *in, void *key);
 void mlwe_RNSc_to_RNS(void *out, void *in);
 void mlwe_RNS_to_RNSc(void *out, void *in);
 void mlwe_copy_RNS_sample(void *out, void *in);
 void mlwe_RNS_trivial_sample_of_zero(void *out);
-void *mlwe_new_RNSc_sample_of_zero(void *key);
-void *mlwe_new_RNS_sample_of_zero(void *key);
+void *mlwe_new_RNSc_sample_of_zero(void *key, void *source);
+void *mlwe_new_RNS_sample_of_zero(void *key, void *source);
 void *mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask, void *base);
 
 void mlwe_RNS_mul_addto_by_poly(void *out, void *in, ArithElement *poly);

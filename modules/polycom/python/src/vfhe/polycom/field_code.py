@@ -50,7 +50,7 @@ from vfhe.arith import (
     PseudoMersenneField,
     PseudoMersenneVector,
 )
-from vfhe.crypto import bytes_digest, chain_digest, int_digest, str_digest
+from vfhe.crypto.hash import DigestChain
 from vfhe.util.bindings import ffi, lib
 
 from .code import (
@@ -79,6 +79,11 @@ ROOT_FIELDS = ("prime", "field")
 # How many seeds are tried for a table before giving up: a retry happens with
 # probability about `n / |F|` per table, so a second one is already unlikely.
 _MAX_SAMPLING_ATTEMPTS = 64
+
+
+def _int_bytes(n: int) -> bytes:
+    """An integer as the fewest two's-complement little-endian bytes that hold it: one part of a digest chain."""
+    return int(n).to_bytes((int(n).bit_length() + 8) // 8, "little", signed=True)
 
 
 def _pmf_vector(vector: FieldVector) -> PseudoMersenneVector:
@@ -584,19 +589,19 @@ class FieldFoldableRS:
         `c`, `d`, the instantiation, the seed, the twist field and the root
         field. Two codes with equal digests encode, fold and hash
         identically."""
-        return chain_digest(
+        return DigestChain(
             [
                 b"field-foldable-rs",
                 self.field.digest(),
-                int_digest(self.k0),
-                int_digest(self.c),
-                int_digest(self.d),
-                str_digest(self.instantiation),
-                bytes_digest(self.seed),
-                str_digest(self.twist_field),
-                str_digest(self.root_field),
+                _int_bytes(self.k0),
+                _int_bytes(self.c),
+                _int_bytes(self.d),
+                self.instantiation.encode(),
+                self.seed,
+                self.twist_field.encode(),
+                self.root_field.encode(),
             ]
-        )
+        ).digest()
 
     def truncated(self, depth: int) -> FieldFoldableRS:
         """The depth-`depth` code with this code's field, `k0`, `c`, seed and

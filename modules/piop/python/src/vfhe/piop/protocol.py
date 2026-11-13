@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import ArithParent
-from vfhe.crypto import chain_digest
+from vfhe.crypto.hash import DigestChain
 
 from .digest import element_digest
 from .relation import Relation, Statement, child_statement
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 def exceptional_set_size(domain) -> int | None:
-    """|A| for the domain's exceptional set; None if the domain has no size.
+    """``|A|`` for the domain's exceptional set; None if the domain has no size.
 
     Each arithmetic domain computes its own: the size depends on the
     representation, and a domain that is not an `ArithParent` (an int, a
@@ -98,7 +98,7 @@ class Protocol:
         `parameters()`."""
         parts = [b"protocol", element_digest(type(self))]
         parts.append(element_digest(self.parameters()))
-        return chain_digest(parts)
+        return DigestChain(parts).digest()
 
     def bundle_key(self, oracle) -> Any:
         """What a bundle protocol groups claims on `oracle` by: the driver

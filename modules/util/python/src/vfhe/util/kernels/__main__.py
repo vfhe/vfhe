@@ -14,7 +14,7 @@ vfhe then needs no compiler.
 
 import argparse
 
-from ._build import ExtensionBuilder
+from ._build import compile
 
 parser = argparse.ArgumentParser(
     prog="python -m vfhe.util.kernels",
@@ -39,11 +39,4 @@ if not sources:
 
 declarations = [f for f in args.files if f.endswith(".h")]
 
-print(
-    ExtensionBuilder(
-        sources,
-        declarations,
-        engine=args.engine,
-        cc=args.cc,
-    ).compile()
-)
+print(compile(sources, declarations, engine=args.engine, cc=args.cc))

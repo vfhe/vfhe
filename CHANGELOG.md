@@ -12,6 +12,60 @@ versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `vfhe.crypto.random.Random`, the source a scheme's samplers draw from, and
+  a `random=` parameter on `MLWE_Scheme`, `CKKS_Scheme`, `BFV_Scheme`,
+  `LWE_Key`, `Verifier` and every `random_*` sampler of arith: a seeded
+  source makes a scheme reproducible on every engine. In C every sampler
+  takes a `Random` (`random.h`), `NULL` being the entropy stream;
+  `random_below` and `normal_random` replace `entropy_uniform_below` and
+  `normal_from_entropy`.
+- A CUDA extension, `_vfhe_cuda`, built beside the engines when the build
+  finds a toolkit (`-Dcuda=auto|enabled|disabled`) and loaded by
+  `vfhe.util.gpu`. With a device, `rns` gains a `cuda` backend:
+  `Ring(..., backend="cuda")` holds its elements on the device, where add,
+  subtract and negate run, and `Polynomial.to_backend` moves an element
+  between host and device. The wheels carry no extension; a build from the
+  sdist with `nvcc` does.
+- Every module's Python API on the documentation site, split by concern
+  where a module is large, with links between its own pages; the site's
+  Project section is contributing, security, support and this changelog.
+
+### Changed
+
+- **BREAKING**: `vfhe.crypto` is three subpackages imported like util's,
+  `random`, `hash` and `merkle`, with nothing re-exported. `Random()`
+  replaces the `entropy` module and `seeded_below_many` the `seeded` module;
+  `entropy.deterministic`, `entropy_pin` and `entropy_unpin` are gone, a
+  reproducible scheme being built over a seeded `Random`. `digest(data)` is
+  the one hash function, BLAKE3 of a byte string, in place of `hash_bytes`,
+  `chain_digest` and the typed digests; `DigestChain` is the chain, and
+  tagging a transcript's primitives is piop's `element_digest`. `Merkle`
+  takes packed leaf digests alone, `Merkle(digests)`, and an opening is
+  `bytes`; `MerklePath`, trees over leaf objects and `from_digests` are gone.
+- **BREAKING (C)**: crypto's headers own their prefixes: the hash functions
+  are `hash_blake3`, `hash_blake3_batch`, `hash_blake3_chain` and
+  `hash_blake3_stream_*`, leaving `blake3_` to the vendored library;
+  `entropy.h` folded into `random.h`, whose `random_bytes(NULL, ...)` is the
+  stream; `wipe.h` is util's.
+- **BREAKING**: `kernels.ExtensionBuilder` is the functions `kernels.build`,
+  `kernels.compile` and `kernels.directory`, each taking
+  `(sources, declarations, *, engine=None, cc=None)`.
+- **BREAKING**: `vfhe.info` is `vfhe.util.info`, and the report is
+  `python -m vfhe.util.info`: every command the library offers lives under
+  `vfhe.util`, beside `kernels` and `benchmark`.
+- **BREAKING**: the benchmarks are pytest-benchmark tests, each module's
+  `python/bench/` installed as its `bench` package: `python -m vfhe.benchmark`
+  times them on an install (`pip install 'vfhe[benchmark]'`) and
+  `make benchmark` on every engine of a checkout, with saved runs and
+  comparison; the complete depth of `make test` runs each once. The harness
+  under `tools/bench`, `make bench` and the C benchmarks are gone.
+- **BREAKING**: `vfhe.util.io` has one type class, `Codec`; `Encoder` and
+  `Decoder` are folded into it, `read_exactly` is no longer exported, and
+  `BoolCodec`, `FloatCodec` and `StrCodec` are gone. `gpu.device_count` is
+  private.
+
 ## [0.0.4] - 2026-11-13
 
 ### Added
@@ -247,6 +301,25 @@ versions may contain breaking changes.
   left, and `Ring(N, primes=[...])` failed without `prime_size=None`.
 - The documented meaning of `delta` in `soundness_error` and the contract of
   `base_extend` were corrected; behaviour is unchanged.
+
+### Security
+
+- A failing entropy source (RDRAND, `/dev/urandom`) exits the process
+  with the reason on stderr; it used to print to stdout and return an
+  undefined seed.
+- A Gaussian draw whose uniform word was zero produced an infinite sample
+  and an undefined integer cast, once in 2^64 draws; the words now map into
+  the open unit interval. `normal_from_seed` is a new mapping from seed to
+  samples, under a new derive-key context.
+- The portable seed source reads `getentropy` in place of `/dev/urandom`
+  through stdio, which over-read the device into a buffer that kept the
+  bytes; RDRAND retries a drained step ten times before failing, Intel's
+  guidance, where one miss used to exit. The fresh seed, the AES round keys
+  and the served slice of the per-thread pool are wiped once used.
+- `seeded.below`'s mask is built from `bound - 1`, as documented: a power-
+  of-two bound no longer rejects half its draws. The sequence changes for
+  those bounds alone. A `context` with a NUL byte and a bound past 64 bits
+  raise `ValueError`; BLAKE3 would have cut the context short.
 
 ## [0.0.3] - 2026-09-10
 

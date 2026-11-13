@@ -51,7 +51,7 @@ positions, drawn after every run has folded: a query's first layer is
 answered once, by the leaves of the committed ring codewords, which the
 verifier authenticates against the ring commitments and maps to the leaves
 of every u_i. Each later layer is committed once for all primes: one Merkle
-tree whose leaf j joins every prime's leaf j (`vfhe.crypto.join_digests`),
+tree whose leaf j joins every prime's leaf j (`vfhe.crypto.merkle.join_digests`),
 built when every prime has folded to that layer, so a layer's answers carry
 every prime's fibers and one authentication path per query.
 
@@ -66,7 +66,7 @@ from array import array
 from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import MLE, FieldVector, Polynomial, Ring, RNSPolynomial
-from vfhe.crypto import Merkle, join_digests
+from vfhe.crypto.merkle import Merkle, join_digests
 from vfhe.piop import (
     Prover,
     Rejection,
@@ -153,7 +153,7 @@ class BatchFoldEval(BasefoldEval):
         + (k polynomials - 1) / |F| + (1 - delta + gamma d)^rep``,
         one prime's error: the common-point sumcheck [CCCFGS26, §7.1], the
         random linear combination [CCCFGS26, §7.2, Lemma 5] and basefold over
-        a residue code [ZCF24]. Here |F| = min_i p_i^d is the size of the
+        a residue code [ZCF24]. Here ``|F|`` = min_i p_i^d is the size of the
         smallest residue field, which is also the size of the set the shared
         challenges come from, l the number of variables, k the number of
         components at a prime, and d the code's depth (not the split degree).
@@ -173,7 +173,7 @@ class BatchFoldEval(BasefoldEval):
         that prime's checks pass, which happens with probability at most
         that prime's error. Each prime's error is bounded by the expression
         above: its challenges come after the messages they answer and are
-        uniform over a set of size |F| (they are one ring element's
+        uniform over a set of size ``|F|`` (they are one ring element's
         components, so the primes' challenges are correlated, which no
         prime's argument looks at), and its query positions are uniform and
         drawn after every oracle they check is committed. The same holds
@@ -193,9 +193,9 @@ class BatchFoldEval(BasefoldEval):
         position, which includes what the paper's verifier reads there; and
         every layer's tree is committed before the queries are drawn.
 
-        Two terms rest on assumptions. The fold term 2d / (gamma^3 |F|) is
+        Two terms rest on assumptions. The fold term 2d / (gamma^3 ``|F|``) is
         [ZCF24]'s for fold challenges uniform over the whole field; here
-        they are uniform over a subset of size |F|, which keeps the bound if
+        they are uniform over a subset of size ``|F|``, which keeps the bound if
         it comes from counting the challenges that fold badly (the ring
         `BasefoldEval` makes the same assumption). And as in
         `BasefoldEval.soundness_error`, the bound is stated for the default
@@ -275,7 +275,7 @@ class BatchFoldEval(BasefoldEval):
             protocol.code.leaf_digests(word, size)
             for protocol, word in zip(self.residue_protocols, words, strict=True)
         ]
-        tree = Merkle.from_digests(join_digests(digests))
+        tree = Merkle(join_digests(digests))
         return [tree] * len(words)
 
     async def prove(
@@ -641,8 +641,9 @@ def _check_joint_layer(
 
     `answers` is a `LayerAnswers` with one word of leaves per prime, each
     leaf a fiber of `size` symbols. A leaf of the shared tree joins the
-    primes' leaf digests (`vfhe.crypto.join_digests`). Raises `Rejection`
-    when the answers are malformed or a path does not authenticate its leaf.
+    primes' leaf digests (`vfhe.crypto.merkle.join_digests`). Raises
+    `Rejection` when the answers are malformed or a path does not
+    authenticate its leaf.
     """
     words = _checked_leaf_words(label, level, answers, len(codes))
     blocks = []

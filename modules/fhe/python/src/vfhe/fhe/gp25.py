@@ -30,7 +30,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from vfhe.arith import Polynomial, repr
-from vfhe.crypto import entropy
 from vfhe.mlwe.mgsw import MGSW, MGSW_Scheme
 from vfhe.mlwe.mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Scheme, MLWE_Set, lib_rlwe
 from vfhe.util.bindings import ffi, lib
@@ -285,9 +284,9 @@ class GP25:
                 poly = [0] * n
                 placed = 0
                 while placed < h:
-                    j = entropy.below(n)
+                    j = scheme.random.below(n)
                     if poly[j] == 0:
-                        poly[j] = 1 - 2 * entropy.below(2) if ternary else 1
+                        poly[j] = 1 - 2 * scheme.random.below(2) if ternary else 1
                         placed += 1
                 key.append(poly)
             candidate = MLWE_Key(key, sigma_err, scheme)

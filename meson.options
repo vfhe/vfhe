@@ -15,3 +15,11 @@ option(
     value: '',
     description: 'the C++ library supplying main(), from $LIB_FUZZING_ENGINE',
 )
+
+# A GPU joins no engine: its sources build into one extension of their own.
+option(
+    'cuda',
+    type: 'feature',
+    value: 'auto',
+    description: 'the CUDA extension _vfhe_cuda; auto builds it when nvcc is found',
+)

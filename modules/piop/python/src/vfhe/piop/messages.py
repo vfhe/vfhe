@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import MLE, FieldVector
 from vfhe.arith.mle import vector_table
-from vfhe.crypto import hash_bytes
+from vfhe.crypto.hash import digest
 
 from .oracle import Oracle, TableOracle
 from .protocol import Rejection
@@ -63,14 +63,14 @@ class OracleMessages:
     `send` and `receive` are the two halves of one message under one
     transcript label. Each party gets its own oracle: the prover's names its
     table, the verifier's a table built from the entries it read, over the
-    variables it passes (`MLE_Variable`s compare by identity, so each party
+    variables it passes (`MLE_Variable` objects compare by identity, so each party
     uses its own).
     """
 
     def digest(self) -> bytes:
         """What a transcript absorbs for the way tables travel: the ideal
         model has no parameters."""
-        return hash_bytes(b"oracle-messages")
+        return digest(b"oracle-messages")
 
     def send(self, prover: Prover, label: str, table: MLE) -> Oracle:
         """Write `table` under `label` and return the prover's oracle to it."""

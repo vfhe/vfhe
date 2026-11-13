@@ -26,6 +26,7 @@ from vfhe.util.bindings import ffi
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from vfhe.crypto.random import Random
     from vfhe.mlwe import PlaintextMatrix
 
 
@@ -38,6 +39,7 @@ class CKKS_Scheme(MLWE_Scheme):
         special_primes: int = 0,
         special_rings: list[RNSRing] | None = None,
         balanced: bool = True,
+        random: Random | None = None,
     ):
         """Create a CKKS scheme.
 
@@ -45,7 +47,7 @@ class CKKS_Scheme(MLWE_Scheme):
         automatically) or an explicit list of per-level rings paired with
         ``special_rings`` when ``special_primes > 0`` -- e.g. non-nested levels
         for rational rescaling. See :class:`MLWE_Scheme` for both modes, and
-        for ``balanced``.
+        for ``balanced`` and ``random``.
         """
         super().__init__(
             rings,
@@ -53,6 +55,7 @@ class CKKS_Scheme(MLWE_Scheme):
             special_rings=special_rings,
             module_rank=module_rank,
             balanced=balanced,
+            random=random,
         )
         self.scaling_factor = scaling_factor
         self.complex_ring = ComplexRing(self.ring.N // 2)
@@ -530,6 +533,9 @@ class CKKS_Scheme(MLWE_Scheme):
 
 
 class CKKS_Ciphertext(MLWE):
+    """A CKKS ciphertext: an `MLWE` sample carrying its scale ``delta``, which
+    multiplication raises and `rescale` lowers."""
+
     scheme: CKKS_Scheme  # narrows MLWE.scheme for the CKKS-only members
 
     def __init__(

@@ -74,7 +74,7 @@ and the documentation site render it.
 
 | Module | Concern | C it owns | Uses |
 |---|---|---|---|
-| `util` | which engine loads, how Python reaches C (`bindings`), custom kernels compiled against vfhe's C (`kernels`), serialization (`io`), `vfhe.info` | `alloc.h`, `parallel.h`, `x86_64.h`: the substrate every kernel calls | |
+| `util` | which engine loads, how Python reaches C (`bindings`), custom kernels compiled against vfhe's C (`kernels`), serialization (`io`), `vfhe.util.info` | `alloc.h`, `parallel.h`, `x86_64.h`: the substrate every kernel calls | |
 | `crypto` | randomness from entropy and from seeds, BLAKE3 hashing, the Merkle vector commitment | `crypto.h`, `merkle.h`; BLAKE3 itself is vendored in `external/` | `util` |
 | `arith` | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: NTT, number theory, complex and multiprecision numbers, multilinear extensions | `arith.h`, `mle.h` | `crypto`, `util` |
 | `mlwe` | LWE, Module-LWE and MGSW over the `arith` ring: samples, keys, key switching, gadgets | `mlwe.h` | `arith`, `crypto`, `util` |
