@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The computation a trace recorded, read into its steps in vfhe's own
 terms, with the recorded values.

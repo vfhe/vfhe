@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 # Push-to-main checks at complete depth; too slow for the merge gate.
 name: CI Postsubmit

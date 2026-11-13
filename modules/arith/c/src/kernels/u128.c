@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // Linear combinations of 64-bit words modulo 2^128.

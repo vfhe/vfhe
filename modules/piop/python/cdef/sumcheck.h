@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the sumcheck prover kernels (piop/c/src/sumcheck.c,
 // prototyped in piop/c/include/sumcheck.h). Element arrays and

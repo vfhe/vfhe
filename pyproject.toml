@@ -1,8 +1,8 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 [project]
 name = "vfhe"
-version = "0.0.4.dev0"
+version = "0.0.4"
 description = "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,7 +20,7 @@ authors = [
     { name = "Alin-Petru Roșu" },
     { name = "Eduardo Soria-Vazquez" },
 ]
-maintainers = [{ name = "The vFHE Maintainers", email = "maintainers@vfhe.ai" }]
+maintainers = [{ name = "The vfhe maintainers", email = "maintainers@vfhe.ai" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

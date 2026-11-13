@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the generators (crypto/c/src/prng.c and normal.c,
 // prototyped in crypto/c/include/crypto.h). Byte buffers are plain

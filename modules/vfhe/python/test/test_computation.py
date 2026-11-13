@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The computation read from the tape of the use case: two multiplications
 with their operands, slots, digits, key components and rescales, equal to

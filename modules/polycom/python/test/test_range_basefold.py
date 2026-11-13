@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The range proof compiled with basefold: `mu'`, the counters and the four
 `f^(1)` tables are sent as commitments (`BasefoldMessages`), one field scheme

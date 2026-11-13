@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """`RNSRing.crt_components` / `from_crt_components`: the CRT components of
 ring elements at a prime, all in one residue field, and back.

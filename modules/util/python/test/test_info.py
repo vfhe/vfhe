@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """`python -m vfhe.info` is what a bug report pastes, so it reports the engine
 truthfully and exits 0 on every install, including one that cannot load an

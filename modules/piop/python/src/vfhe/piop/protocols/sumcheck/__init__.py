@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The sumcheck protocols [LFKN92] and their machinery: the protocols in
 `sumcheck`, the round-message kernels and the verifier's claim update in

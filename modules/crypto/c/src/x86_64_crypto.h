@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // The x86 instructions crypto uses, on the same 0/1 contract as <x86_64.h>: always
 // defined, tested with `#if`. Nothing outside crypto reads them, which is why

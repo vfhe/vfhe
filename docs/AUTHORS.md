@@ -3,7 +3,7 @@
 This project is both an open-source initiative and an academic collaboration,
 and our authorship policy reflects this dual nature. We list as Authors anyone
 who has made significant contributions, such as code, algorithms, and ideas,
-to the design, architecture, and implementation of the vFHE library itself.
+to the design, architecture, and implementation of the vfhe library itself.
 Unlike academic convention, authorship does not imply responsibility for the
 entire work: each author is responsible for the code and the ideas they
 contributed. Authors are sorted alphabetically by surname,
@@ -25,7 +25,7 @@ following
 
 ## History
 
-The vFHE library began with the initiative of its authors following joint
+The vfhe library began with the initiative of its authors following joint
 research on verifiable fully homomorphic encryption. The project was set in
 motion by the ERC Proof of Concept grant VERIFHE at the IMDEA Software
 Institute, with the additional support of the grants JDC2024-055789-I,
@@ -38,6 +38,6 @@ e.g. HELIOPOLIS. -->
 
 ## Contributors
 
-We gratefully acknowledge intellectual and software contributions to the vFHE
+We gratefully acknowledge intellectual and software contributions to the vfhe
 library from all
 [contributors](https://github.com/vfhe/vfhe/graphs/contributors).

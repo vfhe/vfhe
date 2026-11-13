@@ -1,4 +1,4 @@
-# Developing vFHE
+# Developing vfhe
 
 For contributors changing the library itself. It covers the build, the test
 matrix, coverage, and packaging. All library code lives in self-contained
@@ -134,7 +134,7 @@ The *to do* rows are the work ahead, and this table is that list.
 | `avx512f` | x86_64 | to do | AVX-512 F/DQ/VL without IFMA — most kernels need no `madd52` |
 | `avxifma` | x86_64 | to do | the same IFMA at 256 bits (VEX), for CPUs without AVX-512 |
 | `avx2` | x86_64 | to do | 256-bit integer SIMD, the widest baseline on old x86_64 |
-| `neon` | arm64, macOS | shipping | BLAKE3's NEON hashing today. vFHE's own kernels still take the portable path here, because they guard on `__AVX512IFMA__`; a `#if defined(__ARM_NEON)` branch slots in with no registry change |
+| `neon` | arm64, macOS | shipping | BLAKE3's NEON hashing today. vfhe's own kernels still take the portable path here, because they guard on `__AVX512IFMA__`; a `#if defined(__ARM_NEON)` branch slots in with no registry change |
 
 Meson pins every test to its engine (`VFHE_ENGINE`), so a machine that
 happens to have IFMA cannot silently switch engines. Testing `avx512ifma`
@@ -492,7 +492,7 @@ files, or in `arch/<arch>/` under `c/src/`.
 
 ## Building the distribution
 
-vFHE releases as wheels (Linux x86_64/arm64, macOS arm64) plus the sdist.
+vfhe releases as wheels (Linux x86_64/arm64, macOS arm64) plus the sdist.
 Every install carries each engine its architecture can run and picks one at
 import.
 

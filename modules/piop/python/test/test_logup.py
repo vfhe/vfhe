@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The logarithmic-derivative lookup protocol `LogUpGKR` for
 `Relation_Lookup`: the multiplicities sent per table, the two fractional

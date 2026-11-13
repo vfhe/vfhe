@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """`RNSRing.integer_linear_combinations`: an integer matrix times a vector of
 ring elements, against the products computed coefficient by coefficient."""

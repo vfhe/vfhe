@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The residue range relation and its decomposition protocol: the optimized
 range PIOP of [CCCFGS26] on an integer table held as one oracle per prime.

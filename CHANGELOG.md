@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
+<!-- SPDX-FileCopyrightText: 2026 The vfhe authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # Changelog
@@ -12,1746 +12,241 @@ versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-11-13
+
 ### Added
 
-- `Merkle.open_many(indices)` opens several leaves in one C call
-  (`merkle_open_many`) and returns their paths packed end to end in one
-  `bytes`. `Merkle.verify_many(root, indices, paths, leaf_digests)` checks such
-  packed paths in one C call (`merkle_verify_many`). It returns `None`, or
-  the first leaf whose opening does not authenticate. The Basefold and
-  BatchFold verifiers check each layer's query paths with it.
-- `polycom.LayerAnswers`, one committed layer's answers to a run's query
-  positions: the queried leaves as one word per codeword under the layer's
-  tree (a `FieldVector`, or a list of ring elements), and their paths as
-  one packed `bytes`. A transcript digests it with one hash per word and
-  one for the paths.
-- `pmf_inverse` inverts one pseudo-Mersenne element in one C call.
-  `PseudoMersenneElement.inverse` uses it instead of a square-and-multiply
-  in Python.
-- `Field.lagrange_interpolate(values, x)` evaluates at `x` the polynomial
-  that takes the value `values[t]` at the integer `t`, for
-  `t = 0, ..., len(values) - 1`. No field element is inverted: the one
-  inverse it needs is that of the integer `(len(values) - 1)!`, computed
-  modulo the characteristic. It is one native call for pseudo-Mersenne and
-  extension fields up to `ARITH_LAGRANGE_MAX_VALUES` (32) values
-  (`pmf_lagrange_interpolate`, `field_ext_lagrange_interpolate`), and the
-  generic definition beyond.
-- `vfhe.arith.IntegerMatrix(rows)` (also exported by `vfhe.mlwe`) holds an
-  integer matrix for `RNSRing.integer_linear_combinations` and
-  `MLWE_Scheme.linear_combinations`, which then compute each output as
-  `sum_j W[i][j] * cts[j]` in the domain the ciphertexts are in. The rows
-  are lists of integers or a C-contiguous two-dimensional `int64` buffer,
-  such as a NumPy array, read in place: it must not change while the matrix
-  is in use. Under CKKS the outputs keep the ciphertexts' scaling factor. On
-  the generic path, and so on the execution tape, each term is one pass:
-  `scale_int`, `scale_addto` and `scale_subto` events, which
-  `vfhe.vfhe.Computation` reads as plaintext-linear terms whose plaintext is
-  the integer weight.
-- `RNSRing.integer_linear_combinations(elements, matrix)` multiplies an
-  integer matrix by a vector of ring elements, in the domain the elements
-  are in (`polynomial_integer_linear_combinations_RNS_polynomial`). The
-  matrix is prepared once per base of primes and kept on the
-  `IntegerMatrix` (`IntegerMatrix.prepared`, `rns_integer_matrix_new`): a
-  copy with its entries reduced modulo each prime used so far, stored by
-  groups of up to three rows at the columns where the group has a nonzero
-  entry, so the work and the storage follow the nonzero entries. Rows whose
-  nonzero columns barely overlap form groups of their own, and a row with at
-  most two nonzero entries is computed with element-wise operations (an
-  entry of 1 or -1 is a copy, add, subtract or negate). The product runs
-  in parallel over tiles of coefficients (and over groups of outputs when
-  the tiles are too few), reading each tile of the inputs once per block
-  of terms for all the outputs. On the avx512ifma engine the sums are
-  reduced once per block of terms for primes below 2^50 (`madd52`), kept
-  lazily in [0, 2q) with precomputed Shoup factors for primes of 50 bits
-  and more, and summed in 64-bit lanes for primes below 2^30.
-  `MLWE_Scheme.linear_combinations` with an `IntegerMatrix` uses it for
-  each component in turn with all the threads it is allowed
-  (`mlwe_RNS_integer_matrix_linear_combinations`), except on the generic
-  path.
-- `arith_scale_subto(ring, out, a, scale)`, the generic operation
-  `out -= scale * a` in either domain, recorded on the execution tape as
-  `"scale_subto"`.
-
-- `FieldVector.reindex(bits, offset=0, out=None)` reads a vector through a
-  map of index bits: element `i` of the result is element
-  `offset + sum_j ((i >> j) & 1) * 2^bits[j]`, and `bits[j] = None`
-  ignores bit `j` of `i`. On multilinear tables, one call restricts a
-  table to 0/1 values of some variables, renames the others and adds
-  variables the result does not depend on. It is native for
-  extension-field and pseudo-Mersenne vectors (`field_vec_reindex`,
-  `pmf_vec_reindex`) and runs on the library's threads. Runs of
-  consecutive entries are copied whole; other positions are looked up,
-  with a gather under AVX-512.
-- `RangeDecomposition` and `ResidueRangeDecomposition` take
-  `max_digit_bits` in place of `chunks`: each claim's number of digits is
-  then the fewest that keep every digit within that many bits
-  (`vfhe.piop.protocols.range.digit_count`), so one protocol serves
-  claims with bounds that no single digit count fits.
-
-- `arith_scaled_lift(ring, out, a, from)`, a generic operation: `a`, an
-  element of a ring with modulus `Q`, as an element of `ring`, which holds
-  `Q`'s primes and more, multiplied by the product `Q'` of the primes it
-  adds (the map `x -> Q'x` from `Z_Q` into `Z_(QQ')`). It is recorded on
-  the execution tape as `"scaled_lift"`. `RNSPolynomial.scaled_lift` with
-  the default factor and `CKKS_Scheme.rational_rescale(_batch)` go through
-  it, so a rational rescale's lift is on the tape and its division reads a
-  recorded value instead of an input.
-- `vfhe.vfhe.computation` reads more of the tape:
-  - a key switch wherever it is (`MLWE_Scheme.relinearize`,
-    `relinearize_batch`, `keyswitch`, as well as a multiplication), as a
-    `KeySwitch` with the value decomposed (`decomposed`, formerly
-    `quadratic`), the digits, the key components,
-    the division by the special primes, the values added (None for a
-    component nothing is added to) and the output; the ones that complete
-    no tensor product are `Computation.key_switches`;
-  - a tensor product no key switch completes (an extended product) as a
-    `Tensor`, in `Computation.tensors`. A tensor product and the key switch
-    that decomposes its quadratic slot and adds the other two are one
-    `Multiplication`, also when they were two calls (`relinearize` of a
-    `multiply(..., None)`), and so are the products of `multiply_batch`;
-  - plaintext-linear steps over ciphertexts of any number of components,
-    such as linear combinations of extended products;
-  - a rescale's input (`Division.source`, `source_version`) and, for a
-    rational rescale, the factor of its lift (`Division.lift`): the value
-    divided is `lift * source`, and `Computation.written_by` names the step
-    that wrote the source.
-
-  `KeySwitch.digit_events`, `power(t)` and `bound(t)` give how each digit
-  was taken, the power of two a radix digit stands for and the largest
-  value a digit can take. `vfhe.vfhe.cccfgs26` covers the new steps: PreMult
-  for a tensor product, the key switch relations for a key switch, the lift
-  of a rational rescale, the digits' recomposition prime by prime (radix
-  digits with their powers) and each digit's bound from its decomposition.
-  `Witness.steps` are in tape order.
-
-- `FieldVector.fold_inner_products`, `fold_and_inner_products`,
-  `fold_product_sums` and `fold_and_product_sums` over an extension field
-  are one C call each (`field_vec_fold_inner_products`,
-  `field_vec_fold_and_inner_products`, `field_vec_fold_product_sums`,
-  `field_vec_fold_and_product_sums`) instead of the front's whole-vector
-  bodies: one pass over the tables, nothing table-sized allocated, and the
-  sums kept unreduced across pairs and reduced once per chunk. IFMA kernels
-  for primes below `2^50` at degrees up to 8, the engine's element-wise
-  kernels over cache-sized windows of pairs for other moduli and degrees,
-  and scalar code on the portable engine; on the library's threads, with
-  results independent of their number. Degrees above
-  `FIELD_FOLD_MAX_DEGREE` (16) and shapes past the `FIELD_FOLD_MAX_*`
-  bounds keep the front's bodies.
-- `ExtensionFieldNTT.pack(..., zero_padding=True)` (and the C
-  `field_ntt_zero_padded`): the batch given by the first elements of each
-  transform, in either layout, with zeros after them, laid out as `forward`
-  needs it in one pass and with no zero-padded intermediate. The field
-  code's extension-field base encoder (`FieldFoldableRS` over an
-  `ExtensionField`) packs its batch that way: the base step no longer holds
-  a zeroed padding and a padded copy next to the transform's buffer, so its
-  peak falls from 12 table sizes to 5 with the root in `F_p` (9 with it in
-  the extension). The commit's peak is then the twist levels'.
-- `vfhe.piop.protocols.LogUpGKR(field, messages=None)`: a second protocol for
-  `Relation_Lookup`, registered in place of `Lookup`. The lookup by
-  logarithmic derivatives [Hab22]: the prover sends the multiplicities of
-  each table's entries (one table of `beta` entries through `messages`, the
-  only oracle it sends), the verifier draws `xi` outside the table, and the
-  two fractional sums at `xi` are the roots of two trees of fractions,
-  proven by GKR [PH23] and compared as fractions, so the looked-up oracle
-  and the table may have different sizes. It reduces to `Relation_Eval`
-  claims only: one on each looked-up oracle and one on each multiplicity
-  table. A bundle protocol: one run proves every frontier lookup claim,
-  with one multiplicity table per `beta`, claims of one `beta` and size
-  concatenated as in `Lookup`, and layer `k` of every tree in one
-  eq-weighted degree-3 sumcheck through the registered `Relation_Sum`
-  protocol. `soundness_error` is `(2^n + beta) / (|F| - beta)`. Helpers
-  `vfhe.piop.protocols.logup.fraction_tree` and `multiplicities`. Described
-  in `modules/piop/range.md`.
-- `vfhe.arith.histogram(values, bound)` (and the C function of the same
-  name): the totals of `count_occurrences` alone, `totals[x]` the number of
-  values equal to `x`, without the per-value counts; threaded as
-  `count_occurrences` is, and None when a value is `bound` or more.
-- `Ring.digest()` and `Field.digest()`: a 32-byte digest of the parameters
-  that fix the arithmetic (a ring's `N`, primes and splitting degree; a
-  field's prime, degree and `w`). `Protocol.parameters()` (empty by
-  default) lists a protocol's public parameters and `Protocol.digest()`
-  binds them with its class; `RangeDecomposition` (and so
-  `ResidueRangeDecomposition`), `Lookup` and `BasefoldEval` list theirs.
-  `IOP.registry_digest()` digests the challenge domain and every registered
-  protocol with its relation and oracle kind, independently of the order of
-  registration. `Basefold` (code and layer schedule), `BasefoldMessages`
-  (schemes by table size and sizes sent in the clear), `OracleMessages`,
-  `FoldableRS` and `FieldFoldableRS` (ring or field, `k0`, `c`, `d`,
-  instantiation, seed, twist field and, for the field code, root field)
-  have a `digest()`.
-- `vfhe.arith.crt_lift_mod_2_128(residues, primes)`: the integers in
-  `[0, q)` given by their residues modulo up to 64 distinct primes below
-  `2^63`, one buffer of 64-bit words per prime, modulo `2^128`, as two
-  `array('Q')`s `(low, high)` -- the contract of `RNSRing.lift_mod_2_128`
-  for residues held as arrays. Garner's mixed radix as vector operations
-  over each `F_p`, then the digits' combination modulo `2^128` in one native
-  call; that kernel, `vec_combination_mod_2_128`, is declared in `arith.h`
-  and to Python.
-- `vfhe.piop.relations.Relation_ResidueRange(bound)` /
-  `vfhe.piop.protocols.ResidueRangeDecomposition(field, m, alphabet, kappa,
-  chunks, messages=None)`: the range claim on an integer table given by its
-  residues modulo the primes of `q`, one oracle per prime over a field of
-  that characteristic with entries in the prime subfield, every entry below
-  `B`; and the optimized range PIOP of [CCCFGS26] on it without the
-  `unpacked_evaluation` shortcut: the
-  verifier queries each residue oracle at the integer point and checks the
-  recomposition modulo that oracle's prime as an equality in its field,
-  which leaves `kappa` evaluation claims on each residue oracle. The primes
-  come from the oracles' domains (`Oracle.domain`); the prover's digits
-  come from the residues through `crt_lift_mod_2_128`. `RangeDecomposition`
-  and its transcripts are unchanged; `modules/piop/range.md`, "The
-  decomposition on residue oracles".
-- `VirtualOracle.partial_evaluation(constituent, variables, fixed,
-  coefficient=1)`: `coefficient * p(fixed, .)`, the constituent `p` with
-  some variables bound to constants of its domain (or integers) and the
-  others renamed, in order, to `variables`; `is_partial_evaluation()`
-  recognises the form, of which a `restriction` is the case of 0/1
-  constants and coefficient 1. `resolve_table` resolves any oracle of that
-  form to its constituent's table with the fixed variables bound, renamed
-  and scaled: a sparse table is sliced when the constants are bits and
-  materialized otherwise. `VirtualEval` reduces a claim on it to one claim
-  on the constituent at the extended point.
-- `FieldVector.coefficients()` and `FieldVector.set_coefficients(coefficients,
-  start=0)`: the coordinates of extension-field elements over the prime
-  subfield, one `array('Q')` per coefficient of `x^j`, read with one copy
-  and written (reduced mod `p`) with one native call per coefficient,
-  `field_vec_set_coefficient`.
-- `RNSRing.from_diagonal(vectors)` and `polynomial_RNS_from_diagonal`: the
-  elements whose CRT components at each prime are all one given element of
-  the residue field, which `from_crt_components` gives from as many copies
-  of it as there are components, written without forming the copies.
-- `BasefoldMessages(schemes, sent=...)`: the table sizes in `sent` are sent
-  as their entries and named by a public `TableOracle` on both sides, so
-  their evaluation claims are decided by the verifier.
-  `basefold_messages(domain, sizes, security_bits)` builds the messages and
-  the `BasefoldEval` protocols for a target soundness: one scheme per size
-  from `basefold_parameters`, the sizes below the smallest that has
-  parameters sent.
-- `MLE.linear_combination(tables, coefficients)`: the table `sum_i c_i T_i`
-  for tables over the same variables (in the same order), the same ring or
-  field and the same basis; coefficients are elements of that ring or field,
-  or integers. Ring tables and coefficients are put in NTT form in place.
-  Over a ring it is one native call, `mle_dense_poly_linear_combination`.
-- `MLE.from_uint64(ring, variables, values, repr=repr.coeff)` and
-  `MLE.to_uint64(repr=repr.coeff)`: a ring table from and to one buffer of
-  64-bit words, entry after entry, each laid out as
-  `RNSPolynomial.to_uint64` lays out one element (a `numpy.uint64` array of
-  shape `(2^n, ell, N)` works), in one native call.
-- `polynomial_RNS_get_natural_array` / `polynomial_RNS_set_natural_array`:
-  the natural-order rows of many polynomials, read or written in one call.
-- `sumcheck_product_round{,_pairs,_halves}`: one sumcheck round message for a
-  product of any number of `R_q` tables at any number of nodes.
-- `docs/USAGE.md` "Threads, processes and memory": the thread limit, Python
-  threads and the GIL, what a forked child may use, and memory placement on
-  machines with several NUMA nodes.
-- `Oracle.domain`: the ring or field of an oracle's values -- a table's, an
-  `EqOracle`'s, a `ClosedFormOracle`'s or an `ImplicitOracle`'s when given
-  (both take `domain=`), a `CommittedOracle`'s scheme's (`Basefold.domain`,
-  its code's), a `VirtualOracle`'s constituents' -- or None. `Sumcheck`,
-  `SumcheckProd`, `SumDefStart` and `OutputTest` draw their challenges in
-  the domain of the oracle they work on, and fall back to the IOP's when it
-  is None; their `soundness_error` takes that domain by default. One IOP
-  can then run protocols over several domains: a range proof over `F_p`
-  beside an `R_q` reduction on the same committed oracle, whose claims on
-  it share one opening. Transcripts are unchanged when every oracle is over
-  the IOP's domain.
-- `RNSRing.scalar(value)` and `vfhe.arith.RNSScalar`: an integer, or one
-  integer per prime, held natively as an `ArithScalar` and applied by
-  `p * scalar` and `p *= scalar` through `arith_scale_by`, with no
-  allocation per product, to the elements of the ring and of its quotients.
-  `arith_scale_by`, `arith_scalar_new` and `arith_scalar_free` are declared
-  to Python.
 - The execution tape, `vfhe.util.trace`: while a trace is enabled, every
-  whole-element ring operation the native code makes over an RNS ring
-  leaves an event with its kind, the versions of its operands, its
-  parameters and a copy of its output, read back as `RNSPolynomial`
-  values; an operand no event wrote is recorded first as an input. In C,
-  `arith_trace.h`: the generic interface opens and closes an event around
-  each operation, which costs one load and one branch when no trace is
-  enabled. While a trace is enabled, a sample operation takes its generic
-  path, the same computation through the generic interface, instead of
-  its kernel, so the tape is complete: a product is its tensor products,
-  the digits of its key switch and their products with the key, and the
-  divisions. `vfhe.arith.set_generic_only` takes the generic paths
-  without a trace, for comparing them with the kernels.
-  Marks cut the tape into operations: while a trace is enabled, a
-  profile hook marks the entry and the exit of every public function and
-  method of the vfhe modules (`vfhe.util` aside), and `trace.mark` places
-  marks by hand; `Trace.operations` reads the tape as that tree, an
-  `Operation` with a name, a path and its events per marked call that
-  made a ring operation. `Trace.version_of` gives the event that last
-  wrote a polynomial or a sample component, for naming a tape value.
-  `Polynomial`'s `add`, `sub`, `multiply`, `copy`, `automorphism` (in the
-  coefficient domain), `sample_gaussian`, `round_division`, `__mod__` and
-  the products by an integer go through the generic interface, so they
-  are on the tape; the row kernels they called are the ones the
-  interface calls. A ring keeps its generic-interface handle and a
-  polynomial its `ArithElement` (`as_element` returns the same struct,
-  with the current domain), so a call does not look them up or allocate
-  them each time. `arith_copy_handles`, `arith_add_handles`,
-  `arith_sub_handles` and `arith_mul_handles` take bare element handles
-  and one domain, so the polynomial's copy, sum, difference and product
-  build no `ArithElement` at all.
-- The `vfhe.vfhe` package, with what an arithmetization reads from the
-  tape: `computation` reads a trace's operations into its steps in vfhe's
-  terms (a multiplication's operands, tensor slots, digits, key
-  components, the division by the special primes, and rescales, with the
-  recorded values); `witness` applies an arithmetization to them, the
-  named values with their roles and bounds and the relations between
-  them, with `check` evaluating every bound and relation on the recorded
-  values; `cccfgs26` is the arithmetization of [CCCFGS26, App. A.5]
-  (`d0`, `d1`, `d2`, `w_ks`, `evk`, `w_quot`, `w_rmd`, Eqs. 18-20). Rank
-  1 only. A tape read in pieces refers back to values an earlier piece
-  recorded, such as a key, which the reader of a later piece is given as
-  `known`. The relinearized product converts its tensor product in place
-  instead of into a second sample, so the key switch's operands are the
-  tensor's slots on the tape (and one allocation and one copy fewer on
-  every path). `computation` also reads plaintext-linear steps
-  (`Linear`, sums of `Term`s): products by a plaintext, linear
-  combinations (with or without a `PlaintextMatrix`), and additions and
-  subtractions of ciphertexts, followed back so that a step's terms are
-  ciphertexts no such step wrote. Every step carries its `layer` (the
-  multiplications on the longest chain before it) and its `ell`;
-  `Computation.unread` names the operations it does not read, such as
-  rotations, and `Computation.written_by` and `inputs` tell where a value
-  came from. `witness.range_classes` groups the entries that carry a
-  bound by name and `ell`, and `witness.coefficients` gives a class's
-  values as signed coefficient vectors. `cccfgs26` bounds `w_quot` by
-  `q_l/p_l`.
-- The tape can be bounded and verified. `trace.enable(limit=n)` holds at
-  most `n` events and makes the computation wait for room, so a consumer
-  thread drains it while the computation runs, through `Trace.wait`; a
-  thread that drains between its own calls must not set a limit. With
-  `verify` on (`trace.enable(verify=True)` or `trace.set_verify`), the
-  tape digests each value it records and checks each operand against its
-  digest before an operation: a value written other than through the
-  generic interface is recorded again as an input flagged `untraced`, and
-  `Trace.untraced` counts them; the trace tests run with it on. An event
-  becomes readable once its operation has ended, and one whose operation
-  failed is flagged `failed` and holds no value. In C,
-  `arith_trace_set_limit`, `arith_trace_wait`, `arith_trace_set_verify`,
-  `arith_trace_untraced` and `arith_trace_converted`, which the domain
-  conversions of the generic interface call so that an in-place
-  conversion is not taken for a write. `Polynomial.to_NTT`/`to_coeff` and
-  the sample conversions on the generic path go through those
-  conversions.
-- Two operations of the ring tower in the generic interface and on
-  `Polynomial`: `decompose_digit`, a digit of an element's residues (a
-  residue lifted, the fast base conversion of a group's, or a radix digit
-  of one, unsigned or balanced), and `round_division_approximate`, the
-  round division through the fast base conversion of the remainder. They
-  are the two steps of a key switch that had no generic form; the gadget
-  products and the division by the special primes now have one, written
-  with them.
-- Python 3.15 support, tested in CI, built as wheels and declared in the
-  classifiers.
-- Add per-module benchmarks, `make bench`: Python benchmarks of a module's
-  API in `modules/<mod>/python/bench/` and C benchmarks of its kernels in
-  `modules/<mod>/c/bench/`, timed per engine and thread limit into a results
-  file that `tools/bench/compare.py` compares with another. The complete
-  depth of `make test` runs every benchmark once.
-- `RNSRing.crt_components(elements, index)`, `from_crt_components(vectors)`
-  and `residue_field(index)`: the CRT components of ring elements at one RNS
-  prime p -- their residues modulo the maximal ideals `P_s = (p, X^d - w_s)`
-  of `R_q` containing p, all carried into the residue field `R_q/P_0` by the
-  isomorphisms the automorphisms `X -> X^(x_s)` induce -- as one extension
-  field vector, and back (`polynomial_RNS_crt_components`,
-  `polynomial_RNS_from_crt_components` and `rns_crt_maps_new` in C).
-- `BasefoldEval` opens several evaluation claims together, at any points
-  and on any of its scheme's commitments: one sumcheck reduces them to a
-  common point and one basefold run opens a random linear combination of
-  the polynomials there ([CCCFGS26, §7, Figs. 3-4]). The sumcheck is skipped
-  when the points coincide, the combination when there is one polynomial.
-  `soundness_error` takes the bundle's `claims` and `polynomials`.
-- `FieldFoldableRS.residue_code(code, index)`: the code a foldable code over
-  `R_q` induces on the residue field at one of its primes -- the code whose
-  codewords are the CRT components there of the ring code's codewords, with
-  the same tables over the prime subfield; folding commutes with taking
-  components.
-- `FoldableRS(..., twist_field="field")`: the general code over `R_q` with
-  its twists in the residue fields `F_(p^d)` of the ring's primes rather than
-  in `F_p` -- one `FieldFoldableRS` per prime (`residue_codes`), whose
-  codewords are the CRT components of the ring code's. The distance bound
-  runs on `log2 p^d` bits; a twist multiply costs an `F_(p^d)` product.
-  `"prime"`, the integer tables, stays the default.
-- `FieldFoldableRS.encode_batch(messages, count)`, `fold_batch(words,
-  challenges, level)` and `fold_fibers_batch(values, challenges, level,
-  indices)`: several codewords encoded or folded in one call, each fold with
-  its own challenge.
-- `FieldVector.fold_twisted_blocks(untwist, r)`: `fold_twisted` of
-  several blocks sharing one table, block `b` with its own element `r[b]`, in
-  one pass (`field_vec_fold_twisted_blocks` in C).
-- `FieldFoldableRS(..., root_field=)` (`ROOT_FIELDS`): where the general
-  code's base transform may take its root of unity -- `"prime"`, `F_p` only
-  (the default), or `"field"`, the extension when `F_p` has none.
-- `RNSRing.crt_components(..., element_major=True)`: the components of each
-  element together, entry `b * k + s`.
-- `vfhe.polycom.BatchFoldEval` ([CCCFGS26, §7]): a second Eval protocol for
-  basefold commitments over `R_q`. The claims are carried to the CRT
-  components at each prime and proved there, over the residue field, by the
-  common-point sumcheck, a random linear combination of the components and
-  one basefold run over the residue code. The primes run in lockstep, one
-  shared ring challenge per round read at every prime as its CRT component
-  0. The ring commitments serve every prime, and the runs share one set of
-  query positions, the ring leaves answering every prime's first layer.
-  Each later fold layer is committed by one Merkle tree for all primes,
-  answered with every prime's fiber and one path.
-  `soundness_error` reports one prime's error over the smallest residue
-  field: a false bundle fails at a prime fixed before any challenge, so no
-  factor for the number of primes is needed.
-- `RNSRing.crt_linear_combination(parts, index, coefficients)`
-  (`polynomial_RNS_crt_linear_combination` in C): a linear combination,
-  with coefficients in the residue field, of the CRT components of several
-  arrays of ring elements, computed as inner products of the elements'
-  mul-domain words with one table per array and output coefficient, without
-  forming the components (the precomputation of HELIOPOLIS [ACGS24],
-  ePrint 2023/1949, App. C). BatchFold forms its combinations with it.
-- `vfhe.crypto.join_digests(parts)` (`merkle_join_digests` in C): leaf
-  digests joining several packed digest arrays index by index, so one
-  Merkle tree commits to several codewords of one length.
-- `IOP.and_composition(label, subprotocols, challenge_sampler=None)`: runs
-  sub-protocols as their AND-composition, one challenge per round shared by
-  all of them. They take turns in a fixed order, so the transcript order
-  depends only on the protocols; an existing protocol's half runs unchanged
-  as a sub-protocol. `IOP.batched_call(step, operand, kernel)` hands every
-  sub-protocol's operand to one kernel call.
-- `Ring.random_exceptional(seed=None)`, `Polynomial.sample_exceptional(
-  seed=None)` and `Field.random_exceptional(seed=None, bound=None)`: the
-  exceptional samplers take an optional seed, and the field's an optional
-  bound on its coefficients. Both draw their coefficients uniformly with
-  `vfhe.crypto.seeded` (or `entropy` without a seed), so a seeded ring
-  element and the bounded field element from the same seed have the same
-  coefficients.
-- `Verifier.challenge(label, domain)`: a challenge from the exceptional set
-  of `domain` rather than of the IOP's domain (the Fiat-Shamir verifier
-  derives it the same way).
-- `Protocol.bundle_key(oracle)`: what a bundle protocol groups the claims on
-  an oracle by -- the oracle by default; `BasefoldEval` returns its scheme,
-  so the driver hands it every pending claim on the oracles committed under
-  it, parking each until no other statement can produce another.
-- `vfhe.piop.relations.Relation_Lookup` / `vfhe.piop.protocols.Lookup` and
-  `Relation_Range` / `RangeDecomposition`: the lookup argument (offline
-  memory checking over four grand products, two degree-3 zerochecks over
-  virtual oracles) and the range check over packed `R_q` polynomials that
-  reduces to it through the base-`beta` digits of the coefficients, as in
-  [CCCFGS26]'s appendix; `modules/piop/range.md` is the design note.
-- `vfhe.crypto.digest`: `chain_digest`, the chained digest of
-  already-digested parts, and `bytes_digest`, `int_digest`, `str_digest`,
-  the canonical digests of primitives every `digest()` method is built
-  from; `DigestChain`, the same chain as an accumulator, which absorbs a
-  run of equal-length parts packed in one buffer in a single native call
-  (`hash_chain` in C).
-- `RNSPolynomial.digest_sequence(polys)`: the BLAKE3 digest of the rows of
-  several polynomials as one message (`polynomial_RNS_hash_update` in C).
-- `MLE.digest` covers the entries with one digest of the whole table --
-  `FieldVector.hash()` over a field, `digest_sequence` over a ring -- rather
-  than one per entry.
-- `Basefold.commit(f, prover=prover)` installs on `prover` the table of the
-  committed oracle and the opening of its commitment.
-- `Basefold(code, schedule)`: a layer schedule groups the code's `d` folds
-  into layers of `schedule[i]` folds, positive counts summing to `d`. Only
-  the codeword each layer starts from is committed, by a Merkle tree whose
-  leaves are its fibers of `2^schedule[i]` adjacent symbols, so a schedule
-  of fewer layers builds fewer trees and opens fewer paths per query. The
-  commitment depends on `schedule[0]`; the default `[1] * d` is the scheme
-  as before, with the same commitments and transcripts.
-  `Basefold.merkle_commit(word, folds)` builds the tree over `2^folds`-symbol
-  fibers. `Basefold.soundness_error` is the [ZCF24] bound, stated for the
-  default schedule.
-- `FieldFoldableRS.fold_fibers(values, challenges, level, indices)` and
-  `FoldableRS.fold_fibers`: fibers of `2^s` adjacent symbols, end to end,
-  folded `s = len(challenges)` times to the one symbol each determines --
-  over a field as whole-vector operations. With them, on both codes,
-  `fiber_at(word, i, size)`, `fibers_at(word, positions, size)` (the
-  fibers at several positions end to end, in one gather),
-  `check_fibers(fibers, count, size)` (checks a received word of fibers)
-  and `leaf_digests(word, size)` for fibers of `size` symbols.
-- `FieldVector.digest()`: a 32-byte digest of the vector, its `hash()` under
-  a tag of its own, so a vector can appear in a transcript entry or a
-  statement field.
-- Oracles committed under different commitment schemes, or under one scheme
-  with different parameters (two basefold codes), in one IOP: a
-  `CommittedOracle` carries its `scheme`, a scheme's evaluation protocol
-  declares it as `Protocol.scheme`, and the registry keys the protocol by
-  it, so each claim on a committed oracle reaches the protocol of the
-  scheme it was committed under. A claim with no entry for its scheme
-  falls back to the entry of its kind, then to the default; a claim on a
-  plain oracle is refused (`TypeError`) once a scheme is registered for its
-  relation.
-- `Statement` refuses a bare table among its `oracles` (a `TypeError`
-  naming `TableOracle`), and `VirtualOracle` a bare table as a constituent.
-
-- Add indexed relations to `vfhe.piop`: a relation declares `index_fields`,
-  its index is then a mapping over exactly those names, and the oracles
-  among its values (`Relation.index_oracles`, `statement_oracles`) are
-  oracles of every statement of the relation -- read by the parking rule,
-  the Composer's rules and routing, and the prover view, and digested in the
-  declared order (`Relation.index_digest`). `Relation.head_index` may name
-  an index field, and a statement then derives its head from that entry.
-  `SparseMLE.restrict` slices a sparse table at 0/1 constants;
-  `VirtualOracle.restriction` reads one member of a family of tables packed
-  into one master oracle over slot and table variables, and `resolve_table`
-  resolves it to a slice. New in `vfhe.piop.sparse`: `FamilyShape`, the
-  shape of such a family; `Relation_SpEval`, the abstract sparse-evaluation
-  relation "the sparse master is what the dense index oracle encodes", every
-  encoding being a subclass with its own `compute_head` and a protocol
-  registered against its `Start`; `dense_relation`, deriving from a relation
-  with sparse index oracles the relation whose index holds the dense oracle,
-  the shape and the realization; `dense_layering`, its two-layer protocol.
-  `Relation_Circuit` is now that relation for circuits: the wiring predicates
-  committed through one dense index oracle, GKR running in the first layer.
-- Add sequential composition to `vfhe.piop`: a statement may carry a `head`,
-  an implicit oracle (`Implicit`) its relation computes from the statement's
-  other oracles (`Relation.head_index`, `compute_head`); `with_start` derives
-  the start relation `R.Start` (the relation with its head bound, plus
-  evaluation claims on it) and `R.start(statement, claims)`; `compose` /
-  `Composed` build a relation's protocol from a layered reduction, computing
-  the heads deepest layer first and starting each headed statement with the
-  claims on its head. `Relation_SumDef` / `SumDefStart` are the sum
-  definition `L(z) = sum_b G(z, b)` and its composable protocol;
-  `Relation_Layer`, `Relation_Equal` / `OutputTest` and `GKR_Start` are the
-  pieces of GKR as a composition.
-- Add `Polynomial.convert_base(ring, out, exact)`: a value re-expressed over
-  another base, which need not contain this one -- the general move
-  `base_extend` is the special case of. The default is the fast conversion
-  already behind `base_extend`, which writes `x + u * M`; `exact=True` removes
-  that overflow, for about a tenth again of the cost, for a value the caller
-  keeps clear of the ends of its range. Existing conversions are unchanged.
-- Add `Polynomial.rescale_to_power_of_two(k)`: `round(2^k * c / q)` for every
-  coefficient, on centered representatives, as `N` machine words. It is the
-  rescale for a target modulus that is not a product of base primes -- how an
-  element leaves for a scheme that works at a power of two -- which
-  `round_division` and `scaled_lift` between them cannot express. Exact, with
-  no floating point anywhere in the rounding.
-- Add `FieldVector.sample_random_at(seed, indices)`: the seeded elements at
-  scattered positions of the sequence `sample_random` fills from, in one call.
-- Add `Field.digest_elements(elements)`: the digest of a few elements without
-  building a vector to hold them.
-- Add `FieldVector.padding_unit`, the width `view`'s `start` and `length` must
-  be multiples of -- stated by `view` before, but not obtainable.
-- Add `FieldVector.fma_interleave(a, b, c_even, c_odd)`: `a + b * c_even` and
-  `a + b * c_odd` written straight into one vector of twice the length.
-- Add `FieldVector.fold_twisted(untwist, r)`: a vector of adjacent pairs
-  folded to half its length in one call, `out[i] = (w[2i] + w[2i+1]) / 2 +
-  (w[2i] - w[2i+1]) * untwist[i] * r` -- the inverse of `lift_twisted` at
-  `untwist = 1 / (2 t)`, with two extension products per pair.
-- Add `layout=` to `ExtensionFieldNTT.pack` / `unpack`: a caller says
-  whether it holds a batch by blocks (the default, as before) or interleaved,
-  and the conversion to and from the plan's own layout follows from that and
-  the domain.
-- Add `FieldVector.lift_twisted(a, b, twist, out=None)`: `a + b * t` and
-  `a - b * t` interleaved into one vector of twice the length, as one kernel
-  call that forms the product once per pair and reads a table shorter than `a`
-  cyclically rather than tiled. The inverse move to `fold_twisted`.
-- Add prime-subfield tables to the extension field's vectors: `mul`, `fma`,
-  `fold_twisted` and `lift_twisted` take a vector over the degree-1 field with
-  the same prime and multiply plane-wise (`field_vec_mul_plane` /
-  `field_vec_fma_plane`: `d` prime-field products per element in place of the
-  extension product).
-- Add `mod_eltwise_inner_product_addto` and
-  `polynomial_matrix_mul_addto_RNS_polynomial` (C, `arith.h`): element-wise
-  inner products with one reduction per element, and the product `a * b^T` of
-  matrices of ring elements. Also `polynomial_new_RNS_polynomial_rows`, a
-  polynomial with only its mask's rows allocated.
-- Add `MerklePath.from_bytes(packed)`, and `FoldableRS.fold_pairs` /
-  `leaf_digests_of` for a set of positions rather than one.
-- Add `entropy.below_many(count, bound)` (`vfhe.crypto`; native
-  `generate_uniform_below`): values exactly uniform in `[0, bound)` by
-  rejection sampling, so a draw reveals only how many values were redrawn.
-- Add `prng_normal_seeded` (C): `generate_normal_random`'s rounded draw as a
-  function of a seed, for parallel kernels that must not depend on their
-  thread count.
-- Add seed expansion (`expand.c`): `prng_expand_key` derives a key from a seed
-  and a label, and `prng_expand_below` / `prng_expand_below32` expand it into
-  values below a bound by AES-128 in counter mode (`prng_aes128_ctr`), the
-  same sequence on every engine. It replaces `aes_rng.c` as the entropy
-  stream's AES-NI expander. Also `Blake3Stream` (`hash_stream_*`),
-  incremental BLAKE3.
-- Add native multithreading under one library-wide limit:
-  `vfhe.util.parallel.set_num_threads(n)` / `num_threads()` (C `vfhe_set_num_threads`
-  / `vfhe_num_threads`), defaulting to `VFHE_NUM_THREADS` or else 1 (single
-  threaded). Operations taking
-  `n_threads` use up to the limit by default and never exceed it: single
-  operations (key switch, automorphism, multiplication, relinearization,
-  round division and rescale, domain conversions) split over the ring's
-  primes from N = 4096 up, and batches over their items.
-  `vfhe.util.parallel.local_num_threads(n)` (C `vfhe_set_local_num_threads` /
-  `vfhe_local_num_threads`) limits the threads of the calls one thread makes,
-  and a parallel call inside another gets only its share of the outer call's
-  threads (`vfhe_share_for`), so nesting never goes past the limit. Results
-  do not depend on the thread count. The native loop is `vfhe_parallel_for`
-  (util's `parallel.h`), with helper threads kept asleep between calls. The complex-FFT
-  batch, which always used 8 threads, follows the limit too. A CKKS rotation
-  at N = 2^14 over 17 primes runs about 6x faster on 96 cores than on one.
-- Add a memory pool for the buffers the library allocates and frees
-  repeatedly (`vfhe.util.memory_pool`; C `mempool_*`, in util's `memory_pool.h`): a released RNS
-  polynomial row, field or pseudo-Mersenne vector, or complex polynomial is
-  kept by the releasing thread and handed out again for the next request of
-  its size. At N = 2^14 the CKKS batch calls went from thousands of minor page
-  faults per call to none. `set_capacity(n_bytes | "auto" | None)` bounds what
-  it keeps: `"auto"` (the default) at most the library's peak use, so a
-  process keeps its peak working set resident; `0` turns it off.
-  `release_all()` hands back what it keeps, and `statistics()` reports it
-  (`peak_outstanding_bytes` may miss a short-lived peak by a few MiB per
-  thread). `set_wipe_on_release(True)` zeroes every buffer as it is released
-  (off by default). `VFHE_MEMPOOL_CAPACITY` and
-  `VFHE_MEMPOOL_WIPE_ON_RELEASE=1` set the defaults. A sanitized build
-  bypasses the pool.
-- Add serialization, `vfhe.util.io`: the type classes `Encoder`, `Decoder` and
-  `Codec`. `codec.encode(obj, f)` writes an object to a binary stream and
-  `codec.decode(f)` reads one back, consuming exactly the bytes its encoder
-  wrote (`decode_strict` also refuses trailing bytes), so codecs compose: `ListCodec`, `DictCodec`, `TupleCodec` and
-  `OptionalCodec` build one codec from others, and `IntCodec`, `FloatCodec`,
-  `BoolCodec`, `StrCodec` and `BytesCodec` cover plain values. A vfhe codec is
-  built from the codecs of what its objects hold --
-  `KeySwitchKeyCodec(SampleCodec(MLWESchemeCodec(scheme), packing="tight"))` --
-  and streams a key of any size one sample at a time, its scheme written once.
-  A ring or scheme codec
-  built with the caller's objects hands them back where the stream's
-  `parameters` match, so a loaded ciphertext refers to the scheme holding the
-  keys; one built with none rebuilds them from the stream, once.
-  `PolynomialCodec(rings, packing, domain)` and `SampleCodec(schemes, seeded,
-  packing, domain)` choose tight or word rows, the rows' domain, and whether a
-  fresh sample is written as its 32-byte mask seed, which halves it. A stream
-  names its row packing and seed expansion, and a reader refuses ones it does
-  not know. Every residue is checked against its prime on load. The format is
-  `vfhe.util.io.protobuf.ObjectMessageCodec`, a length-prefixed protobuf message per
-  object, with the schemas under `proto/vfhe/<module>/io/v1/`, checked by
-  `buf`. Codecs cover RNS rings and polynomials, MLWE and MGSW schemes,
-  samples, key-switch keys, MGSW ciphertexts, LWE samples, the secret keys
-  (`MLWEKeyCodec`, `LWEKeyCodec`), the CKKS and BFV schemes, CKKS
-  ciphertexts, `SAB_Key`, `CGGI16_Key` and `CKKS_LinearTransform`.
-- Give rings and schemes value equality: `RNSRing`, `MLWE_Scheme` and its
-  subclasses, and `MGSW_Scheme` compare and hash by `parameters`, a frozen
-  value of what keys and ciphertexts depend on (degree, split degree and primes
-  for a ring; class, ring chains, rank and a subclass's own parameters for a
-  scheme). Two objects over the same primes are one ring, whichever holds it;
-  `vfhe.util.io` binds a stored scheme to the caller's by the same value.
-- Add `MLWE_Scheme.key_gen(sigma_err, distribution="ternary")`: a key with
-  every coefficient uniform in `{-1, 0, 1}`.
-- Add `MLWE(..., obj=)`: adopt a native sample.
-- Add a documentation site, `make docs`, published from `main` to GitHub Pages:
-  the guides, the Python API from the docstrings and the C API from the
-  Doxygen blocks, built with warnings as errors.
-- Add `MLWE.from_components(scheme, a, b, lvl=None)`: the sample with mask
-  `a` and body `b`, copied from the polynomials (which may be temporaries, in
-  either domain), over a level of the scheme or another of its rings.
-- Add `MLWE.mod_reduce(ring | lvl)`: a ciphertext reduced into a smaller
-  level in place, the value kept rather than divided -- CKKS's level drop.
-- Add `vfhe.util.kernels`: compile your own C kernels *into* the library. Your
-  sources and vfhe's are one translation-unit set and one link with link-time
-  optimisation, so a loop of yours calling `add_modq` inlines it exactly as
-  vfhe's own loops do, and the process still holds one copy of the library.
-  `kernels.ExtensionBuilder(sources, declarations).build()` does it in place: the engine it builds
-  carries the prebuilt engine's module name and goes first on `sys.path`, so
-  `vfhe.util.bindings` imports it in place of the prebuilt one. It must run
-  before anything imports vfhe's C -- a loaded extension cannot be replaced, so
-  a late call raises. `python -m vfhe.util.kernels` builds the same artefact and
-  exits, so putting its directory on `PYTHONPATH` removes the ordering rule and
-  lets an image ship without a compiler. Builds are cached under
-  `$VFHE_BUILD_DIR`, else `~/.cache/vfhe`, and ninja rebuilds only what a change
-  actually reached.
-- Add a `kernels` extra: `pip install vfhe[kernels]` pulls in meson and ninja, which
-  `vfhe.util.kernels` drives. Only a custom build needs it -- the default path loads
-  a prebuilt engine -- and building without it now says so instead of failing
-  with `FileNotFoundError`.
-- Ship the library's C in wheels and sdists as `vfhe/_source/kernels-src.tar.gz`,
-  which is what `vfhe.util.kernels` compiles against: the sources, the public
-  headers and the cdefs, and nothing else. It adds about 350 KB to a wheel.
-- Add `MLWE.multiply_by_monomial(exponent, minus_one=False)`: the sample
-  times `X^exponent` (or `X^exponent - 1`), any integer exponent, keeping its
-  ring (special primes included), level, type (a CKKS ciphertext keeps its
-  `delta`) and representation. And `MGSW.multiply_by_monomial`, the same on
-  every row, which turns an MGSW of `m` into one of `m * X^exponent`.
-- Add hoisted automorphisms: `MLWE_Scheme.automorphisms(c, gens, ksks)`
-  applies several automorphisms to one ciphertext, decomposing it against the
-  gadget once for every key switch (both gadgets): 16 rotations at N = 2^14
-  are about 1.5x faster. Natively `mlwe_hoist` /
-  `mlwe_automorphism_RNSc_GHS_hoisted`, and the automorphism of a fully split
-  ring's NTT representation, `polynomial_RNS_automorphism_index` /
-  `polynomial_RNS_permute`.
-- Add `MLWE_Scheme.automorphism_batch(cts, gens, ksks)`, one automorphism
-  each on several ciphertexts in either domain, and
-  `MLWE_Scheme.automorphism_sum(cts, gens, ksks)`: `sum_i
-  Aut_gens[i](cts[i])` with a single division by the special primes for all
-  the key switches.
-- Add the automorphism multiplexer (the B-to-1 mux-rotate of [CHKS25]):
-  `MLWE_Scheme.automorphism_mux(c, gens, ksks)` computes `sum_d b_d Aut_d(c)`
-  for bits `b_d` encrypted in the keys (`gen_automorphism_mux_keys`),
-  decomposing `c` once and dividing by the special primes once;
-  `automorphism_mux_batch` runs many. Also `gadget_mul_addto_automorphism`.
-- Add `MLWE_Scheme.linear_combination(cts, coefficients)` /
-  `linear_combinations(cts, rows)`: ciphertexts combined with plaintext
-  coefficients in one pass, for one or several rows of coefficients, and
-  `mlwe.PlaintextMatrix`, such rows prepared once for reuse.
-- Add `MLWE_Scheme.multiply_batch(lhs, rhs, ksk, n_threads, *, lvl=None)`:
-  several products in one native call, each also round-divided to level
-  `lvl` when given; and `round_division_batch(cts, lvl)`.
-- Add `MLWE_Scheme.trace_pack(vec, ksk, n_threads=0)` (`mlwe_trace_pack`):
-  the trace packing of [CDKS21] with each level's difference halved before
-  its automorphism, after [LY26]'s reverse homomorphic trace. The packed
-  values keep their scale, and each level's key-switch noise is added once
-  instead of being doubled by every level above it: at N = 256, 5 instead of
-  12 bits of noise packing 256 samples. Each level's packings run in
-  parallel.
-- Add `MLWE_Scheme.normalized_trace(c, ksk, n=1)` (`mlwe_normalized_trace`):
-  the normalized trace onto the subring `Z[X^(N/n)]` [AP13], each level
-  halved before its automorphism as in [LY26] -- the coefficients at the
-  multiples of `N / n` at their scale and zero elsewhere, with the noise of
-  `log2(N / n)` key switches. It takes the ascending automorphism keys of
-  `trace_pack`; `trace` keeps its factor `N` and its keys.
-- Add ring switching [GHPS12] between `R_N` and `R_n` when one dimension
-  divides the other, `R_n` being `Z[X^k]` inside `R_N`:
-  `MLWE_Scheme.ring_switch(c, ksk)` takes a sample of a scheme of the other
-  dimension to the level of this one with the same primes, and
-  `gen_ring_switch_key(key_out, key_in, lvl, gadget_params=None,
-  n_threads=0, hybrid=True)` makes its key, between any two ranks. Down, the
-  sample is read as one of rank `r k` over `R_n` and decrypts to the
-  coefficients `k m` of the message; up, a list of up to `n / N` samples is
-  interleaved coefficient by coefficient. The noise is one key switch's.
-  Native `mlwe_ring_switch`, `mlwe_project_subring`, `mlwe_embed_subring`;
-  `MLWE_Scheme.level_with_primes(ring)` finds the level over a ring's primes.
-- Add LWE extraction and the packing key switch to `MLWE_Scheme`:
-  `extract_lwe(c, idx)`, `gen_packing_ksk(key_out, lwe_key, lvl=0,
-  gadget_params=None, n_threads=0)` and `packing_keyswitch(extracted,
-  packing_key, lvl=0)`, which takes samples of another ring dimension over
-  the same primes (matched by value) and keys of either gadget.
-- Add MGSW internal products, automorphisms and noiseless keys:
-  `MGSW.internal_product(other)` (also `MGSW * MGSW`, native
-  `mgsw_internal_product`), an MGSW of the product of the messages;
-  `MGSW_Scheme.automorphism(c, g, aut_key, relin_key)` (`mgsw_automorphism`),
-  the MGSW of `m(X^g)`; and `MGSW_Scheme.trivial(msg)` (`mgsw_trivial`), the
-  gadget matrix times `msg`. Without special primes the keys are of level 0
-  (pair them with the radix gadget); with special primes the product and
-  automorphism keys come from a scheme with one more special prime, and a
-  product adds 5-7 bits of noise to the next external product, against 39 for
-  the radix route.
-- Add `CMUX_batch(in1, in2, selector, n_threads=0)` (`vfhe.mlwe`): the
-  multiplexers of many pairs by one MGSW selector in one native call
-  (`mgsw_CMUX_batch`), in parallel, with the results left canonical.
-- Add `mgsw_shift_sequences` (C, `mlwe.h`): shifts sequences of samples by an
-  encrypted amount `d <= 3` given as one-hot MGSW keys, `y_i = x_(i+w-d)`.
-- Generate keys on several threads: every key generator samples through
-  `MLWE_Scheme.sample_scaled` (`mlwe_RNS_sample_scaled_batch`) and takes
-  `n_threads` -- the `gen_*` key-switch keys, `MGSW_Scheme.encrypt`, the CKKS
-  and BFV rotation and conjugation keys, and the bootstrapping keys of
-  `CGGI16`, `GP25` and `SHIP`. Each sample's mask comes from a seed, kept as
-  `MLWE.seed`, and its noise from a secret seed (`prng_normal_seeded`), all
-  drawn in order on the calling thread, so the keys do not depend on the
-  thread count. `MGSW_Scheme.encrypt_constants(values, key)` encrypts
-  constant polynomials as one batch, which is what a bootstrapping key is. A
-  CGGI16 bootstrapping key at N = 2048 for n = 918 is about 4.5x faster on
-  eight threads than on one.
-- Add `fhe.BFV_Scheme`: BFV over `vfhe.mlwe`, with the plaintext modulus taken
-  from the ciphertext ring's lowest primes so that `Delta = q/t` is exact.
-  Batched encoding into `N` slots (two rows of `N/2`), encrypt/decrypt,
-  plaintext and ciphertext multiplication with relinearization, slot rotation
-  and conjugation, and modulus switching.
-- Add `ring=` and `scale=` to `CKKS_Scheme.encode`: the ring the plaintext
-  lives in (default: level 0's) and the factor the values are scaled by
-  (default: `scaling_factor`), e.g. for a ciphertext further down the chain.
-  A contiguous buffer of complex doubles, such as a numpy `complex128` array,
-  is read in place.
-- Add `CKKS_Scheme.encode_batch(values, ring=, scale=, n_threads=)`: many
-  vectors encoded in one native call
-  (`complex_values_ifft_scale_round_to_RNS_batch`, also
-  `ComplexRing.values_ifft_scale_round_to_RNS_batch`). `encode` is one such
-  call, so the two agree bit for bit.
-- Add `CKKS_Scheme.multiply_plain(ciphertext, plaintext, scale)`: a plaintext
-  product without the rescale, with `delta` multiplied by the plaintext's
-  `scale` (default: `scaling_factor`; 1 for an unscaled plaintext), so
-  several products can be summed before one rescale. `ciphertext *
-  plaintext` is this followed by `rescale`.
-- Add `CKKS_Scheme.linear_combination(cts, coefficients, scale)` /
-  `linear_combinations(cts, rows)`, the `MLWE_Scheme` ones with `delta`
-  tracked, and `CKKS_Scheme.conjugate` / `gen_conjugation_key`.
-- Add `CKKS_Scheme.rotation_generator(k)`: the Galois element `5^k mod 2N`
-  of a rotation of the slots by `k` steps.
-- Add `CKKS_Scheme.multiply_batch(lhs, rhs, ksk, n_threads, *, lvl=None)`,
-  which rescales each product to `lvl` in the same native call when given,
-  and `rescale_batch(cts)`.
-- Add `CKKS_Scheme.product(cts)`: the product of ciphertexts as a balanced
-  tree, `ceil(log2(n))` levels deep.
-- Add `fhe.CKKS_LinearTransform`: a slot matrix, given by its diagonals and
-  acting on every block of `n` slots, encoded once for a level (through
-  `encode_batch`) and applied by baby-step giant-step with hoisted baby
-  rotations and `automorphism_sum` for the giant steps; `rotations` lists the
-  keys it needs, and `apply` runs in parallel. `slot_to_coeff` /
-  `coeff_to_slot` build SlotToCoeff and its inverse, for any `n` dividing
-  `N/2`.
-- Add a native CGGI16 blind rotation (`cggi16_blind_rotate`, on the
-  library's threads) with an optionally unfolded loop [ZYL+17, BMMP18]:
-  `CGGI16(scheme, gsw_ell=None, unfolding=1, gadget_params=None)` consumes
-  `unfolding` input coefficients per step for one gadget decomposition, with
-  `2^u - 1` MGSW keys per step of `u` coefficients, which pays where the
-  synchronization between steps dominates (many threads).
-  `functional_bootstrap_batch(outs, tv, inputs, bk, torus_base)` runs one
-  rotation per thread (`cggi16_blind_rotate_batch`). `gadget_params` is the
-  bootstrapping key's gadget (the RNS one by default). `generate_bootstrap_key`
-  raises `ValueError` for a non-binary input key, and `CGGI16_Key` records `n`
-  and `unfolding`.
-- Add the SHIP bootstrap [CHKS25] (`vfhe.fhe.SHIP`, `SHIP_Key`): bootstraps
-  `N/2` real slots using only the `ceil(log2(h + 1))` levels of a product
-  tree, `h` the input key's Hamming weight. `SHIP.sample_input_key` draws the
-  sparse key (one coefficient per public window) and `generate_bootstrap_key`
-  the keys; `bootstrap` (also `half_bootstrap`, `blind_rotate`) runs natively
-  on the library's threads. Inputs come at the SlotToCoeff level at
-  `input_scale`, and outputs leave at `output_lvl` and `output_scale`, by
-  default the scale that comes back to `input_scale` when every level in
-  between multiplies and rescales, so bootstrap, multiply, bootstrap needs no
-  rescaling of its own. All `h + 1` terms of the product tree share one scale
-  (`factor_scale`), the one that lands the tree's output on `output_scale`,
-  so no node of the tree is rescaled below the others. At the paper's LL13
-  parameters (N = 2^13): about 4.7 bits of worst-slot precision. Native encoders `ship_encode_pi` /
-  `ship_encode_pt0`.
-- Add `FoldableRS.relative_distance(security_bits)` /
-  `FieldFoldableRS.relative_distance(security_bits)`: a lower bound on the
-  code's relative minimum distance, which is the `delta`
-  `Basefold.soundness_error` takes -- the exact Reed-Solomon value for the
-  `"rs"` instantiation, [ZCF24, Thm. 2]'s bound for the general code.
-- Add `polycom.foldable_relative_distance(k0, c, d, field_bits,
-  security_bits, bound)`, the general code's distance bound as a pure
-  function. `bound="cccfgs26"` (the default) is the tightening of [ZCF24,
-  Thm. 2] proven in [CCCFGS26] (*Batch, Pack, and Prove*, ASIACRYPT 2026, to
-  appear) for this code; `"zcf24"` is the original, validated against that
-  paper's Table 1. `polycom.DISTANCE_BOUNDS` lists them, and
-  `relative_distance` on both codes takes `bound` too.
-- Add `instantiation=` and `seed=` to `FoldableRS` / `FieldFoldableRS`, with
-  `polycom.INSTANTIATIONS` and `polycom.DEFAULT_SEED`; and `twists_odd`, the
-  odd-position twists `-T`, derived from `twists` on request.
-- Add `twist_field="field" | "prime"` to `FieldFoldableRS`
-  (`polycom.TWIST_FIELDS`): the general code's twists drawn from the whole
-  field (the default) or from its prime subfield, with `relative_distance` on
-  the twists' field. Prime twists make every lift and fold plane-wise, for
-  more queries at the same soundness.
-- Add `polycom.batch_inverse(values, p)`: modular inverses by Montgomery's
-  trick, which is how `FoldableRS` now builds its fold tables (one
-  exponentiation per level and prime rather than one per entry).
-
-- Oracles sent through an object: `vfhe.piop.OracleMessages` writes a
-  table to the transcript (the ideal model), and
-  `vfhe.polycom.BasefoldMessages` commits it under the field Basefold
-  scheme of its size and sends the Merkle root. `RangeDecomposition` and
-  `Lookup` take it as `messages=`, which compiles the range proof with
-  Basefold; `modules/piop/range.md`, "Sending an oracle".
-- `RangeDecomposition` takes a split point `m` up to `ell + nu`, the
-  variables of the `X|Z` block (was `ell`), so the partial evaluations it
-  sends can have fewer than `c N` entries.
-- `FieldVector.set_uint64(values, start, shift, width, high)` and
-  `FieldVector.to_uint64()`: 64-bit integers (128-bit with `high`), or one
-  bit field of each, into and out of a vector in one call, with C kernels
-  over pseudo-Mersenne fields (`pmf_vec_set_uint64`, `pmf_vec_get_uint64`).
-- `RNSRing.lift_mod_2_128(elements)`: every coefficient as the integer in
-  `[0, q)` its residues define, modulo `2^128`, by Garner's mixed radix in C
-  (`polynomial_RNS_lift_mod_2_128`): one row per prime through the
-  element-wise kernels (IFMA for primes up to 50 bits), then the rows'
-  combination modulo `2^128` in 52-bit limbs with IFMA products
-  (`vec_combination_mod_2_128`), the elements on several threads.
-- `FieldVector.inverse` over a pseudo-Mersenne field is one C call
-  (`pmf_vec_inv`) instead of the front's loop over elements: Montgomery's
-  trick with the vector cut into rows, so each step of either sweep is a
-  group multiply per group of a row, and one inversion for the whole
-  vector. A zero element
-  raises `ValueError`, as the front documents and the extension-field
-  vector does, rather than `ZeroDivisionError`.
-- `RNSPolynomial.to_uint64(repr)` and `from_uint64(values, repr)`: the rows
-  as one `array('Q')` of `ell * N` words, a row per prime, and back from any
-  C-contiguous buffer of 64-bit words such as a `numpy.uint64` matrix of
-  shape `(ell, N)`, in one C call each (`polynomial_RNS_get_natural`,
-  `polynomial_RNS_set_natural`). The words are in the order
-  `get_coeff_matrix` lists, now documented: coefficient order in the
-  coefficient representation and, in the NTT one, each slot's `split_degree`
-  coefficients of the residue modulo `X^d - w_s` together, slots in the
-  order of `get_rou_matrix`. `from_uint64` refuses a word not below its
-  prime, leaving the polynomial unchanged.
-- Speed up `Polynomial.get_coeff_matrix` / `from_coeff_matrix`: on an
-  unsplit ring, a row is now read with `ffi.unpack` and written with one
-  packed `ffi.memmove` instead of element by element (`BFV_Scheme.encode` /
-  `decode` at N=4096 go from 1.9 / 2.1 ms to 0.27 / 0.29 ms); on a split
-  ring, a row is reordered by slices instead of one coefficient at a time.
-- Add `MLWE_Scheme.sample_batch(msgs, key, lvl=0, n_threads=0)` and
-  `CKKS_Scheme.encrypt_batch(messages, key, n_threads=0)`: fresh samples of
-  many messages in one native call, through `mlwe_RNS_sample_scaled_batch`.
-  Each has a mask seed (kept as `MLWE.seed`) and a secret noise seed of its
-  own, drawn in order on the calling thread, so a batch does not depend on
-  the thread count; the samples come back in the NTT domain.
-  `CKKS_Ciphertext` takes `obj=` like `MLWE`.
-- Add `MLWE_Scheme.relinearize_batch(cts, ksk, n_threads=0)`: the
-  relinearization of many extended products at one level in one native
-  call (`mlwe_RNSc_GHS_hybrid_keyswitch_batch`, which runs hybrid key
-  switches over RNS rings row by row over the whole batch), bit for bit
-  what `relinearize` gives one at a time, on any number of threads.
-- Add `CKKS_Scheme.rational_rescale_batch(cts, n_threads=0)`: the rational
-  rescales of many ciphertexts at one level, each lifted to the union of
-  the two levels' rings in place of a polynomial at a time, and all
-  divided in one native call (`mlwe_round_division_batch`).
-  `rescale_batch` takes it on a non-nested level.
-- `MLWE_Scheme.linear_decrypt`, and with it `CKKS_Scheme.decrypt`, decrypts
-  an extended product (rank `extended_rank`, from `multiply` without a
-  key) under the extended key of the tensor product's slot order, which
-  gives the product of its factors' linear decryptions;
-  `MLWE_Key.extended_key_obj()` builds that key once per key.
-- Add `RNSRing.gen_primes_near(rou_order, prime_size, count, exclude_list,
-  split_degree=)`: the primes of the ring's form nearest `2^prime_size`,
-  alternately above and below it, with an odd multiplier when the ring is
-  split. Opt-in: the primes a ring draws by default do not change.
-- `vfhe.polycom.basefold_parameters(domain, num_vars, security_bits)`: the
-  general foldable code (`k0`, `c`, `d`), the schedule and the query count
-  `rep` of a basefold opening over a field or `R_q` whose soundness error,
-  as `BasefoldEval.soundness_error` reports it with the code's
-  `relative_distance`, is at most `2^-security_bits`, choosing among the
-  candidates the one with the smallest proof (`BasefoldParameters`, with
-  `gamma`, the proximity parameter `delta`, the error reached and a
-  proof-size estimate). It is the parameter estimator of [CCCFGS26] run on
-  the library's bounds, and lands on the same choice: `k0 = 2^8`,
-  `n0 = 2^10` and 314 to 352 queries for 11 to 24 variables over 180- and
-  260-bit fields at 128 bits. Takes the twist field, the distance bound and
-  a bundle's claims and polynomials; `basefold.basefold_soundness_error` is
-  the expression `soundness_error` evaluates, from its quantities alone.
-- `FoldableRS.truncated(depth)` / `FieldFoldableRS.truncated(depth)`: the
-  code of a smaller depth with the same seed and options, as the first
-  levels of this one, sharing their twist tables, transforms and plans
-  instead of building them again; it encodes, folds and commits exactly as
-  the code built with that depth. `BasefoldMessages.from_code(code,
-  num_vars)` builds the scheme of every table size from one code this way.
-- Native product-sumcheck rounds for three factors over `R_q`:
-  `prod_round_evals` hands three native tables over the same variables to
-  `sumcheck_prod3_round_pairs` / `_halves` / `sumcheck_prod3_round` (the
-  degree-3 message at `t = 0..3`, the round variable at any position), and
-  so does the dense prover view of a virtual oracle for a three-factor
-  term. The messages are the pure-Python path's.
-- `vfhe.piop.ClosedFormOracle(variables, evaluate, table, identity)`: a
-  public oracle the verifier evaluates by a function, whose table is built
-  only when something reads it as one, digested by the caller's
-  `identity` bytes and the variables.
-- `FieldVector.set_radix_decomposition(values, width, digits, high=None, columns=1)`:
-  the base-`2^width` digits of 64- or 128-bit integers, one block of
-  elements per digit, with the values optionally read as a matrix of
-  `columns` columns and written column by column; one native call on a
-  pseudo-Mersenne vector (C `pmf_vec_set_radix_decomposition`).
-- `vfhe.arith.count_occurrences(values, bound)` (and the C function of the
-  same name): for an `array('Q')`, how often each value
-  occurred before each position and how often each value below `bound`
-  occurs, or None when a value is out of range.
+  ring operation the native code makes over an RNS ring leaves an event
+  with its kind, operands, parameters and output, cut into operations by
+  the public calls that made them; it can be bounded, drained by another
+  thread and verified against digests of its values. The `vfhe.vfhe`
+  package reads it: `computation` turns a trace into the steps of a
+  homomorphic computation (multiplications with their tensor products, key
+  switches and digits, rescales, plaintext-linear steps), `witness` applies
+  an arithmetization and checks every bound and relation on the recorded
+  values, and `cccfgs26` is the arithmetization of [CCCFGS26, App. A.5].
+- Native multithreading under one library-wide limit, `vfhe.util.parallel`:
+  `set_num_threads`, `num_threads` and `local_num_threads`, defaulting to
+  `VFHE_NUM_THREADS` or 1. Key switches, automorphisms, products, rescales,
+  domain conversions, key generation, the proof-side kernels and every
+  batch call run on those threads, with results independent of their
+  number.
+- Batch calls that do many operations in one native call: `sample_batch`,
+  `encrypt_batch`, `encode_batch`, `multiply_batch`, `relinearize_batch`,
+  `round_division_batch`, `rescale_batch`, `rational_rescale_batch`,
+  `automorphism_batch`, `automorphism_sum`, `CMUX_batch`,
+  `functional_bootstrap_batch` and `encrypt_constants`.
+- A memory pool, `vfhe.util.memory_pool`, keeping the buffers the library
+  releases for the next request of the same size, bounded by `set_capacity`
+  (`"auto"`, bytes or `0`), with `release_all`, `statistics` and
+  `set_wipe_on_release`; `VFHE_MEMPOOL_CAPACITY` and
+  `VFHE_MEMPOOL_WIPE_ON_RELEASE` set the defaults.
+- Serialization, `vfhe.util.io`: `Encoder`, `Decoder` and `Codec`, the
+  plain-value codecs and combinators, and codecs for rings, polynomials,
+  MLWE, MGSW, CKKS and BFV schemes, samples, keys and key-switch keys,
+  `CKKS_LinearTransform` and the bootstrapping keys, streaming a key one
+  sample at a time with a fresh sample written as its mask seed. The format
+  is a length-prefixed protobuf message per object, with schemas under
+  `proto/`.
+- `vfhe.util.kernels`: compile your own C kernels into the library as one
+  link-time-optimised engine, `kernels.ExtensionBuilder(sources,
+  declarations).build()`, cached under `~/.cache/vfhe`; the `kernels` extra
+  pulls in meson and ninja, and wheels ship the library's C sources for it.
+- `fhe.BFV_Scheme`: BFV over `vfhe.mlwe` with batched encoding,
+  plaintext and ciphertext multiplication, rotation, conjugation and modulus
+  switching.
+- Bootstrapping: the SHIP bootstrap [CHKS25] (`fhe.SHIP`), a native CGGI16
+  blind rotation with an optionally unfolded loop, and the GP25 rework
+  described under Changed.
+- `fhe.CKKS_LinearTransform`: a slot matrix by its diagonals applied by
+  baby-step giant-step with hoisted rotations, with `slot_to_coeff` and
+  `coeff_to_slot`.
+- `CKKS_Scheme`: `encode(ring=, scale=)` also from a complex buffer in
+  place, sparse packing of fewer than `N/2` values, `multiply_plain`,
+  `linear_combination(s)`, `conjugate`, `rotation_generator`, `product`,
+  and `decrypt(message_bound=, drop=)` over the fewest primes that hold the
+  plaintext.
+- `MLWE_Scheme`: hoisted automorphisms (`automorphisms`, `automorphism_sum`,
+  `automorphism_mux` of [CHKS25]), `linear_combination(s)` with
+  `PlaintextMatrix` or an `IntegerMatrix`, `trace_pack` [CDKS21, LY26],
+  `normalized_trace` [AP13], ring switching [GHPS12], LWE extraction and the
+  packing key switch, `key_gen(distribution="ternary")`, `gen_ksk(...,
+  hybrid=False)`, `multiply_by_monomial`, `from_components`, `mod_reduce`,
+  `level_with_primes`, and `linear_decrypt` of an extended product.
+- MGSW internal products, automorphisms and noiseless encryptions
+  (`MGSW.internal_product`, `MGSW_Scheme.automorphism`, `trivial`), and
+  `mgsw_shift_sequences` in C.
+- Lookup and range arguments in `vfhe.piop`: `Relation_Lookup` with
+  `Lookup` and `LogUpGKR` [Hab22, PH23] (the default), `Relation_Range` with
+  `RangeDecomposition(max_digit_bits)` and `Relation_ResidueRange` with
+  `ResidueRangeDecomposition`, the range PIOP of [CCCFGS26] over packed
+  `R_q` polynomials and over residue oracles; `modules/piop/range.md` is the
+  design note.
+- `vfhe.piop` composition: indexed relations, sequential composition
+  (`compose`, statement heads, `Relation_SumDef`, GKR as a composition),
+  AND-composition (`IOP.and_composition`, `IOP.batched_call`), bundle
+  protocols (`Protocol.bundle_key`), oracles over their own domain
+  (`Oracle.domain`), several commitment schemes in one IOP,
+  `ClosedFormOracle`, `VirtualOracle.partial_evaluation`, and oracles sent
+  as messages (`OracleMessages`, `BasefoldMessages`).
+- Basefold: batched openings of several claims on any of a scheme's
+  commitments, layer schedules, `BatchFoldEval` over `R_q` through CRT
+  components [CCCFGS26, §7], the parameter estimator `basefold_parameters`,
+  `relative_distance(security_bits)` and `foldable_relative_distance` with
+  the `"cccfgs26"` bound, the general foldable code's `instantiation`,
+  `seed`, `twist_field` and `root_field`, `truncated`, `residue_code`,
+  batch encoding and folding, and fibers of adjacent symbols.
+- Native kernels on fields and vectors: `Field.lagrange_interpolate`,
+  `FieldVector.reindex`, the `fold_*` inner products and product sums,
+  `fold_twisted`, `lift_twisted`, `fma_interleave`, prime-subfield tables,
+  `set_uint64`, `to_uint64`, `set_radix_decomposition`, `coefficients`,
+  `sample_random_at`, `digest_elements`, `digest`, native `inverse`,
+  `pmf_inverse`, `histogram`, `count_occurrences`, `crt_lift_mod_2_128`
+  and `ExtensionFieldNTT.pack(zero_padding=, layout=)`.
+- Rings: `IntegerMatrix` with `integer_linear_combinations`, `RNSScalar`,
+  CRT components (`crt_components`, `from_crt_components`, `residue_field`,
+  `crt_linear_combination`, `from_diagonal`), `lift_mod_2_128`,
+  `to_uint64` and `from_uint64` on polynomials and tables,
+  `convert_base`, `rescale_to_power_of_two`, `gen_primes_near`,
+  `Ring.digest`, `MLE.linear_combination`, `digest_sequence`, and the
+  generic operations `decompose_digit`, `round_division_approximate`,
+  `scaled_lift` and `scale_subto`.
+- Native sumcheck rounds for products of any number of ring tables.
+- `Merkle.open_many` and `verify_many`, `polycom.LayerAnswers`,
+  `vfhe.crypto.join_digests`, `MerklePath.from_bytes`, `chain_digest` and
+  `DigestChain`, seeded exceptional samplers (`random_exceptional(seed=)`),
+  `entropy.below_many`, seed expansion by AES-128 in counter mode and
+  `prng_normal_seeded` in C.
+- Value equality of rings and schemes by their parameters.
+- Per-module benchmarks, `make bench`, with `tools/bench/compare.py`;
+  a documentation site, `make docs`, published to GitHub Pages; Python 3.15;
+  and `docs/USAGE.md` on threads, processes and memory.
 
 ### Changed
 
-- `RNSRing` equality returns at once when both sides are the same object,
-  instead of comparing their parameters: checks that elements share a ring
-  no longer cost a parameter record per element.
-
-- **BREAKING (proof format)**: the answers of a Basefold or BatchFold
-  opening are layer-major. The `.../answers` message holds one entry per
-  layer: a `LayerAnswers` (for a batched opening's first layer, one per
-  commitment) with every queried leaf of the layer in one word and every
-  path in one buffer, instead of one `(leaf, path)` per query and layer.
-  A transcript digests a layer with a few hashes instead of one per field
-  element and one per path, and the verifier checks a layer's leaves
-  without rebuilding them. Every proof digest that includes an opening
-  changes.
-- **BREAKING (proof format)**: a field table sent as a message (the ideal
-  model's `OracleMessages`, `BasefoldMessages`' tables sent in the clear,
-  the range proofs' `psi` messages) travels as the table's `FieldVector`,
-  digested with one hash, instead of a tuple of its entries
-  (`piop.messages.table_message` / `table_from_message`). Proof digests that
-  include such a message change.
-
-- The sumcheck's `interpolate_evals` over a field calls
-  `Field.lagrange_interpolate`: one native call and no field inversion, in
-  place of an inversion and the Lagrange products in Python. The values
-  are the same.
-- In a batched Basefold opening over a field, a claim whose point ends in
-  coordinates that are each 0 or 1 touches only the block of the batching
-  weight that those coordinates select. Its eq~ table is built over the
-  other variables and added into that block, so a claim on a block of a
-  table costs the block, not the table. The verifier computes the sum of
-  the claims' `s^m eq~(z_m, r)` with whole-vector operations across the
-  claims. Transcripts are unchanged.
-- `RNSPolynomial.get_polynomial` computes the CRT constants once per call
-  instead of once per coefficient, and centers each value with one
-  comparison. The values are the same.
-- The IOP driver computes each pending statement's bundle key and oracle
-  closure once, when the statement is added, and keeps an index for the
-  parking rule. Deciding whether a claim waits is a lookup, where it was a
-  scan of every pending statement. The order statements are discharged in,
-  and so every transcript, is unchanged. `Protocol.bundle_key` must now
-  return a hashable key.
-- `TableOracle.digest` keeps the digest of a dense table and recomputes it
-  only when the oracle's table, its entries object, its variables or its
-  basis change.
-
-- `piop.virtual.expand_table` expands a field table with one native pass
-  (`FieldVector.reindex`) instead of a Python loop over the entries, and
-  a table of ring entries through a list of positions built in `O(2^n)`
-  rather than `O(n 2^n)`. Restricting a dense field table to bits
-  (`VirtualOracle.dense_constituent`, `resolve_table`) is one gather
-  instead of a fold per fixed variable (`restrict_boolean`).
-- `BasefoldEval`'s batched opening adds the eq~ tables of the claims on one
-  polynomial into their sum as they are built, so the prover holds two
-  tables per polynomial (three while a ring sum is replaced) rather than
-  one per claim. The transcript is unchanged.
-- **BREAKING (C)**: `polynomial_RNS_get_natural`, `polynomial_RNS_set_natural`
-  and their `_array` forms take the order of the rows, `rows` (the base
-  indices of the active primes), as `polynomial_RNS_write_rows` does.
-
-- `CKKS_Scheme.rescale` and `rational_rescale` state their rounding: each
-  component becomes `round(P_l * c / q_drop)` modulo the next level's
-  modulus (`P_l = 1` for nested levels), the remainder being the centered
-  residue modulo `q_drop`. The `MLWE_Scheme` docstring gives the top
-  balanced radix digit's range, `[-2^(w-1), 2^(w-1)]`.
-
-- **BREAKING**: a `Merkle` tree built from packed digests
-  (`Merkle.from_digests`) reads the buffer once, while it is built, and no
-  longer keeps it: the C tree has its own copy, so the buffer can be freed
-  (for a Basefold commitment, the leaf digests of the codeword: two table
-  sizes per committed table and per opened layer). Such a tree is
-  recommitted with the new digests, `commit(digests)`; `commit()` without
-  them raises, and a tree over leaves refuses `digests`.
-- `vfhe.util.memory_pool.release_all` and `set_capacity` say what they cost
-  in speed, and `docs/USAGE.md` says when a long-running process may want
-  `release_all` after a phase whose buffer sizes do not recur.
-- A `Sumcheck` over a virtual oracle leaves, as the prover's witness of its
-  final `Relation_Eval` claim (`Prover.witnesses[claim]`), the values of the
-  constituents at the final point, which its tables hold after the last
-  round; `VirtualEval`'s prover sends those instead of evaluating each
-  constituent at the point again. The messages are unchanged.
-- **BREAKING**: the Fiat-Shamir chain is seeded with the root statement's
-  digest and `IOP.registry_digest()` (the challenge domain and every
-  registered protocol with its parameters), so a proof is bound to the
-  verifier's configuration: a verifier configured with other parameters
-  rejects it. Every Fiat-Shamir proof changes.
-- **BREAKING**: `Relation_Range(bound)` and `Relation_ResidueRange(bound)`
-  take the bound alone, any positive integer; their index is `("bound",)`,
-  so statement digests change. The digit count `c` is the `chunks`
-  parameter of `RangeDecomposition` (after `ring`) and of
-  `ResidueRangeDecomposition` (after `kappa`), and
-  `vfhe.piop.protocols.range.digit_alphabets(bound, chunks)` gives `beta`
-  and `top_beta`. The decomposition requires a power-of-two bound; the
-  relation does not.
-- `vfhe.piop.protocols.range.balanced` is `centered`: the centered
-  representative of a field element, the term the lattice and FHE
-  literature uses for the representative in `(-p/2, p/2]`.
-- `vfhe.piop.protocols.range.uEval` is `unpacked_evaluation`, and
-  `RangeDecomposition`'s mod-`q` form of it is `_unpacked_evaluation_mod_q`.
-  The range and lookup code and `modules/piop/range.md` cite [CCCFGS26] by
-  the names of its results, not by figure or lemma numbers, and place the
-  construction in the lookup-argument literature (Bulletproofs, plookup,
-  Lasso, memory checking, Quarks).
-- `RangeDecomposition`'s verifier evaluates `unpack(v)` at its point modulo
-  `q` from the element's rows: per prime, the coefficients folded once per
-  coordinate as an `F_p` vector, then one CRT. It no longer rebuilds every
-  coefficient as an integer; `unpacked_evaluation` stays as the exact value.
-- `Lookup` is a bundle protocol: the claims into one table `t_beta` on
-  oracles with the same number of variables run as one argument over the
-  oracles laid end to end (padded with zero blocks to a power of two), so
-  the counters and the `f^(1)` tables are committed once for the group, at
-  `ceil(log2 k)` more variables. A claim alone in its group runs as before.
-  A compiled run of a group of two needs a scheme for tables of one more
-  variable.
-- `ExtensionFieldVector.set_uint64` and `to_uint64` are one native call each
-  (`field_vec_set_uint64`, `field_vec_get_uint64`) instead of one Python
-  call per element.
-- A sumcheck prover view no longer copies a constituent read through a
-  renaming: `VirtualOracle.dense_constituent`, `expand_table` and the
-  resolution of a restriction with no fixed coordinate return a new table
-  object over the same entries (`table_view`), whose binds install new
-  tables and leave the shared entries alone. A ring table shared this way is
-  put in NTT form first.
-- The proof-side kernels use the library's threads on large inputs: the
-  dense ring-table operations (`mle_dense_poly_*`), the sumcheck rounds,
-  the Reed-Solomon transforms and leaf digests, `hash_batch`, Merkle trees,
-  and the pseudo-Mersenne and extension-field vector kernels. Results are
-  the same at any thread count, and at the default limit of one thread the
-  single-threaded code runs.
-- Sumcheck rounds over products of native ring tables of any number of
-  factors, at any number of nodes, run natively (`sumcheck_product_round*`)
-  instead of entry by entry in Python; messages are unchanged.
-- `FoldableRS.leaf_digests` and `leaf_digests_of` digest every leaf in one
-  native call, `rs_leaf_digests`, with the same bytes, so roots, openings
-  and transcripts do not change. Both return a read-only `memoryview` of the
-  digests (`leaf_digests_of` returned `bytes`). `FoldableRS.leaf_digests`
-  and `FieldFoldableRS.leaf_digests` raise `ValueError` for a word that is
-  not a whole number of leaves; the ring code hashed a shorter last leaf and
-  the field code dropped it.
-- `vfhe.piop.protocols.lookup.counters` returns `array('Q')`s for an
-  `array('Q')` whose values are all in the table (counted natively by
-  `count_occurrences`), and lists otherwise.
-- `FoldableRS`'s twists default to the residue fields `F_(p^d)` of the
-  ring's primes (`twist_field="field"`) on a ring whose split degree is above
-  1, and stay the per-prime integers (`"prime"`) on an unsplit ring, where
-  the two give the same distance. The distance bound runs on `d log2 p`
-  bits instead of `log2 p`, which takes fewer queries for the same
-  soundness, at the price of an `F_(p^d)` product per twist multiply. The
-  base code's transform keeps its root in `F_p`. `basefold_parameters`
-  follows the same default. Codes built without `twist_field` on a split
-  ring commit differently from before.
-- `CKKS_Scheme.rational_rescale` takes `n_threads` and leaves its input in
-  the coefficient domain; it is one `rational_rescale_batch`, with the same
-  results as before.
-- The range and lookup provers build their tables with whole-vector
-  operations: the digit table from `lift_mod_2_128` of `v` (unless its
-  digits reach past bit 128 and `q` exceeds `2^128`), the counters with
-  `set_uint64`, the fingerprints with `fma`, and each grand product's
-  product tree in `log n` passes of `split_even_odd` and a product.
-- `RangeDecomposition` no longer needs `c` to divide `log2(B)`: the
-  digits are `c - 1` of `ceil(log2(B) / c)` bits and a shorter most
-  significant one (`top_beta`), and `RangeDecomposition` then adds a
-  `Relation_Lookup(top_beta)` on the restriction of the digit oracle to the
-  top digit, so the claim proved is `[0, B)`. Bounds `c` divides prove as
-  before, with the same transcript.
-  `lookup.grand_product` is `lookup.product_tree`: it returns the whole
-  table of partial products, not the grand product.
-
-- **BREAKING**: `Verifier.challenge` and `Verifier.challenge_bits` are
-  coroutines: write `await iop.verifier.challenge(label)`. Inside an
-  AND-composition a challenge waits for the other sub-protocols; outside one
-  it returns at once, with the same values and transcripts as before.
-- **BREAKING**: `Field.exceptional_from_seed(seed)` and
-  `fs.ring_exceptional_from_seed(ring, seed)` are removed; use
-  `random_exceptional(seed=seed)` on the field or ring. The Fiat-Shamir
-  verifier draws through it. Field challenges keep their values; ring
-  challenges are now drawn by `vfhe.crypto.seeded`'s rejection sampler,
-  which makes their coefficients exactly uniform (the previous reduction of
-  128-bit words was slightly biased), so ring transcripts change.
-- The ring's exceptional set is the elements whose CRT components at
-  every prime are all one element with `split_degree` integer coefficients
-  below the smallest prime (size `p_min^split_degree`, as before), sampled
-  natively (`polynomial_RNS_sample_exceptional`), with or without a seed.
-  Evaluation points made of challenges are then one point in every slot.
-  The sampler used to copy a random slot, sampled independently modulo each
-  prime, into every slot -- a larger set whose differences are not all
-  invertible. Ring challenges and transcripts change.
-- `BatchFoldEval`'s common-point sumcheck is skipped for claims at one
-  point made of exceptional elements, and for distinct such points its
-  prover runs on one combined table per polynomial instead of one per CRT
-  component, with the same messages.
-- `Transcript.read` shields the entry it awaits, so cancelling a reader
-  leaves the entry for its writer.
-- **BREAKING**: `FieldFoldableRS`'s general code takes the root of its base
-  transform in `F_p` only, unless `root_field="field"`. Over an extension
-  field whose `p - 1` lacks the 2-adicity for the base length, the base is
-  now a Vandermonde product on seeded points instead of a transform on
-  roots in the extension -- another code, so its codewords and commitments
-  change; pass `root_field="field"` for the previous one.
-- `BasefoldEval` receives, as one bundle, the claims on all the oracles
-  committed under its scheme rather than those on one oracle, and opens a
-  bundle of several claims with the batched opening rather than one run per
-  claim; transcripts of a single claim are unchanged.
-- `BasefoldEval`'s verifier checks a layer's leaves together: one word of
-  all the queried leaves, digested in one call and folded with
-  `fold_fibers`, then compared with the values the layer above produced as
-  one vector. A leaf of the wrong shape or over the wrong domain is now a
-  rejection rather than an exception.
-- **BREAKING**: `vfhe.piop` is restructured. The framework is one file per
-  concern (`oracle`, `virtual`, `relation`, `protocol`, `transcript`,
-  `party`, `fs`, `iop`, `composer`, `digest`) and is what `vfhe.piop`
-  exports; the relation toolbox is `vfhe.piop.relations` (`Relation_Sum`,
-  `Relation_SumProd`, `Relation_Zero`, `Relation_Equal`, `Relation_SumDef`,
-  `Relation_CircuitSparseIndex`, `Relation_Circuit`, `Relation_Layer`,
-  `Relation_SpEval`, `Relation_Lookup`, `Relation_Range`, `FamilyShape`,
-  `dense_relation`, `wiring_predicates`; `Relation_Eval` stays in the
-  framework, in `vfhe.piop.evaluation` with `with_start`, since the head
-  machinery is written against it) and the protocols are
-  `vfhe.piop.protocols` (`Sumcheck`, `SumcheckProd`, `VirtualEval`,
-  `SumDefStart`, `OutputTest`, `GKR`, `GKR_Start`, `Lookup`,
-  `RangeDecomposition`, `dense_layering`); neither is re-exported by
-  `vfhe.piop`, and the modules `vfhe.piop.piop`, `.sumcheck`, `.circuit`,
-  `.sparse`, `.lookup` and `.range` are gone. The sumcheck round-message
-  kernels are functions in `vfhe.piop.protocols.sumcheck.rounds`
-  (`round_evals`, `prod_round_evals`, their native, whole-vector and
-  pure-Python paths, `interpolate_evals`), no longer static methods of the
-  protocols, and `exceptional_set_size` is `vfhe.piop.exceptional_set_size`;
-  the prover's form of a virtual oracle is
-  `vfhe.piop.protocols.sumcheck.prover_view.prover_view(oracle, witnesses,
-  strategy)`, no longer `VirtualOracle.prover_view`, and the `strategy`
-  switch is an attribute of the sumcheck protocols. `Implicit` is
-  `ImplicitOracle`; `Party` takes its IOP (`Party(iop)`). The driver, the
-  registry and the Composer route a claim by `Relation.subject(statement)`,
-  the oracle a statement is a claim about (`None` by default,
-  `Relation_Eval`'s one oracle), so any relation that declares a subject is
-  bundled, parked and discharged per oracle kind as evaluation claims are;
-  `Relation_Eval.subject` is an instance method. The helpers
-  protocols share have public names (`hypercube`, `hypercube_sum`,
-  `aligned_tables`, `value_of`, `map_oracles`, `table_like`,
-  `child_statement`, `expanded_tables`, `hypercube_index`).
-- **BREAKING**: A statement names oracles, never tables. `vfhe.piop.oracle`
-  has the oracle classes: `TableOracle(table, public=...)` wraps an arith
-  `MLE` or `SparseMLE` (kind `public` for a table the verifier holds,
-  `plain` otherwise); `CommittedOracle(variables, commitment, scheme)` is
-  the verifier's view of a committed polynomial -- the commitment, the
-  scheme it was committed under and the variables, no table; the prover's
-  table lives in `Prover.witnesses[oracle]`, where `resolve_table` finds it; `ImplicitOracle`
-  is the handle. Every oracle has `kind`, `query(point)` (the ideal
-  decider's one query) and `digest()`; `oracle_kind` is gone. `MLE` and
-  `SparseMLE` no longer take or carry `public`, and `MLE.eq` returns an
-  unmarked table. `Basefold.commit(f)` returns `(CommittedOracle,
-  BasefoldOpening)`, no longer tags the table, and `Basefold.commitments`
-  is gone; `Relation_Eval` has no `commitment` field -- a compiled claim
-  names the committed oracle -- and `BasefoldEval` refuses a claim on any
-  other oracle. `RangeDecomposition` takes the ring of its claims as a
-  constructor parameter. `Relation_SumProd.check` decides an instance whose
-  oracles disagree on their variables as not in the relation.
-- **BREAKING**: `digest()` is a method of every value a transcript or a
-  statement absorbs: `Statement`, the oracles and `Proof` in `vfhe.piop`;
-  `MLE`, `SparseMLE`, `MLE_Variable`, `Polynomial` and `FieldElement` in
-  `vfhe.arith`; `MerklePath` in `vfhe.crypto`. `element_digest` digests
-  primitives, containers, classes and protobuf messages itself and calls
-  `digest()` on everything else; the chain is `vfhe.crypto.chain_digest`,
-  seeded differently, so every Fiat-Shamir proof differs from those of
-  `821f951`.
-- **BREAKING**: `Relation_Circuit` with public wiring predicates is now
-  `Relation_CircuitSparseIndex`, built by `indexed(circuit, domain)`: its
-  index is the mapping `("circuit", "predicates")`, the predicates built
-  once by the indexer and read into each layer body through a renaming map;
-  `GKR` / `GKR_Start` are registered against it and its `Start`, and
-  `GKR.layers` no longer needs the IOP's domain. `Relation_Circuit` is the
-  dense-index relation derived from it, proven by `compose(dense_layering)`
-  registered against it and its `Start`. The `.index` of `Relation_Layer`
-  (`("circuit", "layer", "lin", "xmult")`), `Relation_Lookup` (`("beta",)`)
-  and `Relation_Range` (`("bound",)`) is a mapping over those
-  names. The root digest records a committed oracle by its commitment, so
-  every Fiat-Shamir proof whose root has a declared index or a committed
-  oracle differs from those of `9a8e0f8`. `resolve_table` returns a sparse table as it is and
-  resolves restrictions; `prover_view` classifies a constituent as sparse by
-  its resolved table.
-- **BREAKING**: `Relation_Circuit`'s instance is `oracles = (out, w_in)`,
-  the output first and the relation's head, instead of `oracles = (w_in,)`
-  with a separate `output` field; its constructor's parameter is `index`.
-  `GKR` is now a composed protocol (the output test, then one
-  `Relation_Layer` statement per gate layer); `GKR.layers(root, iop)` is an
-  instance method and users register `OutputTest` for `Relation_Equal` and
-  `SumDefStart` for `Relation_Layer.Start` beside it. The messages are
-  unchanged; transcript labels carry statement paths and differ.
-- **BREAKING**: The CKKS encoder and decoder (`ComplexRing`) run on a new
-  negacyclic FFT kernel (`fft_new_plan` / `fft_forward` / `fft_inverse` /
-  `fft_pointwise_mul`, native `FFT_Plan`) in place of the special-root
-  transforms; results agree to rounding. `ComplexRing(N)` no longer takes
-  `special_rous` and gains `plan` and `slot_positions`
-  (`complex_slot_positions`); the native
-  `complex_polys_ifft_scale_round_to_RNS_batch` takes `(plan, slots)` in
-  place of `(n_complex, log_prec, gs_ws)` and no longer overwrites its input.
-  Building a `CKKS_Scheme` at N = 2^16 takes milliseconds instead of seconds.
-- Keep `Polynomial.automorphism` of an NTT-domain element on a fully split ring
-  in the NTT domain (a reordering of the transform's points) instead of
-  converting the element to coefficients first.
-- **BREAKING**: Move util's packages under `vfhe.util`: `vfhe.util.bindings`,
-  `vfhe.util.kernels` and `vfhe.util.io`, plus the internal `vfhe.util._engine`
-  and `vfhe.util._cpu`. The kernels command is `python -m vfhe.util.kernels`.
-  `vfhe.info` and `python -m vfhe.info` stay where they were.
-- **BREAKING**: Make `python -m vfhe.info` print JSON, with plain values: `version`
-  (`null` in a source tree), `engine`, the loaded engine's name (`null` when none
-  loads, with the reason on stderr), `engine_file`, its path, and `runs`, which
-  maps every engine to whether this CPU runs it (`true`, `false`, or `null` when
-  the CPU cannot say).
-- **BREAKING**: Prime selection follows the ring's splitting. A partially
-  split ring keeps primes `1 mod 2N / split_degree` with an odd multiplier,
-  so that its residues are fields of size `p^split_degree` [CCCFGS25,
-  Sec. 3.1]; a fully split ring now also takes full-size primes with an even
-  multiplier instead of falling back to a smaller prime (at N = 2^11 and 16
-  bits, 40961 instead of 12289). Rings that had a full-size prime keep their
-  primes. `RNSRing.gen_prime` takes `split_degree` (keyword, required) and
-  raises `ValueError` when no prime is left, and a ring given its primes
-  (`primes=` or `mask=`) with `split_degree > 1` raises `ValueError` for a
-  prime with an even multiplier, which silently gave residues of size `p`.
-- Make `Ring(..., mask=...)` and `RNSRing.quotient_ring(mask=...)` raise when
-  the mask names primes outside the pool they are given, instead of dropping
-  them silently. `RNSRing.union` builds the ring over two rings' primes.
-- Make `Multiprecision.compute_crt_consts` raise for moduli its single-digit
-  Barrett step cannot serve (primes wider than 52 bits) rather than returning
-  constants that reconstruct incorrectly.
-- Route `ExtensionFieldNTT.pack` / `unpack`'s transpose through a tile buffer
-  with an odd stride, so both its memory sides are contiguous runs; at `2^22`
-  elements over `F_(p^4)` it takes 107 ms to about 50.
-- Let `FieldVector.query` also accept a buffer of unsigned 64-bit indices, handed
-  to the gather as it stands; the kernel now range-checks them itself.
-- Make `FieldVector.hash_elements` / `hash_fibers` return a read-only `memoryview`
-  of the kernel's buffer rather than a copy. It compares, slices and converts
-  like `bytes`; `bytes(digests)` is the copy, and is what hashing or keying by
-  them needs.
-- Let `Merkle.from_digests` accept any bytes-like and keep it rather than
-  copying, so a mutable buffer stays connected -- `commit()` re-reads it.
-- Ask the kernel for huge pages for allocations of 8 MiB and up.
-  [`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md) covers the allocator settings that go with it.
-- **BREAKING**: Gadget parameters are one object. `GadgetParams(log_base=None,
-  digits=None, primes_per_digit=1)` (`vfhe.mlwe`; `log_base=None` is the RNS
-  gadget) replaces the `radix_log_base` argument of `gadget_scalars`,
-  `gen_ksk`, `gen_rlk`, `gen_ksk_for_level`, `gen_rlk_for_level`,
-  `gen_ksk_automorphism(_set)`, `gen_ksk_trace`, `MLWE_Set` and
-  `MGSW_Scheme` (`gadget_params=`, which the other key generators, `GP25`,
-  `CGGI16` and `SHIP` take too); `MLWE_Set` and `MGSW_Scheme` expose
-  `gadget_params` in place of `log_base` / `radix_log_base`. It adds two
-  decompositions. `primes_per_digit=a` groups the RNS digits, the `dnum` of
-  hybrid key switching [HK20]: the digit of a group of `a` primes is the value
-  modulo their product `Q_J`, lifted to every prime of the key by the fast
-  base conversion (`polynomial_RNSc_lifted_combination`), for about `a` times
-  fewer keys and products (a key switch about 1.6x faster with groups of 4 at
-  N = 2^14 over eight primes); the special modulus `P` has to cover a group,
-  which is not checked, and it does not combine with the radix gadget.
-  `digits` keeps only the top digits of each residue of the radix gadget, the
-  approximate decomposition, rounding the residue first; it holds over one
-  prime only and is refused at a level of more than one. In C, `GadgetParams
-  {log_base, digits, primes_per_digit, balanced}`, passed by pointer,
-  replaces the `log_base` argument of `gadget_mul_addto_polynomial`,
-  `gadget_mul_subto_polynomial`, `mlwe_new_RNS_ks_key` and the `mgsw_*`
-  products, and `RNS_MLWE_KS_Key.gadget_params` replaces `log_base`;
-  `GadgetParams.native(balanced)` builds it.
-- **BREAKING**: Gadget digits are balanced by default (RNS and radix;
-  `balanced=False` restores the old outputs). With `MLWE_Scheme(...,
-  balanced=True)`, which `CKKS_Scheme` and `BFV_Scheme` pass through and the
-  scheme's keys and `MGSW_Scheme` follow (unless given `balanced`), the RNS
-  gadget decomposes into centered residues in `(-p_j/2, p_j/2]`, and the
-  radix gadget into base-`2^w` digits of the centered residue in
-  `[-2^(w-1), 2^(w-1))` (the top one taking the carry; `w = 1` keeps the
-  unsigned digits). The keys are the same and the digits' second moment is a
-  quarter, so every gadget product adds about one bit less noise standard
-  deviation at the same cost. Outputs change; what they decrypt to does not.
-  With balanced RNS digits, `MLWE_Scheme.automorphisms` gives the same
-  ciphertexts as `automorphism`. `vfhe.util.io` records the choice, and the C
-  `GadgetParams` carries it (`balanced`).
-- **BREAKING**: The division by the special primes after a gadget product is
-  the ModDown of hybrid key switching (`mlwe_mod_down`), the fast base
-  conversion of the value modulo `P`, in place of a rounding division by one
-  special prime at a time, whose cost grew with the square of their number:
-  about 3x faster at four special primes, for an added error of at most half
-  their number. Outputs change; what they decrypt to does not. The exact
-  rounding division (`mlwe_round_division`: rescale, level moves,
-  decryption) is unchanged.
-- **BREAKING**: Fresh samples and keys are drawn from seeds.
-  `MLWE_Scheme.sample` expands a sample's mask from a fresh 32-byte seed by
-  default (`prng_expand_below`) and keeps it as `MLWE.seed`, so `vfhe.util.io` can
-  store the sample as its seed; `sample(..., seeded=False)` or
-  `MLWE_Scheme.seeded_encryption = False` draws the mask directly. Key
-  generation samples the same way and leaves its keys in the NTT domain,
-  where they are used. Distributions are unchanged, but a pinned stream
-  (`entropy.deterministic`) gives other samples and keys than before.
+- **BREAKING (proof format)**: Fiat-Shamir proofs change. The chain is
+  seeded with the root statement's digest and the registry digest, so a
+  proof is bound to the verifier's configuration; every value a transcript
+  absorbs has a `digest()` method; answers of an opening are layer-major
+  (`LayerAnswers`); field tables sent as messages travel as vectors; ring
+  challenges are drawn exactly uniformly from an exceptional set whose
+  points are one element in every slot; and the general foldable code of
+  [ZCF24, Def. 5] is the default (`instantiation="rs"` is the previous
+  one), with twists in the residue fields on a split ring and the base
+  transform's root in `F_p`.
+- **BREAKING**: `vfhe.piop` is restructured: the framework is one file per
+  concern and is what `vfhe.piop` exports, relations are
+  `vfhe.piop.relations`, protocols `vfhe.piop.protocols`, with nothing
+  re-exported. A statement names oracles, never tables (`TableOracle`,
+  `CommittedOracle`, `ImplicitOracle`); `Verifier.challenge` and
+  `challenge_bits` are coroutines; `Relation_Circuit` is an indexed
+  relation and `GKR` a composed protocol; `Relation_Range(bound)` takes the
+  bound alone and `RangeDecomposition` the digit parameters.
+- **BREAKING**: `vfhe.util` holds the tooling: `vfhe.engine` is
+  `vfhe.util.bindings` (`ffi` and `lib` alone), the catalogue is
+  `vfhe.util._engine`, `vfhe.util.kernels` replaces `vfhe.dynamic_extensions`,
+  the kernels command is `python -m vfhe.util.kernels`, and `python -m
+  vfhe.info` prints JSON.
+- **BREAKING**: Gadget parameters are one object, `GadgetParams(log_base,
+  digits, primes_per_digit)`, replacing `radix_log_base` everywhere, with
+  grouped RNS digits (the `dnum` of [HK20]) and approximate decomposition;
+  digits are balanced by default; the division by the special primes is the
+  ModDown of hybrid key switching. Outputs change; what they decrypt to does
+  not.
+- **BREAKING**: Fresh samples and keys are drawn from seeds, kept as
+  `MLWE.seed`, which `vfhe.util.io` stores in place of the mask; keys are
+  left in the NTT domain. Distributions are unchanged.
 - **BREAKING**: `MLWE_Scheme(ring, special_primes=k)` derives every level
-  down to one prime by default (`max_lvl` defaults to
-  `len(ring.primes) - k`): with no special primes the one-prime level used to
-  be missing, so such a scheme now has one more level. `max_lvl` outside
-  `1 .. len(ring.primes) - k` raises `ValueError`.
-- **BREAKING**: Rename the phase `b - <a, s>` to the linear decryption, the
-  scheme-neutral term: `MLWE_Scheme.phase` and `LWE.phase` become
-  `linear_decrypt`, and the native `mlwe_RNS_phase` / `lwe_phase` become
-  `mlwe_RNS_linear_decrypt` / `lwe_linear_decrypt`. The old names are
-  removed.
-- Make `MLWE_Scheme.linear_decrypt` reuse a key over a wider ring instead of
-  rebuilding it for the ciphertext's ring, and takes `ring=` to compute it
-  modulo a quotient only; `MLWE_Key.at_ring(ring)` builds the key over
-  another ring once and keeps it. `Polynomial.mod_reduce` keeps the element's
-  domain.
-- **BREAKING**: Rename the installed `engine.h` to `x86_64.h`, holding only
-  what its name says: `VFHE_HAVE_X86_64`, `VFHE_HAVE_AVX512F` and
-  `VFHE_HAVE_AVX512IFMA`. The cipher and RNG instructions it also carried
-  (`VFHE_HAVE_AESNI`, `VFHE_HAVE_VAES`, `VFHE_HAVE_RDRAND`) are crypto's alone
-  and moved into that module, unexported -- no other module read them. Include
-  `<x86_64.h>` where you included `<engine.h>`.
-- **BREAKING**: Move the index and modulus helpers (`array_reduce_mod_N`,
-  `array_mod_switch_from_2k`, `double2int`, `int_rev`, `bit_rev`) from
-  `util.h` to `arith.h`, and what is left of that header is now `alloc.h`:
-  `util` is allocation and nothing else. Every caller of the moved helpers
-  already compiled against `arith.h`; include `<alloc.h>` for the rest.
-- **BREAKING**: Rename `vfhe.engine` to `vfhe.util.bindings`: import `from vfhe.util.bindings
-  import ffi, lib`. `vfhe.util._engine` is instead the catalogue -- an `Engine` enum
-  of every engine this build knows, and which of them this CPU can run. The two
-  names were one letter apart while doing unrelated jobs, and only the
-  catalogue is answerable before anything compiled is mapped, which is what
-  `vfhe.util.kernels` and the test runner need.
-- Drop `setuptools` as a runtime dependency. Nothing imports it on any
-  path that still exists; it served the old runtime-compilation code.
-- **BREAKING**: Replace two build options with one: `-Dfuzz=<engine>` is what asks
-  for a fuzzing build, since a session instruments exactly one ISA and there is
-  no such thing as fuzzing without naming it. The old `-Dfuzz=true` boolean and
-  `-Dfuzz_engine=<name>` string could disagree, and passing the engine while
-  forgetting the boolean configured an ordinary wheel build, silently.
-- Move the CPU and cache probes to pure Python in `vfhe.util._cpu`. It is private, so
-  no import path a caller uses changes.
-- Make `tools/test/unit/run.sh` read the built engines off meson's test list, keep
-  those this CPU runs, and select their tests by name; meson runs every test
-  directly. Under
-  `EMULATE=1` the emulated test setup launches each test through SDE as its
-  `exe_wrapper`, once `tools/test/sde/fetch.sh` has fetched it.
-- Build engines with link-time optimisation. The shipped extension was
-  already an LTO build, but the static archive beside it was not, so C linked
-  against it paid a call where the extension inlined -- measured at 2870 ns per
-  call against 530 ns. LTO is not a build option: inlining across the boundary
-  is the point of the feature that needs it.
-- Change every copyright header to `The vFHE Authors`, in
-  place of the individual and institutional lines they replaced.
-- Configure ruff and pyright in `ruff.toml` and `pyrightconfig.json`
-  rather than in `pyproject.toml`, which each tool reads by default and which
-  keeps packaging metadata separate from tool settings.
-- Make the version a static `version` in `pyproject.toml`; the build has no
-  version logic left: `project()` declares none, and `setuptools-scm` is no
-  longer a build dependency. It no longer comes from `git describe` -- a
-  release edits the line and tags it -- so sdists need no frozen `.version`.
-- **BREAKING**: Name cffi declaration files `.h` instead of `.cdef`, so
-  editors and `clang-format` treat them as the C they contain. The library's
-  own move with them, and `vfhe.util.kernels` reads a caller's `.h` as
-  declarations.
-- `MLWE_Scheme.gen_ksk(..., hybrid=False)` (also `gen_ksk_for_level` and
-  `gen_ring_switch_key`): a key-switch key in the level's own ring rather than
-  its special ring, so the key switch divides by no special prime (BV). For
-  an output key that must stay at a small modulus, such as a sparse one; pair
-  it with a small radix, `GadgetParams(log_base=...)`.
-- **BREAKING**: `mlwe_full_packing_keyswitch(out, in, size, ksk)` no longer
-  takes the unused `lvl`; it takes samples of another ring dimension over the
-  same primes (matched by value) and decomposes through the key's gadget, so
-  it takes radix keys.
-- `mgsw_CMUX_to_coeff` and `mgsw_NCMUX_to_coeff` keep the external product
-  canonical, skipping a transform pair per call.
-- Let `CKKS_Scheme.encode` take any number of values dividing `N/2` and pack
-  fewer than `N/2` sparsely (repeated across the slots, so the plaintext is a
-  polynomial in `X^(N/2n)`); `decode(..., slots=n)` reads them back.
-- `CKKS_Scheme.decode` reconstructs the coefficients natively
-  (`polynomial_RNSc_to_centered_doubles`, exact up to the doubles' rounding
-  for any value) instead of a Python big-integer CRT per coefficient: about
-  100x faster at N = 2^14 over 8 primes, with the same values.
-- Make `CKKS_Scheme.decrypt(ciphertext, key, *, message_bound=None, drop=True)`
-  return the plaintext over the fewest primes that hold it, the lowest level
-  whose modulus exceeds `2 * delta * message_bound`, computing the linear
-  decryption over those primes only (about 8x faster to decrypt and decode a
-  level-0 ciphertext at N = 2^16 over 9 primes). By default `message_bound` is
-  what the smallest level with at least two bits above the scaling factor
-  holds at the scheme's scale; `drop=False` keeps every prime.
-- **BREAKING**: Rework GP25 [GP25]. `GP25(scheme, gsw_ell=None,
-  gadget_params=None, bits_per_layer=1)` rotates over
-  `scheme`, the rotation key's over `R_N`, and bootstraps every coefficient
-  of a sample over `R_n`, for any `n` and `N`. Three keys take part: the
-  output key, dense over `R_n`, which inputs arrive under (at the lowest level
-  of its scheme) and outputs leave under, so bootstraps compose; the input
-  key, a sparse key of the same scheme (`GP25.sample_input_key(scheme, h,
-  gap_bits, sigma_err)` draws one until every gap, `GP25.gaps`, fits in
-  `gap_bits`), which inputs are switched to by a Hamming-weight-reducing key
-  generated for one level only, so the sparse key only has to be secure at
-  that modulus; and the rotation key. Level 0 of `scheme` must have the
-  primes of a level of the output key's scheme, where outputs land.
-  `generate_bootstrap_key(input_key, rotation_key, output_key, h, gap_bits,
-  ternary=True, hw_reducing_lvl=None, hw_reducing_hybrid=True,
-  hw_reducing_gadget_params=None, n_threads=0)` makes the `SAB_Key` (`gaps`,
-  `signs`, `gap_bits`, `bits_per_layer`, `n`, `h`, `automorphism_key`,
-  `hw_reducing_key`, `hw_reducing_lvl`, `output_lvl`, `trace_repack_key` and
-  `output_switch_key`); input keys may have any rank, and `ternary=False`
-  takes a binary one. `output_key=None` switches nothing:
-  inputs come under the input key and `repack(blind_rotate(...))` leaves the
-  result over `R_N` under the rotation key, and
-  `generate_repacking_key(rotation_key, n)` makes only the keys `rotate` and
-  `repack` read.
-  `test_vector(table)` takes exact integers mod q. `bootstrap(rlwe_in, tv,
-  key)` is `blind_rotate` (the weight-reducing switch, the switch to `Z_2N`
-  and `blind_rotate_exponents`), `repack` and the output switch. The blind
-  rotation is one native call on the library's threads, `gp25_blind_rotate`,
-  built from `GP25.rotate(acc, keys, automorphism_key)` (`gp25_rotate`) and
-  `GP25.multiply_by_signed_monomials`. Repacking goes through `trace_pack`
-  and a ring switch, for any `n`, `N` and rank, with 1-3 MiB of keys against
-  36-576 MiB for the packing key switch it replaces at N = 1024.
-  `bits_per_layer=2` is BatchBoot's multi-bit rotation [LWZ+26]: a pair of
-  rotation bits of value `d` takes three MGSW keys, of `[d = 1]`, `[d = 2]`
-  and `[d = 3]`, while the pair's power `p` has `4 p <= n`
-  (`GP25.rotation_layers`), for 1.5 times the MGSW keys, about 0.8 bit more
-  rotation noise with the RNS gadget, and a rotation about 1.4x faster;
-  `encrypt_rotations(values, n_bits, n, key)` makes such keys. See Removed
-  for the previous surface.
-- **BREAKING**: Make `FoldableRS` and `FieldFoldableRS` build the general
-  foldable code of [ZCF24, Def. 5] by default -- seeded twist tables at every
-  level above a Reed-Solomon base code -- rather than a Reed-Solomon code on
-  roots of unity at every level. The same constructor call gives a different
-  code, with different codewords and commitments, and its distance is the
-  paper's recursive bound rather than the exact Reed-Solomon one, so security
-  parameters derived from the old `relative_distance` do not carry over. The
-  previous code is `instantiation="rs"`. What the change buys: no 2-adicity
-  condition on the codeword length (`FieldFoldableRS` needed
-  `2 n_d | p - 1`, `FoldableRS` needed `n_d | N/split_degree`); only the base
-  length `n0` wants a transform, and does without one where the field has
-  none.
-- Make `FoldableRS.twists` / `FieldFoldableRS.twists` the general code's
-  twist table `T` (the odd position uses `-T`, as in the paper), and the
-  field code's are lists of elements rather than integers (a twist of the
-  general code need not lie in the prime subfield). `twists2_inv` is gone:
-  the fold's `1 / (2 T)` is held privately.
-- Make `relative_distance` a method, not a property: the general code's bound
-  depends on the security parameter.
-- Make the general code over an extension field encode the base messages of a
-  level-`l` message with one batched transform (`ExtensionField.ntt_plan(n0)`,
-  in the base domain or, on a field with too little 2-adicity, the extension
-  one) where it ran a Horner scheme of `k0` passes; at `k0 = 128` and a `2^20`
-  codeword over `F_(p^4)` the encode is 12x faster (1.69 s to 0.14 s,
-  avx512ifma), and a field whose only roots of unity lie outside `F_p` now
-  has a transform as its base encoder rather than a Vandermonde product.
-- Make the general code's lifts `lift_twisted` calls alternating between two
-  buffers, in place of `fma_interleave` over a tiled and negated table into a
-  fresh destination per level: at a `2^22` codeword over `F_(p^4)` the lifts
-  of an 11-level encode go from 724 ms to 363 ms and the commit from 1.16 s to
-  0.88 s (avx512ifma); with `twist_field="prime"` the commit is 0.66 s.
+  down to one prime by default; `phase` is `linear_decrypt`; prime selection
+  follows the ring's splitting (a partially split ring takes primes with an
+  odd multiplier, `gen_prime` takes `split_degree`); `Ring(mask=)` and
+  `quotient_ring(mask=)` raise for primes outside their pool.
+- **BREAKING**: GP25 [GP25] is reworked: `GP25(scheme, gsw_ell, gadget_params,
+  bits_per_layer)` bootstraps samples of any `n` and `N` between an input
+  key, a sparse key switched to by a Hamming-weight-reducing key, and an
+  output key, with repacking through `trace_pack` and a ring switch;
+  `bits_per_layer=2` is the multi-bit rotation of [LWZ+26].
+- **BREAKING**: The CKKS encoder runs on a negacyclic FFT kernel;
+  `ComplexRing(N)` takes no `special_rous`, and building a scheme at
+  N = 2^16 takes milliseconds.
+- **BREAKING (C)**: `engine.h` is `x86_64.h`; `util.h` is `alloc.h` with the
+  index and modulus helpers moved to `arith.h`; cffi declaration files are
+  `.h`; `polynomial_RNS_get_natural` and `set_natural` take the row order;
+  `mlwe_full_packing_keyswitch` takes no `lvl`; `-Dfuzz=<engine>` replaces
+  two build options. Engines are built with link-time optimisation.
+- **BREAKING**: `Merkle.from_digests` reads its buffer once and keeps no
+  reference; `commit(digests)` recommits.
+- Faster: `Lookup` bundles claims of one table into one argument; batched
+  openings touch only the block a 0/1-suffixed point selects; the ring's
+  `get_polynomial`, `get_coeff_matrix` and `from_coeff_matrix`, CKKS
+  `decode` and `decrypt`, field vector inversion, `expand_table`, the
+  general code's encode and lifts, and `ExtensionFieldNTT.pack` are one
+  native pass or several times faster; large allocations ask for huge
+  pages; `RNSRing` equality returns at once for one object.
+- The version is a static line in `pyproject.toml`; ruff and pyright are
+  configured in their own files; `setuptools` is no longer a runtime
+  dependency; every copyright header reads `The vfhe authors`.
+- The library is written `vfhe` everywhere, in prose as in code, as its
+  authors voted; `vFHE` is gone from the documentation, the metadata and
+  the copyright line.
 
 ### Removed
 
-- **BREAKING**: Python 3.10, past its end of life on 2026-10-04; the CI
-  toolchain pins `filelock` 4.2.1, whose advisories have no fix on 3.10.
-- **BREAKING**: `ImplicitOracle`, `ImplicitEval` and the `implicit` entry of
-  the protocol registry. An oracle defined by a hypercube sum is a
-  `Relation_SumDef` statement headed at that oracle inside a layered
-  reduction; `IOP.protocol_for` refuses an evaluation claim on an implicit
-  oracle, which only the Composer consumes. The driver's parking rule now
-  concerns committed and plain oracles only.
-- **BREAKING**: Reduce `vfhe.util.bindings` to `ffi` and `lib`.
-  `active_engine()` and `runnable_engines()` are gone, since the loaded engine
-  is internal knowledge; `set_num_threads` and `num_threads` moved to
-  `vfhe.util.parallel` (see Added); the "a faster engine could run" warning is gone —
-  only a pin could trigger it, and `python -m vfhe.info` reports what else
-  this CPU runs.
-- **BREAKING**: Remove `vfhe_engine_active()` from the C, and with it
-  `build_info.c`, util's `python/cdef/engine.h` and the `-DVFHE_ENGINE_NAME`
-  every engine was compiled with. It reported which engine a binary was, for a
-  "you could be faster" hint that became pure Python; nothing has called it
-  since. `python -m vfhe.info` reports the loaded engine.
-- **BREAKING**: Remove `cache_root` from `vfhe.util.kernels`. `ExtensionBuilder.compile()`
-  and `build()` return the directory they produced, which is the path a
-  caller actually needs; nothing in the tree or the docs ever asked where the
-  cache root was.
-- **BREAKING**: Remove `libvfhe` and its `LibVFHE` class from
-  `vfhe.util.bindings`. Nothing read them: `multithreaded` and `num_threads` were never
-  consulted, since the C that threads takes its count as a call argument. Use
-  `from vfhe.util.bindings import ffi, lib`, which is what the wrappers already do.
-- **BREAKING**: Remove the CPU probe from C: `vfhe_cpu.h`, `cpu_probe.c` and
-  the `vfhe_cpu` cdef. What a host supports is `vfhe.util._cpu`'s
-  answer, in pure Python, because it has to be answerable *before* an engine
-  loads -- a probe inside the engine cannot say whether that engine may load.
-- **BREAKING**: Remove `rebind_state` from `vfhe.arith`, and
-  `vfhe.arith.state` no longer offers `register_rebind` / `rebind`. They
-  existed only to rebuild state after the hot swap, which is gone; the `reset`
-  half stays, and is what empties caches between tests.
-- **BREAKING**: Remove `vfhe.dynamic_extensions`, replaced by `vfhe.util.kernels`
-  (see Added). The hot swap it was built around -- `update_cffi_references`,
-  `register_reinitializer`, `REINITIALIZATION_REGISTRY` -- goes with it:
-  CPython cannot unload an extension, so a swap could never reach objects a
-  caller already held, which in a cryptography library is a wrong answer rather
-  than an untidiness.
-- **BREAKING**: Stop installing a standalone C library: the
-  `libvfhe_<engine>` shared libraries, their pkg-config files and the public
-  headers under `<prefix>/include/vfhe` are gone. Nothing linked them -- the
-  engine extension carries the code -- and vFHE is a Python library with C
-  underneath, not a C library with Python bindings. `vfhe.util.kernels` is how C
-  reaches these kernels.
-- **BREAKING**: Stop shipping `libvfhe_<engine>.a` and
-  `engine-<engine>.json`. Nothing links the archive any more, and the JSON's
-  contents moved into the generated `_vfhe_flags` table, so meson's engine
-  catalog reaches Python by one route instead of two.
-- **BREAKING**: `ComplexRing`'s `special_rous` argument, `gen_special_rous`,
-  `gen_special_rous_hp`, `CT_rous` and `GS_rous`, and the native special-root
-  transforms `CT_NR` / `GS_RN` with their tables (`load_rous_CT`,
-  `load_rous_GS`, `bit_reverse_array`), replaced by the FFT kernel.
-- `mpmath` is no longer a dependency: its only use was building the old
-  transform's root tables.
-- **BREAKING**: `array_reduce_mod_N` and `array_mod_switch_from_2k` (C,
-  `util.h`), whose only uses were the biased uniform sampling fixed below.
-- **BREAKING**: `MLWE_Scheme.phase`, `LWE.phase`, `mlwe_RNS_phase` and
-  `lwe_phase`; use `linear_decrypt` (see Changed).
-- **BREAKING**: `MLWE_Scheme.full_packing_keyswitch_scaled` and
-  `mlwe_full_packing_keyswitch_scaled`: `trace_pack` packs the same samples
-  without the factor and with less noise.
-- **BREAKING**: The unimplemented LWE key switch (`LWE_KS_Key`,
-  `lwe_new_KS_key`, `lwe_keyswitch`) and the undefined
-  `mlwe_RNSc_extract_lwe`, from `mlwe.h`.
-- **BREAKING**: GP25's previous surface (see the rework in Changed):
-  `GP25(..., debug_key=, threads=, trace_repack=)` (repacking always goes
-  through the trace), `mod_switch` (from `vfhe.fhe`),
-  `generate_sparse_ternary_key` (use
-  `sample_input_key` and `generate_bootstrap_key`), `encrypt_bits`,
-  `sab_rlwe_bootstrap` (use `bootstrap`), `sab_blind_rotate`, `setup_tv_xb`,
-  `sab_LUT_packing` (use `test_vector`), `sparse_mul`, `RGSW_monomial_mul`,
-  `sub_a`, the `CMUX` / `NCMUX` / `mul_by_xai` / `mul_by_xai_minus_1`
-  wrappers, `get_noise` / `get_noise_stderr`, `extract_lwe_key` (use
-  `MLWE_Key.extract_lwe_key`), `rlwe_extract_lwe`, `gen_packing_ksk` and
-  `packing_keyswitch` (now `MLWE_Scheme.extract_lwe`, `gen_packing_ksk` and
-  `packing_keyswitch`), the `SAB_Key` fields `s`, `s_sign`, `r_prec` and
-  `b_prec`, and the native `gp25_RGSW_monomial_mul(_mt)` and
-  `gp25_sub_a_mt`.
-- **BREAKING**: `CGGI16_Key.b_prec`, which nothing read.
-- The native `mlwe_RNS_add_polynomial` and `mlwe_RNS_sub_polynomial`, copies
-  of `mlwe_add_RNSc_polynomial` and `mlwe_sub_RNSc_polynomial`, which take
-  operands in either representation.
+- **BREAKING**: Python 3.10, past its end of life.
+- **BREAKING**: `vfhe.dynamic_extensions` and the hot swap, `rebind_state`,
+  the standalone C library (`libvfhe_<engine>` shared and static libraries,
+  pkg-config files, installed headers, `engine-<engine>.json`),
+  `vfhe_engine_active` and the C CPU probe, `libvfhe` / `LibVFHE`,
+  `active_engine`, `runnable_engines` and `cache_root`.
+- **BREAKING**: `ImplicitOracle`, `ImplicitEval` and the `implicit` registry
+  entry: an oracle defined by a sum is a `Relation_SumDef` statement.
+- **BREAKING**: `ComplexRing`'s special-root transforms and `mpmath`;
+  `array_reduce_mod_N` and `array_mod_switch_from_2k`; `phase` and its
+  native forms; `full_packing_keyswitch_scaled`; the unimplemented LWE key
+  switch; GP25's previous surface (`sab_rlwe_bootstrap`, `encrypt_bits`,
+  `generate_sparse_ternary_key` and the rest, see the rework); and
+  `CGGI16_Key.b_prec`.
 
 ### Fixed
 
-- Fix `RNSPolynomial.to_uint64` / `from_uint64` and `MLE.to_uint64` /
-  `from_uint64` on a ring that lists its primes in an order other than
-  the one the shared base registered them in. That happens to a ring
-  built after another of the same `N` and split degree whose primes it
-  reuses out of order. The rows came in the base's order instead of
-  `ring.primes`'s, silently permuted, and a value above its prime was
-  reported against the wrong prime. The range protocols read the rows of
-  `to_uint64` in the ring's order, so they rejected honest claims over
-  such a ring.
-
-- Fix `vfhe.vfhe.computation.Division.remainder` when the divisor exceeds
-  the quotient's modulus: it was computed modulo the quotient's ring, which
-  wraps a remainder above half that modulus. A rational rescale between
-  levels with no prime in common, and the division by the special primes
-  at a level whose modulus is below the special primes' product, gave a
-  wrong remainder, and `cccfgs26` rejected those honest computations. The
-  remainder is now an element of the dividend's ring, where it is exact.
-- Fix draining a trace that never recorded an event passing a null pointer
-  to `memcpy` and `memmove` (undefined behaviour, reported by the
-  undefined-behaviour sanitizer).
-- Fix `Computation` raising a bare `KeyError`, instead of asking for the
-  earlier values, on a copy of a value recorded in an earlier piece of the
-  tape.
-
-- Fix `ExtensionField(p, d, w)` accepting a composite `p`: the first
-  transform built over such a field searched for a root of unity forever.
-  The constructor now rejects a modulus that is not prime, as
-  `PseudoMersenneField` already did.
-- Fix `FieldVector.fold_product_sums` and `fold_and_product_sums` over
-  pseudo-Mersenne vectors aborting, in builds with assertions, on an empty
-  list of sums: such a call now takes the whole-vector body, which returns
-  no sums (and the fold).
-- Fix a forked child hanging on its first ring lookup when another thread
-  of the parent was looking up a ring at the fork (every MLWE sample
-  allocation does): arith's ring caches are now locked across `fork`.
-- Fix `Basefold.commit` with a prover also recording the opening (the
-  codeword and its Merkle tree) on the scheme, for the scheme's lifetime: a
-  scheme reused across proofs, such as the ones `BasefoldMessages` commits a
-  proof's messages under, kept every proof's openings. With a prover the
-  opening now lives on that prover only; a commit without one is still
-  recorded on the scheme (`openings`), where any prover finds it.
-- Fix `field_vec_inv` writing part of `out` before finding a zero among the
-  elements past its last whole row, against its contract of leaving `out`
-  untouched when it returns 0. Those elements are now inverted before any row
-  is written.
-- Fix `RangeDecomposition` and `Lookup` drawing their challenges in the
-  IOP's domain instead of their own field: in an IOP over another ring or
-  field they handed ring elements to field code. Their own challenges are
-  now drawn in their `field`, which changes nothing when it is the IOP's
-  domain.
-- Fix `ct + p` and `ct - p` for an MLWE sample and a polynomial returning a
-  sample with an uninitialized mask: the native `mlwe_add_RNSc_polynomial`,
-  `mlwe_sub_RNSc_polynomial`, `mlwe_RNS_add_polynomial` and
-  `mlwe_RNS_sub_polynomial` wrote only `b`. They now copy the mask of their
-  first operand when the output is another sample; the in-place forms are
-  unchanged.
-- Fix the product of an RNS `Polynomial` by an integer outside `[0, 2^64)`
-  raising `OverflowError`, and by a numpy integer raising
-  `NotImplementedError`: `*` and `*=` take any integral value, reduced by
-  each prime. A value outside a word, and one integer per prime (a list,
-  now also accepted by `*=`), become an `RNSScalar`, so these products are
-  on the execution tape as `"scale_by"` events.
-- Fix `RNSPolynomial.from_coeff_matrix` on a ring with `split_degree = 1`
-  reading past a row shorter than `N` and writing what followed it into the
-  polynomial: a short row now raises `IndexError`, as on a split ring.
-- Correct the documented meaning of `delta` in `BasefoldEval.soundness_error`
-  and `BatchFoldEval.soundness_error`: it is the proximity parameter, admissible
-  when `delta < J_gamma(J_gamma(Delta))` and `3 delta - d gamma < Delta` for the
-  code's relative distance `Delta` (`relative_distance()`), not that distance.
-  The bound is unchanged.
-- Correct `Polynomial.base_extend`'s documented contract: it returns a value
-  congruent to this element modulo the ring's modulus, not the element
-  itself. Behaviour is unchanged; the docstring claimed exactness the fast
-  base conversion behind it never provided.
-- Fix uniform sampling below a prime (`Polynomial.sample_uniform`, the masks
-  of MLWE and LWE samples, `gen_sparse_ternary_array_modq`) being biased:
-  random words were mapped onto the modulus by a floating-point scaling or a
-  masked reduction, which lost the low bits of a prime above 2^53 and
-  favoured some residues of a prime well below its power of two. Values are
-  now drawn by rejection (`generate_uniform_below`) and are exactly uniform.
-- Fix `Ring(N, prime_size=[...])` searching forever when no prime of a
-  requested size is `1 mod 2N / split_degree` with an odd multiplier (17 bits
-  at N = 2^13, for one): it now takes a smaller prime, a fully split ring one
-  with an even multiplier first (65537 there), and raises `ValueError` when
-  none is left.
-- Fix `Ring(N, primes=[...])`, one of the documented ways to give the
-  modulus, failing unless `prime_size=None` was passed too.
-- Fix RNS `Polynomial.from_bigint_array` with fewer than N values reading past
-  its buffers: the remaining coefficients were heap contents instead of zero.
-- Fix `arith_scalar_new` on an RNS ring whose primes do not start the base
-  copying one value per prime when the scaling kernels index the scalar by
-  base row: they read past the copy, and `arith_scale_by` and
-  `MLWE.multiply_scalar` scaled the ring's higher rows by whatever lay there.
-- Fix the native RNS ring handles stopping being shared after 256 distinct
-  rings: past that, every lookup allocated a new handle that was never freed
-  (one per sample allocated), and two handles for one ring no longer compared
-  equal. The table now grows, under a lock.
-- Fix CKKS encoding at a scale that takes a coefficient to 2^63 or beyond
-  (`encode` and the native rounding paths): the rounding went through an
-  `int64_t` and wrapped silently. A value that large is reduced exactly now,
-  as the integer the double holds, so any scale works; values below 2^63 take
-  the same path as before. A NaN or infinite value to round (a non-finite
-  input or scale) now raises `ValueError`; the native
-  `complex_poly_round_to_RNS` and `complex_*_ifft_scale_round_to_RNS_batch`
-  return `false` for it.
-- Fix `ComplexRing(N)` crashing for `N < 8` on avx512ifma, and
-  `complex_poly_scale_double` scaling nothing below `N = 4` there.
-- Fix `ComplexPolynomial` assignment, `from_array` and `*=` rejecting
-  `numbers.Complex` / `numbers.Real` values (e.g. a subclass of `complex`, or
-  a `Fraction`) other than the exact builtin types.
-- Fix `FieldVector.view` of a view starting at the parent's buffers rather than at
-  the view: the nested view's planes skipped the outer offset, so it read and
-  wrote the wrong elements. Both vector implementations.
-- Fix `Multiprecision.from_polynomial` leaking its result. `free_mp_polynomial`
-  was never exposed, so no caller could release one; the returned handle now
-  owns its native allocation.
-- Fix multiprecision reconstruction (`Multiprecision.from_polynomial`) reading
-  rows of the shared RNS base that the polynomial does not own, which crashed
-  as soon as a second ring existed in the process, and pairing its CRT
-  constants with the wrong primes. It now follows the polynomial's own prime
-  mask.
-- Fix multiprecision reconstruction returning values that were not reduced
-  modulo q. The Barrett constants were sized from the prime width, which put
-  the quotient's digit read out of range whenever the primes were narrower
-  than a base-2^52 digit; they now come from the moduli themselves, and the
-  reconstruction reduces each residue before accumulating, so the number of
-  primes no longer bounds what can be reconstructed.
-- Make the entropy-backed generators (`generate_random_bytes`,
-  `generate_normal_random`, `entropy`) safe to call from several threads at
-  once: concurrent callers could be served the same bytes of the shared 1 KiB
-  pool, and each thread now keeps a pool of its own. A forked child discards
-  the pool it inherits instead of serving it again after its parent, and
-  pinned threads (`entropy.deterministic`) never take the same seed.
-- Fix `MLWE_Scheme(ring, special_primes=n)` dropping the special primes for
-  any ring but the first one built over its RNS base. The mask was derived
-  from the working primes' *count*, which is their base index only when the
-  ring starts at index 0; every other ring got a special ring equal to its
-  level 0, so key switching silently ran BV instead of the GHS hybrid, at
-  about a prime's worth of extra noise.
-- Fix `MLWE_Scheme(ring, special_primes=k)` for `k >= 2`, and for a ring of
-  one prime: the default level chain was one level too long, and the
-  constructor raised `ValueError` (`IndexError` for one prime).
-- Fix MGSW keys of a level whose primes do not come first in the MGSW ring
-  (a special prime with a lower index in the RNS base than the level's): the
-  gadget covered the ring's first primes rather than the level's, so every
-  external product and CMUX by a key encrypting anything but 0 returned
-  garbage. The keys of nested chains with the special primes last are
-  unchanged.
-- Fix `MGSW.external_product` and `CMUX` returning a level-0 sample whatever
-  the input's level; below level 0 it decrypted to garbage. The products now
-  keep the input's level and type, and raise `ValueError` when the MGSW was
-  encrypted for another level (`MGSW.check_level`,
-  `MGSW_Scheme.gadget_size`).
-- Fix `MLWE_Scheme.sample` at a level holding primes the key's ring does not
-  (a level that shares no prime with level 0): the sample was drawn with no
-  key on those primes and did not decrypt. It now uses the key over the
-  sample's ring, as decryption already did.
-- Fix `mlwe_round_division` leaving the sample on its old ring: the
-  components were divided into the destination ring, but `->ring` still named
-  the source, so native code that allocates or key-switches from a sample
-  after a rescale worked in the wrong ring.
-- Fix `MLWE.new_like()` (behind `copy`, `+`, `-` and plaintext products)
-  allocating at the level's defaults rather than like its input: a sample over
-  a special ring came back over `rings[-1]`, and an unrelinearized product
-  lost every component past the scheme's rank. With neither `lvl` nor `ring`
-  given, the result now has the input's ring, rank and `is_extended`.
-- Fix `CKKS_Scheme.multiply` (inherited from `MLWE_Scheme`) returning the
-  first operand's `delta` instead of the product of both, so a product taken
-  with it decoded at the wrong scale; `*` was right.
-
-- `BasefoldEval` draws every challenge in its scheme's ring or field. The
-  batching and the verifier's challenges were drawn in the IOP's domain, so
-  a scheme over another domain (ring Basefold in an IOP over a field) could
-  not open its claims.
-- `Lookup` proves over a field vector whose internal nodes do not start at
-  a multiple of its padding unit (tables or looked-up oracles of fewer than
-  8 entries over a pseudo-Mersenne field, such as the range proof's
-  digits at `B = 2^8`, `c = 4`): it gathers them instead of taking a view,
-  which raised.
+- Uniform sampling below a prime was biased: masks, keys and
+  `sample_uniform` now draw by rejection and are exactly uniform.
+- `MLWE_Scheme(ring, special_primes=n)` dropped the special primes for every
+  ring but the first over its base, so key switching ran BV with a prime's
+  worth of extra noise; `special_primes >= 2` and one-prime rings raised.
+- MGSW keys of a level whose primes do not come first in the ring gave
+  garbage from every external product and CMUX; `external_product` and
+  `CMUX` returned level-0 samples whatever the input's level.
+- `MLWE_Scheme.sample` at a level sharing no prime with level 0 did not
+  decrypt; `mlwe_round_division` left a sample on its old ring;
+  `MLWE.new_like` lost the ring, rank or extension of its input; `ct + p`
+  and `ct - p` returned an uninitialized mask; `CKKS_Scheme.multiply`
+  returned the wrong `delta`.
+- CKKS encoding at a scale reaching 2^63 wrapped silently and now reduces
+  exactly; a non-finite value raises `ValueError`; `ComplexRing(N)` crashed
+  for `N < 8` on avx512ifma.
+- `to_uint64` and `from_uint64` on a ring listing its primes out of the
+  base's order permuted the rows, so range proofs rejected honest claims;
+  `from_coeff_matrix` read past a short row; `from_bigint_array` with fewer
+  than `N` values read heap contents; the product of a polynomial by a
+  large or numpy integer raised.
+- The entropy stream served several threads the same bytes and a forked
+  child its parent's; a forked child could hang on its first ring lookup;
+  native ring handles stopped being shared after 256 rings.
+- Multiprecision reconstruction crashed with a second ring, paired constants
+  with the wrong primes, returned unreduced values and leaked; `ExtensionField`
+  accepted a composite modulus; `FieldVector.view` of a view read the wrong
+  elements; `field_vec_inv` wrote before finding a zero.
+- `Basefold.commit` with a prover kept every proof's opening on the scheme;
+  `BasefoldEval`, `RangeDecomposition` and `Lookup` drew challenges in the
+  IOP's domain instead of their own; `Lookup` raised on tables of fewer than
+  eight entries; `Division.remainder` was wrong when the divisor exceeded
+  the quotient's modulus, and `cccfgs26` rejected honest computations.
+- `Ring(N, prime_size=[...])` searched forever when no prime of a size was
+  left, and `Ring(N, primes=[...])` failed without `prime_size=None`.
+- The documented meaning of `delta` in `soundness_error` and the contract of
+  `base_extend` were corrected; behaviour is unchanged.
 
 ## [0.0.3] - 2026-09-10
 
@@ -1787,7 +282,7 @@ versions may contain breaking changes.
     an installed wheel can.
   - The Apache-2.0 licence text and `NOTICE` at `.dist-info/licenses/`, so a
     redistributor receives the attribution the licence requires for the C
-    vFHE ships.
+    vfhe ships.
 
 ### Changed
 
@@ -1894,7 +389,8 @@ versions may contain breaking changes.
   and an AVX-512 or portable native engine.
 - Distribute as an sdist, which builds against the host CPU at install time.
 
-[Unreleased]: https://github.com/vfhe/vfhe/compare/0.0.3...HEAD
+[Unreleased]: https://github.com/vfhe/vfhe/compare/0.0.4...HEAD
+[0.0.4]: https://github.com/vfhe/vfhe/compare/0.0.3...0.0.4
 [0.0.3]: https://github.com/vfhe/vfhe/compare/0.0.2...0.0.3
 [0.0.2]: https://github.com/vfhe/vfhe/compare/0.0.1...0.0.2
 [0.0.1]: https://github.com/vfhe/vfhe/releases/tag/0.0.1

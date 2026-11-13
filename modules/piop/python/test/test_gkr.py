@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Relation_CircuitSparseIndex and the GKR protocol over vfhe.circuit's protobuf
 circuits: the ideal model over plain tables, the ring domain under

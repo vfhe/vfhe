@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
-"""Ties the modules into vFHE: what an arithmetization reads from the
+"""Ties the modules into vfhe: what an arithmetization reads from the
 execution tape.
 
 - `computation` reads a trace into its steps in vfhe's own terms.

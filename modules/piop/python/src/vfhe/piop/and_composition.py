@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """AND-composition with shared challenges (piop.md §5): the machinery behind
 `IOP.and_composition` and `IOP.batched_call`.

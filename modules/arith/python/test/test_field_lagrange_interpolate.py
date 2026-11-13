@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """`Field.lagrange_interpolate`: Lagrange interpolation on the nodes 0, 1, ..., k.
 

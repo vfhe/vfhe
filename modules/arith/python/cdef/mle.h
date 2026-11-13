@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of arith's dense multilinear-extension kernels
 // (arith/c/src/mle.c, prototyped in arith/c/include/mle.h). Polynomial handles

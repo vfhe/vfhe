@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The execution tape over sample operations. A traced run takes each
 operation's generic path, so the tape is the dispatch's alone: this checks

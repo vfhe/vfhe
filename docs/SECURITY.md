@@ -1,6 +1,6 @@
 # Security policy
 
-For anyone reporting a vulnerability in vFHE, and for readers assessing
+For anyone reporting a vulnerability in vfhe, and for readers assessing
 what the project defends against.
 
 ## Reporting a vulnerability
@@ -8,7 +8,7 @@ what the project defends against.
 **Please do not open a public issue for a security problem.** Report it
 privately by email to <security@vfhe.ai>.
 
-> **Before you invest time.** vFHE is unaudited pre-release software, not
+> **Before you invest time.** vfhe is unaudited pre-release software, not
 > yet ready for production use, and it changes freely between `0.x`
 > releases. Findings are welcome and appreciated, but they carry more
 > value — for you and for us — against a stable release. Until the first
@@ -89,12 +89,12 @@ loads the optimal one at import.
 
 ### Explicitly out of scope
 
-- **The cryptographic soundness of the implemented schemes.** vFHE implements
+- **The cryptographic soundness of the implemented schemes.** vfhe implements
   published schemes and assumes their security claims. Report a scheme or
   parameter regime shown insecure by cryptanalysis to the scheme's authors.
-- **C given to `vfhe.util.kernels`.** On request vFHE compiles caller-provided C
+- **C given to `vfhe.util.kernels`.** On request vfhe compiles caller-provided C
   into the library itself, which runs with the caller's full trust.
-- **Timing and other side channels.** vFHE is not constant-time; do not use it
+- **Timing and other side channels.** vfhe is not constant-time; do not use it
   where an adversary observes timing, cache, or power.
 - **Production use.** Unaudited pre-release software; a finding that
   amounts to "it is unaudited" is not a report — the README already says

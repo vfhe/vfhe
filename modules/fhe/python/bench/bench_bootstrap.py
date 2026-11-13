@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Bootstrapping: the CGGI16 functional bootstrap, the GP25 rotation of many
 accumulators, and the SHIP bootstrap of CKKS slots.

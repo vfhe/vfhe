@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Element-wise products of field vectors: an extension of a word-sized prime field,
 and pseudo-Mersenne fields of several words. And the fold kernels of field vectors

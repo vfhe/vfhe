@@ -6,11 +6,11 @@ body:
     id: problem
     attributes:
       label: Problem
-      description: What you are trying to do that vFHE currently cannot.
+      description: What you are trying to do that vfhe currently cannot.
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
       label: Proposed solution
-      description: How vFHE could support it, if you have a shape in mind.
+      description: How vfhe could support it, if you have a shape in mind.

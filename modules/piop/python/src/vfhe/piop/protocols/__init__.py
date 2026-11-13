@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The protocols (piop.md section 5): the reductions registered against the
 relations of the toolbox. The sumcheck protocols are a subpackage,

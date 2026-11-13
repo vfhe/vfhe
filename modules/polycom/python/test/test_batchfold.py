@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for BatchFold [CCCFGS26, §7]: evaluation claims on polynomials over
 R_q proved by one basefold run per prime over the residue code, against the

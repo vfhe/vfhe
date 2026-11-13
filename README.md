@@ -7,11 +7,11 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13712/badge)](https://www.bestpractices.dev/projects/13712)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/vfhe/vfhe/blob/main/LICENSE)
 
-The vFHE library: a library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques.
+The vfhe library: a library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques.
 
 > ❗ **Warning:** This is a pre-release version of the library and is subject to breaking changes. ❗
 
-Using vFHE starts at [Installing](#installing) and continues in
+Using vfhe starts at [Installing](#installing) and continues in
 [`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md); changing
 it starts at
 [`DEVELOPMENT.md`](https://github.com/vfhe/vfhe/blob/main/docs/DEVELOPMENT.md).
@@ -26,7 +26,7 @@ Supported platforms: Linux and macOS (POSIX only), on x86_64 and arm64.
 pip install vfhe
 ```
 
-vFHE ships one **engine** per instruction-set level it has kernels for:
+vfhe ships one **engine** per instruction-set level it has kernels for:
 **portable** (any CPU), **avx512ifma** (x86_64 with AVX-512 IFMA), and
 **neon** (arm64). An install carries every engine its architecture can run
 and picks the best one at import, so it moves freely between machines of
@@ -144,19 +144,19 @@ Maintainers can be reached at <maintainers@vfhe.ai>.
 
 ## Citation
 
-If you use vFHE in academic work, please cite the software using
+If you use vfhe in academic work, please cite the software using
 [`CITATION.cff`](https://github.com/vfhe/vfhe/blob/main/CITATION.cff) (GitHub renders a **"Cite this repository"**
 button from it) and the archived release DOI where relevant. (When a paper is
 published, we'll add it as the preferred citation.) In BibTeX form:
 
 ```bibtex
-@software{The_vFHE_Library,
+@software{The_vfhe_library,
   author = {Cascudo, Ignacio and Costache, Anamaria and Cozzo, Daniele and
             Dubois, Adrien and Fiore, Dario and Guimarães, Antonio and
             Köstler, Robin and Osadnik, Michał and Roșu, Alin-Petru and
             Soria-Vazquez, Eduardo},
   license = {Apache-2.0},
-  title = {{The vFHE Library}},
+  title = {{The vfhe library}},
   url = {https://github.com/vfhe/vfhe}
 }
 ```

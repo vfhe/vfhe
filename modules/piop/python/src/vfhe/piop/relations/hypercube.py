@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The hypercube relations of the toolbox (piop.md section 4): a sum, a sum
 of products, and a zero test over {0,1}^n."""

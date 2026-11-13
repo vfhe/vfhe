@@ -1,17 +1,17 @@
-# Using vFHE
+# Using vfhe
 
-For developers computing on encrypted data with vFHE. It walks one CKKS
+For developers computing on encrypted data with vfhe. It walks one CKKS
 example end to end; the module surfaces are listed in the
 [README](https://github.com/vfhe/vfhe/blob/main/README.md#modules).
 
-> **Warning:** vFHE is pre-release and not audited; do not use it in
+> **Warning:** vfhe is pre-release and not audited; do not use it in
 > production. See
 > [SECURITY.md](https://github.com/vfhe/vfhe/blob/main/docs/SECURITY.md).
 
 ## Prerequisites
 
 - **Python 3.11 or later**
-- **vFHE installed** — `pip install vfhe`, covered in the
+- **vfhe installed** — `pip install vfhe`, covered in the
   [README](https://github.com/vfhe/vfhe/blob/main/README.md#installing)
 
 ## Example: CKKS in five steps
@@ -70,7 +70,7 @@ the computation.
 
 ## Record what ran
 
-For verifiable computation, vFHE can record every ring operation a
+For verifiable computation, vfhe can record every ring operation a
 computation makes, with a copy of each result, and name the values an
 arithmetization needs. With the example's scheme and ciphertexts:
 
@@ -99,7 +99,7 @@ them on the recorded values. `witness.range_classes(w)` groups the values
 that carry a bound, and `witness.coefficients(w, "w_ks")` gives one
 class's values as signed coefficient vectors, the input of a range check.
 `vfhe.vfhe.computation.Computation(operations)` gives the steps themselves
-in vFHE's terms: the multiplications, the tensor products and key switches
+in vfhe's terms: the multiplications, the tensor products and key switches
 that are not part of one (a relinearization of a sum of extended products),
 the rescales with the value each consumed, and the plaintext-linear steps.
 The tape is one: a second `recording` resumes
@@ -111,18 +111,18 @@ the computation runs.
 
 ## Threads, processes and memory
 
-vFHE runs on one thread unless told otherwise. The limit is one setting for
+vfhe runs on one thread unless told otherwise. The limit is one setting for
 the whole library: `VFHE_NUM_THREADS` in the environment, or
 `vfhe.util.parallel.set_num_threads(n)` at run time, and every operation that
 can use several threads stays within it. `local_num_threads(n)` lowers it for
 the calls one thread makes inside a `with` block. The threads are native and
 kept in a pool between calls; Python only makes one call per operation.
 
-Native calls release the GIL, so Python threads may call vFHE at the same
+Native calls release the GIL, so Python threads may call vfhe at the same
 time. They gain little on small operations, whose time is mostly the Python
 around the call; raising the limit is what puts more cores on one operation.
 
-A process may `fork` after building vFHE objects, and the child may use them
+A process may `fork` after building vfhe objects, and the child may use them
 and the library as usual:
 
 - the child starts its own thread pool on its first parallel call;
@@ -132,10 +132,10 @@ and the library as usual:
   never draw the same bytes;
 - rings, keys, polynomials and tables are the child's own copies.
 
-Fork while no other thread of the process is inside a vFHE call, and with no
+Fork while no other thread of the process is inside a vfhe call, and with no
 trace enabled.
 
-vFHE does not choose where memory is placed. On a machine with several NUMA
+vfhe does not choose where memory is placed. On a machine with several NUMA
 nodes, `numactl --interleave=all` spreads large tables over every node's
 memory, and `numactl --cpunodebind=N --membind=N` keeps a process on one
 node. The memory pool keeps freed buffers per thread for reuse, up to the

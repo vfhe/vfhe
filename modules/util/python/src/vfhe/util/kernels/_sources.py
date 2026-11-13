@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """What a build takes from the install: vfhe's version, the build cache, and vfhe's C unpacked from the shipped tarball."""
 

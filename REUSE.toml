@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 version = 1
 
@@ -25,11 +25,11 @@ path = [
     # Legal notice reproduced verbatim
     "NOTICE",
 ]
-SPDX-FileCopyrightText = "2026 The vFHE Authors"
+SPDX-FileCopyrightText = "2026 The vfhe authors"
 SPDX-License-Identifier = "Apache-2.0"
 
 # The Contributor Covenant carries its own licence.
 [[annotations]]
 path = "docs/CODE_OF_CONDUCT.md"
-SPDX-FileCopyrightText = "2026 The vFHE Authors"
+SPDX-FileCopyrightText = "2026 The vfhe authors"
 SPDX-License-Identifier = "CC-BY-SA-4.0"

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for basefold's batched opening [CCCFGS26, §7, Figs. 3-4]: several
 evaluation claims, on one or more polynomials committed under one scheme,

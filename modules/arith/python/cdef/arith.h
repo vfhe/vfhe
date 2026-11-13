@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the arith engine (ported from the original ctypes
 // prototypes). Handles are passed as `void *` (as the old ctypes code did);

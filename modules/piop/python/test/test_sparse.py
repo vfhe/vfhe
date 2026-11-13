@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Sparse index oracles committed through a dense one: `FamilyShape`, the
 abstract `Relation_SpEval`, `dense_relation` / `dense_layering`, and a basic

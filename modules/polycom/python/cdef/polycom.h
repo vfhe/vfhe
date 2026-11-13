@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the polycom engine: the Reed-Solomon code kernels
 // (polycom/c/src/rscode.c, prototyped in polycom/c/include/rscode.h).

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The transcript of one run and the proof it leaves (piop.md section 5):
 the labeled record of exchanged messages, its Fiat-Shamir chain, the

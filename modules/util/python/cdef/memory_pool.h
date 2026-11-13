@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // What Python may call of memory_pool.h, in cffi's cdef dialect: the pool's
 // capacity, wiping and accounting, and its allocator for the buffers Python
