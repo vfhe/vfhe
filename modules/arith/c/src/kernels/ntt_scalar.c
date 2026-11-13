@@ -14,6 +14,7 @@
 // inverse pair, which is the same transform basis the vectorized kernels use.
 //
 // Both kernels take their input reduced to [0, q) and leave it reduced.
+#include <alloc.h>
 #include <arith.h>
 #include "arith_internal.h"
 
@@ -34,7 +35,7 @@ void ntt_scalar_precompute(uint64_t n, Modulus mod, uint64_t root_of_unity, uint
     while ((1ULL << logn) < n)
         logn++;
 
-    uint64_t *rou = (uint64_t *)malloc(n * sizeof(uint64_t));
+    uint64_t *rou = (uint64_t *)safe_malloc(n * sizeof(uint64_t));
     rou[0] = 1;
     uint64_t idx = 0, prev_idx = 0;
     for (size_t i = 1; i < n; i++)
@@ -44,7 +45,7 @@ void ntt_scalar_precompute(uint64_t n, Modulus mod, uint64_t root_of_unity, uint
         prev_idx = idx;
     }
 
-    uint64_t **ws = (uint64_t **)malloc(1 * sizeof(uint64_t *));
+    uint64_t **ws = (uint64_t **)safe_malloc(1 * sizeof(uint64_t *));
     ws[0] = rou;
     *out_ws = ws;
 }

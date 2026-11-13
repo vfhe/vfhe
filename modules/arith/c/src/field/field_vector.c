@@ -14,7 +14,8 @@
 #include "arith_internal.h"
 #include "alloc.h"
 #include "../vec_chunks.h"
-#include <crypto.h>
+#include <hash.h>
+#include <seeded.h>
 
 uint64_t field_vec_padded_length(uint64_t n)
 {
@@ -1557,7 +1558,7 @@ void field_vec_sample_random(FieldVector out, const uint8_t *seed, uint64_t seed
     if (n == 0)
         return;
     uint64_t *flat = (uint64_t *)malloc(n * d * sizeof(uint64_t));
-    prng_sample_below_from(flat, n * d, start * d, out->mod->q, "field_vec_sample", seed, seed_len);
+    seeded_below_from(flat, n * d, start * d, out->mod->q, "field_vec_sample", seed, seed_len);
     field_vec_set_range(out, 0, flat, n);
     free(flat);
 }
@@ -1577,8 +1578,8 @@ void field_vec_sample_random_at(FieldVector out, const uint8_t *seed, uint64_t s
         uint64_t run = 1;
         while (k + run < count && indices[k + run] == indices[k] + run)
             run++;
-        prng_sample_below_from(&flat[k * d], run * d, indices[k] * d, out->mod->q,
-                               "field_vec_sample", seed, seed_len);
+        seeded_below_from(&flat[k * d], run * d, indices[k] * d, out->mod->q, "field_vec_sample",
+                          seed, seed_len);
         k += run;
     }
     field_vec_set_range(out, 0, flat, count);
@@ -1591,7 +1592,7 @@ void field_vec_sample_random_element(uint64_t *out, const uint8_t *seed, uint64_
     // The same stream, at the d draws element `index` takes -- so this and the
     // fill above agree by construction rather than by two definitions that have
     // to be kept in step.
-    prng_sample_below_from(out, d, index * d, mod, "field_vec_sample", seed, seed_len);
+    seeded_below_from(out, d, index * d, mod, "field_vec_sample", seed, seed_len);
 }
 
 // The elements in index order, d words each, as the bytes a digest covers.
@@ -1624,7 +1625,7 @@ void field_vec_hash(uint8_t *out, const FieldVector a) { hash_span(out, a, 0, a-
 // file offers are that: a contiguous run is (stride, 1) and a fiber is
 // (1, stride), which is the whole difference between them.
 //
-// The digests go through the lane-parallel `hash_batch`, which is an order of
+// The digests go through the lane-parallel `hash_blake3_batch`, which is an order of
 // magnitude over a hasher per window. It needs the windows laid end to end,
 // and an element's d words live one per plane -- so a window's bytes are never
 // already contiguous and a batch has to be staged. The gather is a pass over
@@ -1641,9 +1642,9 @@ static void hash_windows_range(const FieldVecJob *job, uint64_t begin, uint64_t 
     const uint64_t leaf = group * d * sizeof(uint64_t);
     uint8_t *out = job->bytes;
 
-    if (!hash_batch_fits(leaf))
+    if (!hash_blake3_batch_fits(leaf))
     {
-        // A window past a BLAKE3 chunk, which hash_batch cannot take: one
+        // A window past a BLAKE3 chunk, which hash_blake3_batch cannot take: one
         // hasher per window, fed element by element.
         uint64_t *element = (uint64_t *)safe_malloc(d * sizeof(uint64_t));
         for (uint64_t k = begin; k < end; k++)
@@ -1661,7 +1662,7 @@ static void hash_windows_range(const FieldVecJob *job, uint64_t begin, uint64_t 
         return;
     }
 
-    // hash_batch_fits caps `leaf` at a BLAKE3 chunk, so this is at least 32.
+    // hash_blake3_batch_fits caps `leaf` at a BLAKE3 chunk, so this is at least 32.
     const uint64_t batch = FIELD_VEC_HASH_STAGE_BYTES / leaf;
     uint64_t *staged = (uint64_t *)safe_aligned_malloc(batch * leaf);
     for (uint64_t k = begin; k < end;)
@@ -1673,7 +1674,7 @@ static void hash_windows_range(const FieldVecJob *job, uint64_t begin, uint64_t 
             for (uint64_t i = 0; i < group; i++)
                 field_vec_get_element(&staged[(j * group + i) * d], a,
                                       (k + j) * window_step + i * element_step);
-        hash_batch(&out[k * BLAKE3_OUT_LEN], (const uint8_t *)staged, run, leaf);
+        hash_blake3_batch(&out[k * BLAKE3_OUT_LEN], (const uint8_t *)staged, run, leaf);
         k += run;
     }
     free(staged);

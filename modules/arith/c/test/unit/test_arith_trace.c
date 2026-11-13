@@ -275,7 +275,7 @@ void test_scale_by_records_the_scalar_and_samples_are_secret(void)
     arith_scalar_new(ring, factors, &scalar);
     arith_trace_enable();
     arith_scale_by(ring, &y, &x, scalar);
-    arith_sample_gaussian(ring, &s, 3.2);
+    arith_sample_gaussian(ring, &s, 3.2, NULL);
     TEST_ASSERT_EQUAL_UINT64(3, arith_trace_length());
     ArithTraceEvent e = event(1);
     TEST_ASSERT_EQUAL_INT(ARITH_TRACE_SCALE_BY, e.kind);

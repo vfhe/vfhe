@@ -7,7 +7,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, TypeVar
 
 from google.protobuf.message import DecodeError, Message
-from vfhe.util.io import Codec, read_exactly
+from vfhe.util.io import Codec
+from vfhe.util.io._read_exactly import read_exactly
 
 if TYPE_CHECKING:
     from typing import IO

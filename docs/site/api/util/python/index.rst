@@ -4,8 +4,7 @@
 Python
 ======
 
-The packages a program imports. ``vfhe.info`` sits beside ``vfhe.util`` and
-belongs to the same module.
+The packages a program imports.
 
 .. toctree::
    :maxdepth: 1
@@ -16,4 +15,5 @@ belongs to the same module.
    io
    parallel
    memory_pool
+   gpu
    info

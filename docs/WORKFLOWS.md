@@ -80,6 +80,14 @@ time. Because an offline runner queues jobs instead of failing them, the
 pull-request gate schedules nothing on it to minimize development friction.
 Only the release and post-submit workflows depend on it.
 
+### The self-hosted CUDA runner
+
+`hardware-gpu.yml` names a second label, `self-hosted, Linux, X64, cuda`, for
+a runner with an NVIDIA device and the NVIDIA container toolkit, and runs on
+`workflow_dispatch` alone until one exists: a job on a label no runner carries
+queues forever. The job builds with `-Dcuda=enabled` in the toolkit's own
+image and runs the fast Python suites, whose GPU tests skip everywhere else.
+
 ## Conventions
 
 - The merge method is rebase, and its cost is accepted: rebase mints new

@@ -9,10 +9,8 @@
    :maxdepth: 1
 
    guides/usage
-   guides/performance
    guides/architecture
    guides/development
-   guides/workflows
 
 .. toctree::
    :caption: API reference
@@ -27,7 +25,4 @@
    project/contributing
    project/security
    project/support
-   project/governance
-   project/code-of-conduct
-   project/authors
    changelog

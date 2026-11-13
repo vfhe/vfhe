@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, TypeVar
 
 from vfhe.arith.number_theory import crt
+from vfhe.crypto.random import Random
 from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
@@ -40,15 +41,20 @@ class LWE_Key:
         sparse_h: int | None = None,
         key: list[int] | None = None,
         n: int | None = None,
+        random: Random | None = None,
     ):
         """An LWE secret key over ``ring``, of dimension ``n`` (``ring.N``).
 
         Generated (``sec_sigma`` or ``sparse_h``, with ``err_sigma``), or given
         as its coefficients in ``key``. ``err_sigma`` is the standard deviation
         of the noise the key encrypts with; a key given without one is
-        ``err_sigma=None``, decrypts, and refuses to encrypt.
+        ``err_sigma=None``, decrypts, and refuses to encrypt. ``random`` is the
+        source the key and every sample under it draw from: the entropy
+        stream when None.
         """
         self.ring = ring
+        #: The source the key and its samples draw from.
+        self.random = random if random is not None else Random()
         self.err_sigma: float | None = None
         self.n = n if n is not None else ring.N
         self.l = ring.ell
@@ -63,12 +69,12 @@ class LWE_Key:
                 self.err_sigma = err_sigma
         elif sparse_h is not None and err_sigma is not None:
             self.obj = lib_lwe.lib.lwe_new_sparse_ternary_key(
-                self.n, ring.mask, ring.base, sparse_h, err_sigma
+                self.n, ring.mask, ring.base, sparse_h, err_sigma, self.random.obj
             )
             self.err_sigma = err_sigma
         elif sec_sigma is not None and err_sigma is not None:
             self.obj = lib_lwe.lib.lwe_new_key(
-                self.n, ring.mask, ring.base, sec_sigma, err_sigma
+                self.n, ring.mask, ring.base, sec_sigma, err_sigma, self.random.obj
             )
             self.err_sigma = err_sigma
         else:
@@ -102,6 +108,10 @@ class LWE_Key:
 
 
 class LWE:
+    """An LWE sample of dimension ``n`` over ``ring``'s primes: ``m`` encrypted
+    under ``key``, a noiseless sample of ``m`` with ``is_trivial``, an adopted
+    native sample ``obj``, or an empty one."""
+
     def __init__(
         self,
         ring: RNSRing,
@@ -129,7 +139,7 @@ class LWE:
                 )
             self.n = key.n
             m_arr = ffi.new("uint64_t[]", self._to_native(m))
-            self.obj = lib_lwe.lib.lwe_new_sample(m_arr, key.obj)
+            self.obj = lib_lwe.lib.lwe_new_sample(m_arr, key.obj, key.random.obj)
         elif is_trivial and m is not None:
             m_arr = ffi.new("uint64_t[]", self._to_native(m))
             self.obj = lib_lwe.lib.lwe_new_trivial_sample(

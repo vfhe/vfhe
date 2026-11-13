@@ -249,7 +249,7 @@ class RangeDecomposition(Protocol):
     efficiency parameter -- and the `kappa` ring values `v(x_eta)`. The verifier
     replies with one spot-check point `s'`.
 
-    It then checks, per repetition, that the digits recompose:
+    It then checks, per repetition, that the digits recompose::
 
         sum_{delta, j} iota(psi_eta[delta, j]) * eq~(delta; r_eta^{>m})
                                               * beta^{to-int(j)}
@@ -791,7 +791,7 @@ class ResidueRangeDecomposition(RangeDecomposition):
     point. The query at `r_eta` is answered on every residue oracle: the
     prover sends `(u_1(r_eta), ..., u_U(r_eta))`, each coordinate of
     `r_eta` read in the oracle's field, and the verifier checks, for every
-    prime,
+    prime::
 
         sum_{delta, j} iota(psi_eta[delta, j]) * eq~(delta; r_eta^{>m})
                                               * beta^{to-int(j)}

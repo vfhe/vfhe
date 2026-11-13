@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from vfhe.crypto import chain_digest
+from vfhe.crypto.hash import DigestChain
 
 from .and_composition import ANDComposition, current_subprotocol
 from .digest import element_digest
@@ -203,15 +203,15 @@ class IOP:
         entries = []
         for (relation, kind, _), protocol in self.protocols.items():
             entries.append(
-                chain_digest(
+                DigestChain(
                     [
                         element_digest(relation),
                         element_digest(None if kind is None else kind.value),
                         protocol.digest(),
                     ]
-                )
+                ).digest()
             )
-        return chain_digest(parts + sorted(entries))
+        return DigestChain(parts + sorted(entries)).digest()
 
     def _bind(self, statement: Statement) -> None:
         """Seed the Fiat-Shamir chain with the claim being proven and with
@@ -221,7 +221,9 @@ class IOP:
         would make one transcript a proof under every parameter set."""
         if self.fiat_shamir and not self.transcript.seed:
             self.transcript.bind(
-                chain_digest([element_digest(statement), self.registry_digest()])
+                DigestChain(
+                    [element_digest(statement), self.registry_digest()]
+                ).digest()
             )
 
     @staticmethod

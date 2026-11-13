@@ -3,7 +3,7 @@
 #include <arith.h>
 #include <blake3.h>
 #include "arith_internal.h"
-#include <crypto.h>
+#include <seeded.h>
 
 // Helper functions for polynomial operations used in inversion
 static int poly_deg(const uint64_t *p, int n)
@@ -365,7 +365,7 @@ int field_ext_inv(uint64_t *ainv, const uint64_t *a, uint64_t d, uint64_t w, Mod
 void field_sample_random_element(uint64_t *a, const uint8_t *seed, uint64_t seed_len, uint64_t d,
                                  uint64_t mod)
 {
-    prng_sample_below(a, d, mod, "field_sample_element", seed, seed_len);
+    seeded_below(a, d, mod, "field_sample_element", seed, seed_len);
 }
 
 void field_hash_element(uint8_t *out, const uint64_t *a, uint64_t d)

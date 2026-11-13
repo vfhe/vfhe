@@ -35,7 +35,9 @@ uint64_t rns_rows_parts(uint64_t N, uint64_t rows, uint64_t items, uint64_t n_th
     const uint64_t threads = vfhe_threads_for(n_threads, UINT64_MAX);
     if (N < ROWS_MIN_N || rows == 0 || threads <= rows || items <= 1)
         return 1;
-    const uint64_t parts = (2 * threads + rows - 1) / rows;
+    // ceil(2 * threads / rows), without the doubling wrapping.
+    const uint64_t doubled = threads > UINT64_MAX / 2 ? UINT64_MAX : 2 * threads;
+    const uint64_t parts = doubled / rows + (doubled % rows != 0);
     return parts < items ? parts : items;
 }
 

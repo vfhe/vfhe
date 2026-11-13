@@ -35,10 +35,11 @@ from abc import ABC, ABCMeta, abstractmethod
 from array import array
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from vfhe.crypto import chain_digest, entropy, hash_bytes, int_digest, seeded
+from vfhe.crypto.hash import DigestChain, digest
+from vfhe.crypto.random import Random, seeded_below_many
 from vfhe.util._cpu import last_level_cache_bytes
 
-from .registry import registered, resolve
+from .registry import find_conversion, registered, resolve
 from .spec import Capability, Domain, Spec
 
 if TYPE_CHECKING:
@@ -50,6 +51,11 @@ if TYPE_CHECKING:
 # Seed length for an unseeded field sampler: 256 bits, matching the width the
 # C expanders absorb.
 _SEED_BYTES = 32
+
+
+def _int_bytes(n: int) -> bytes:
+    """An integer as the fewest two's-complement little-endian bytes that hold it: one part of a digest chain."""
+    return int(n).to_bytes((int(n).bit_length() + 8) // 8, "little", signed=True)
 
 
 #: The context string of the seeded exceptional samplers, so that a ring and
@@ -111,7 +117,7 @@ class ArithParent(ABC):
     @property
     @abstractmethod
     def exceptional_set_size(self) -> int:
-        """|A| for an exceptional set of this domain.
+        """``|A|`` for an exceptional set of this domain.
 
         A set whose pairwise differences are all invertible. Protocols with
         soundness in the size of the challenge set read this rather than
@@ -291,40 +297,47 @@ class Ring(ArithParent, metaclass=_ImplementationDispatch):
 
     # --- sampling ---
 
-    def random_element(self, ntt: bool = True) -> Polynomial:
+    def random_element(
+        self, ntt: bool = True, random: Random | None = None
+    ) -> Polynomial:
         """A uniform element of the ring.
 
         :param ntt: Return it in the mul domain (the NTT domain, for RNS)
             rather than the canonical one. The default costs nothing, since
             the sampler writes residues directly.
+        :param random: The source to draw from; the entropy stream when None.
         """
         raise NotImplementedError
 
-    def random_gaussian_element(self, sigma: float, ntt: bool = True) -> Polynomial:
+    def random_gaussian_element(
+        self, sigma: float, ntt: bool = True, random: Random | None = None
+    ) -> Polynomial:
         """An element with discrete-Gaussian coefficients of width ``sigma``.
 
         :param sigma: Standard deviation, in coefficients.
         :param ntt: Convert to the mul domain before returning. Sampling is
             always done in the canonical domain, so True adds a transform.
+        :param random: The source to draw from; the entropy stream when None.
         """
         raise NotImplementedError
 
     def random_exceptional(
-        self, seed: bytes | None = None, ntt: bool = True
+        self, seed: bytes | None = None, ntt: bool = True, random: Random | None = None
     ) -> Polynomial:
         """A uniform element of the ring's exceptional set: a new
         `Polynomial` filled by `Polynomial.sample_exceptional`, which says
         what the set is.
 
-        :param seed: Derive the element from this seed; a fresh one is drawn
-            when it is None.
+        :param seed: Derive the element from this seed; one is drawn from
+            ``random`` when it is None.
         :param ntt: Return it in the mul domain rather than the canonical one.
+        :param random: The source to draw from; the entropy stream when None.
         """
         raise NotImplementedError
 
     @property
     def exceptional_set_size(self) -> int:
-        """|A| for an exceptional set of this ring."""
+        """``|A|`` for an exceptional set of this ring."""
         raise NotImplementedError
 
     def digest(self) -> bytes:
@@ -436,6 +449,24 @@ class Polynomial(metaclass=_ImplementationDispatch):
 
     def __copy__(self) -> Polynomial:
         return self.copy()
+
+    def to_backend(self, backend: str) -> Polynomial:
+        """This element held by ``backend`` of its implementation: itself when
+        it already is, otherwise a new element through the registered
+        conversion.
+
+        A move is never implicit: a device copy costs more than the operation
+        it precedes. Raises `TypeError` when no conversion is registered.
+        """
+        spec = self.ring.spec
+        if backend == spec.backend:
+            return self
+        conversion = find_conversion(spec.key, (spec.implementation, backend))
+        if conversion is None:
+            raise TypeError(
+                f"no conversion from {spec} to {spec.implementation}/{backend}"
+            )
+        return conversion.convert(self)
 
     # --- identity ---
 
@@ -658,7 +689,7 @@ class Polynomial(metaclass=_ImplementationDispatch):
         evaluation points are thus one point in every slot.
 
         The ``a_j`` are uniform below p_min: drawn from ``seed`` by
-        `vfhe.crypto.seeded`, or fresh by `vfhe.crypto.entropy` when it is
+        `seeded_below_many`, or fresh by the entropy stream when it is
         None.
         """
         raise NotImplementedError
@@ -824,7 +855,7 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
 
     @property
     def exceptional_set_size(self) -> int:
-        """|A| for any field is its order: every nonzero difference of two
+        """``|A|`` for any field is its order: every nonzero difference of two
         field elements is invertible, so the whole field is exceptional."""
         return self.order
 
@@ -833,9 +864,8 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         prime, the degree and, for an extension, the constant `w` of its
         defining polynomial `x^degree - w`. Two fields with equal digests are
         the same field to a transcript."""
-        parts = [b"field", int_digest(int(self.prime)), int_digest(int(self.degree))]
-        parts.append(int_digest(int(getattr(self, "w", 0))))
-        return chain_digest(parts)
+        sizes = (int(self.prime), int(self.degree), int(getattr(self, "w", 0)))
+        return DigestChain([b"field", *(_int_bytes(n) for n in sizes)]).digest()
 
     def lagrange_interpolate(self, values, x) -> FieldElement:
         """Evaluate at `x` the polynomial that takes the value ``values[t]`` at
@@ -924,19 +954,24 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         one.sample_random(seed, index)
         return one[0]
 
-    def random_element(self, seed: bytes | None = None) -> FieldElement:
+    def random_element(
+        self, seed: bytes | None = None, random: Random | None = None
+    ) -> FieldElement:
         """A uniform element of the field.
 
         Deterministic from ``seed`` when one is given -- the same seed gives
-        the same element on every engine -- and expanded from a fresh
-        ``vfhe.crypto`` seed otherwise.
+        the same element on every engine -- and expanded from a seed drawn
+        from ``random`` (the entropy stream when None) otherwise.
         """
         if seed is None:
-            seed = entropy.bytes(_SEED_BYTES)
+            seed = (random or Random()).bytes(_SEED_BYTES)
         return self._uniform_from_seed(seed)
 
     def random_exceptional(
-        self, seed: bytes | None = None, bound: int | None = None
+        self,
+        seed: bytes | None = None,
+        bound: int | None = None,
+        random: Random | None = None,
     ) -> FieldElement:
         """A uniform element of the field's exceptional set, which for a field
         is the whole field: `random_element`, deterministic from ``seed`` when
@@ -952,11 +987,11 @@ class Field(ArithParent, metaclass=_ImplementationDispatch):
         different characteristic read one ring element alike.
         """
         if bound is None:
-            return self.random_element(seed)
+            return self.random_element(seed, random)
         if seed is None:
-            coefficients = entropy.below_many(self.degree, bound)
+            coefficients = (random or Random()).below_many(self.degree, bound)
         else:
-            coefficients = seeded.below_many(
+            coefficients = seeded_below_many(
                 self.degree, bound, _EXCEPTIONAL_CONTEXT, seed
             )
         if self.degree == 1:
@@ -1557,7 +1592,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
     ) -> None:
         """Element ``start + i`` becomes ``sum_j (coefficients[j][i] mod p)
         x^j``, for every ``i`` below the common length of the ``d`` buffers
-        of 64-bit unsigned integers in `coefficients` (``array('Q')``s, say),
+        of 64-bit unsigned integers in `coefficients` (``array('Q')`` buffers, say),
         which must fit from `start`. The inverse of `coefficients`, with the
         same domain."""
         raise NotImplementedError(
@@ -1933,7 +1968,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
         c_odd,
         out: FieldVector | None = None,
     ) -> FieldVector:
-        """Two `fma`s sharing operands, written straight into one vector::
+        """Two `fma` calls sharing operands, written straight into one vector::
 
             out[2i]     = a[i] + b[i] * c_even[i]
             out[2i + 1] = a[i] + b[i] * c_odd[i]
@@ -2405,7 +2440,7 @@ class FieldVector(metaclass=_ImplementationDispatch):
     def digest(self) -> bytes:
         """A 32-byte digest of the vector: its `hash` under a tag of its own,
         so that a vector of one element does not digest like that element."""
-        return hash_bytes(b"field-vector" + self.hash())
+        return digest(b"field-vector" + self.hash())
 
     def hash_elements(self, group: int = 1, stride: int = 1) -> memoryview:
         """One digest per window of elements, packed: the leaves a Merkle

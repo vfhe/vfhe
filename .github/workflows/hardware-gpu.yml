@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-License-Identifier: Apache-2.0
+# The suites with the CUDA extension, on a self-hosted runner with a device.
+# On request only: no hosted runner has one, and a job on a label no runner
+# carries waits forever.
+name: Hardware GPU
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read # checkout
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-gpu:
+    name: Test GPU (cuda)
+    runs-on: [self-hosted, Linux, X64, cuda]
+    container:
+      image: nvidia/cuda:12.6.3-devel-ubuntu24.04 # zizmor: ignore[unpinned-images]
+      options: --gpus all
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Trust the checkout
+        # The container runs as root over a workspace owned by the runner user.
+        run: git config --global --add safe.directory '*'
+      - name: Install what setup-python's interpreter loads
+        # The libraries .github/hardware.Dockerfile installs for the same reason.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git \
+            libbz2-1.0 libffi8 liblzma5 libncursesw6 libreadline8 libsqlite3-0 \
+            libssl3 libuuid1 zlib1g
+      - name: Set up dev environment
+        uses: ./.github/actions/setup-dev
+        with:
+          groups: test
+          pip-cache: false
+      - name: Build with the CUDA extension
+        run: meson setup build -Dcuda=enabled
+      - name: Run the Python suites
+        run: make test ENGINE=portable SUITES=fast

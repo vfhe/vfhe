@@ -16,9 +16,9 @@ from vfhe.arith.impl.field.field import ExtensionField
 from vfhe.arith.impl.field.vector import ExtensionFieldVector
 from vfhe.arith.impl.mp.multiprecision import Multiprecision
 from vfhe.arith.number_theory import is_prime
-from vfhe.arith.registry import register
+from vfhe.arith.registry import common_spec, register
 from vfhe.arith.spec import Capability, Constraints, Spec
-from vfhe.crypto import chain_digest, int_digest
+from vfhe.crypto.hash import DigestChain
 from vfhe.util.bindings import ffi, lib
 
 from .rns_base import registry
@@ -29,6 +29,11 @@ if TYPE_CHECKING:
 
     from typing_extensions import Buffer
     from vfhe.arith.integer_matrix import IntegerMatrix
+
+
+def _int_bytes(n: int) -> bytes:
+    """An integer as the fewest two's-complement little-endian bytes that hold it: one part of a digest chain."""
+    return int(n).to_bytes((int(n).bit_length() + 8) // 8, "little", signed=True)
 
 
 #: The fields `RNSRing.residue_field` returns, one per (N, split_degree, prime).
@@ -109,6 +114,11 @@ class RingParameters:
     N: int
     split_degree: int
     primes: tuple[int, ...]
+
+
+def _source(random):
+    """The C source of `random`, or NULL for the entropy stream."""
+    return ffi.NULL if random is None else random.obj
 
 
 class RNSRing(Ring):
@@ -231,6 +241,12 @@ class RNSRing(Ring):
 
         if not split_degree:
             split_degree = next_power_of_2(exceptional_set_size / self.smallest_prime)  # type: ignore
+        if N < 1 or N & (N - 1):
+            raise ValueError(f"the ring degree must be a power of two, got {N}")
+        if split_degree < 1 or split_degree & (split_degree - 1) or split_degree > N:
+            raise ValueError(
+                f"split_degree must be a power of two dividing {N}, got {split_degree}"
+            )
         self.split_degree = split_degree
         self.N = N
         self.byte_size = self.N * self.ell * 8
@@ -242,6 +258,16 @@ class RNSRing(Ring):
                     f"not enough primes for quotient ring for size 2^{mod_size}"
                 )
             self.primes = primes[: self.ell]
+            # The native base builds a transform per prime; what is not a
+            # prime of the right shape has none, and a message may carry anything.
+            order = 2 * N // split_degree
+            for p in self.primes:
+                if not 2 <= p < 1 << 62 or not is_prime(p):
+                    raise ValueError(f"{p} is not a prime below 2^62")
+                if (p - 1) % order != 0:
+                    raise ValueError(
+                        f"prime {p} is not 1 mod {order}: no NTT of this length"
+                    )
         else:
             self.primes = self.gen_primes()
 
@@ -323,7 +349,7 @@ class RNSRing(Ring):
 
     @property
     def exceptional_set_size(self) -> int:
-        """|A| for this ring: the residue fields have size p_i^split_degree,
+        """``|A|`` for this ring: the residue fields have size p_i^split_degree,
         and a difference must be invertible in every one of them, so the
         smallest bounds the set."""
         return min(self.primes) ** self.split_degree
@@ -357,9 +383,8 @@ class RNSRing(Ring):
 
     def digest(self) -> bytes:
         """See `Ring.digest`: `N`, the primes in order, the splitting degree."""
-        parts = [b"ring", int_digest(self.N), int_digest(self.split_degree)]
-        parts += [int_digest(int(p)) for p in self.primes]
-        return chain_digest(parts)
+        sizes = (self.N, self.split_degree, *self.primes)
+        return DigestChain([b"ring", *(_int_bytes(n) for n in sizes)]).digest()
 
     def residue_field(self, index: int) -> ExtensionField:
         """A residue field of ``R_q`` at the prime ``p = primes[index]``: the
@@ -884,14 +909,14 @@ class RNSRing(Ring):
         """
         return RNSScalar(self, value)
 
-    def random_element(self, ntt=True):
-        return Polynomial(self).sample_uniform(ntt)
+    def random_element(self, ntt=True, random=None):
+        return Polynomial(self).sample_uniform(ntt, random)
 
-    def random_gaussian_element(self, sigma, ntt=True):
-        return Polynomial(self).sample_gaussian(sigma, ntt)
+    def random_gaussian_element(self, sigma, ntt=True, random=None):
+        return Polynomial(self).sample_gaussian(sigma, ntt, random)
 
-    def random_exceptional(self, seed=None, ntt=True):
-        return Polynomial(self).sample_exceptional(seed, ntt)
+    def random_exceptional(self, seed=None, ntt=True, random=None):
+        return Polynomial(self).sample_exceptional(seed, ntt, random)
 
 
 class Representation(Enum):
@@ -1084,7 +1109,13 @@ class RNSPolynomial(Polynomial):
         self.ring.lib.polynomial_RNSc_negate(self.obj, in1.obj)
         self.repr = in1.repr
 
+    def _same_backend(self, other) -> None:
+        """Raises `TypeError` naming the conversion to make when `other` is held by another backend."""
+        if not isinstance(other, RNSPolynomial):
+            common_spec(self.ring.spec, other.ring.spec)
+
     def sub(self, in1, in2):
+        self._same_backend(in2)
         if in1.repr != in2.repr:
             raise ValueError("failed: in1.repr != in2.repr")
         _check_status(
@@ -1096,6 +1127,7 @@ class RNSPolynomial(Polynomial):
         self.repr = in1.repr
 
     def add(self, in1, in2):
+        self._same_backend(in2)
         if in1.repr != in2.repr:
             raise ValueError("failed: in1.repr != in2.repr")
         _check_status(
@@ -1169,15 +1201,15 @@ class RNSPolynomial(Polynomial):
         view.to_repr(target)
         return view
 
-    def sample_uniform(self, ntt=True):
-        self.ring.lib.polynomial_gen_random_RNSc_polynomial(self.obj)
+    def sample_uniform(self, ntt=True, random=None):
+        self.ring.lib.polynomial_gen_random_RNSc_polynomial(self.obj, _source(random))
         self.repr = repr.ntt if ntt else repr.coeff
         return self
 
-    def sample_gaussian(self, sigma, ntt=True):
+    def sample_gaussian(self, sigma, ntt=True, random=None):
         _check_status(
             self.ring.lib.arith_sample_gaussian(
-                self.ring.arith_ring, self.as_element(), sigma
+                self.ring.arith_ring, self.as_element(), sigma, _source(random)
             ),
             "sample_gaussian",
         )
@@ -1186,13 +1218,17 @@ class RNSPolynomial(Polynomial):
             self.to_NTT()
         return self
 
-    def sample_exceptional(self, seed=None, ntt=True):
+    def sample_exceptional(self, seed=None, ntt=True, random=None):
         ring = self.ring
         maps = ring._inverse_crt_maps_by_row()
         if seed is None:
-            ring.lib.polynomial_RNS_sample_exceptional(self.obj, ffi.NULL, 0, maps)
+            ring.lib.polynomial_RNS_sample_exceptional(
+                self.obj, ffi.NULL, 0, maps, _source(random)
+            )
         else:
-            ring.lib.polynomial_RNS_sample_exceptional(self.obj, seed, len(seed), maps)
+            ring.lib.polynomial_RNS_sample_exceptional(
+                self.obj, seed, len(seed), maps, ffi.NULL
+            )
         self.repr = repr.ntt
         if not ntt:
             self.to_coeff()
@@ -1386,6 +1422,13 @@ class RNSPolynomial(Polynomial):
                 for i in range(self.ring.ell)
             )
         else:
+            self._same_backend(value)
+            # The native comparison reads both rows at this ring's length.
+            if (value.ring.N, value.ring.split_degree) != (
+                self.ring.N,
+                self.ring.split_degree,
+            ):
+                return False
             view = self._viewed_as(value.repr)
             return bool(self.ring.lib.polynomial_eq(view.obj, value.obj))
 
@@ -1415,13 +1458,13 @@ class RNSPolynomial(Polynomial):
     def digest_sequence(polys: list[RNSPolynomial]) -> bytes:
         """The BLAKE3 digest of one message: for each of `polys` in order,
         the rows `get_hash` hashes, taken in the mul domain like it."""
-        state = ffi.new("uint8_t[]", lib.hash_stream_size())
-        lib.hash_stream_init(state)
+        state = ffi.new("uint8_t[]", lib.hash_blake3_stream_size())
+        lib.hash_blake3_stream_init(state)
         for p in polys:
             view = p._viewed_as(repr.ntt)  # a local: the view owns the rows read
             p.ring.lib.polynomial_RNS_hash_update(state, view.obj)
         out = ffi.new("uint8_t[32]")
-        lib.hash_stream_digest(state, out)
+        lib.hash_blake3_stream_digest(state, out)
         return bytes(out)
 
     def __hash__(self):

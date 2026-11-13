@@ -7,7 +7,7 @@
   ``ffi.buffer``, ``ffi.NULL``.
 
 Importing this package loads an extension, which stays loaded for the life of
-the process. A custom engine needs `kernels.ExtensionBuilder.build()` to run first.
+the process. A custom engine needs `kernels.build()` to run first.
 
 >>> from vfhe.util.bindings import ffi, lib
 >>> out = ffi.new("uint64_t[]", 8)

@@ -95,7 +95,7 @@ class SumDefStart(Protocol):
     evaluation claim on that virtual oracle, and `VirtualEval` that claim to
     claims on G's constituents, both run by the Composer inside the layer (or
     by the driver, for a started statement run on its own). Zero
-    communication; soundness error (k-1)/|A| for k claims [Sor22, Lem. 11;
+    communication; soundness error (k-1)/``|A|`` for k claims [Sor22, Lem. 11;
     CCCFGS25, Eqs. (19)-(20)].
     """
 
@@ -104,7 +104,7 @@ class SumDefStart(Protocol):
     reduces_to: tuple[type[Relation], ...] = (Relation_Sum,)
 
     def soundness_error(self, statement: Statement, domain: Any = None) -> float | None:
-        """(k - 1) / |A|; the domain defaults to the definition's
+        """(k - 1) / ``|A|``; the domain defaults to the definition's
         (`Oracle.domain` of its body)."""
         if domain is None:
             domain = Relation_SumDef.definition(statement)[1].domain
