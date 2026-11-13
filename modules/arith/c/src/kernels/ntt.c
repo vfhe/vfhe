@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
+#include <alloc.h>
 #include <arith.h>
 #include <inttypes.h>
 
@@ -35,7 +36,7 @@ void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_
     while ((1ULL << logn) < n)
         logn++;
 
-    uint64_t *rou = (uint64_t *)malloc(n * sizeof(uint64_t));
+    uint64_t *rou = (uint64_t *)safe_malloc(n * sizeof(uint64_t));
     rou[0] = 1;
     uint64_t idx = 0, prev_idx = 0;
     for (size_t i = 1; i < n; i++)
@@ -44,8 +45,8 @@ void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_
         rou[idx] = mul_modq(rou[prev_idx], root_of_unity, mod);
         prev_idx = idx;
     }
-    __m512i **ws = (__m512i **)malloc(logn * sizeof(__m512i *));
-    __m512i **w_precon = (__m512i **)malloc(logn * sizeof(__m512i *));
+    __m512i **ws = (__m512i **)safe_malloc(logn * sizeof(__m512i *));
+    __m512i **w_precon = (__m512i **)safe_malloc(logn * sizeof(__m512i *));
     size_t level = 0;
     size_t w_idx = 1;
     /* Broadcast levels: one twiddle per butterfly group, so the level holds
@@ -60,8 +61,8 @@ void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_
     for (; (1ULL << (level + 3)) < n; level++)
     {
         size_t m = 1ULL << level;
-        uint64_t *wsb = (uint64_t *)_mm_malloc(m * sizeof(uint64_t), 64);
-        uint64_t *wpb = (uint64_t *)_mm_malloc(m * sizeof(uint64_t), 64);
+        uint64_t *wsb = (uint64_t *)safe_aligned_malloc(m * sizeof(uint64_t));
+        uint64_t *wpb = (uint64_t *)safe_aligned_malloc(m * sizeof(uint64_t));
         for (size_t i = 0; i < m; i++)
         {
             wsb[i] = rou[w_idx + i];
@@ -75,8 +76,8 @@ void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_
     {
         size_t m = 1ULL << level;
         size_t num_vectors = n / 16;
-        ws[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
-        w_precon[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
+        ws[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
+        w_precon[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
         for (size_t i = 0; i < num_vectors; i++)
         {
             uint64_t w_0 = rou[w_idx + 2 * i];
@@ -95,8 +96,8 @@ void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_
     {
         size_t m = 1ULL << level;
         size_t num_vectors = n / 16;
-        ws[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
-        w_precon[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
+        ws[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
+        w_precon[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
         for (size_t i = 0; i < num_vectors; i++)
         {
             uint64_t w_0 = rou[w_idx + 4 * i];
@@ -117,8 +118,8 @@ void ntt_precompute_fwd(uint64_t n, Modulus mod, uint64_t root_of_unity, uint64_
     {
         size_t m = 1ULL << level;
         size_t num_vectors = n / 16;
-        ws[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
-        w_precon[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
+        ws[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
+        w_precon[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
         for (size_t i = 0; i < num_vectors; i++)
         {
             ws[level][i] = _mm512_set_epi64(rou[w_idx + 8 * i + 7], rou[w_idx + 8 * i + 6],
@@ -150,7 +151,7 @@ void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uin
     while ((1ULL << logn) < n)
         logn++;
 
-    uint64_t *rou = (uint64_t *)malloc(n * sizeof(uint64_t));
+    uint64_t *rou = (uint64_t *)safe_malloc(n * sizeof(uint64_t));
     rou[0] = 1;
     uint64_t idx = 0, prev_idx = 0;
     for (size_t i = 1; i < n; i++)
@@ -159,7 +160,7 @@ void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uin
         rou[idx] = mul_modq(rou[prev_idx], inv_root_of_unity, mod);
         prev_idx = idx;
     }
-    uint64_t *temp = (uint64_t *)malloc(n * sizeof(uint64_t));
+    uint64_t *temp = (uint64_t *)safe_malloc(n * sizeof(uint64_t));
     temp[0] = 1;
     idx = 1;
     for (size_t m = (n >> 1); m > 0; m >>= 1)
@@ -169,16 +170,16 @@ void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uin
             temp[idx++] = rou[m + i];
         }
     }
-    __m512i **ws = (__m512i **)malloc(logn * sizeof(__m512i *));
-    __m512i **w_precon = (__m512i **)malloc(logn * sizeof(__m512i *));
+    __m512i **ws = (__m512i **)safe_malloc(logn * sizeof(__m512i *));
+    __m512i **w_precon = (__m512i **)safe_malloc(logn * sizeof(__m512i *));
     size_t level = 0;
     size_t w_idx = 1;
     if (level < logn)
     {
         size_t m = n >> 1;
         size_t num_vectors = n / 16;
-        ws[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
-        w_precon[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
+        ws[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
+        w_precon[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
         for (size_t i = 0; i < num_vectors; i++)
         {
             ws[level][i] = _mm512_set_epi64(temp[w_idx + 8 * i + 7], temp[w_idx + 8 * i + 6],
@@ -202,8 +203,8 @@ void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uin
     {
         size_t m = n >> 2;
         size_t num_vectors = n / 16;
-        ws[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
-        w_precon[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
+        ws[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
+        w_precon[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
         for (size_t i = 0; i < num_vectors; i++)
         {
             uint64_t w_0 = temp[w_idx + 4 * i];
@@ -224,8 +225,8 @@ void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uin
     {
         size_t m = n >> 3;
         size_t num_vectors = n / 16;
-        ws[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
-        w_precon[level] = (__m512i *)_mm_malloc(num_vectors * sizeof(__m512i), 64);
+        ws[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
+        w_precon[level] = (__m512i *)safe_aligned_malloc(num_vectors * sizeof(__m512i));
         for (size_t i = 0; i < num_vectors; i++)
         {
             uint64_t w_0 = temp[w_idx + 2 * i];
@@ -244,8 +245,8 @@ void ntt_precompute_inv(uint64_t n, Modulus mod, uint64_t inv_root_of_unity, uin
     for (; level < logn; level++)
     {
         size_t m = n >> (level + 1);
-        uint64_t *wsb = (uint64_t *)_mm_malloc(m * sizeof(uint64_t), 64);
-        uint64_t *wpb = (uint64_t *)_mm_malloc(m * sizeof(uint64_t), 64);
+        uint64_t *wsb = (uint64_t *)safe_aligned_malloc(m * sizeof(uint64_t));
+        uint64_t *wpb = (uint64_t *)safe_aligned_malloc(m * sizeof(uint64_t));
         for (size_t i = 0; i < m; i++)
         {
             wsb[i] = temp[w_idx + i];
@@ -268,8 +269,8 @@ void ntt_free_precompute(__m512i **ws, __m512i **w_precon, uint64_t n)
         logn++;
     for (int i = 0; i < logn; i++)
     {
-        _mm_free(ws[i]);
-        _mm_free(w_precon[i]);
+        free(ws[i]);
+        free(w_precon[i]);
     }
     free(ws);
     free(w_precon);
@@ -290,6 +291,13 @@ NTT_Plan ntt_new_plan_at_shift(uint64_t n, Modulus mod, uint64_t shoup_shift)
     // first whose n-th power is -1 (order exactly 2n).
     // Without 2n | q - 1 no such root exists and the search below would visit
     // every residue of a 61-bit prime before giving up.
+    // The twiddle tables are indexed by bit-reversed positions over log2(n)
+    // bits, so the length is a power of two.
+    if (n == 0 || (n & (n - 1)) != 0)
+    {
+        fprintf(stderr, "ntt_new_plan: length %" PRIu64 " is not a power of two\n", n);
+        return NULL;
+    }
     if ((q - 1) % (2 * n) != 0)
     {
         fprintf(stderr,
@@ -310,7 +318,7 @@ NTT_Plan ntt_new_plan_at_shift(uint64_t n, Modulus mod, uint64_t shoup_shift)
     }
     uint64_t inv_root_of_unity = inverse_mod(root_of_unity, q);
 
-    NTT_Plan res = (NTT_Plan)malloc(sizeof(struct _NTT_Plan));
+    NTT_Plan res = (NTT_Plan)safe_malloc(sizeof(struct _NTT_Plan));
     res->mod = mod; // borrowed; ntt_free_plan leaves it alone
     res->n = n;
     res->root_of_unity = root_of_unity;

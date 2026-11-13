@@ -25,7 +25,7 @@
 #include <arith.h>
 #include <assert.h>
 #include <blake3.h>
-#include <crypto.h>
+#include <hash.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -422,7 +422,7 @@ void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint
     // A window the lanes cannot take: one hasher each, as before. Note this
     // turns on the *encoded* width, so which windows qualify depends on the
     // prime -- an element is nbytes here, not a machine word.
-    if (!hash_batch_fits(leaf))
+    if (!hash_blake3_batch_fits(leaf))
     {
         for (uint64_t k = 0; k < count; k++)
             pmf_vec_hash_span(&out[k * BLAKE3_OUT_LEN], a, k * stride, group);
@@ -431,7 +431,7 @@ void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint
 
     // Staged because a digest covers canonical encodings, which nothing holds:
     // pmf_to_bytes has to run per element whatever the hashing does with the
-    // result. hash_batch_fits caps `leaf` at a chunk, so this is at least 32.
+    // result. hash_blake3_batch_fits caps `leaf` at a chunk, so this is at least 32.
     const uint64_t batch = PMF_VEC_HASH_STAGE_BYTES / leaf;
     uint8_t *staged = (uint8_t *)safe_aligned_malloc(batch * leaf);
     uint64_t element[PMF_LANES];
@@ -446,7 +446,7 @@ void pmf_vec_hash_elements(uint8_t *out, const PMFVector a, uint64_t group, uint
                 pmf_vec_get_element(element, a, (k + j) * stride + i);
                 pmf_to_bytes(&staged[(j * group + i) * nbytes], element, a->params);
             }
-        hash_batch(&out[k * BLAKE3_OUT_LEN], staged, run, leaf);
+        hash_blake3_batch(&out[k * BLAKE3_OUT_LEN], staged, run, leaf);
         k += run;
     }
     free(staged);

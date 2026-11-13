@@ -42,7 +42,6 @@ import math
 from typing import TYPE_CHECKING, cast
 
 from vfhe.arith import Polynomial, domain_of, repr
-from vfhe.crypto import entropy
 from vfhe.mlwe.mlwe import MLWE, GadgetParams, MLWE_Key, MLWE_Set, lib_rlwe
 from vfhe.util.bindings import ffi, lib
 
@@ -267,9 +266,9 @@ class SHIP:
         for k in range(self.h):
             start = self._window_start(k)
             for _ in range(attempts):
-                j = (start + entropy.below(size)) % N
+                j = (start + self.scheme.random.below(size)) % N
                 if poly[j] == 0:
-                    poly[j] = 1 - 2 * entropy.below(2)
+                    poly[j] = 1 - 2 * self.scheme.random.below(2)
                     break
             else:
                 raise RuntimeError("no free position in a window")

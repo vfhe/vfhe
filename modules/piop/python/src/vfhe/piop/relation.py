@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from vfhe.arith.mle import vector_table
-from vfhe.crypto import chain_digest
+from vfhe.crypto.hash import DigestChain
 
 from .digest import element_digest
 from .oracle import ImplicitOracle, Oracle, TableOracle, map_oracles
@@ -204,7 +204,7 @@ class Relation:
             parts = [b"index"]
             for name in self.index_fields:
                 parts += [element_digest(name), element_digest(self.index[name])]
-            self._index_digest = chain_digest(parts)
+            self._index_digest = DigestChain(parts).digest()
         return self._index_digest
 
     def check(self, statement: Statement) -> bool:
@@ -364,7 +364,7 @@ class Statement:
             parts.append(element_digest(relation.index))
         for name in relation.fields:
             parts += [element_digest(name), element_digest(self.fields.get(name))]
-        return chain_digest(parts)
+        return DigestChain(parts).digest()
 
     def __repr__(self) -> str:
         head = "" if self.head is None else f", head={self.head!r}"

@@ -44,8 +44,9 @@ ArithStatus arith_rns_permute(ArithRing ring, ArithElement *out, const ArithElem
                               uint64_t gen);
 ArithStatus arith_rns_mul_by_monomial(ArithRing ring, ArithElement *out, const ArithElement *a,
                                       uint64_t power, int minus_one);
-ArithStatus arith_rns_sample_uniform(ArithRing ring, ArithElement *out);
-ArithStatus arith_rns_sample_gaussian(ArithRing ring, ArithElement *out, double sigma);
+ArithStatus arith_rns_sample_uniform(ArithRing ring, ArithElement *out, Random source);
+ArithStatus arith_rns_sample_gaussian(ArithRing ring, ArithElement *out, double sigma,
+                                      Random source);
 ArithStatus arith_rns_sample_uniform_seeded(ArithRing ring, ArithElement *out, const uint8_t *seed,
                                             uint64_t seed_len, uint64_t stream);
 ArithStatus arith_rns_from_int_array(ArithRing ring, ArithElement *out, const uint64_t *values,

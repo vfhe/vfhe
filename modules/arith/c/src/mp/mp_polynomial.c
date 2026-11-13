@@ -3,7 +3,7 @@
 #include <inttypes.h>
 #include <arith.h>
 #include <alloc.h>
-#include <crypto.h>
+#include <random.h>
 #include "kernels/ifma52.h"
 // RNS row width and accessors, for the RNS <-> MP conversions below.
 #include "arith_internal.h"
@@ -131,13 +131,13 @@ void mp_polynomial_drop_digits(MPPolynomial p, uint64_t num_digits)
     p->d -= num_digits;
 }
 
-void mp_polynomial_rnd(MPPolynomial poly)
+void mp_polynomial_rnd(MPPolynomial poly, Random source)
 {
 #if VFHE_HAVE_AVX512IFMA
     __m512i and_mask = _mm512_set1_epi64(0x000FFFFFFFFFFFFFULL);
     for (size_t j = 0; j < poly->d; j++)
     {
-        generate_random_bytes(sizeof(uint64_t) * poly->N, (uint8_t *)poly->coeffs[j]);
+        random_bytes(source, (uint8_t *)poly->coeffs[j], sizeof(uint64_t) * poly->N);
         __m512i *polyv = (__m512i *)poly->coeffs[j];
         for (size_t i = 0; i < poly->N / 8; i++)
         {
@@ -147,7 +147,7 @@ void mp_polynomial_rnd(MPPolynomial poly)
 #else
     for (size_t j = 0; j < poly->d; j++)
     {
-        generate_random_bytes(sizeof(uint64_t) * poly->N, (uint8_t *)poly->coeffs[j]);
+        random_bytes(source, (uint8_t *)poly->coeffs[j], sizeof(uint64_t) * poly->N);
         for (size_t i = 0; i < poly->N; i++)
         {
             poly->coeffs[j][i] &= 0x000FFFFFFFFFFFFFULL;

@@ -6,7 +6,7 @@ meson runs this file for the shipped engines::
 
     python _ffi.py MODULE OUT.c CDEF... -- HEADER...
 
-`ExtensionBuilder` calls `emit` with your declarations added to both lists.
+`compile` calls `emit` with your declarations added to both lists.
 """
 
 from __future__ import annotations

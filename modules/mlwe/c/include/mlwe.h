@@ -5,12 +5,15 @@
 #include <arith.h>
 #include <arith_generic.h>
 #include <parallel.h>
+#include <random.h>
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-    void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uint64_t q);
+    /* Every sampler here draws from `source`; NULL is the entropy stream. */
+    void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uint64_t q,
+                                       Random source);
     /* LWE
      *
      * An LWE key or sample lives over the primes of `base` that `mask`
@@ -147,14 +150,13 @@ extern "C"
     void free_mlwe_RNS_key(RNS_MLWE_Key key);
     LWE mlwe_extract_LWE(RNSc_MLWE in, uint64_t idx);
     RNS_MLWE_Key mlwe_new_RNS_gaussian_key(uint64_t N, uint64_t r, uint64_t l, double key_sigma,
-                                           RNS_Base base, double sigma);
+                                           RNS_Base base, double sigma, Random source);
     RNS_MLWE mlwe_alloc_RNS_sample(uint64_t N, uint64_t r, uint64_t mask, RNS_Base base);
     RNSc_MLWE mlwe_alloc_RNSc_sample(uint64_t N, uint64_t r, uint64_t mask, RNS_Base base);
-    RNS_MLWE mlwe_new_RNS_sample(RNS_MLWE_Key key, uint64_t *m, uint64_t p);
-    void mlwe_RNS_sample_of_zero(RNS_MLWE out, RNS_MLWE_Key key);
-    void mlwe_RNSc_sample_of_zero(RNSc_MLWE out, RNS_MLWE_Key key);
-    RNS_MLWE mlwe_new_RNS_sample_of_zero(RNS_MLWE_Key key);
-    RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key);
+    void mlwe_RNS_sample_of_zero(RNS_MLWE out, RNS_MLWE_Key key, Random source);
+    void mlwe_RNSc_sample_of_zero(RNSc_MLWE out, RNS_MLWE_Key key, Random source);
+    RNS_MLWE mlwe_new_RNS_sample_of_zero(RNS_MLWE_Key key, Random source);
+    RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key, Random source);
     RNS_MLWE mlwe_new_RNS_trivial_sample_of_zero(uint64_t N, uint64_t r, uint64_t mask,
                                                  RNS_Base base);
     void mlwe_RNS_linear_decrypt(ArithElement *out, RNS_MLWE in, RNS_MLWE_Key key);
@@ -164,14 +166,14 @@ extern "C"
     void mlwe_RNS_trivial_sample_of_zero(RNS_MLWE out);
     void mlwe_copy_RNS_sample(RNS_MLWE out, RNS_MLWE in);
     void mlwe_copy_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in);
-    void mlwe_RNSc_sample(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m);
+    void mlwe_RNSc_sample(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m, Random source);
     // The same with the mask drawn from `seed`: component i of `a` is stream i
     // (arith_sample_uniform_seeded), so the sample can be stored as its seed
     // and `b`. Use a fresh seed per sample.
     void mlwe_RNS_sample_of_zero_seeded(RNS_MLWE out, RNS_MLWE_Key key, const uint8_t *seed,
-                                        uint64_t seed_len);
+                                        uint64_t seed_len, Random source);
     void mlwe_RNSc_sample_seeded(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m,
-                                 const uint8_t *seed, uint64_t seed_len);
+                                 const uint8_t *seed, uint64_t seed_len, Random source);
     // Fresh samples under `key` of every message times every scalar,
     // message-major: out[i * n_scales + k] encrypts msgs[i] scaled by
     // scales[k], a scalar being one value per component as arith_scalar_new
@@ -180,13 +182,13 @@ extern "C"
     // left in the mul domain. Sample i's mask is expanded from the 32 bytes at
     // mask_seeds[32 * i], which this fills, as mlwe_RNS_sample_of_zero_seeded
     // expands it, and its noise from a secret seed of its own
-    // (prng_normal_seeded). Every seed is drawn here, on the calling thread
-    // and in order, so the samples do not depend on how many of the up to
-    // `n_threads` threads (0: the library limit) draw them.
+    // (normal_from_seed). Every seed is drawn from `source` here, on the
+    // calling thread and in order, so the samples do not depend on how many
+    // of the up to `n_threads` threads (0: the library limit) draw them.
     void mlwe_RNS_sample_scaled_batch(RNS_MLWE *out, ArithRing ring, RNS_MLWE_Key key,
                                       const ArithElement *msgs, uint64_t n_msgs,
                                       uint64_t *const *scales, uint64_t n_scales,
-                                      uint8_t *mask_seeds, uint64_t n_threads);
+                                      uint8_t *mask_seeds, uint64_t n_threads, Random source);
     void mlwe_scale_RNS_mlwe_RNS(RNS_MLWE c, const uint64_t *per_component);
     void mlwe_add_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in1, RNSc_MLWE in2);
     void mlwe_add_RNS_sample(RNS_MLWE out, RNS_MLWE in1, RNS_MLWE in2);
@@ -514,11 +516,11 @@ extern "C"
     LWE lwe_alloc_sample(uint64_t n, uint64_t mask, RNS_Base base);
     void free_lwe_sample(LWE c);
     LWE_Key lwe_new_key(uint64_t n, uint64_t mask, RNS_Base base, double sec_sigma,
-                        double err_sigma);
+                        double err_sigma, Random source);
     LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t mask, RNS_Base base, uint64_t h,
-                                       double err_sigma);
-    void lwe_sample(LWE c, uint64_t *m, LWE_Key key);
-    LWE lwe_new_sample(uint64_t *m, LWE_Key key);
+                                       double err_sigma, Random source);
+    void lwe_sample(LWE c, uint64_t *m, LWE_Key key, Random source);
+    LWE lwe_new_sample(uint64_t *m, LWE_Key key, Random source);
     LWE lwe_new_trivial_sample(uint64_t *m, uint64_t n, uint64_t mask, RNS_Base base);
     void lwe_linear_decrypt(uint64_t *out, LWE c, LWE_Key key);
     void lwe_subto(LWE out, LWE in);

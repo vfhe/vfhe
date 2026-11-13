@@ -33,6 +33,8 @@ from vfhe.arith.spec import Capability, Constraints, Spec
 from vfhe.util.bindings import ffi, lib
 
 if TYPE_CHECKING:
+    from vfhe.crypto.random import Random
+
     from .ntt import PseudoMersenneNTT
 
 _LIMB_BITS = 52
@@ -228,10 +230,13 @@ class PseudoMersenneField(Field):
         # these say what they yield here. Declarations only -- the inherited
         # implementations are what run.
         def random_element(
-            self, seed: bytes | None = None
+            self, seed: bytes | None = None, random: Random | None = None
         ) -> PseudoMersenneElement: ...
         def random_exceptional(
-            self, seed: bytes | None = None, bound: int | None = None
+            self,
+            seed: bytes | None = None,
+            bound: int | None = None,
+            random: Random | None = None,
         ) -> PseudoMersenneElement: ...
 
     def random(self, seed: bytes) -> PseudoMersenneElement:

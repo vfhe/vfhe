@@ -135,7 +135,7 @@ class RangeDecomposition(Protocol):
     efficiency knob -- and the `kappa` ring values `v(x_eta)`. The verifier
     replies with one spot-check point `s'`.
 
-    It then checks, per repetition, that the digits recompose:
+    It then checks, per repetition, that the digits recompose::
 
         sum_{delta, j} iota(psi_eta[delta, j]) * eq~(delta; r_eta^{>m})
                                               * beta^{to-int(j)}

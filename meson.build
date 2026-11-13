@@ -23,8 +23,9 @@ vfhe_c_include_dirs = []       # -I paths, private dirs too
 vfhe_c_public_headers = []     # the wrapper's #include lines
 vfhe_c_unit_tests = []         # c/test/unit suites
 vfhe_c_fuzz_tests = []         # c/test/fuzz fuzzers
-vfhe_c_benchmarks = []         # c/bench executables
 vfhe_python_cdefs = []         # what Python may call of the headers
+vfhe_cuda_sources = []         # compiled by nvcc into the CUDA extension
+vfhe_cuda_cdefs = []           # what Python may call of the CUDA extension
 
 # --- Modules ------------------------------------------------------------------
 
@@ -36,6 +37,7 @@ subdir('modules/mlwe')
 subdir('modules/piop')
 subdir('modules/polycom')
 subdir('modules/util')
+subdir('modules/vfhe')
 
 # --- External -----------------------------------------------------------------
 
@@ -166,6 +168,42 @@ foreach engine_name, c_args : engines
         install_dir: py.get_install_dir(),
     )
 endforeach
+
+# --- CUDA ---------------------------------------------------------------------
+
+# One extension beside the engines, loaded by vfhe.util.gpu; cudart static,
+# so it loads without a driver.
+cuda_option = get_option('cuda')
+cuda_dep = dependency('', required: false)
+if not cuda_option.disabled() and add_languages('cuda', required: cuda_option, native: false)
+    cuda_dep = dependency('cuda', version: '>=12', required: cuda_option)
+endif
+
+if cuda_dep.found()
+    cuda_ffi_c = custom_target(
+        'ffi-c-cuda',
+        output: '_vfhe_cuda.c',
+        command: [
+            py, files('modules/util/python/src/vfhe/util/kernels/_ffi.py'),
+            '_vfhe_cuda', '@OUTPUT@',
+            vfhe_cuda_cdefs, '--', vfhe_c_public_headers,
+        ],
+        depend_files: vfhe_cuda_cdefs + vfhe_c_public_headers,
+    )
+
+    shared_library(
+        '_vfhe_cuda',
+        vfhe_cuda_sources + [cuda_ffi_c],
+        name_prefix: '',
+        name_suffix: 'so',
+        include_directories: vfhe_c_include_dirs,
+        c_args: common_c_args,
+        override_options: ['b_lundef=false'],
+        dependencies: [cuda_dep, py.dependency(embed: false)],
+        install: true,
+        install_dir: py.get_install_dir(),
+    )
+endif
 
 # --- Tests --------------------------------------------------------------------
 

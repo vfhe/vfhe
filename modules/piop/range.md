@@ -47,13 +47,13 @@ Everything else is the framework's. The whole construction is this much
 wiring:
 
 ```python
-iop = IOP(domain=field)                       # field = F_p; or fiat_shamir=True
-iop.register(Relation_Range,  RangeDecomposition(field, m, alphabet, kappa, ring))
+iop = IOP(domain=field)  # field = F_p; or fiat_shamir=True
+iop.register(Relation_Range, RangeDecomposition(field, m, alphabet, kappa, ring))
 #                                     m = split point, alphabet = |Sigma| = sigma,
 #                                     kappa = repetitions (all Fig. 13); ring = R_q
 iop.register(Relation_Lookup, Lookup(field))
-iop.register(Relation_Sum,    Sumcheck())
-iop.register(Relation_Eval,   VirtualEval(), kind=OracleKind.virtual)
+iop.register(Relation_Sum, Sumcheck())
+iop.register(Relation_Eval, VirtualEval(), kind=OracleKind.virtual)
 # Relation_Eval for plain oracles stays unregistered -> terminal oracle query
 assert iop.run(Statement(Relation_Range(B, c), oracles=[TableOracle(v_tilde)]))
 ```
@@ -203,10 +203,13 @@ Taken first, because Figure 13 reduces to it. The relation is
 ```python
 class Relation_Lookup(Relation):
     """Every hypercube evaluation of the oracle lies in t_beta = {0..beta-1}."""
+
     name = "lookup"
     fields = ("oracles",)
     index_fields = ("beta",)
-    def __init__(self, beta: int) -> None: super().__init__(index={"beta": beta})
+
+    def __init__(self, beta: int) -> None:
+        super().__init__(index={"beta": beta})
 ```
 
 `check()` walks the hypercube and tests `0 <= int(value) < beta`.
@@ -250,17 +253,18 @@ steps 1–2; steps 3–6 are all of its step 3.
 
    ```python
    notlast = TableOracle(MLE.eq(field, [0], variables=[w]), public=True)  # [1, 0] = 1 - w
-   last    = TableOracle(MLE.eq(field, [1], variables=[w]), public=True)  # [0, 1] = w
-   onto_W  = lambda t: {v: W[i] for i, v in enumerate(t.variables)}
+   last = TableOracle(MLE.eq(field, [1], variables=[w]), public=True)  # [0, 1] = w
+   onto_W = lambda t: {v: W[i] for i, v in enumerate(t.variables)}
    f_WSmu = VirtualOracle(
        variables=W,
        constituents=[notlast, last, mu_prime, read_ts, f1_WSmu],
-       terms=[(one,        (0, 2)),     # (1-W_n) * mu'
-              (zeta,       (0, 3)),     # (1-W_n) * sigma_L * read_ts
-              (zeta - tau, (0,)),       # (1-W_n) * (sigma_L - tau)
-              (one,        (1, 4))],    # W_n * f^(1)
-       maps=[{w: W[n]}, {w: W[n]},
-             onto_W(mu_prime), onto_W(read_ts), onto_W(f1_WSmu)],
+       terms=[
+           (one, (0, 2)),  # (1-W_n) * mu'
+           (zeta, (0, 3)),  # (1-W_n) * sigma_L * read_ts
+           (zeta - tau, (0,)),  # (1-W_n) * (sigma_L - tau)
+           (one, (1, 4)),
+       ],  # W_n * f^(1)
+       maps=[{w: W[n]}, {w: W[n]}, onto_W(mu_prime), onto_W(read_ts), onto_W(f1_WSmu)],
    )
    ```
 
@@ -273,8 +277,8 @@ steps 1–2; steps 3–6 are all of its step 3.
    `X = [X_0 … X_{n−1}]`:
 
    ```python
-   child0 = {W[0]: 0} | {W[i+1]: X[i] for i in range(n)}   # f_a(0, X)
-   child1 = {W[0]: 1} | {W[i+1]: X[i] for i in range(n)}   # f_a(1, X)
+   child0 = {W[0]: 0} | {W[i + 1]: X[i] for i in range(n)}  # f_a(0, X)
+   child1 = {W[0]: 1} | {W[i + 1]: X[i] for i in range(n)}  # f_a(1, X)
    ```
 
    The parent slot needs no view of `f_α` at all: `f_α(X, 1) = f^{(1)}_α(X)`
@@ -291,9 +295,8 @@ steps 1–2; steps 3–6 are all of its step 3.
 
    ```python
    constituents = [eq_rho, f1_WSmu, f_WSmu, f_WSmu, f1_RS, f_RS, f_RS]
-   terms = [( one, (0, 1)), (-one, (0, 2, 3)),
-            ( chi, (0, 4)), (-chi, (0, 5, 6))]
-   maps  = [identity, rename1, child0, child1, rename2, child0, child1]
+   terms = [(one, (0, 1)), (-one, (0, 2, 3)), (chi, (0, 4)), (-chi, (0, 5, 6))]
+   maps = [identity, rename1, child0, child1, rename2, child0, child1]
    ```
 
    This is Figure 12 transcribed: one `eq̃(ρ, X)` factor, `f_1(1,X) −
@@ -366,10 +369,12 @@ The relation is `relations/range.py`, the protocol `protocols/range.py`.
 class Relation_Range(Relation):
     """Every coefficient of every hypercube evaluation of the R_q oracle
     lies in [0, B): the table T_B of the paper."""
+
     name = "range"
     fields = ("oracles",)
     index_fields = ("bound", "chunks")
-    def __init__(self, bound: int, chunks: int) -> None:   # B, c
+
+    def __init__(self, bound: int, chunks: int) -> None:  # B, c
         super().__init__(index={"bound": bound, "chunks": chunks})
 ```
 

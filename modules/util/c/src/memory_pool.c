@@ -1,13 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Antonio Guimarães <antonio.guimaraes@imdea.org>
 // SPDX-License-Identifier: Apache-2.0
+// How the pool works. Each thread keeps its own free lists, one bucket per
+// buffer size, and takes a lock only its owner contends for in normal use.
+// What every thread retains is counted against one shared capacity, which a
+// thread draws on in chunks so that a working set below a chunk touches no
+// shared line. The automatic capacity follows the peak of what was handed out
+// at once, which the threads report in the same chunked way.
 #include "memory_pool.h"
 
 #include <alloc.h>
+#include <wipe.h>
 
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+
 #include <string.h>
+
+#include "env.h"
 
 #if defined(__SANITIZE_ADDRESS__)
 #define MEMPOOL_BYPASS 1
@@ -89,7 +99,7 @@ static SharedCount reserved = {0};
 static SharedSignedCount outstanding = {0};
 static SharedCount peak_outstanding = {0};
 // MEMPOOL_CAPACITY_DEFAULT until first read or after a reset: the environment
-// is read on first use rather than at load.
+// is read on first use.
 static atomic_uint_fast64_t capacity_setting = MEMPOOL_CAPACITY_DEFAULT;
 // 1 when every released buffer is zeroed, 0 when not, -1 until first read or
 // after a reset (the environment is read on first use).
@@ -102,14 +112,6 @@ static pthread_once_t init_once = PTHREAD_ONCE_INIT;
 // a buffer with its complement when handing it out and with the byte itself
 // when taking it back, so reads of memory nobody wrote show up in tests.
 static int perturb_byte = 0;
-
-// Zeroes in a way the compiler may not drop, even though the buffer may be
-// freed right after.
-static void wipe(void *ptr, size_t bytes)
-{
-    memset(ptr, 0, bytes);
-    __asm__ __volatile__("" : : "r"(ptr) : "memory");
-}
 
 // Frees every buffer the storage retains and gives up its reserved room.
 static void release_storage(ThreadStorage *s)
@@ -233,15 +235,10 @@ static ThreadStorage *this_thread_storage(void)
 
 static uint64_t default_capacity(void)
 {
-    const char *env = getenv("VFHE_MEMPOOL_CAPACITY");
-    if (env != NULL && *env != '\0')
-    {
-        char *end;
-        const unsigned long long value = strtoull(env, &end, 10);
-        if (*end == '\0' && value < MEMPOOL_CAPACITY_DEFAULT)
-            return (uint64_t)value;
-    }
-    return MEMPOOL_CAPACITY_AUTO;
+    uint64_t value;
+    return env_uint64("VFHE_MEMPOOL_CAPACITY", &value) && value < MEMPOOL_CAPACITY_DEFAULT
+               ? value
+               : MEMPOOL_CAPACITY_AUTO;
 }
 
 uint64_t mempool_capacity(void)
@@ -249,9 +246,11 @@ uint64_t mempool_capacity(void)
     uint_fast64_t setting = atomic_load(&capacity_setting);
     if (setting == MEMPOOL_CAPACITY_DEFAULT)
     {
+        // The exchange's own outcome is the answer; a reload could see a reset.
         uint_fast64_t unset = MEMPOOL_CAPACITY_DEFAULT;
-        atomic_compare_exchange_strong(&capacity_setting, &unset, default_capacity());
-        setting = atomic_load(&capacity_setting);
+        setting = default_capacity();
+        if (!atomic_compare_exchange_strong(&capacity_setting, &unset, setting))
+            setting = unset;
     }
     return (uint64_t)setting;
 }
@@ -442,9 +441,9 @@ int mempool_wipe_on_release(void)
     {
         const char *env = getenv("VFHE_MEMPOOL_WIPE_ON_RELEASE");
         int unset = -1;
-        atomic_compare_exchange_strong(&wipe_setting, &unset,
-                                       env != NULL && strcmp(env, "1") == 0 ? 1 : 0);
-        setting = atomic_load(&wipe_setting);
+        setting = env != NULL && strcmp(env, "1") == 0 ? 1 : 0;
+        if (!atomic_compare_exchange_strong(&wipe_setting, &unset, setting))
+            setting = unset;
     }
     return setting;
 }

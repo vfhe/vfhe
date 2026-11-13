@@ -17,6 +17,7 @@
 
 #include <arith.h>
 #include <arith_generic.h>
+#include <expand.h>
 
 #include "unity.h"
 
@@ -404,9 +405,9 @@ void test_sampling_lands_in_the_canonical_domain(void)
 {
     ArithElement e;
     arith_new(ring, &e);
-    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_sample_uniform(ring, &e));
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_sample_uniform(ring, &e, NULL));
     TEST_ASSERT_EQUAL_INT(ARITH_DOMAIN_CANONICAL, e.domain);
-    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_sample_gaussian(ring, &e, 3.2));
+    TEST_ASSERT_EQUAL_INT(ARITH_OK, arith_sample_gaussian(ring, &e, 3.2, NULL));
     TEST_ASSERT_EQUAL_INT(ARITH_DOMAIN_CANONICAL, e.domain);
     arith_free(ring, &e);
 }
@@ -900,6 +901,26 @@ void test_matrix_product_over_a_ring_that_is_not_fully_split(void)
     rns_base_free(split);
 }
 
+/* A seeded row is expand_below under the key expand_key derives from the seed
+ * and the label (stream, q): the format a stored seed expands to. */
+void test_a_seeded_row_matches_the_crypto_definition(void)
+{
+    static const char CONTEXT[] = "vfhe 2026-10-04 RNS polynomial mul-domain row from a seed";
+    RNS_Polynomial a = polynomial_new_RNS_polynomial(TEST_N, TEST_MASK, base);
+    polynomial_RNS_expand_seeded(a, (const uint8_t *)"s", 1, 9);
+    for (uint64_t i = 0; i < TEST_L; i++)
+    {
+        const uint64_t label[2] = {9, PRIMES[i]};
+        uint8_t key[16];
+        uint64_t expected[TEST_N];
+        expand_key(key, CONTEXT, (const uint8_t *)"s", 1, label, 2);
+        expand_below(expected, TEST_N, 0, PRIMES[i], key);
+        for (uint64_t j = 0; j < TEST_N; j++)
+            TEST_ASSERT_EQUAL_UINT64(expected[j], coeff(a, i, j));
+    }
+    free_RNS_polynomial(a);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -931,5 +952,6 @@ int main(void)
     RUN_TEST(test_round_division_to_a_smaller_ring);
     RUN_TEST(test_the_shared_ring_is_shared);
     RUN_TEST(test_an_unknown_tag_dispatches_through_the_table);
+    RUN_TEST(test_a_seeded_row_matches_the_crypto_definition);
     return UNITY_END();
 }

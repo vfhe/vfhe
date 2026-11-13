@@ -18,7 +18,7 @@ from vfhe.arith import (
     domain_of,
     repr,
 )
-from vfhe.crypto import entropy
+from vfhe.crypto.random import Random
 from vfhe.util.bindings import ffi, lib
 from vfhe.util.parallel import local_num_threads
 
@@ -106,6 +106,11 @@ class SchemeParameters:
 
 
 class MLWE_Scheme:
+    """A leveled Module-LWE scheme over a chain of `RNSRing` levels: keys,
+    encryption and linear decryption, homomorphic addition and multiplication,
+    key switching and automorphisms, every sample drawn from its `random`
+    source."""
+
     # Concrete ciphertext class this scheme allocates when it has no input
     # ciphertext to derive the type from (see :meth:`sample`). Subclasses set it
     # to their own ciphertext class; operations that transform an existing
@@ -122,6 +127,7 @@ class MLWE_Scheme:
         max_lvl: int | None = None,
         module_rank: int = 1,
         balanced: bool = True,
+        random: Random | None = None,
     ) -> None:
         """Create a leveled scheme in one of two initialization modes.
 
@@ -143,7 +149,13 @@ class MLWE_Scheme:
         and the balanced digits add about one bit less noise standard deviation
         at the same cost. The key-switch keys the scheme generates carry the
         choice, and :class:`MGSW_Scheme` follows it.
+
+        ``random`` is the source every key, mask and noise of the scheme is
+        drawn from: the entropy stream when None, or a seeded
+        `vfhe.crypto.random.Random`, under which the scheme is reproducible.
         """
+        #: The source the scheme's samplers draw from.
+        self.random = random if random is not None else Random()
         first = rings if isinstance(rings, ArithParent) else rings[0]
         first.require(Capability.QUOTIENT_POLY_RING | Capability.TOWER)
 
@@ -262,7 +274,7 @@ class MLWE_Scheme:
         """
         if distribution != "ternary":
             raise ValueError(f"unknown key distribution {distribution!r}")
-        values = entropy.below_many(self.N * self.r, 3)
+        values = self.random.below_many(self.N * self.r, 3)
         key = [
             [v - 1 for v in values[i * self.N : (i + 1) * self.N]]
             for i in range(self.r)
@@ -276,7 +288,7 @@ class MLWE_Scheme:
         crt_h = 0
         sign = 1
         while crt_h < h:
-            rnd = entropy.below(self.N * self.r)
+            rnd = self.random.below(self.N * self.r)
             if key[rnd // self.N][rnd % self.N]:
                 continue
             key[rnd // self.N][rnd % self.N] = sign
@@ -1269,13 +1281,15 @@ class MLWE_Scheme:
             key = key.at_ring(out.ring)
         msg.to_coeff()
         if self.seeded_encryption if seeded is None else seeded:
-            seed = entropy.bytes(32)
+            seed = self.random.bytes(32)
             lib_rlwe.lib.mlwe_RNSc_sample_seeded(
-                out.obj, key.obj, msg.as_element(), seed, len(seed)
+                out.obj, key.obj, msg.as_element(), seed, len(seed), self.random.obj
             )
             out.seed = seed
         else:
-            lib_rlwe.lib.mlwe_RNSc_sample(out.obj, key.obj, msg.as_element())
+            lib_rlwe.lib.mlwe_RNSc_sample(
+                out.obj, key.obj, msg.as_element(), self.random.obj
+            )
             out.seed = None
         out.repr = repr.coeff
         return out
@@ -1297,9 +1311,9 @@ class MLWE_Scheme:
 
         Each sample is a function of a mask seed, kept as `MLWE.seed` as
         :meth:`sample` keeps it, and a secret noise seed, all drawn in order on the
-        calling thread, so the samples do not depend on the thread count: under
-        ``entropy.deterministic`` any count gives the same keys. They come back in
-        NTT form, where keys are used.
+        calling thread, so the samples do not depend on the thread count: over
+        a seeded `random` any count gives the same keys. They come back in NTT
+        form, where keys are used.
         """
         ring = key.ring
         if ffi.cast("RNS_MLWE_Key", key.obj).r != self.r:
@@ -1340,6 +1354,7 @@ class MLWE_Scheme:
             len(rows),
             seeds,
             n_threads,
+            self.random.obj,
         )
         if lvl is None:
             lvl = self.level_of_ring(ring, strict=False)
@@ -1378,6 +1393,8 @@ class MLWE_Scheme:
             key_at_ring = key
         else:
             key_at_ring = key.at_ring(target)
+        if rlwe.r != ffi.cast("RNS_MLWE_Key", key_at_ring.obj).r:
+            raise ValueError("the sample's rank is not the key's")
         rlwe.to_NTT()
         lib_rlwe.lib.mlwe_RNS_linear_decrypt(
             out.as_element(), rlwe.obj, key_at_ring.obj
@@ -1629,6 +1646,9 @@ class PlaintextMatrix:
 
 
 class MLWE_Key:
+    """A secret key of an `MLWE_Scheme`: ``key`` holds its ``scheme.r``
+    coefficient vectors and ``sigma_err`` the noise width of its encryptions."""
+
     def __init__(
         self,
         key: list[list[int]],
@@ -1687,7 +1707,11 @@ class MLWE_Key:
         lwe_coeffs = functools.reduce(operator.iadd, self.key, [])
         n = len(lwe_coeffs)
         return LWE_Key(
-            ring=self.scheme.rings[0], key=lwe_coeffs, n=n, err_sigma=self.sigma_err
+            ring=self.scheme.rings[0],
+            key=lwe_coeffs,
+            n=n,
+            err_sigma=self.sigma_err,
+            random=self.scheme.random,
         )
 
 
@@ -1775,6 +1799,11 @@ def _monomial(ring: RNSRing, exponent: int, minus_one: bool = False) -> RNSPolyn
 
 
 class MLWE:
+    """A Module-LWE sample over ``ring`` at level ``lvl``: ``r`` mask
+    components and the body, held natively in ``obj``. It is the ciphertext of
+    every scheme, with ``+``, ``-`` and ``*`` and the scheme's operations on
+    it."""
+
     #: The seed the mask was drawn from (`MLWE_Scheme.sample`), or None. Kept
     #: by copies only. An in-place change of the mask leaves it stale; writers
     #: check it against the mask before relying on it.

@@ -4,6 +4,7 @@
 #define VFHE_ARITH_GENERIC_H
 
 #include <arith.h>
+#include <random.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -141,8 +142,10 @@ extern "C"
                                        uint64_t power, int minus_one);
 
         // sampling group (ARITH_CAP_SAMPLING)
-        ArithStatus (*sample_uniform)(ArithRing ring, ArithElement *out);
-        ArithStatus (*sample_gaussian)(ArithRing ring, ArithElement *out, double sigma);
+        // Uniform and Gaussian, drawn from `source` (NULL: the entropy stream).
+        ArithStatus (*sample_uniform)(ArithRing ring, ArithElement *out, Random source);
+        ArithStatus (*sample_gaussian)(ArithRing ring, ArithElement *out, double sigma,
+                                       Random source);
         // Uniform, in the mul domain, as a pure function of the ring, `seed`
         // and `stream`: the element can be stored as its seed.
         ArithStatus (*sample_uniform_seeded)(ArithRing ring, ArithElement *out, const uint8_t *seed,
@@ -228,8 +231,9 @@ extern "C"
     ArithStatus arith_mul_by_monomial(ArithRing ring, ArithElement *out, const ArithElement *a,
                                       uint64_t power, int minus_one);
 
-    ArithStatus arith_sample_uniform(ArithRing ring, ArithElement *out);
-    ArithStatus arith_sample_gaussian(ArithRing ring, ArithElement *out, double sigma);
+    ArithStatus arith_sample_uniform(ArithRing ring, ArithElement *out, Random source);
+    ArithStatus arith_sample_gaussian(ArithRing ring, ArithElement *out, double sigma,
+                                      Random source);
     ArithStatus arith_sample_uniform_seeded(ArithRing ring, ArithElement *out, const uint8_t *seed,
                                             uint64_t seed_len, uint64_t stream);
     ArithStatus arith_from_int_array(ArithRing ring, ArithElement *out, const uint64_t *values,

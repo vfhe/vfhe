@@ -144,7 +144,7 @@ class Sumcheck(_SumcheckRounds):
     def soundness_error(
         self, statement: Statement, domain, degree: int | None = None
     ) -> float | None:
-        """degree * num_vars / |A| (piop.md §6); None if |A| is unknown. The
+        """degree * num_vars / ``|A|`` (piop.md §6); None if ``|A|`` is unknown. The
         degree defaults to the oracle's (`degree` attribute of a defined
         oracle in products form), else 1 (a multilinear table)."""
         size = exceptional_set_size(domain)
@@ -195,7 +195,7 @@ class SumcheckProd(_SumcheckRounds):
     supported_domains: tuple[type, ...] = (Ring, Field)
 
     def soundness_error(self, statement: Statement, domain) -> float | None:
-        """k * num_vars / |A| (piop.md §6); None if |A| is unknown."""
+        """k * num_vars / ``|A|`` (piop.md §6); None if ``|A|`` is unknown."""
         size = exceptional_set_size(domain)
         if size is None:
             return None

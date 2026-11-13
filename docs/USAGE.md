@@ -72,8 +72,8 @@ the computation.
 
 - Raise `Ring`'s degree and modulus bit-count for deeper computations, at the
   cost of speed and ciphertext size.
-- Read each module's `__init__` re-exports for its public API, listed in the
-  [README](https://github.com/vfhe/vfhe/blob/main/README.md#modules).
+- Read the [API reference](https://vfhe.github.io/vfhe/api/) of the modules
+  listed in the [README](https://github.com/vfhe/vfhe/blob/main/README.md#modules).
 - Compile your own C kernels into the library with `vfhe.util.kernels`, so the
   compiler inlines vfhe's primitives into your loops. It needs a C compiler, and
   meson and ninja from `pip install vfhe[kernels]`.

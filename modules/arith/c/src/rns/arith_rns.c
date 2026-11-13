@@ -195,17 +195,19 @@ ArithStatus arith_rns_mul_by_monomial(ArithRing ring, ArithElement *out, const A
     return ARITH_OK;
 }
 
-ArithStatus arith_rns_sample_uniform(ArithRing ring, ArithElement *out)
+ArithStatus arith_rns_sample_uniform(ArithRing ring, ArithElement *out, Random source)
 {
     (void)ring;
-    polynomial_gen_random_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(out));
+    polynomial_gen_random_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(out), source);
     return ARITH_OK;
 }
 
-ArithStatus arith_rns_sample_gaussian(ArithRing ring, ArithElement *out, double sigma)
+ArithStatus arith_rns_sample_gaussian(ArithRing ring, ArithElement *out, double sigma,
+                                      Random source)
 {
     (void)ring;
-    polynomial_gen_gaussian_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(out), sigma);
+    polynomial_gen_gaussian_RNSc_polynomial((RNSc_Polynomial)arith_rns_polynomial(out), sigma,
+                                            source);
     return ARITH_OK;
 }
 

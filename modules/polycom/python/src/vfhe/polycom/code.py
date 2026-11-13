@@ -57,7 +57,8 @@ from typing import TYPE_CHECKING, TypeVar
 
 from vfhe.arith import Polynomial, RNSPolynomial, RNSRing
 from vfhe.arith.mle import element_array, mark_ntt
-from vfhe.crypto import hash_bytes, leaf_digest, seeded
+from vfhe.crypto.hash import digest
+from vfhe.crypto.random import seeded_below_many
 from vfhe.util.bindings import lib
 
 if TYPE_CHECKING:
@@ -94,7 +95,7 @@ def derive_seed(seed: bytes, tag: bytes, attempt: int = 0) -> bytes:
     """The seed of one table: a digest of the code's seed, the table's tag
     and the attempt number, so every table of a code is an independent pure
     function of the seed and a rejected draw is redone under a fresh one."""
-    return hash_bytes(
+    return digest(
         _CONTEXT
         + attempt.to_bytes(2, "little")
         + len(tag).to_bytes(2, "little")
@@ -126,8 +127,8 @@ def foldable_relative_distance(
     case, `t_i = 2 t_{i-1} + l_i`, and `distance >= 1 - t_d / n_d`. They
     differ in `l_i`::
 
-        "cccfgs26": l_i = (lambda + 2 t_{i-1} (1 + log2(|F| / (|F| - 1)))
-                           + 0.585 n_i) / (log2(|F| - 1) - 1)
+        "cccfgs26": l_i = (lambda + 2 t_{i-1} (1 + log2(``|F|`` / (``|F|`` - 1)))
+                           + 0.585 n_i) / (log2(``|F|`` - 1) - 1)
         "zcf24":    l_i = (2 log2(n_{i-1}) + lambda + 2.002 t_{i-1} + 0.6 n_i)
                            / (log2|F| - 1.001)
 
@@ -149,8 +150,8 @@ def foldable_relative_distance(
     if bound not in DISTANCE_BOUNDS:
         raise ValueError(f"bound must be one of {DISTANCE_BOUNDS}, got {bound!r}")
     if bound == "cccfgs26":
-        # log2(|F| - 1) and log2(|F| / (|F| - 1)) from log2|F|, without
-        # forming |F|: the correction is log2(1 - 2^-field_bits), which is 0
+        # log2(``|F|`` - 1) and log2(``|F|`` / (``|F|`` - 1)) from log2|F|, without
+        # forming ``|F|``: the correction is log2(1 - 2^-field_bits), which is 0
         # to double precision once the field has more than about 50 bits.
         correction = math.log1p(-(2.0**-field_bits)) / math.log(2)
         denominator = field_bits + correction - 1
@@ -279,15 +280,15 @@ def bit_reverse_permutation(bits: int) -> list[int]:
 
 def _element_hash(element: RNSPolynomial):
     """The element's own digest, dispatched through its class."""
-    return element.get_hash()
+    return element.digest()
 
 
 def pair_digest(pair: tuple[RNSPolynomial, RNSPolynomial]) -> bytes:
     """The Merkle leaf digest of one adjacent pair.
 
-    Both ring elements are hashed with their own `get_hash` and the two
+    Both ring elements are hashed with their own `digest` and the two
     digests hashed together, so the leaf binds the pair as an ordered unit.
-    `get_hash` hashes the NTT form and leaves the entry alone, so hashing a
+    `digest` hashes the NTT form and leaves the entry alone, so hashing a
     codeword never disturbs it.
     """
     lo, hi = pair
@@ -297,7 +298,7 @@ def pair_digest(pair: tuple[RNSPolynomial, RNSPolynomial]) -> bytes:
 def _fiber_digest(fiber) -> bytes:
     """The Merkle leaf digest of adjacent symbols: each element's own digest,
     in order, hashed together. Two symbols give `pair_digest`."""
-    return hash_bytes(b"".join(leaf_digest(e, _element_hash) for e in fiber))
+    return digest(b"".join(_element_hash(e) for e in fiber))
 
 
 #: A per-position table of per-prime scalars: ``table[j][k]`` is the scalar
@@ -500,7 +501,7 @@ class FoldableRS:
         """`n` positions of uniform per-prime scalars, a pure function of the
         code's seed, `tag` and `attempt`."""
         rows = [
-            seeded.below_many(
+            seeded_below_many(
                 n, p, _CONTEXT, derive_seed(self.seed, tag + bytes([k]), attempt)
             )
             for k, p in enumerate(self.ring.primes)
@@ -656,6 +657,14 @@ class FoldableRS:
         level = (size // self.n0).bit_length() - 1
         if self.n0 << level != size or level > self.d:
             raise ValueError(f"codeword length {size} is not n0 * 2^l, l <= d")
+        ring = self.ring
+        for p in word:
+            if (
+                p.ring.N != ring.N
+                or p.ring.mask != ring.mask
+                or p.ring.base != ring.base
+            ):
+                raise ValueError("codeword element belongs to a different ring")
         if self.instantiation == "rs":
             return self._kernel_decode(word, self.k0 << level, self._plans[level])
         if self.residue_codes:

@@ -160,6 +160,11 @@ class SampleCodec(Codec[MLWE]):
         if domain == Repr.ntt or message.seed:
             self.schemes.rings.require_same_transform(ring)
         rows = RowReader(ring, message.packing)
+        expected = scheme.extended_rank if message.extended else scheme.r
+        if message.rank != expected:
+            raise ValueError(
+                f"a sample of rank {message.rank} for a scheme of rank {expected}"
+            )
         c = self.cls(scheme, lvl=message.lvl, ring=ring, rank=message.rank)
         c.is_extended = message.extended
         rows.read(message.b, c.obj_b())
@@ -168,9 +173,15 @@ class SampleCodec(Codec[MLWE]):
                 raise ValueError(
                     f"unknown seed expansion {message.seed_expansion}: written by a newer vfhe?"
                 )
+            if len(message.seed) != SEED_BYTES:
+                raise ValueError(
+                    f"a mask seed is {SEED_BYTES} bytes, got {len(message.seed)}"
+                )
             for j in range(message.rank):
                 a_j = c.obj_a_i(j)
-                lib.polynomial_RNS_expand_seeded(a_j, message.seed, SEED_BYTES, j)
+                lib.polynomial_RNS_expand_seeded(
+                    a_j, message.seed, len(message.seed), j
+                )
                 if domain == Repr.coeff:
                     lib.polynomial_RNS_to_RNSc(a_j, a_j)
             c.seed = message.seed

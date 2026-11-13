@@ -30,7 +30,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vfhe.arith import MLE_Variable
-from vfhe.crypto import chain_digest
+from vfhe.crypto.hash import DigestChain
 from vfhe.piop.digest import element_digest
 from vfhe.piop.oracle import ImplicitOracle, Oracle, TableOracle, map_oracles
 from vfhe.piop.relation import Relation, Statement
@@ -131,7 +131,7 @@ class FamilyShape:
         return {n: tuple(v) if isinstance(v, list) else v for n, v in out.items()}
 
     def digest(self) -> bytes:
-        return chain_digest([b"family-shape", element_digest(self.widths)])
+        return DigestChain([b"family-shape", element_digest(self.widths)]).digest()
 
     def __repr__(self) -> str:
         return f"FamilyShape({self.widths!r})"

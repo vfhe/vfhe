@@ -17,7 +17,7 @@ oracle uses the same function as one that folds one.
 
 from __future__ import annotations
 
-from vfhe.crypto import DIGEST_LEN, hash_bytes
+from vfhe.crypto.hash import DIGEST_LEN, digest
 
 
 def query_positions(seed: bytes, span: int, shift: int, rep: int) -> tuple[int, ...]:
@@ -66,10 +66,10 @@ def query_positions(seed: bytes, span: int, shift: int, rep: int) -> tuple[int, 
     seen: set[int] = set()
     counter = 0
     while len(positions) < rep:
-        digest = hash_bytes(seed + counter.to_bytes(8, "little"))
+        block = digest(seed + counter.to_bytes(8, "little"))
         counter += 1
         for off in range(0, DIGEST_LEN, 8):
-            candidate = int.from_bytes(digest[off : off + 8], "little") & (span - 1)
+            candidate = int.from_bytes(block[off : off + 8], "little") & (span - 1)
             end = candidate >> shift
             if end in seen:
                 continue

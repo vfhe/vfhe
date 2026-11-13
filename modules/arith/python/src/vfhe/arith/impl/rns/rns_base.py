@@ -28,8 +28,18 @@ class RNS_Base_Registry:
         # (N, split_degree, in_mask, out_mask, exact, primes) -> params_pointer
         self.conversion_params_cache = {}
 
+    #: Primes a base holds at most: the width of the masks that select them.
+    MAX_PRIMES = 64
+
     def register_ring_primes(self, primes, N, split_degree):
         key = (N, split_degree)
+        if len(set(primes)) != len(primes):
+            raise ValueError("a ring's primes must be distinct")
+        known = self.prime_to_index.get(key, {})
+        if len(known) + sum(p not in known for p in primes) > self.MAX_PRIMES:
+            raise ValueError(
+                f"a base holds at most {self.MAX_PRIMES} primes per (N, split_degree)"
+            )
         if key not in self.bases:
             self.primes[key] = list(primes)
             self.prime_to_index[key] = {p: i for i, p in enumerate(primes)}

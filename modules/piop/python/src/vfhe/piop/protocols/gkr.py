@@ -48,7 +48,7 @@ class OutputTest(Protocol):
     unless `out` is public: the verifier draws r (one challenge per
     variable), v = out(r) is computed by the verifier when `out` is public
     and sent by the prover otherwise — the random-evaluation identity test
-    of [Tha22, §4.6], soundness s / |A| by generalized Schwartz-Zippel
+    of [Tha22, §4.6], soundness s / ``|A|`` by generalized Schwartz-Zippel
     [GNS23, Lem. 2]. The step that turns a sequentially composable protocol
     into a protocol for the relation with its head committed or public."""
 

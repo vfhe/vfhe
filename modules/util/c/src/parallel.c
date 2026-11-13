@@ -1,21 +1,29 @@
 // SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
+// How a loop runs. The caller takes idle workers off a lock-free stack, hands
+// them the loop, and wakes the first; the workers wake each other as a binary
+// tree and draw items one at a time with the caller. A loop short of workers
+// is "open": a worker finishing another loop joins it. The caller waits for
+// the last thread to retire, then the loop, which lives on its stack, is gone.
+// Workers are created on first need and kept asleep between loops.
 #include "parallel.h"
 
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+
 #include <string.h>
 
-// 0 until first read or after a reset: the default is resolved lazily, so the
-// environment is read on first use rather than at load.
+#include "env.h"
+
+// 0 until first read or after a reset: the environment is read on first use.
 static atomic_uint_fast64_t thread_limit = 0;
 
 // The calling thread's local number of threads, 0 for none set. A loop sets
 // it for the threads running its bodies to their share of the loop's threads,
-// so a loop started inside a body divides that share instead of multiplying
-// threads.
+// so a loop started inside a body divides that share: nested loops stay
+// within the limit.
 static _Thread_local uint64_t local_num_threads = 0;
 
 // The smallest share of a loop's threads that its bodies are lent.
@@ -23,15 +31,8 @@ static _Thread_local uint64_t local_num_threads = 0;
 
 static uint64_t default_thread_limit(void)
 {
-    const char *env = getenv("VFHE_NUM_THREADS");
-    if (env != NULL && *env != '\0')
-    {
-        char *end;
-        const unsigned long long value = strtoull(env, &end, 10);
-        if (*end == '\0' && value > 0)
-            return (uint64_t)value;
-    }
-    return 1;
+    uint64_t value;
+    return env_uint64("VFHE_NUM_THREADS", &value) && value > 0 ? value : 1;
 }
 
 uint64_t vfhe_num_threads(void)
@@ -39,9 +40,12 @@ uint64_t vfhe_num_threads(void)
     uint_fast64_t limit = atomic_load(&thread_limit);
     if (limit == 0)
     {
+        // The exchange's own outcome is the answer: what it stored, or what
+        // another thread had stored first. A reload could see a reset.
         uint_fast64_t unset = 0;
-        atomic_compare_exchange_strong(&thread_limit, &unset, default_thread_limit());
-        limit = atomic_load(&thread_limit);
+        limit = default_thread_limit();
+        if (!atomic_compare_exchange_strong(&thread_limit, &unset, limit))
+            limit = unset;
     }
     return (uint64_t)limit;
 }
@@ -83,7 +87,7 @@ static uint64_t share_of(uint64_t budget, uint64_t threads)
 
 uint64_t vfhe_threads_for(uint64_t requested, uint64_t n_items)
 {
-    return n_items <= 1 ? 1 : loop_threads(thread_budget(requested), n_items);
+    return loop_threads(thread_budget(requested), n_items);
 }
 
 uint64_t vfhe_share_for(uint64_t requested, uint64_t n_items)
@@ -297,7 +301,8 @@ static void after_fork_in_child(void)
     atomic_store(&pool.n_open, 0);
 }
 
-static void register_fork_handlers(void)
+// Registered as the library loads, before any loop can run.
+__attribute__((constructor)) static void watch_forks(void)
 {
     pthread_atfork(before_fork, after_fork_in_parent, after_fork_in_child);
 }
@@ -307,11 +312,9 @@ static void register_fork_handlers(void)
 // loops that wanted it run on fewer threads.
 static void grow_pool(uint64_t n_workers)
 {
-    static pthread_once_t fork_handlers_once = PTHREAD_ONCE_INIT;
     if (atomic_load(&pool.n_workers) >= n_workers)
         return;
     pthread_mutex_lock(&pool.grow_lock);
-    pthread_once(&fork_handlers_once, register_fork_handlers);
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -407,8 +410,8 @@ void vfhe_parallel_for(uint64_t n, uint64_t n_threads, void (*body)(void *ctx, u
     local_num_threads = caller_local;
 
     // Every item has been drawn, so no worker joins from here on. The ones
-    // given the loop that have not started are taken back rather than waited
-    // for; then wait for the ones still running their items.
+    // given the loop that have not started are taken back; the caller then
+    // waits for the ones running items.
     if (open)
     {
         pthread_mutex_lock(&pool.open_lock);

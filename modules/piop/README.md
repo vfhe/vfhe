@@ -2,12 +2,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.piop
 
+The interactive-oracle-proof scaffolding. The architecture and its
+derivation from the PIOP literature are documented in [piop.md](piop.md).
+
 > **Under development.** The code is largely verified by the test suite, but
 > the documentation text — this file and [piop.md](piop.md) — has not been
 > reviewed yet and may be inaccurate or out of date.
-
-The interactive-oracle-proof scaffolding. The architecture and its
-derivation from the PIOP literature are documented in [piop.md](piop.md).
 
 The polynomials the protocols run on — `MLE`, `SparseMLE`, `MLE_Basis`,
 `MLE_Variable` — are `vfhe.arith`'s (`arith/mle.py`), not this module's. A
@@ -19,7 +19,12 @@ The package has three parts: the framework, exported by `vfhe.piop`; the
 relation toolbox, `vfhe.piop.relations`; and the protocols,
 `vfhe.piop.protocols`.
 
-## The framework (`vfhe.piop`)
+## Layout
+
+Every path below is under `python/src/vfhe/piop/`; the module's one C file
+is listed last.
+
+### The framework (`vfhe.piop`)
 
 - `oracle.py`: `OracleKind` and the oracle classes — `Oracle`, the contract
   (`variables`, `kind`, `query(point)`, `digest()`); `TableOracle`, an
@@ -94,7 +99,7 @@ relation toolbox, `vfhe.piop.relations`; and the protocols,
   (arith's tables, polynomials and field elements; `vfhe.crypto`'s Merkle
   paths; the oracles, statements and proofs here).
 
-## The relation toolbox (`vfhe.piop.relations`)
+### The relation toolbox (`vfhe.piop.relations`)
 
 - `hypercube.py`: `Relation_Sum`, `Relation_SumProd`, `Relation_Zero`.
 - `sumdef.py`: `Relation_SumDef`, an oracle defined as the hypercube sum of
@@ -115,7 +120,7 @@ Every relation's `check` is the ideal (non-succinct) decider: what tests
 run and what the verifier may do on the fully-reduced leaf statements. It
 needs the tables, so a claim on a committed oracle has no decider.
 
-## The protocols (`vfhe.piop.protocols`)
+### The protocols (`vfhe.piop.protocols`)
 
 - `sumcheck/`: the sumcheck protocols and their machinery.
   - `sumcheck.py`: `Sumcheck` (reduces `Relation_Sum` to `Relation_Eval`
@@ -147,7 +152,14 @@ needs the tables, so a claim on a committed oracle has no decider.
   base-`β` digits of the coefficients as an oracle over a prime field, a
   recomposition check, and a lookup claim on the digits).
 
-`c/src/sumcheck.c` holds the sumcheck round-message kernels
-(`python/cdef/sumcheck.h`), the module's only C. The dense-MLE kernels they
-mirror are `vfhe.arith`'s (`arith/c/src/mle.c`), and the vector commitment
-the PCS layer uses is `vfhe.crypto`'s `Merkle`.
+### The C
+
+- `c/src/sumcheck.c`, `c/include/sumcheck.h`, `python/cdef/sumcheck.h`: the
+  sumcheck round-message kernels, the module's only C.
+
+## Dependencies
+
+`piop` builds on `vfhe.arith` (the tables, `MLE` / `SparseMLE`, and the
+dense-MLE kernels `sumcheck.c` mirrors), `vfhe.crypto` (digests and the
+verifier's coins) and `vfhe.circuit` (the circuits its relations decide).
+`vfhe.polycom` registers its commitment schemes into it.

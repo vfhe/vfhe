@@ -5,7 +5,7 @@
 # without a documentation block, or a parameter without a line, is an error.
 
 PROJECT_NAME = vFHE
-INPUT = modules/util/c/include
+INPUT = modules/crypto/c/include modules/util/c/include
 RECURSIVE = YES
 OUTPUT_DIRECTORY = build/docs/doxygen
 GENERATE_XML = YES

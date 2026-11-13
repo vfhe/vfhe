@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from vfhe.crypto import chain_digest, hash_bytes
+from vfhe.crypto.hash import DigestChain, digest
 
 from .digest import element_digest
 from .protocol import Rejection
@@ -166,11 +166,11 @@ class Transcript:
             i = len(self._states)
             label = self.order[i]
             self.digests.append(element_digest(self.entries[label].result()))
-            previous = self._states[i - 1] if i else hash_bytes(b"seed" + self.seed)
+            previous = self._states[i - 1] if i else digest(b"seed" + self.seed)
             self._states.append(
-                hash_bytes(previous + hash_bytes(label.encode()) + self.digests[i])
+                digest(previous + digest(label.encode()) + self.digests[i])
             )
-        return self._states[upto - 1] if upto else hash_bytes(b"seed" + self.seed)
+        return self._states[upto - 1] if upto else digest(b"seed" + self.seed)
 
 
 class Proof:
@@ -218,7 +218,9 @@ class Proof:
 
     def digest(self) -> bytes:
         """A digest of the whole proof (`element_digest` hook)."""
-        return chain_digest([b"proof"] + [element_digest(m) for m in self.messages])
+        return DigestChain(
+            [b"proof"] + [element_digest(m) for m in self.messages]
+        ).digest()
 
     def __repr__(self) -> str:
         return f"Proof({len(self)} messages: {', '.join(self.labels)})"

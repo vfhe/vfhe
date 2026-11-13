@@ -1,35 +1,16 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-# vfhe.crypto public API re-exports: the basic cryptographic primitives —
-# randomness, hashing and vector commitment — every other module builds on.
-from .digest import DigestChain, bytes_digest, chain_digest, int_digest, str_digest
-from .hash import Blake3Stream
-from .merkle import (
-    DIGEST_LEN,
-    Merkle,
-    MerklePath,
-    hash_bytes,
-    join_digests,
-    leaf_digest,
-)
-from .prng import SEED_WORDS, EntropyPRNG, SeededPRNG, entropy, seeded
+"""The basic cryptographic primitives every other module builds on.
 
-__all__ = [
-    "DIGEST_LEN",
-    "SEED_WORDS",
-    "Blake3Stream",
-    "DigestChain",
-    "EntropyPRNG",
-    "Merkle",
-    "MerklePath",
-    "SeededPRNG",
-    "bytes_digest",
-    "chain_digest",
-    "entropy",
-    "hash_bytes",
-    "int_digest",
-    "join_digests",
-    "leaf_digest",
-    "seeded",
-    "str_digest",
-]
+- `random` is the randomness: `Random`, the source a scheme's samplers draw
+  from, the entropy stream or a seeded stream, and `seeded_below_many`, values
+  another party recomputes from a transcript. Nothing else in vfhe draws
+  randomness from anywhere.
+- `hash` is BLAKE3: `digest` of a byte string and the chain `DigestChain`;
+  every digest is `DIGEST_LEN` bytes.
+- `merkle` is the vector commitment: the tree `Merkle` and `join_digests`.
+
+Importing `vfhe.crypto` imports none of them; import the one you use:
+
+>>> from vfhe.crypto.random import Random
+"""

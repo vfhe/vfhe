@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
 #include "alloc.h"
-#include <crypto.h>
+#include <normal.h>
+#include <random.h>
 
 // Generates a sparse ternary array with Hamming Weight h, balanced (h/2 ones and h/2 negative ones)
-void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uint64_t q)
+void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uint64_t q,
+                                   Random source)
 {
     memset(out, 0, sizeof(uint64_t) * size);
     uint64_t hw = 0, val = 1, *rnd_buffer;
@@ -13,7 +15,7 @@ void gen_sparse_ternary_array_modq(uint64_t *out, uint64_t size, uint64_t h, uin
     rnd_buffer = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * buffer_size);
     while (hw < h)
     {
-        generate_uniform_below(rnd_buffer, buffer_size, size);
+        random_below(source, rnd_buffer, buffer_size, size);
         uint64_t i = 0;
         while (i < buffer_size && hw < h)
         {
@@ -102,12 +104,13 @@ void free_lwe_key(LWE_Key key)
     free(key);
 }
 
-LWE_Key lwe_new_key(uint64_t n, uint64_t mask, RNS_Base base, double sec_sigma, double err_sigma)
+LWE_Key lwe_new_key(uint64_t n, uint64_t mask, RNS_Base base, double sec_sigma, double err_sigma,
+                    Random source)
 {
     LWE_Key key = lwe_alloc_key(n, mask, base);
     for (size_t i = 0; i < n; i++)
     {
-        int64_t s_val = (int64_t)double2int(generate_normal_random(sec_sigma));
+        int64_t s_val = (int64_t)double2int(normal_random(source, sec_sigma));
         for (size_t j = 0; j < key->l; j++)
         {
             const Modulus mod = lwe_limb_mod(base, mask, j);
@@ -119,11 +122,11 @@ LWE_Key lwe_new_key(uint64_t n, uint64_t mask, RNS_Base base, double sec_sigma, 
 }
 
 LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t mask, RNS_Base base, uint64_t h,
-                                   double err_sigma)
+                                   double err_sigma, Random source)
 {
     LWE_Key key = lwe_alloc_key(n, mask, base);
     uint64_t *tmp = (uint64_t *)safe_malloc(sizeof(uint64_t) * n);
-    gen_sparse_ternary_array_modq(tmp, n, h, 3);
+    gen_sparse_ternary_array_modq(tmp, n, h, 3, source);
     for (size_t j = 0; j < key->l; j++)
     {
         const uint64_t q = lwe_limb_mod(base, mask, j)->q;
@@ -142,17 +145,17 @@ LWE_Key lwe_new_sparse_ternary_key(uint64_t n, uint64_t mask, RNS_Base base, uin
     return key;
 }
 
-void lwe_sample(LWE c, uint64_t *m, LWE_Key key)
+void lwe_sample(LWE c, uint64_t *m, LWE_Key key, Random source)
 {
     assert(c->mask == key->mask && c->n == key->n);
     assert(key->sigma >= 0);
     uint64_t *as = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * key->n);
-    int64_t e_val = (int64_t)double2int(generate_normal_random(key->sigma));
+    int64_t e_val = (int64_t)double2int(normal_random(source, key->sigma));
     for (size_t i = 0; i < key->l; i++)
     {
         const Modulus mod = lwe_limb_mod(key->base, key->mask, i);
         const uint64_t q = mod->q;
-        generate_uniform_below(c->a[i], key->n, q);
+        random_below(source, c->a[i], key->n, q);
 
         uint64_t e = e_val < 0 ? negate_modq((uint64_t)(-e_val), q) : (uint64_t)e_val;
 
@@ -169,10 +172,10 @@ void lwe_sample(LWE c, uint64_t *m, LWE_Key key)
     free(as);
 }
 
-LWE lwe_new_sample(uint64_t *m, LWE_Key key)
+LWE lwe_new_sample(uint64_t *m, LWE_Key key, Random source)
 {
     LWE c = lwe_alloc_sample(key->n, key->mask, key->base);
-    lwe_sample(c, m, key);
+    lwe_sample(c, m, key, source);
     return c;
 }
 

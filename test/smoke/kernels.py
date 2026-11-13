@@ -5,7 +5,7 @@
 Only an install proves the vfhe/_source snapshot shipped -- a wheel built
 without it imports perfectly and cannot compile a kernel.
 
-Ordering is the subject here: ExtensionBuilder.build() runs before anything
+Ordering is the subject here: `kernels.build()` runs before anything
 touches vfhe's C, which is the rule the feature is documented under. The
 ahead-of-time command is checked the same way, from a child process.
 """
@@ -38,7 +38,7 @@ def main() -> int:
         (work / "smoke.c").write_text(SOURCE)
         (work / "smoke.h").write_text(DECLARATION)
 
-        out = kernels.ExtensionBuilder([work / "smoke.c"], [work / "smoke.h"]).build()
+        out = kernels.build([work / "smoke.c"], [work / "smoke.h"])
         ok = check("the engine built", any(out.glob("_vfhe_native_*.so")))
 
         # Only now, and it is the engine just built that loads.
@@ -53,8 +53,7 @@ def main() -> int:
         )
         ok &= check(
             "build() is idempotent",
-            kernels.ExtensionBuilder([work / "smoke.c"], [work / "smoke.h"]).build()
-            == out,
+            kernels.build([work / "smoke.c"], [work / "smoke.h"]) == out,
         )
 
         # The ahead-of-time path: one process builds, another imports it by PYTHONPATH.

@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the Merkle tree (crypto/c/src/merkle.c, prototyped in
-// crypto/c/include/merkle.h). The tree handle is passed as `void *`; digests are
-// plain byte buffers (cffi accepts a `bytes` object for a `const uint8_t *`).
+// crypto/c/include/merkle.h). The tree is passed as `void *`.
 
-void merkle_hash(uint8_t *out, const uint8_t *in, uint64_t len);
 void merkle_join_digests(uint8_t *out, const uint8_t *const *parts, uint64_t part_count,
                          uint64_t count);
 void *merkle_new(uint64_t size);

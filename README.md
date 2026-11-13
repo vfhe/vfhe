@@ -1,7 +1,7 @@
 # vfhe
 
 [![PyPI](https://img.shields.io/pypi/v/vfhe)](https://pypi.org/project/vfhe/)
-[![Python versions](https://img.shields.io/pypi/pyversions/vfhe)](https://pypi.org/project/vfhe/)
+[![Python versions](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fvfhe%2Fvfhe%2Fmain%2Fpyproject.toml)](https://github.com/vfhe/vfhe/blob/main/pyproject.toml)
 [![CI](https://github.com/vfhe/vfhe/actions/workflows/ci-postsubmit.yml/badge.svg)](https://github.com/vfhe/vfhe/actions/workflows/ci-postsubmit.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/vfhe/vfhe/badge)](https://securityscorecards.dev/viewer/?uri=github.com/vfhe/vfhe)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13712/badge)](https://www.bestpractices.dev/projects/13712)
@@ -15,6 +15,8 @@ Using vFHE starts at [Installing](#installing) and continues in
 [`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md); changing
 it starts at
 [`DEVELOPMENT.md`](https://github.com/vfhe/vfhe/blob/main/docs/DEVELOPMENT.md).
+The documentation site, API reference included, is
+<https://vfhe.github.io/vfhe/>.
 
 ---
 
@@ -44,7 +46,7 @@ required.
 > CC=gcc-14 pip install --no-binary vfhe vfhe
 > ```
 
-> **What did I get?** `python -m vfhe.info` prints the whole environment a
+> **What did I get?** `python -m vfhe.util.info` prints the whole environment a
 > bug report needs:
 >
 > ```json
@@ -90,9 +92,7 @@ these attestations at `https://pypi.org/project/vfhe/#files`.
 A walkthrough of encrypted computation with CKKS is in
 [`USAGE.md`](https://github.com/vfhe/vfhe/blob/main/docs/USAGE.md);
 [`test/smoke/ckks.py`](https://github.com/vfhe/vfhe/blob/main/test/smoke/ckks.py)
-is its runnable form. Measured times of the main operations on a reference
-machine are in
-[`PERFORMANCE.md`](https://github.com/vfhe/vfhe/blob/main/docs/PERFORMANCE.md).
+is its runnable form.
 
 ---
 
@@ -107,7 +107,7 @@ modules, no Python symbols). A Python-facing module's public API is its
 | Module | Kind | What it provides |
 |---|---|---|
 | `arith` | Python-facing | RNS polynomial arithmetic over `Z_q[X]/(X^N+1)`: incomplete NTTs, complex FFTs, general multiprecision, basic number theory procedures, and multilinear extensions |
-| `util` | Python-facing | The native handle (`ffi`/`lib`), the engine picker and the pure-Python host probes (`vfhe.util._cpu`), `vfhe.info`, custom kernel builds (`vfhe.util.kernels`), and the C substrate (aligned allocation, the thread limit and parallel loop) |
+| `util` | Python-facing | The native handle (`ffi`/`lib`), the engine picker and the pure-Python host probes (`vfhe.util._cpu`), `vfhe.util.info`, custom kernel builds (`vfhe.util.kernels`), and the C substrate (aligned allocation, the thread limit and parallel loop) |
 | `crypto` | Python-facing | Basic primitives: the library's randomness (BLAKE3-seeded PRNG, AES-CTR RNG, Box-Muller sampling, a seeded transcript sampler) and BLAKE3 Merkle trees |
 | `mlwe` | Python-facing | LWE / Module-LWE and MGSW: key generation, encryption, key-switching, arithmetic, and ring morphisms |
 | `fhe` | Python-facing | Schemes on top of `mlwe`: CKKS (encode/encrypt/rescale/rotate/multiply), CGGI16 functional bootstrap, GP25 sparse-amortized bootstrap |

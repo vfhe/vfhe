@@ -6,8 +6,8 @@
  *        repeatedly.
  *
  * A buffer released with mempool_free() is kept by the releasing thread and
- * handed out again for a request of the same size, instead of going back to
- * the C library. What the pool retains over all threads is bounded by its
+ * handed out again for a request of the same size. What the pool retains
+ * over all threads is bounded by its
  * capacity. Buffers below 4 KiB, and every buffer in a build with
  * AddressSanitizer, bypass the pool.
  *

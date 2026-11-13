@@ -18,6 +18,8 @@ CI and releasing are in
   [Xcode Command Line Tools](https://developer.apple.com/xcode/resources/)
   (`xcode-select --install`)
 - **git**, to fetch the two submodules the build compiles
+- **CUDA toolkit 12 or later**, only for the CUDA extension; the build skips
+  it when `nvcc` is absent
 
 ## Getting started
 
@@ -187,13 +189,42 @@ Building needs a C compiler, meson and ninja, the `kernels` extra
 (`pip install vfhe[kernels]`); loading a prebuilt engine needs neither. The
 engine built carries the prebuilt engine's module name and its directory goes
 first on `sys.path`, so `vfhe.util.bindings` imports it in place of the prebuilt
-one. CPython keeps an extension loaded for the life of the process, so `ExtensionBuilder.build()`
+one. CPython keeps an extension loaded for the life of the process, so `kernels.build()`
 runs before anything imports vfhe's C and raises when called later.
 `python -m vfhe.util.kernels` builds the same artefact and exits; its directory
 on `PYTHONPATH` removes the ordering rule and lets an image ship without a
 compiler. The same works from Python when generating the C needs vfhe loaded:
 `compile()` writes the engine without touching the process, and a child process
 with its directory on `PYTHONPATH` runs the kernel.
+
+### The CUDA extension
+
+A GPU is not an instruction set of the host, so CUDA joins no engine: every
+`.cu` source compiles with `nvcc` into one extension beside them,
+`_vfhe_cuda`, which `vfhe.util.gpu` loads on its own. A module lists its
+`.cu` sources and their cdef in `vfhe_cuda_sources` and `vfhe_cuda_cdefs`,
+their header among the public ones, and wraps its kernels over
+`vfhe.util.gpu.extension()`, as `vfhe.arith`'s `cuda` backend does. The `cuda` feature
+option decides: `auto` (the default) builds the extension when the build
+finds a toolkit and skips it otherwise, `enabled` fails without one,
+`disabled` never looks.
+
+```bash
+meson setup build -Dcuda=enabled
+```
+
+The CUDA runtime links statically, so the extension loads on a machine with no
+driver and `gpu.available()` answers `False` there; a kernel then raises. The
+tests skip the same way, so `make test` passes on every machine and exercises
+the device where there is one. Building needs CUDA 12 or later with `nvcc` on
+`PATH` or `CUDA_PATH` set; running needs a driver.
+
+The wheels carry no CUDA extension, because cibuildwheel's manylinux images
+have no toolkit; shipping one is an open decision between a build image with
+the toolkit and a package of its own. An install from the sdist on a machine
+with `nvcc` gets it: `pip install --no-binary vfhe vfhe`. CI runs the suites
+with the extension on request, `hardware-gpu.yml`, on a self-hosted runner
+labelled `cuda`.
 
 ## Testing
 
@@ -213,7 +244,7 @@ cover every implementation behind the ISA macros, so the engine is a build
 parameter rather than a test parameter. A test that applies to one engine
 asks which one is loaded. An arithmetic *implementation* or *backend* is the
 opposite: chosen per object at runtime, so it is a legitimate `parametrize`
-argument (see `modules/arith/python/test/test_spec.py`).
+argument (see `modules/arith/python/test/unit/test_spec.py`).
 
 ```bash
 make test                          # C + complete suites, on every built engine
@@ -288,112 +319,54 @@ python .cache/oss-fuzz/infra/helper.py run_fuzzer --external . <target> [reprodu
 
 ## Benchmarking
 
-Benchmarks time a module's public API, in
-`modules/<mod>/python/bench/bench_<topic>.py`, and the C kernels below it, in
-`modules/<mod>/c/bench/bench_<topic>.c`. They are not tests: the complete
-depth of `make test` runs each one once, at its smallest shape, so that a
-benchmark the code has outgrown fails there rather than going stale.
-
-```bash
-make bench                                   # the headline tier, on every engine this CPU runs
-make bench TIER=full MODULE=arith,fhe        # every benchmark of two modules
-make bench ENGINE=avx512ifma THREADS=1,8,32  # one engine, at three thread limits
-make bench BENCH='ntt*' REPS=15 PIN=0-31     # a name glob, more repetitions, pinned to CPUs 0-31
-make bench LABEL=before                      # names the results file
-tools/bench/compare.py results/bench/<run>-before.jsonl results/bench/<run>-after.jsonl
-```
-
-The headline tier is the few benchmarks that summarise each module, each
-timing an operation sequence as a user runs it, such as a multiply followed
-by its rescale, rather than one step of it. The full tier is all of them.
-Each engine and module runs in its own process with `VFHE_ENGINE` pinned,
-and each C benchmark file is one executable per engine,
-`<engine>-bench-<stem>`, which the runner builds when it needs it.
-
-A result keeps the seconds per call of every repetition, their minimum and
-their median, where each repetition times as many calls as fill 50 ms after
-a warm-up, plus the minor page faults per call. Compare minimums. Results go
-to `results/bench/<time>-<machine>-<verdict>-<label>.jsonl`, one line per
-benchmark, shape, engine and thread count, with the commit, whether the tree
-was dirty, the compiler and build options, the `VFHE_*` environment and the
-machine's state. The runner refuses a build with coverage, sanitizers or
-optimisation below `-O2`, whose timings mean nothing.
-
-The verdict says whether the machine's timings can be trusted. It is
-`untrusted` when the machine is WSL or battery powered, when a CPU quota or a
-clock held at its minimum slows it, or when a hypervisor or other work took
-CPU time at the start or the end of the run; `tools/bench/machine.py` has the
-exact rules. An untrusted run can show the direction of a change large
-enough to clear its noise, never its size: quote numbers from trusted runs
-only.
-
-`tools/bench/compare.py` prints the new minimum over the old for every row
-the two files share. A row's spread is `(max - min) / min` over its
-repetitions, and a change smaller than the larger of the two spreads is
-noise, so the row reads `~` rather than `faster` or `slower`. A row the
-change cannot have touched should read `~`; when it does not, the
-measurement moved, not the code.
-
-### Writing a benchmark
-
-A Python benchmark is a setup decorated with `benchmark`. It builds what the
-timed call needs and returns a `Case`:
+A module's benchmarks are pytest tests in `modules/<mod>/python/bench/`,
+beside `src` and `test`, one file per topic named after it (`hash.py`).
+Every public function of a file is a benchmark, named after the operation,
+written with [pytest-benchmark]'s fixture: the setup, the timed call, the
+check; helpers start with an underscore.
 
 ```python
-from harness import Case, Shape, benchmark
-from vfhe.arith import Polynomial, Ring
-
-
-@benchmark(shapes=["ckks-n12-3p", "ckks-n13-7p"], tier="headline")
-def polynomial_product(shape: Shape) -> Case:
-    ring = Ring(1 << shape["log_n"], prime_size=shape["prime_bits"], split_degree=1)
-    a = Polynomial(ring).from_bigint_array([1, 2, 3])
-    b = Polynomial(ring).from_bigint_array([3, 4])
-    a.to_NTT()
-    b.to_NTT()
-    return Case(lambda: a.__imul__(b))
+@pytest.mark.parametrize("log_n", [12, 13])
+def multiply(benchmark, log_n):
+    ring = Ring(1 << log_n, prime_size=[60] + [40] * (log_n - 10), split_degree=1)
+    a, b = ring.random_element(), ring.random_element()
+    benchmark(a.__imul__, b)
 ```
 
-- The setup runs once per shape, under a fixed seed, after arith's caches are
-  emptied. Only `Case.op` is timed.
-- `Case.check`, when given, receives one result of `op` before timing, at
-  every thread count, and raises when it is wrong. A wrong result records a
-  failure, never a time.
-- `op`'s result is dropped inside the timed window, so freeing it counts.
-  Prefer in-place operations where the API has them: a benchmark that
-  allocates on every call mostly measures the allocator.
-- Shapes are the named parameter sets of `tools/bench/shapes.py`, shared so
-  that results line up across modules. A set that one benchmark alone uses is
-  a `Shape` in its own file. List shapes smallest first; the smoke run uses
-  the first.
-- An in-place floating-point operation repeated thousands of times can drive
-  its values into denormals, which compute many times slower. Restore the
-  operand on every call, or alternate between two buffers.
-- The runner sets the thread limit; a benchmark never does.
-
-A C benchmark defines an array of `BenchCase` and returns `bench_main()` from
-`main()`; `tools/bench/bench.h` documents the contract. Pass `op`'s output to
-`BENCH_KEEP`, or the compiler may delete the work. List the file in the
-module's `vfhe_c_benchmarks`. Its stem names the executable, so stems are
-unique across modules.
-
-### Publishing a reference run
-
-[`PERFORMANCE.md`](https://github.com/vfhe/vfhe/blob/main/docs/PERFORMANCE.md)
-and `tools/bench/baselines/<machine>.jsonl` both come from one reference run:
-a trusted run of a committed tree, usually the headline tier on every engine
-and the full tier on the fastest. Regenerate both from the run's files rather
-than editing either:
+Meson installs the directory into the package as `vfhe.<mod>.bench`, so an
+install times itself:
 
 ```bash
-tools/bench/report.py page results/bench/<run>-headline.jsonl results/bench/<run>-full.jsonl
-tools/bench/report.py baseline results/bench/<run>-headline.jsonl results/bench/<run>-full.jsonl
+pip install 'vfhe[benchmark]'
+python -m vfhe.benchmark                      # every benchmark, on the engine the install loads
+python -m vfhe.benchmark -k ntt --benchmark-save=before
+python -m vfhe.benchmark -k ntt --benchmark-compare
 ```
 
-The page shows the headline tier and the full tier's bootstraps (`--include`
-adds other benchmarks by name). A pull request that claims a speedup compares
-its own run on the reference machine against the baseline with
-`tools/bench/compare.py`.
+Every benchmark runs seeded, after arith's caches are emptied, so every run
+times the same data; the pytest plugin `vfhe.util.benchmark` does that, loaded
+by `addopts` in the checkout and by `python -m vfhe.benchmark` on an install. Only the call handed to `benchmark` is timed, and its
+result is dropped inside the timed window, so freeing it counts: prefer
+in-place operations where the API has them. A benchmark is `complete`, so
+`make test` at that depth runs it once as a test and a benchmark the code has
+outgrown fails there; the fast suites leave it out.
+
+In a checkout, `make benchmark` runs the directories per engine, each in a
+process of its own with `VFHE_ENGINE` pinned, since a process holds one engine:
+
+```bash
+make benchmark                          # every benchmark, on every engine this CPU runs
+make benchmark ENGINE=avx512ifma THREADS=8 BENCH=ntt
+make benchmark SAVE=before              # keep the run, per engine, under .cache/benchmarks
+make benchmark COMPARE=latest           # ...and, after a change, set the new run against it
+```
+
+The rest is pytest-benchmark: calibration, warm-up, the garbage collector
+off, the table of min, mean and standard deviation, and the comparison
+columns. A change within the spread of the two runs is noise; time on a
+quiet machine.
+
+[pytest-benchmark]: https://pytest-benchmark.readthedocs.io/
 
 ## Documentation
 
@@ -404,13 +377,15 @@ Doxygen blocks in each module's `c/include` (Doxygen's XML, rendered by
 Breathe). It needs `doxygen` on `PATH` besides the `docs` dependency group. CI builds it on
 every pull request with warnings as errors, so an undocumented declaration or a
 malformed docstring fails the gate, and publishes it from `main` to
-<https://vfhe.github.io/vfhe/>. The API pages list `util` and `info`; a module
-joins them once its headers and docstrings pass the generators.
+<https://vfhe.github.io/vfhe/>. Every module's Python API is on the site; the
+C API covers `util` and `crypto`, and a module's headers join once their
+Doxygen blocks pass the generator.
 
 The generators read these conventions. A C declaration carries a `/** ... */`
 block of `@` commands: `@brief`, `@param[in]`, `@return`, `@warning`, `@note`.
 A Python docstring opens with a verb, names code in `` `backticks` ``, which
-Sphinx cross-references, and literals in ``` ``double backticks`` ```. A
+Sphinx cross-references, and literals in ``` ``double backticks`` ```; a
+parameter list is a Google-style `Args:` section. A
 package's `__init__` docstring states the exports, what a user must know to use
 them safely, and one example.
 
@@ -438,19 +413,26 @@ own code; nothing else needs rewiring.
 A module carries only the parts it needs. `circuit` is Python with no C,
 `polycom` has no C tests, and `arith` has everything.
 
-1. **Python package.** `modules/<mod>/python/src/vfhe/<mod>/__init__.py` plus
-   its implementation modules, the pytest suite in `python/test/`, and its
-   benchmarks in `python/bench/`. A
-   module holding several implementations of one interface gives each its own
+1. **README.** `modules/<mod>/README.md`, in the shape every module's has:
+   a first paragraph saying what the module provides and what a user must
+   know to use it; `## Layout`, one bullet per path under the module
+   directory, Python first, then the cdefs, then the C; `## Dependencies`,
+   which modules it builds on and which build on it; and `## Environment`,
+   the variables it reads, only when it reads any. A module still being
+   written says so in a blockquote under the first paragraph.
+2. **Python package.** `modules/<mod>/python/src/vfhe/<mod>/__init__.py` plus
+   its implementation modules, the pytest suite in `python/test/unit/`, and
+   the benchmarks in `python/bench/`, which meson installs into the package.
+   A module holding several implementations of one interface gives each its own
    subpackage, `impl/<name>/` (`arith`).
-2. **C sources.** `c/src/*.c` and `c/include/*.h`, grouped in subdirectories
+3. **C sources.** `c/src/*.c` and `c/include/*.h`, grouped in subdirectories
    where a module has many (`arith`); `<file>_rns.c` holds the part of
    `<file>.c` that needs one representation. A module exposing C to
    Python also writes `python/cdef/<name>.h`, the declarations Python may
    call, in cffi's cdef dialect. Kernels worth testing below the Python
    surface add a Unity suite in `c/test/unit/`, a libFuzzer fuzzer in
-   `c/test/fuzz/`, and a benchmark in `c/bench/`.
-3. **Protobuf schema.** Not under the module: every wire format lives in the
+   and `c/test/fuzz/`.
+4. **Protobuf schema.** Not under the module: every wire format lives in the
    repository's `proto/` tree, as `proto/vfhe/<mod>/<name>/v1/<name>.proto`
    with `package vfhe.<mod>.<name>.v1`, following buf's convention that a
    file's path equals its package path. A schema is a contract between a
@@ -467,14 +449,14 @@ testing policy.
 Each module's `meson.build` appends what it contributes to the lists the
 root `meson.build` declares — `vfhe_c_sources`, `vfhe_c_include_dirs`,
 `vfhe_c_public_headers`, `vfhe_c_unit_tests`, `vfhe_c_fuzz_tests`,
-`vfhe_c_benchmarks`, `vfhe_python_cdefs` — and installs what it owns. A new module costs its
+`vfhe_python_cdefs` — and installs what it owns. A new module costs its
 directory plus one `subdir()` line in the root; a new file costs one line in
 the module's own list. Misspell a list and meson stops, naming the file and
 the correct name, because the lists are plain variables.
 
 The root reads the lists to build one extension per engine, and
 `test/meson.build` to build the static libraries, the test programs, the
-fuzzers and the benchmark executables. Python-facing modules also list their import path in
+fuzzers. Python-facing modules also list their import path in
 `pyrightconfig.json` and in `test/meson.build`'s `pythonpath`.
 
 ### Adding an engine
@@ -482,7 +464,10 @@ fuzzers and the benchmark executables. Python-facing modules also list their imp
 An engine costs one entry in the root `meson.build`'s `engines` dict, its
 name mapped to the C flags that define the macros its kernels guard on, plus
 those kernels and its CI rows. Kernels live behind the ISA macros in shared
-files, or in `arch/<arch>/` under `c/src/`.
+files, or as `crypto` lays them out: one header per kernel in
+`c/src/kernels/` and one source per family under `kernels/<family>/`
+(`portable`, `x86_64`, `aarch64`); a file whose instructions the engine lacks
+compiles to nothing.
 
 ## Building the distribution
 

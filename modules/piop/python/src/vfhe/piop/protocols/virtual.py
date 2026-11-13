@@ -88,7 +88,7 @@ class SumDefStart(Protocol):
     evaluation claim on that virtual oracle, and `VirtualEval` that claim to
     claims on G's constituents, both run by the Composer inside the layer (or
     by the driver, for a started statement run on its own). Zero
-    communication; soundness error (k-1)/|A| for k claims [Sor22, Lem. 11;
+    communication; soundness error (k-1)/``|A|`` for k claims [Sor22, Lem. 11;
     CCCFGS25, Eqs. (19)-(20)].
     """
 

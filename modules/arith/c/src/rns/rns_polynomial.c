@@ -3,7 +3,13 @@
 #include "arith.h"
 #include "alloc.h"
 #include "memory_pool.h"
-#include <crypto.h>
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <hash.h>
+#include <normal.h>
+#include <random.h>
+#include <seeded.h>
 #include <blake3.h>
 
 // Row width, the row accessors and the per-row operation macros.
@@ -92,12 +98,27 @@ void compute_RNS_Qhat_array(uint64_t *out, uint64_t *p, uint64_t l)
     }
 }
 
+// A base holds at most as many primes as its masks have bits.
+#define RNS_MAX_PRIMES 64
+
+// mod_new and ntt_new_plan refuse a modulus with NULL after saying why; a base
+// cannot be built without either, and the caller has already been told.
+static void require(const void *made, const char *what, uint64_t prime)
+{
+    if (made == NULL)
+    {
+        fprintf(stderr, "rns base: no %s for modulus %" PRIu64 "\n", what, prime);
+        exit(EXIT_FAILURE);
+    }
+}
+
 static Modulus *new_modulus_list(uint64_t *primes, uint64_t l)
 {
     Modulus *mods = (Modulus *)safe_malloc(sizeof(Modulus) * l);
     for (size_t i = 0; i < l; i++)
     {
         mods[i] = mod_new(primes[i]);
+        require(mods[i], "modulus", primes[i]);
     }
     return mods;
 }
@@ -109,6 +130,7 @@ static NTT_Plan *new_ntt_plan_list(Modulus *mods, uint64_t N, uint64_t l)
     for (size_t i = 0; i < l; i++)
     {
         plans[i] = ntt_new_plan(N, mods[i]);
+        require(plans[i], "NTT plan", mods[i]->q);
     }
     return plans;
 }
@@ -127,6 +149,12 @@ static uint32_t *rns_narrow_twiddles(RNS_Base base, size_t i, uint64_t poly_size
 
 RNS_Base new_rns_base(uint64_t *primes, uint64_t split_degree, uint64_t N, uint64_t l)
 {
+    if (l > RNS_MAX_PRIMES)
+    {
+        fprintf(stderr, "rns base: %" PRIu64 " primes exceed the %d a mask selects\n", l,
+                RNS_MAX_PRIMES);
+        exit(EXIT_FAILURE);
+    }
     const uint64_t poly_size = N / split_degree;
     const uint64_t log_poly_size = (uint64_t)log2(poly_size);
     uint64_t *w_p = (uint64_t *)safe_malloc(2 * poly_size * sizeof(uint64_t));
@@ -166,6 +194,12 @@ void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t c
     if (count == 0)
         return;
     uint64_t new_l = base->l + count;
+    if (new_l > RNS_MAX_PRIMES)
+    {
+        fprintf(stderr, "rns base: %" PRIu64 " primes exceed the %d a mask selects\n", new_l,
+                RNS_MAX_PRIMES);
+        exit(EXIT_FAILURE);
+    }
     const uint64_t poly_size = base->N / base->split_degree;
     const uint64_t log_poly_size = (uint64_t)log2(poly_size);
     uint64_t *w_p = (uint64_t *)safe_malloc(2 * poly_size * sizeof(uint64_t));
@@ -181,7 +215,9 @@ void rns_base_extend_with_primes(RNS_Base base, uint64_t *new_primes, uint64_t c
         if (rns_prime_is_narrow(prime))
             base->narrow_mask |= 1ULL << i;
         base->mods[i] = mod_new(prime);
+        require(base->mods[i], "modulus", prime);
         base->plans[i] = ntt_new_plan(poly_size, base->mods[i]);
+        require(base->plans[i], "NTT plan", prime);
         base->w[i] = (uint64_t *)safe_aligned_malloc(poly_size * sizeof(uint64_t));
         uint64_t w1 = base->plans[i]->root_of_unity;
         w_p[0] = w1;
@@ -258,6 +294,9 @@ RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N, u
 
 bool polynomial_eq(RNS_Polynomial a, RNS_Polynomial b)
 {
+    // The rows are compared at a's length: another length is another ring.
+    if (a->base->N != b->base->N || a->base->split_degree != b->base->split_degree)
+        return false;
     const uint64_t max_l = a->base->l > b->base->l ? a->base->l : b->base->l;
     for (size_t i = 0; i < max_l; i++)
     {
@@ -412,7 +451,7 @@ void array_to_RNS(RNS_Polynomial out, uint64_t **in)
     polynomial_RNSc_to_RNS(out, (RNSc_Polynomial)out);
 }
 
-void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
+void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out, Random source)
 {
     // The sampler writes 64-bit words, so a narrow row is drawn into a wide
     // scratch row and narrowed after.
@@ -424,7 +463,7 @@ void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
             const uint64_t p = out->base->mods[i]->q;
             const bool narrow = rns_row_is_narrow(out->base, i);
             uint64_t *dst = narrow ? scratch : out->rows64[i];
-            generate_uniform_below(dst, out->base->N, p);
+            random_below(source, dst, out->base->N, p);
             if (narrow)
                 mod_narrow_w32(out->rows32[i], scratch, out->base->N);
         }
@@ -433,7 +472,7 @@ void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out)
 }
 
 void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed, uint64_t seed_len,
-                                       RNS_CrtMaps const *maps)
+                                       RNS_CrtMaps const *maps, Random source)
 {
     const uint64_t d = out->base->split_degree;
     const uint64_t k = out->base->N / d;
@@ -443,9 +482,9 @@ void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed, 
             bound = out->base->mods[i]->q;
     uint64_t a[d];
     if (seed == NULL)
-        generate_uniform_below(a, d, bound);
+        random_below(source, a, d, bound);
     else
-        prng_sample_below(a, d, bound, "exceptional", seed, seed_len);
+        seeded_below(a, d, bound, "exceptional", seed, seed_len);
     // k copies of beta, one per component; every a_j is below every prime,
     // so the same planes serve every row.
     const uint64_t padded = field_vec_padded_length(k);
@@ -467,12 +506,12 @@ void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed, 
     free(planes);
 }
 
-void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma)
+void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma, Random source)
 {
     int64_t *noise_arr = (int64_t *)safe_aligned_malloc(out->base->N * sizeof(int64_t));
     for (size_t j = 0; j < out->base->N; j++)
     {
-        noise_arr[j] = (int64_t)round(generate_normal_random(sigma));
+        noise_arr[j] = (int64_t)round(normal_random(source, sigma));
     }
     for (size_t i = 0; i < out->base->l; i++)
     {
@@ -907,12 +946,12 @@ void polynomial_RNS_to_RNSc(RNSc_Polynomial out, RNS_Polynomial in)
     }
 }
 
-void polynomial_RNSc_add_noise(RNSc_Polynomial out, RNSc_Polynomial in, double sigma)
+void polynomial_RNSc_add_noise(RNSc_Polynomial out, RNSc_Polynomial in, double sigma, Random source)
 {
     int64_t *noise_arr = (int64_t *)safe_aligned_malloc(out->base->N * sizeof(int64_t));
     for (size_t j = 0; j < out->base->N; j++)
     {
-        noise_arr[j] = (int64_t)round(generate_normal_random(sigma));
+        noise_arr[j] = (int64_t)round(normal_random(source, sigma));
     }
     /* The noise is drawn once and reduced per prime, so it lands in a buffer
        at that row's width and the add stays there too. */
@@ -1568,20 +1607,22 @@ void polynomial_RNS_hash_update(void *state, RNS_Polynomial p)
             continue;
         // one update per row, over the row as it is stored
         if (rns_row_is_narrow(p->base, i))
-            hash_stream_update(state, (const uint8_t *)p->rows32[i], p->base->N * sizeof(uint32_t));
+            hash_blake3_stream_update(state, (const uint8_t *)p->rows32[i],
+                                      p->base->N * sizeof(uint32_t));
         else
-            hash_stream_update(state, (const uint8_t *)p->rows64[i], p->base->N * sizeof(uint64_t));
+            hash_blake3_stream_update(state, (const uint8_t *)p->rows64[i],
+                                      p->base->N * sizeof(uint64_t));
     }
 }
 
 void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p)
 {
-    // a hash_stream state is a blake3_hasher (hash_stream_size), so it can
+    // a blake3_stream state is a blake3_hasher (hash_blake3_stream_size), so it can
     // live on the stack here
     blake3_hasher hasher;
-    hash_stream_init(&hasher);
+    hash_blake3_stream_init(&hasher);
     polynomial_RNS_hash_update(&hasher, p);
-    hash_stream_digest(&hasher, (uint8_t *)out);
+    hash_blake3_stream_digest(&hasher, (uint8_t *)out);
 }
 
 uint64_t *polynomial_RNS_get_hash_p(RNS_Polynomial p)

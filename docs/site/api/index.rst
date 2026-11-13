@@ -9,10 +9,20 @@ API reference
    :start-after: ## Modules
    :end-before: ## Development
 
+Every module's Python package is documented here from its docstrings, its
+public API being what ``vfhe.<module>`` exports. The C headers of ``crypto``
+and ``util`` are documented from their Doxygen blocks; the other modules'
+headers join as their blocks reach that standard.
+
 .. toctree::
    :maxdepth: 1
 
+   arith/index
+   circuit/index
+   crypto/index
+   fhe/index
+   mlwe/index
+   piop/index
+   polycom/index
    util/index
-
-The other modules join this reference as their headers and docstrings reach its
-standard.
+   vfhe/index

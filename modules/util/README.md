@@ -5,15 +5,29 @@
 The runtime beneath every vfhe module: which engine runs, how Python reaches C,
 and the C substrate every kernel calls.
 
+## Layout
+
 - `python/src/vfhe/util/bindings/`: loads the engine and exports its `ffi` and
   `lib`; every other Python module reaches C through
   `from vfhe.util.bindings import ffi, lib`. The import system runs it once, so
   a process holds one engine.
 - `python/src/vfhe/util/kernels/`: compiles the caller's C together with vfhe's
   own into one engine, LTO on, so the compiler inlines across the boundary. The
-  engine it builds is the one the process then loads, so `ExtensionBuilder.build()` runs before
+  engine it builds is the one the process then loads, so `kernels.build()` runs before
   `bindings` is imported. `import vfhe.util` leaves it alone, so only a caller
   who builds pays for cffi and a compiler.
+- `python/src/vfhe/util/io/`: serializes vfhe objects: codecs composed over a
+  byte stream, each module registering the ones for its own types.
+- `python/src/vfhe/util/parallel/`: the thread limits from Python: the
+  library-wide one, and a local one per thread for a `with` block.
+- `python/src/vfhe/util/memory_pool/`: the memory pool's capacity, wiping and
+  accounting from Python.
+- `python/src/vfhe/util/benchmark/`: the pytest plugin the benchmarks run
+  under, the seed fixture and the `complete` marker.
+- `python/src/vfhe/util/gpu/`: loads the CUDA extension: `available()` is
+  `False` in an install built without `nvcc` and on a machine without a
+  device; `extension()` hands its `ffi` and `lib` to the modules with kernels, such
+  as `vfhe.arith`'s ``cuda`` backend.
 - `python/src/vfhe/util/_engine/`: the engines this build knows, as an enum.
   `select()` returns the pinned one (`VFHE_ENGINE`) or the fastest installed one
   this CPU runs; `active()` returns the one loaded.
@@ -23,23 +37,26 @@ and the C substrate every kernel calls.
   when it cannot judge. `last_level_cache_bytes` says how big the last level of
   cache is, a tuning hint whose wrong answer only costs speed, so `None` keeps a
   working set whole.
-- `python/src/vfhe/info/`: `python -m vfhe.info`, a JSON report of the install
+- `python/src/vfhe/util/info/`: `python -m vfhe.util.info`, a JSON report of the install
   for bug reports.
-- `python/src/vfhe/util/parallel.py`: the thread limits from Python: the
-  library-wide one, and a local one per thread for a `with` block.
-- `python/src/vfhe/util/memory_pool.py`: the memory pool's capacity, wiping and
-  accounting from Python.
 - `python/cdef/parallel.h`, `python/cdef/memory_pool.h`: what Python may call
   of the C below: the thread limits, and the memory pool's controls and its
   allocator for the buffers Python owns.
+- `python/cdef/gpu.h`: what Python may call of the CUDA runtime.
 - `c/include/`, `c/src/`: allocation that exits on failure (`alloc`), the thread
   limits and the parallel loop with its persistent thread pool (`parallel`),
-  the per-thread memory pool (`memory_pool`), and the `VFHE_HAVE_*` macros for
-  x86-64 vector extensions (`x86_64.h`). Randomness lives in `crypto`, index
-  and modulus helpers in `arith`.
+  the per-thread memory pool (`memory_pool`), zeroing the compiler keeps, for
+  seeds and keys once used (`wipe.h`), and the `VFHE_HAVE_*` macros for x86-64
+  vector extensions (`x86_64.h`).
+- `c/src/cuda/`: the CUDA runtime's side (`gpu.h`): the device count and the
+  error strings. `nvcc` compiles it with every module's kernels into the
+  `_vfhe_cuda` extension beside the engines when the build finds a toolkit.
+
+## Dependencies
 
 `util` depends on nothing above it: its headers include only libc. Anything
-needing an `arith` type belongs in `arith`.
+needing an `arith` type belongs in `arith`; randomness lives in `crypto`, index
+and modulus helpers in `arith`.
 
 ## Environment
 

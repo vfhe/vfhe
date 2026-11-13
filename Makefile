@@ -21,29 +21,37 @@ REQUIREMENT ?=
 INDEX ?= pypi
 # Names of smoke test cases, space separated. Empty runs every one of them.
 SMOKE_CASES ?=
-# Benchmarks: modules (comma separated, empty for all), thread limits, the tier
-# (headline or full), a glob on names, repetitions (empty for each benchmark's
-# own), CPUs to pin to, and the label that names the results file.
-MODULE ?=
+# Benchmarks: engines (comma separated, empty for all this CPU runs), the thread
+# limit, a pytest -k expression, a name to save the run under, and a saved run to
+# compare with (`latest` or its number); runs are kept per engine under
+# .cache/benchmarks.
+ENGINE ?=
 THREADS ?= 1
-TIER ?= headline
 BENCH ?=
-REPS ?=
-PIN ?=
-LABEL ?= run
+SAVE ?=
+COMPARE ?=
+comma := ,
+ENGINES_PY := from vfhe.util._engine import Engine; print(" ".join(e.value for e in Engine if e.installed() and e.runnable()))
 
 # In precedence: the artefact DIST names, a requirement from INDEX, or the sdist.
 PACKAGE = $(or $(wildcard $(DIST)),$(REQUIREMENT),$(wildcard dist/*.tar.gz))
 
 export PYTHONDONTWRITEBYTECODE := 1
 
-.PHONY: bench build clean deps dev-env docs format help lint release-notes sbom-embed sdist smoke spellcheck test wheel
+.PHONY: benchmark build clean deps dev-env docs format help lint release-notes sbom-embed sdist smoke spellcheck test wheel
 .DEFAULT_GOAL := help
 
-bench: build  ## time benchmarks into results/bench (MODULE=arith ENGINE=<name> THREADS=1,8 TIER=full BENCH='ntt*' PIN=0-31 LABEL=x)
-	$(PYTHON) tools/bench/run.py --build-dir build --threads $(THREADS) --tier $(TIER) --label $(LABEL) \
-		$(if $(MODULE),--module $(MODULE)) $(if $(ENGINE),--engine $(ENGINE)) \
-		$(if $(BENCH),--bench '$(BENCH)') $(if $(REPS),--reps $(REPS)) $(if $(PIN),--pin $(PIN))
+# The tree's packages, for commands that import vfhe without installing it.
+PYTHONPATH_SRC = $(subst $() $(),:,$(wildcard modules/*/python/src))
+
+benchmark: build  ## time the benchmarks (ENGINE=avx512ifma THREADS=8 BENCH=ntt SAVE=before COMPARE=latest)
+	@for engine in $(subst $(comma), ,$(or $(ENGINE),$(shell PYTHONPATH=build:$(PYTHONPATH_SRC) $(PYTHON) -c '$(ENGINES_PY)'))); do \
+		VFHE_ENGINE=$$engine VFHE_NUM_THREADS=$(THREADS) PYTHONPATH=build:build/proto:$(PYTHONPATH_SRC) $(PYTHON) -m pytest \
+			modules/*/python/bench --benchmark-enable --benchmark-only --benchmark-disable-gc \
+			--benchmark-storage=file://.cache/benchmarks/$$engine $(if $(BENCH),-k '$(BENCH)') \
+			$(if $(SAVE),--benchmark-save=$(SAVE)) \
+			$(if $(COMPARE),--benchmark-compare$(if $(filter-out latest,$(COMPARE)),=$(COMPARE))) || exit 1; \
+	done
 
 build:    ## compile everything into build/ (KERNELS=<engine> alone, VFHE_SANITIZE=address)
 	meson setup build

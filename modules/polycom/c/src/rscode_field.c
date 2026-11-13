@@ -5,6 +5,7 @@
 // coefficient planes of a FieldVector. The evaluation points lie in F_p, so the
 // transform is F_p-linear and runs once per plane with one NTT_Plan over the
 // field's modulus; a plane is exactly the uint64_t array arith's NTT takes.
+#include <assert.h>
 #include "rscode.h"
 
 #include <string.h>
@@ -36,6 +37,7 @@ void rs_field_encode(FieldVector out, const FieldVector in, NTT_Plan plan)
 
 int rs_field_decode(FieldVector out, const FieldVector in, NTT_Plan plan)
 {
+    assert(out == NULL || out->d == in->d); // one plane of `out` per plane of `in`
     const uint64_t size = in->n;
     const uint64_t degree = out == NULL ? 0 : out->n;
     uint64_t *scratch = (uint64_t *)safe_aligned_malloc(sizeof(uint64_t) * size);

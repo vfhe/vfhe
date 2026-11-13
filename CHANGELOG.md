@@ -14,13 +14,39 @@ versions may contain breaking changes.
 
 ### Added
 
+- `vfhe.crypto.random.Random`, the source a scheme's samplers draw from, and a
+  `random=` parameter on `MLWE_Scheme`, `CKKS_Scheme`, `BFV_Scheme`,
+  `LWE_Key` and every `random_*` sampler of arith: a seeded source makes a
+  scheme reproducible on every engine, as SEAL's random generator does. In
+  C, every sampler takes a `Random` (`random.h`), `NULL` being the entropy
+  stream; `random_below` and `normal_random` replace `entropy_uniform_below`
+  and `normal_from_entropy`. `Random()` replaces the `entropy` module and
+  `vfhe.crypto.random.seeded_below_many` the `seeded` module; `vfhe.crypto`
+  is three subpackages imported like util's, `random`, `hash` and `merkle`,
+  with nothing re-exported;
+  `entropy.deterministic`, `entropy_pin` and `entropy_unpin` are gone, since
+  a reproducible scheme is built over a seeded `Random`, and the benchmarks
+  run on the entropy stream. `digest(data)` is the one hash function, BLAKE3
+  of a byte string, in place of `blake3_digest` and the type-tagged `digest`;
+  tagging a transcript's primitives is piop's `element_digest`. In C the
+  hash functions carry their header's prefix and their algorithm,
+  `hash_blake3`, `hash_blake3_batch`, `hash_blake3_chain` and
+  `hash_blake3_stream_*`, leaving `blake3_` to the vendored library; `entropy.h` folded into `random.h`, whose `random_bytes(NULL, ...)`
+  is the stream; `random_normal` is `normal_random`.
+- A CUDA extension, `_vfhe_cuda`, built beside the engines when the build
+  finds a toolkit (`-Dcuda=auto|enabled|disabled`) and loaded by
+  `vfhe.util.gpu`. With a device, `rns` gains a `cuda` backend:
+  `Ring(..., backend="cuda")` holds its elements on the device, where add,
+  subtract and negate run, and `Polynomial.to_backend` moves an element
+  between host and device, never an operator. The wheels carry no extension;
+  a build from the sdist with `nvcc` does.
 - Python 3.15 support, tested in CI, built as wheels and declared in the
   classifiers.
-- Add per-module benchmarks, `make bench`: Python benchmarks of a module's
-  API in `modules/<mod>/python/bench/` and C benchmarks of its kernels in
-  `modules/<mod>/c/bench/`, timed per engine and thread limit into a results
-  file that `tools/bench/compare.py` compares with another. The complete
-  depth of `make test` runs every benchmark once.
+- Add benchmarks, each module's `python/bench/`, installed as its `bench`
+  package: pytest-benchmark tests that `python -m vfhe.benchmark` times on an install (`pip install
+  'vfhe[benchmark]'`) and `make benchmark` on every engine of a checkout,
+  with saved runs and comparison; the complete depth of `make test` runs each
+  once.
 - `RNSRing.crt_components(elements, index)`, `from_crt_components(vectors)`
   and `residue_field(index)`: the CRT components of ring elements at one RNS
   prime p -- their residues modulo the maximal ideals `P_s = (p, X^d - w_s)`
@@ -77,7 +103,7 @@ versions may contain breaking changes.
   mul-domain words with one table per array and output coefficient, without
   forming the components (the precomputation of HELIOPOLIS [ACGS24],
   ePrint 2023/1949, App. C). BatchFold forms its combinations with it.
-- `vfhe.crypto.join_digests(parts)` (`merkle_join_digests` in C): leaf
+- `vfhe.crypto.merkle.join_digests(parts)` (`merkle_join_digests` in C): leaf
   digests joining several packed digest arrays index by index, so one
   Merkle tree commits to several codewords of one length.
 - `IOP.and_composition(label, subprotocols, challenge_sampler=None)`: runs
@@ -90,7 +116,7 @@ versions may contain breaking changes.
   seed=None)` and `Field.random_exceptional(seed=None, bound=None)`: the
   exceptional samplers take an optional seed, and the field's an optional
   bound on its coefficients. Both draw their coefficients uniformly with
-  `vfhe.crypto.seeded` (or `entropy` without a seed), so a seeded ring
+  `seeded_below_many` (or a `Random` without a seed), so a seeded ring
   element and the bounded field element from the same seed have the same
   coefficients.
 - `Verifier.challenge(label, domain)`: a challenge from the exceptional set
@@ -106,7 +132,7 @@ versions may contain breaking changes.
   virtual oracles) and the range check over packed `R_q` polynomials that
   reduces to it through the base-`beta` digits of the coefficients, as in
   [CCCFGS26]'s appendix; `modules/piop/range.md` is the design note.
-- `vfhe.crypto.digest`: `chain_digest`, the chained digest of
+- `vfhe.crypto.hash`: `chain_digest`, the chained digest of
   already-digested parts, and `bytes_digest`, `int_digest`, `str_digest`,
   the canonical digests of primitives every `digest()` method is built
   from; `DigestChain`, the same chain as an accumulator, which absorbs a
@@ -228,7 +254,7 @@ versions may contain breaking changes.
   polynomial with only its mask's rows allocated.
 - Add `MerklePath.from_bytes(packed)`, and `FoldableRS.fold_pairs` /
   `leaf_digests_of` for a set of positions rather than one.
-- Add `entropy.below_many(count, bound)` (`vfhe.crypto`; native
+- Add `Random.below_many(count, bound)` (`vfhe.crypto`; native
   `generate_uniform_below`): values exactly uniform in `[0, bound)` by
   rejection sampling, so a draw reveals only how many values were redrawn.
 - Add `prng_normal_seeded` (C): `generate_normal_random`'s rounded draw as a
@@ -270,12 +296,12 @@ versions may contain breaking changes.
   (off by default). `VFHE_MEMPOOL_CAPACITY` and
   `VFHE_MEMPOOL_WIPE_ON_RELEASE=1` set the defaults. A sanitized build
   bypasses the pool.
-- Add serialization, `vfhe.util.io`: the type classes `Encoder`, `Decoder` and
-  `Codec`. `codec.encode(obj, f)` writes an object to a binary stream and
+- Add serialization, `vfhe.util.io`: the type class `Codec`.
+  `codec.encode(obj, f)` writes an object to a binary stream and
   `codec.decode(f)` reads one back, consuming exactly the bytes its encoder
-  wrote (`decode_strict` also refuses trailing bytes), so codecs compose: `ListCodec`, `DictCodec`, `TupleCodec` and
-  `OptionalCodec` build one codec from others, and `IntCodec`, `FloatCodec`,
-  `BoolCodec`, `StrCodec` and `BytesCodec` cover plain values. A vfhe codec is
+  wrote (`decode_strict` also refuses trailing bytes), so codecs compose:
+  `ListCodec`, `DictCodec`, `TupleCodec` and `OptionalCodec` build one codec from others,
+  and `IntCodec` and `BytesCodec` cover plain values. A vfhe codec is
   built from the codecs of what its objects hold --
   `KeySwitchKeyCodec(SampleCodec(MLWESchemeCodec(scheme), packing="tight"))` --
   and streams a key of any size one sample at a time, its scheme written once.
@@ -503,6 +529,34 @@ versions may contain breaking changes.
 
 ### Changed
 
+- **BREAKING**: `kernels.ExtensionBuilder` is the functions `kernels.build`,
+  `kernels.compile` and `kernels.directory`, each taking
+  `(sources, declarations, *, engine=None, cc=None)`; the class held nothing
+  beyond its arguments.
+- **BREAKING**: `vfhe.info` is `vfhe.util.info`, and the report is
+  `python -m vfhe.util.info`: every command the library offers now lives
+  under `vfhe.util`, beside `kernels` and `benchmark`.
+- **BREAKING**: `vfhe.crypto` holds its implementation in private modules
+  (`_entropy`, `_seeded`, `_hash`, `_digest`, `_merkle`); the public API is
+  the package's exports, unchanged in names. Gone from it: `SEED_WORDS`,
+  `entropy.normal`, `entropy.seed_words`, `entropy.bytes_from_fresh_seed`,
+  `entropy.bytes_from_pool` and `seeded.bytes`, which nothing used; a
+  `hash=` callable now returns bytes alone.
+- **BREAKING**: crypto's C surface is one header per concern -- `entropy.h`,
+  `seeded.h`, `normal.h`, `expand.h`, `hash.h`, `merkle.h` in place of
+  `crypto.h` -- with one prefix each: `entropy_bytes(out, amount)`,
+  `entropy_uniform_below`, `entropy_set_deterministic_seed`,
+  `normal_from_entropy`, `normal_from_seed`, `seeded_below`,
+  `seeded_below_from`, `expand_key`, `expand_below`, `expand_below32`,
+  `expand_aes128_ctr`, `blake3_digest`, `blake3_batch`, `blake3_stream_*`,
+  `blake3_chain` and the vendored `BLAKE3_OUT_LEN` replace
+  `generate_random_bytes(amount, out)`, `generate_uniform_below`,
+  `vfhe_prng_set_deterministic_seed`, `generate_normal_random`,
+  `prng_normal_seeded`, `prng_sample_below`, `prng_sample_below_from`,
+  `prng_expand_*`, `prng_aes128_ctr`, `merkle_hash`, `hash_*` and
+  `MERKLE_DIGEST_LEN`; in Python `blake3_digest` replaces `hash_bytes`.
+  The seed source and the two expanders behind `entropy_bytes` are no
+  longer exported.
 - **BREAKING**: `Verifier.challenge` and `Verifier.challenge_bits` are
   coroutines: write `await iop.verifier.challenge(label)`. Inside an
   AND-composition a challenge waits for the other sub-protocols; outside one
@@ -638,8 +692,8 @@ versions may contain breaking changes.
 - **BREAKING**: Move util's packages under `vfhe.util`: `vfhe.util.bindings`,
   `vfhe.util.kernels` and `vfhe.util.io`, plus the internal `vfhe.util._engine`
   and `vfhe.util._cpu`. The kernels command is `python -m vfhe.util.kernels`.
-  `vfhe.info` and `python -m vfhe.info` stay where they were.
-- **BREAKING**: Make `python -m vfhe.info` print JSON, with plain values: `version`
+  `vfhe.util.info` and `python -m vfhe.util.info` stay where they were.
+- **BREAKING**: Make `python -m vfhe.util.info` print JSON, with plain values: `version`
   (`null` in a source tree), `engine`, the loaded engine's name (`null` when none
   loads, with the reason on stderr), `engine_file`, its path, and `runs`, which
   maps every engine to whether this CPU runs it (`true`, `false`, or `null` when
@@ -883,6 +937,9 @@ versions may contain breaking changes.
   fresh destination per level: at a `2^22` codeword over `F_(p^4)` the lifts
   of an 11-level encode go from 724 ms to 363 ms and the commit from 1.16 s to
   0.88 s (avx512ifma); with `twist_field="prime"` the commit is 0.66 s.
+- The documentation site documents every module's Python API, split by
+  concern where a module is large, and links between its own pages; its
+  Project section is contributing, security, support and this changelog.
 
 ### Removed
 
@@ -898,13 +955,13 @@ versions may contain breaking changes.
   `active_engine()` and `runnable_engines()` are gone, since the loaded engine
   is internal knowledge; `set_num_threads` and `num_threads` moved to
   `vfhe.util.parallel` (see Added); the "a faster engine could run" warning is gone —
-  only a pin could trigger it, and `python -m vfhe.info` reports what else
+  only a pin could trigger it, and `python -m vfhe.util.info` reports what else
   this CPU runs.
 - **BREAKING**: Remove `vfhe_engine_active()` from the C, and with it
   `build_info.c`, util's `python/cdef/engine.h` and the `-DVFHE_ENGINE_NAME`
   every engine was compiled with. It reported which engine a binary was, for a
   "you could be faster" hint that became pure Python; nothing has called it
-  since. `python -m vfhe.info` reports the loaded engine.
+  since. `python -m vfhe.util.info` reports the loaded engine.
 - **BREAKING**: Remove `cache_root` from `vfhe.util.kernels`. `ExtensionBuilder.compile()`
   and `build()` return the directory they produced, which is the path a
   caller actually needs; nothing in the tree or the docs ever asked where the
@@ -970,6 +1027,37 @@ versions may contain breaking changes.
 - **BREAKING**: `CGGI16_Key.b_prec`, which nothing read.
 
 ### Fixed
+
+- A `Ring` message could carry a degree that is not a power of two, a zero
+  degree, a split degree that does not divide it, a composite or unit
+  modulus, one at or past 2^62, a prime with no root of unity of the ring's
+  order, or more primes than a mask selects; each reached the native base
+  and wrote or read out of bounds, divided by zero, dereferenced a refused
+  modulus or plan, or built a transform with a zero root. `RNSRing` refuses
+  them, the shared pool stops at 64 primes, and the C constructors exit on
+  a refused modulus or plan.
+- `SampleCodec.decode` adopted a sample's rank from the stream, so
+  decryption indexed the key past its components; a rank other than the
+  scheme's is refused, and `linear_decrypt` checks the key's.
+- `==` between polynomials of rings of different degree read the shorter
+  row at the longer length; they compare unequal.
+- `SampleCodec.decode` passed a constant seed length to the mask expander,
+  which read 32 bytes of a shorter `seed` field past its end; a seed of any
+  length but 32 is now refused.
+- `Merkle.verify` ignored the bits of the index above the path's length, so
+  an index past the last leaf verified as its low bits; it is rejected.
+- `FoldableRS.decode` trusted the word's ring: elements of a ring with other
+  primes or another degree indexed the kernel's plans and rows out of
+  bounds; they are refused.
+- The NTT plans allocated through unchecked `malloc`; a length whose tables
+  do not fit now exits as every other allocation failure does.
+- `VFHE_NUM_THREADS` and `VFHE_MEMPOOL_CAPACITY` took a sign, blanks and
+  overflowing values through `strtoull`; only a plain decimal counts.
+- The lazy thread-limit, capacity and wipe settings reloaded their atomic
+  after the exchange that resolved them and could hand back the unresolved
+  sentinel under a concurrent reset; they take the exchange's result.
+- `rns_rows_parts` doubled the thread limit without overflow protection; the
+  expander asserts its range does not wrap.
 
 - Correct `Polynomial.base_extend`'s documented contract: it returns a value
   congruent to this element modulo the ring's modulus, not the element
@@ -1070,6 +1158,25 @@ versions may contain breaking changes.
 - Fix `CKKS_Scheme.multiply` (inherited from `MLWE_Scheme`) returning the
   first operand's `delta` instead of the product of both, so a product taken
   with it decoded at the wrong scale; `*` was right.
+
+### Security
+
+- A failing entropy source (RDRAND, `/dev/urandom`) exits the process
+  with the reason on stderr; it used to print to stdout and return an
+  undefined seed.
+- A Gaussian draw whose uniform word was zero produced an infinite sample
+  and an undefined integer cast, once in 2^64 draws; the words now map into
+  the open unit interval. `normal_from_seed` is a new mapping from seed to
+  samples, under a new derive-key context.
+- The portable seed source reads `getentropy` in place of `/dev/urandom`
+  through stdio, which over-read the device into a buffer that kept the
+  bytes; RDRAND retries a drained step ten times before failing, Intel's
+  guidance, where one miss used to exit. The fresh seed, the AES round keys
+  and the served slice of the per-thread pool are wiped once used.
+- `seeded.below`'s mask is built from `bound - 1`, as documented: a power-
+  of-two bound no longer rejects half its draws. The sequence changes for
+  those bounds alone. A `context` with a NUL byte and a bound past 64 bits
+  raise `ValueError`; BLAKE3 would have cut the context short.
 
 ## [0.0.3] - 2026-09-10
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from operator import itemgetter
+from typing import TYPE_CHECKING
 
 from vfhe.arith import (
     Polynomial,
@@ -15,6 +16,9 @@ from vfhe.arith import (
 )
 from vfhe.mlwe.mlwe import MLWE, MLWE_Key, MLWE_Scheme, MLWE_Set, SchemeParameters
 from vfhe.util.bindings import lib
+
+if TYPE_CHECKING:
+    from vfhe.crypto.random import Random
 
 
 class _CenteredMove:
@@ -88,6 +92,7 @@ class BFV_Scheme(MLWE_Scheme):
         special_primes: int = 0,
         special_rings: list[RNSRing] | None = None,
         balanced: bool = True,
+        random: Random | None = None,
     ):
         """Create a BFV scheme.
 
@@ -105,6 +110,7 @@ class BFV_Scheme(MLWE_Scheme):
             special_rings=special_rings,
             module_rank=module_rank,
             balanced=balanced,
+            random=random,
         )
         self.plaintext_ring = self.rings[0].quotient_ring(ell=plaintext_primes)
         #: The plaintext modulus.

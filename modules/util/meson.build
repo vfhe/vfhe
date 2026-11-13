@@ -11,8 +11,10 @@ vfhe_c_include_dirs += include_directories(
 )
 vfhe_c_public_headers += files(
     'c/include/alloc.h',
+    'c/include/gpu.h',
     'c/include/memory_pool.h',
     'c/include/parallel.h',
+    'c/include/wipe.h',
     'c/include/x86_64.h',
 )
 vfhe_c_unit_tests += files(
@@ -20,13 +22,15 @@ vfhe_c_unit_tests += files(
     'c/test/unit/test_memory_pool.c',
     'c/test/unit/test_parallel.c',
 )
-vfhe_c_benchmarks += files(
-    'c/bench/bench_memory_pool.c',
-    'c/bench/bench_parallel.c',
-)
 vfhe_python_cdefs += files(
     'python/cdef/memory_pool.h',
     'python/cdef/parallel.h',
+)
+vfhe_cuda_sources += files(
+    'c/src/cuda/gpu.cu',
+)
+vfhe_cuda_cdefs += files(
+    'python/cdef/gpu.h',
 )
 
 install_subdir(

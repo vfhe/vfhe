@@ -18,7 +18,7 @@ which every `vfhe.arith` ring and field provides.
 
 from __future__ import annotations
 
-from vfhe.crypto import hash_bytes
+from vfhe.crypto.hash import digest
 
 from .party import Verifier
 
@@ -28,7 +28,7 @@ def expand_bytes(seed: bytes, nbytes: int) -> bytes:
     out = b""
     counter = 0
     while len(out) < nbytes:
-        out += hash_bytes(seed + counter.to_bytes(8, "little"))
+        out += digest(seed + counter.to_bytes(8, "little"))
         counter += 1
     return out[:nbytes]
 
@@ -47,7 +47,7 @@ class FS_Verifier(Verifier):
 
     def _derive(self, tag: bytes, label: str) -> bytes:
         transcript = self.iop.transcript
-        return hash_bytes(transcript.state() + tag + label.encode())
+        return digest(transcript.state() + tag + label.encode())
 
     def _draw_challenge(self, label: str, domain=None):
         seed = self._derive(b"challenge", label)

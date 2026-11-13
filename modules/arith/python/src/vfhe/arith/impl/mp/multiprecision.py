@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 
 
 class Multiprecision:
+    """The bridge between RNS residues and multiprecision integers: loads
+    Python integers into base-``2^52`` digit arrays, reconstructs them, and
+    runs the multiprecision kernels on polynomials."""
+
     #: The (implementation, backend) this parent was built for.
     spec: ClassVar[Spec]
 

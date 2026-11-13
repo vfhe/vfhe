@@ -16,7 +16,8 @@ Modulus mod_new(uint64_t q)
        4q <= B for its radix B, and the widest radix is 2^64. A larger modulus
        has no family that can hold it and would be reduced with an overflowing
        product. */
-    if (q >= (1ULL << 62))
+    // Below 2 the Barrett multiplier 2^k / q does not fit a word.
+    if (q < 2 || q >= (1ULL << 62))
     {
         fprintf(stderr,
                 "mod_new: modulus %" PRIu64 " is at or above 2^62, which no kernel can reduce\n",

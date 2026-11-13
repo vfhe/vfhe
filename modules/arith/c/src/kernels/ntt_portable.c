@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 The vFHE Authors
 // SPDX-License-Identifier: Apache-2.0
+#include <alloc.h>
 #include <arith.h>
 #include <inttypes.h>
 
@@ -46,6 +47,13 @@ NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
     // residues qualify, so this terminates quickly.
     // Without 2n | q - 1 no such root exists and the search below would visit
     // every residue of a 61-bit prime before giving up.
+    // The twiddle tables are indexed by bit-reversed positions over log2(n)
+    // bits, so the length is a power of two.
+    if (n == 0 || (n & (n - 1)) != 0)
+    {
+        fprintf(stderr, "ntt_new_plan: length %" PRIu64 " is not a power of two\n", n);
+        return NULL;
+    }
     if ((q - 1) % (2 * n) != 0)
     {
         fprintf(stderr,
@@ -66,7 +74,7 @@ NTT_Plan ntt_new_plan(uint64_t n, Modulus mod)
     }
     uint64_t inv_root_of_unity = inverse_mod(root_of_unity, q);
 
-    NTT_Plan res = (NTT_Plan)malloc(sizeof(struct _NTT_Plan));
+    NTT_Plan res = (NTT_Plan)safe_malloc(sizeof(struct _NTT_Plan));
     res->mod = mod; // borrowed; ntt_free_plan leaves it alone
     res->n = n;
     res->root_of_unity = root_of_unity;

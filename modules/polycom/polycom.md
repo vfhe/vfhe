@@ -42,7 +42,7 @@ offline phase and reused across proofs), and of the `commit -> (Commitment,
 ProverData)` shape of PCS implementations (arkworks' poly-commit, plonky3's
 `Pcs`).
 
-Codewords are committed by **Merkle root** (`vfhe.crypto.Merkle`, BLAKE3):
+Codewords are committed by **Merkle root** (`vfhe.crypto.merkle.Merkle`, BLAKE3):
 the RO-model instantiation of [ZCF24] §4's ideal oracle via the BCS
 compiler [BCS16]. So `commit` returns `(BasefoldCommitment, BasefoldOpening)`
 — a root, and the prover data (the codeword and its tree) that every later
@@ -477,7 +477,7 @@ once, by the ring leaves, which the verifier authenticates against the ring
 roots and maps to the leaves of every `u_i`. Each later layer is committed
 once for all primes, which lockstep makes possible -- every prime reaches
 it at the same moment: one Merkle tree whose leaf `j` hashes every prime's
-leaf digest `j` together (`vfhe.crypto.join_digests`), built through
+leaf digest `j` together (`vfhe.crypto.merkle.join_digests`), built through
 `IOP.batched_call` and its root written once, so a query answers the layer
 with every prime's fiber and a single path, `L` times fewer paths than one
 tree per prime. The sumcheck's tables are taken element-major (component

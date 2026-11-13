@@ -5,7 +5,8 @@
 // into the representation on purpose.
 #include "arith_internal.h"
 #include "alloc.h"
-#include <crypto.h>
+#include <normal.h>
+#include <random.h>
 
 // The MLWE operations that need the RNS representation itself.
 //
@@ -126,7 +127,7 @@ RNS_MLWE_Key mlwe_new_RNS_key_from_array(uint64_t *array, uint64_t N, uint64_t r
 }
 
 RNS_MLWE_Key mlwe_new_RNS_gaussian_key(uint64_t N, uint64_t r, uint64_t l, double key_sigma,
-                                       RNS_Base base, double sigma)
+                                       RNS_Base base, double sigma, Random source)
 {
     RNS_MLWE_Key res = mlwe_alloc_key(arith_rns_ring_get(N, (1ULL << l) - 1, base), r, l, sigma);
     // Sampling into a plain array and loading it keeps key generation
@@ -136,7 +137,7 @@ RNS_MLWE_Key mlwe_new_RNS_gaussian_key(uint64_t N, uint64_t r, uint64_t l, doubl
     {
         for (size_t j = 0; j < N; j++)
         {
-            coeffs[j] = (uint64_t)((int64_t)generate_normal_random(key_sigma));
+            coeffs[j] = (uint64_t)((int64_t)normal_random(source, key_sigma));
         }
         arith_from_int_array(res->ring, &res->s[i], coeffs, N);
     }

@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mlwe.h"
 #include "rns_rows.h"
+#include <assert.h>
 #include "alloc.h"
 #include <parallel.h>
-#include <crypto.h>
+#include <normal.h>
+#include <random.h>
 
 // MLWE RNS functions
 
@@ -113,22 +115,22 @@ void mlwe_copy_RNSc_sample(RNSc_MLWE out, RNSc_MLWE in) { mlwe_copy_RNS_sample(o
 
 void free_mlwe_RNS_sample(void *p) { free_RNS_mlwe_sample((RNS_MLWE)p); }
 
-void mlwe_RNS_sample_of_zero(RNS_MLWE out, RNS_MLWE_Key key)
+void mlwe_RNS_sample_of_zero(RNS_MLWE out, RNS_MLWE_Key key, Random source)
 {
-    arith_sample_gaussian(out->ring, &out->b, key->sigma);
+    arith_sample_gaussian(out->ring, &out->b, key->sigma, source);
     arith_to_mul(out->ring, &out->b);
     for (size_t i = 0; i < out->r; i++)
     {
-        arith_sample_uniform(out->ring, &out->a[i]);
+        arith_sample_uniform(out->ring, &out->a[i], source);
         arith_to_mul(out->ring, &out->a[i]);
         arith_mul_addto(out->ring, &out->b, &key->s[i], &out->a[i]);
     }
 }
 
 void mlwe_RNS_sample_of_zero_seeded(RNS_MLWE out, RNS_MLWE_Key key, const uint8_t *seed,
-                                    uint64_t seed_len)
+                                    uint64_t seed_len, Random source)
 {
-    arith_sample_gaussian(out->ring, &out->b, key->sigma);
+    arith_sample_gaussian(out->ring, &out->b, key->sigma, source);
     arith_to_mul(out->ring, &out->b);
     for (size_t i = 0; i < out->r; i++)
     {
@@ -138,9 +140,9 @@ void mlwe_RNS_sample_of_zero_seeded(RNS_MLWE out, RNS_MLWE_Key key, const uint8_
 }
 
 void mlwe_RNSc_sample_seeded(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m,
-                             const uint8_t *seed, uint64_t seed_len)
+                             const uint8_t *seed, uint64_t seed_len, Random source)
 {
-    mlwe_RNS_sample_of_zero_seeded(out, key, seed, seed_len);
+    mlwe_RNS_sample_of_zero_seeded(out, key, seed, seed_len, source);
     mlwe_RNS_to_RNSc(out, out);
     arith_add(out->ring, &out->b, &out->b, m);
 }
@@ -173,8 +175,8 @@ static void sample_scaled_job(void *ctx, uint64_t i)
     RNS_MLWE out = job->out[i] = mlwe_alloc_sample(ring, key->r);
 
     int64_t *noise = (int64_t *)safe_malloc(ring->N * sizeof(int64_t));
-    prng_normal_seeded(noise, ring->N, key->sigma, &job->noise_seeds[i * SAMPLE_SEED_BYTES],
-                       SAMPLE_SEED_BYTES);
+    normal_from_seed(noise, ring->N, key->sigma, &job->noise_seeds[i * SAMPLE_SEED_BYTES],
+                     SAMPLE_SEED_BYTES);
     arith_from_int_array(ring, &out->b, (const uint64_t *)noise, ring->N);
     free(noise);
 
@@ -192,14 +194,14 @@ static void sample_scaled_job(void *ctx, uint64_t i)
 void mlwe_RNS_sample_scaled_batch(RNS_MLWE *out, ArithRing ring, RNS_MLWE_Key key,
                                   const ArithElement *msgs, uint64_t n_msgs,
                                   uint64_t *const *scales, uint64_t n_scales, uint8_t *mask_seeds,
-                                  uint64_t n_threads)
+                                  uint64_t n_threads, Random source)
 {
     const uint64_t count = n_msgs * n_scales;
     if (count == 0)
         return;
     uint8_t *noise_seeds = (uint8_t *)safe_malloc(count * SAMPLE_SEED_BYTES);
-    generate_random_bytes(count * SAMPLE_SEED_BYTES, mask_seeds);
-    generate_random_bytes(count * SAMPLE_SEED_BYTES, noise_seeds);
+    random_bytes(source, mask_seeds, count * SAMPLE_SEED_BYTES);
+    random_bytes(source, noise_seeds, count * SAMPLE_SEED_BYTES);
     ArithScalar *scalars = (ArithScalar *)safe_malloc(n_scales * sizeof(ArithScalar));
     for (uint64_t k = 0; k < n_scales; k++)
         arith_scalar_new(ring, scales[k], &scalars[k]);
@@ -213,9 +215,9 @@ void mlwe_RNS_sample_scaled_batch(RNS_MLWE *out, ArithRing ring, RNS_MLWE_Key ke
     free(noise_seeds);
 }
 
-void mlwe_RNSc_sample_of_zero(RNSc_MLWE out, RNS_MLWE_Key key)
+void mlwe_RNSc_sample_of_zero(RNSc_MLWE out, RNS_MLWE_Key key, Random source)
 {
-    mlwe_RNS_sample_of_zero(out, key);
+    mlwe_RNS_sample_of_zero(out, key, source);
     mlwe_RNS_to_RNSc(out, out);
 }
 
@@ -255,14 +257,15 @@ void mlwe_scale_RNS_mlwe_addto(RNS_MLWE out, RNS_MLWE in, uint64_t scale)
     arith_scale_addto(out->ring, &out->b, &in->b, scale);
 }
 
-void mlwe_RNSc_sample(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m)
+void mlwe_RNSc_sample(RNSc_MLWE out, RNS_MLWE_Key key, const ArithElement *m, Random source)
 {
-    mlwe_RNSc_sample_of_zero(out, key);
+    mlwe_RNSc_sample_of_zero(out, key, source);
     arith_add(out->ring, &out->b, &out->b, m);
 }
 
 void mlwe_RNS_linear_decrypt(ArithElement *out, RNS_MLWE in, RNS_MLWE_Key key)
 {
+    assert(in->r == key->r); // one key component per mask component
     arith_mul(in->ring, out, &in->a[0], &key->s[0]);
     for (size_t i = 1; i < in->r; i++)
     {
@@ -337,17 +340,17 @@ void mlwe_RNS_linear_combinations(RNS_MLWE *out, RNS_MLWE *in, const ArithElemen
     vfhe_parallel_for(n_out, n_threads, linear_combination_job, &lc);
 }
 
-RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key)
+RNSc_MLWE mlwe_new_RNSc_sample_of_zero(RNS_MLWE_Key key, Random source)
 {
     RNSc_MLWE res = mlwe_alloc_sample(key->ring, key->r);
-    mlwe_RNSc_sample_of_zero(res, key);
+    mlwe_RNSc_sample_of_zero(res, key, source);
     return res;
 }
 
-RNS_MLWE mlwe_new_RNS_sample_of_zero(RNS_MLWE_Key key)
+RNS_MLWE mlwe_new_RNS_sample_of_zero(RNS_MLWE_Key key, Random source)
 {
     RNS_MLWE res = mlwe_alloc_sample(key->ring, key->r);
-    mlwe_RNS_sample_of_zero(res, key);
+    mlwe_RNS_sample_of_zero(res, key, source);
     return res;
 }
 

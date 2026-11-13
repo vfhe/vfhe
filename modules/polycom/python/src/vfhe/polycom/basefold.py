@@ -18,7 +18,7 @@ on the transcript. The prover's opening data is stored under the commitment
 in `prover.witnesses`.
 
 The commitment is a **Merkle root** over the level-d codeword
-(`vfhe.crypto.Merkle`, BLAKE3): the RO-model instantiation of [ZCF24] §4's
+(`vfhe.crypto.merkle.Merkle`, BLAKE3): the RO-model instantiation of [ZCF24] §4's
 ideal oracle, via the BCS compiler [BCS16]. It commits to the codeword's
 adjacent *pairs*, one leaf each — the fold reads a pair, so a single path
 authenticates both operands of a fold check ([ZCF24, Remark 9]'s packed
@@ -64,7 +64,8 @@ from typing import TYPE_CHECKING, Any
 
 from vfhe.arith import MLE, Field, FieldElement, FieldVector, Polynomial, Ring
 from vfhe.arith.mle import native_table, vector_table
-from vfhe.crypto import DIGEST_LEN, Merkle, hash_bytes
+from vfhe.crypto.hash import DIGEST_LEN, digest
+from vfhe.crypto.merkle import Merkle
 from vfhe.piop import (
     CommittedOracle,
     Protocol,
@@ -104,11 +105,6 @@ def _gather(word: Word, positions: list[int]) -> Word:
     if isinstance(word, FieldVector):
         return word.query(array("Q", positions))
     return [word[i] for i in positions]
-
-
-def _identity(digest):
-    """`Merkle.verify`'s leaf hash when the digest is already in hand."""
-    return digest
 
 
 def _coefficients(f: MLE) -> Word:
@@ -172,7 +168,7 @@ class BasefoldCommitment:
         """The `piop.element_digest` hook: what a Fiat-Shamir chain absorbs
         when this commitment sits in a statement (the root already binds the
         codeword; the variables fix the point order)."""
-        return hash_bytes(
+        return digest(
             b"basefold-commitment" + self.root + element_digest(self.variables)
         )
 
@@ -271,7 +267,7 @@ class Basefold:
         well as once per commit.
         """
         folds = self.schedule[0] if folds is None else folds
-        return Merkle.from_digests(self.code.leaf_digests(word, 1 << folds))
+        return Merkle(self.code.leaf_digests(word, 1 << folds))
 
     def commit(
         self, f: MLE, prover: Prover | None = None
@@ -371,18 +367,18 @@ class BasefoldEval(Protocol):
         polynomials: int = 1,
     ) -> float | None:
         """The information-theoretic part,
-        2d / (gamma^3 |A|) + (1 - delta + gamma * d)^rep [ZCF24], per
-        RNS-prime component (|A| = the residue field size). `delta` is the
+        2d / (gamma^3 ``|A|``) + (1 - delta + gamma * d)^rep [ZCF24], per
+        RNS-prime component (``|A|`` = the residue field size). `delta` is the
         code's relative distance -- `self.code.relative_distance()` reports
         it -- and `gamma` is the caller's, subject to the theorem's
-        conditions (polycom.md). None if |A| is unknown.
+        conditions (polycom.md). None if ``|A|`` is unknown.
 
         For a bundle of `claims` evaluation claims on `polynomials` distinct
         polynomials, opened together, the batching adds
-        (2l + claims - 1) / |A| for the common-point sumcheck when
+        (2l + claims - 1) / ``|A|`` for the common-point sumcheck when
         claims > 1 [CCCFGS26, §7.1] (l = the number of variables; the bound
         holds whether or not the points coincide) and
-        (polynomials - 1) / |A| for the random linear combination
+        (polynomials - 1) / ``|A|`` for the random linear combination
         [CCCFGS26, §7.2, Lemma 5].
 
         With Merkle commitments this is no longer the whole story: binding
@@ -878,9 +874,7 @@ def _check_layer(
         raise Rejection(f"{label}: malformed leaf at level {level}: {error}") from error
     digests = code.leaf_digests(block, size)
     for k, (j, answer) in enumerate(zip(positions, answers, strict=True)):
-        if not Merkle.verify(
-            root, j, answer[1], digests[32 * k : 32 * (k + 1)], hash=_identity
-        ):
+        if not Merkle.verify(root, j, answer[1], digests[32 * k : 32 * (k + 1)]):
             raise Rejection(f"{label}: Merkle path rejected at level {level}, leaf {j}")
     return block
 

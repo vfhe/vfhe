@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Smoke test: `python -m vfhe.info` answers from an installed package.
+"""Smoke test: `python -m vfhe.util.info` answers from an installed package.
 
 In a source tree the version is unknown by design, so only an install proves it.
 """
@@ -19,12 +19,12 @@ EXPECTED = ["version", "engine", "engine_file", "runs", "python", "platform"]
 def main() -> int:
     importlib.import_module("vfhe.util.bindings")
     out = subprocess.run(
-        [sys.executable, "-m", "vfhe.info"],
+        [sys.executable, "-m", "vfhe.util.info"],
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    print(f"python -m vfhe.info reports:\n{out}")
+    print(f"python -m vfhe.util.info reports:\n{out}")
     facts = json.loads(out)
 
     ok = check("every fact present", list(facts) == EXPECTED)

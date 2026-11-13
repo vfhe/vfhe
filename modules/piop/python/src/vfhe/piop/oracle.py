@@ -32,7 +32,7 @@ from enum import Enum
 from typing import Any, ClassVar
 
 from vfhe.arith.mle import MLE, SparseMLE
-from vfhe.crypto import chain_digest, hash_bytes
+from vfhe.crypto.hash import DigestChain, digest
 
 from .digest import element_digest
 
@@ -153,7 +153,7 @@ class CommittedOracle(Oracle):
 
     def digest(self) -> bytes:
         """By the commitment, which binds the table, never by entries."""
-        return hash_bytes(b"committed" + self.commitment.digest())
+        return digest(b"committed" + self.commitment.digest())
 
     def __repr__(self) -> str:
         return f"CommittedOracle(vars={self.num_vars}, {self.commitment!r})"
@@ -185,9 +185,9 @@ class ImplicitOracle(Oracle):
         )
 
     def digest(self) -> bytes:
-        return chain_digest(
+        return DigestChain(
             [b"implicit-handle"] + [element_digest(v) for v in self.variables]
-        )
+        ).digest()
 
     def __repr__(self) -> str:
         return f"ImplicitOracle(vars={self.num_vars})"

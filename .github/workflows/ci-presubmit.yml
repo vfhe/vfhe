@@ -123,14 +123,14 @@ jobs:
       matrix:
         include:
           - { engine: portable, os: macos-26, python: "3.11" }
-          - { engine: portable, os: macos-26, python: "3.14" }
+          - { engine: portable, os: macos-26, python: "3.15" }
           - { engine: portable, os: ubuntu-24.04, python: "3.11" }
-          - { engine: portable, os: ubuntu-24.04, python: "3.14", coverage: "true" }
+          - { engine: portable, os: ubuntu-24.04, python: "3.15", coverage: "true" }
           - { engine: portable, os: ubuntu-24.04-arm, python: "3.11" }
-          - { engine: portable, os: ubuntu-24.04-arm, python: "3.14" }
-          - { engine: avx512ifma, os: ubuntu-24.04, python: "3.14", coverage: "true", emulate: "1" }
-          - { engine: neon, os: macos-26, python: "3.14" }
-          - { engine: neon, os: ubuntu-24.04-arm, python: "3.14", coverage: "true" }
+          - { engine: portable, os: ubuntu-24.04-arm, python: "3.15" }
+          - { engine: avx512ifma, os: ubuntu-24.04, python: "3.15", coverage: "true", emulate: "1" }
+          - { engine: neon, os: macos-26, python: "3.15" }
+          - { engine: neon, os: ubuntu-24.04-arm, python: "3.15", coverage: "true" }
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

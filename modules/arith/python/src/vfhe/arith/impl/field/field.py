@@ -242,14 +242,19 @@ class ExtensionField(Field):
         return ExtensionFieldElement(self, value)
 
     if TYPE_CHECKING:
+        from vfhe.crypto.random import Random
+
         # `Field` spells the samplers once against `_uniform_from_seed`;
         # these say what they yield here. Declarations only -- the inherited
         # implementations are what run.
         def random_element(
-            self, seed: bytes | None = None
+            self, seed: bytes | None = None, random: Random | None = None
         ) -> ExtensionFieldElement: ...
         def random_exceptional(
-            self, seed: bytes | None = None, bound: int | None = None
+            self,
+            seed: bytes | None = None,
+            bound: int | None = None,
+            random: Random | None = None,
         ) -> ExtensionFieldElement: ...
 
     def __del__(self) -> None:

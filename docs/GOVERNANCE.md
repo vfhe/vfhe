@@ -42,7 +42,7 @@ The steering committee sets strategic direction and takes the final call on
 decisions escalated to it. A report concerning a maintainer, or an appeal
 against a moderation decision, goes to the steering committee.
 
-The steering comitee will be established at the first release.
+The steering committee will be established at the first release.
 
 ## Decisions
 

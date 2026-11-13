@@ -23,7 +23,7 @@ body:
         Paste the output of:
 
         ```bash
-        python -m vfhe.info
+        python -m vfhe.util.info
         ```
       placeholder: |
         vfhe      0.0.1

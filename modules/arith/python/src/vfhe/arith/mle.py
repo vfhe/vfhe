@@ -12,7 +12,7 @@ import operator
 from enum import Enum
 from typing import Any
 
-from vfhe.crypto import DigestChain, hash_bytes, int_digest, str_digest
+from vfhe.crypto.hash import DigestChain, digest
 from vfhe.util.bindings import ffi, lib
 
 from .base import Field, FieldVector, Polynomial
@@ -36,7 +36,7 @@ class MLE_Variable:
 
     def digest(self) -> bytes:
         """A 32-byte digest of the variable, by its name."""
-        return hash_bytes(b"name" + self.name.encode())
+        return digest(b"name" + self.name.encode())
 
     def __repr__(self) -> str:
         return f"MLE_Variable({self.name!r})"
@@ -46,10 +46,13 @@ def _digest(value) -> bytes:
     """The digest of a table entry or variable: a polynomial, a field element
     or a variable by its own `digest()`, an integer or a string as a
     primitive."""
-    if isinstance(value, bool | int):
-        return int_digest(value)
+    if isinstance(value, int):
+        return digest(
+            b"int"
+            + value.to_bytes((value.bit_length() + 8) // 8 or 1, "little", signed=True)
+        )
     if isinstance(value, str):
-        return str_digest(value)
+        return digest(b"str" + value.encode())
     return value.digest()
 
 
@@ -598,7 +601,11 @@ class MLE:
     def digest(self) -> bytes:
         """A 32-byte digest of the table: the chain of its basis, its
         variables in order and one digest of all its entries."""
-        chain = DigestChain().absorb(b"mle").absorb(str_digest(self.basis.name))
+        chain = (
+            DigestChain()
+            .absorb(b"mle")
+            .absorb(digest(b"str" + self.basis.name.encode()))
+        )
         chain.absorb_packed(b"".join(_digest(v) for v in self.variables))
         return chain.absorb(self._entries_digest()).digest()
 
@@ -611,7 +618,7 @@ class MLE:
             return self._vector.hash()
         if self.ring is not None:
             return RNSPolynomial.digest_sequence(self._polys)
-        return hash_bytes(b"".join(_digest(entry) for entry in self._entries))
+        return digest(b"".join(_digest(entry) for entry in self._entries))
 
     def rename(self, mapping: dict) -> MLE:
         """A copy of this table with its variables relabelled through
@@ -759,8 +766,7 @@ class SparseMLE:
         chain = DigestChain().absorb(b"sparse")
         chain.absorb_packed(b"".join(_digest(v) for v in self.variables))
         entries = b"".join(
-            int_digest(k) + _digest(self.evaluations[k])
-            for k in sorted(self.evaluations)
+            _digest(k) + _digest(self.evaluations[k]) for k in sorted(self.evaluations)
         )
         return chain.absorb_packed(entries).digest()
 

@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2026 The vFHE Authors
 # SPDX-License-Identifier: Apache-2.0
 def is_prime(n: int) -> bool:
+    """Whether ``n`` is prime: trial division by the primes up to 37, then
+    Miller-Rabin on bases that are deterministic below ``2^64``."""
     if n < 2:
         return False
     # Check small primes
@@ -108,6 +110,8 @@ def gen_pseudo_mersenne_prime(
 
 
 def crt(values: list[int], moduli: list[int]) -> int:
+    """The integer in ``[0, prod(moduli))`` congruent to ``values[i]`` modulo
+    ``moduli[i]`` for every ``i``, the moduli pairwise coprime."""
     if len(moduli) == 1:
         return values[0] % moduli[0]
     N = 1

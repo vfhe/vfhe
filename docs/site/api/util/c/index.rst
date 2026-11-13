@@ -11,6 +11,8 @@ against them, and so does one built with ``vfhe.util.kernels``.
    :maxdepth: 1
 
    alloc
+   gpu
    memory_pool
    parallel
+   wipe
    x86_64

@@ -65,8 +65,8 @@ void int_array_to_RNS(void *out, uint64_t *in);
 void array_to_RNS(void *out, uint64_t **in);
 
 // --- sampling ---
-void polynomial_gen_random_RNSc_polynomial(void *out);
-void polynomial_gen_gaussian_RNSc_polynomial(void *out, double sigma);
+void polynomial_gen_random_RNSc_polynomial(void *out, void *source);
+void polynomial_gen_gaussian_RNSc_polynomial(void *out, double sigma, void *source);
 
 // --- arithmetic ---
 void polynomial_mul_RNS_polynomial(void *out, void *in1, void *in2);
@@ -119,6 +119,8 @@ void polynomial_RNS_write_rows(uint8_t *out, void *p, const uint64_t *rows, uint
                                bool tight);
 int64_t polynomial_RNS_read_rows(void *p, const uint8_t *in, const uint64_t *rows, uint64_t count,
                                  bool tight, bool validate);
+void polynomial_RNS_export_u64(uint64_t *out, void *p);
+void polynomial_RNS_import_u64(void *p, const uint64_t *in);
 uint64_t *polynomial_RNS_get_hash_p(void *p);
 
 // --- negacyclic FFT ---
@@ -238,7 +240,7 @@ uint64_t field_vec_padded_length(uint64_t n);
 typedef struct _RNS_CrtMaps *RNS_CrtMaps;
 RNS_CrtMaps rns_crt_maps_new(void *base, uint64_t row, bool to_slot_zero);
 void polynomial_RNS_sample_exceptional(void *out, const uint8_t *seed, uint64_t seed_len,
-                                       RNS_CrtMaps const *maps);
+                                       RNS_CrtMaps const *maps, void *source);
 void rns_crt_maps_free(RNS_CrtMaps maps);
 void polynomial_RNS_crt_components(FieldVector out, RNS_Polynomial *in, uint64_t count,
                                    RNS_CrtMaps maps, bool element_major);

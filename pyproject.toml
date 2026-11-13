@@ -40,6 +40,7 @@ dependencies = ["cffi>=2.1.0", "protobuf>=7.35.1,<8"]
 
 [project.optional-dependencies]
 kernels = ["meson>=1.4", "ninja>=1.11"]
+benchmark = ["pytest>=9.1.1", "pytest-benchmark>=5.3.1"]
 
 [project.urls]
 Homepage = "https://github.com/vfhe/vfhe"
@@ -66,6 +67,7 @@ compile = [
 test = [
     { include-group = "compile" },
     "pytest>=9.1.1",
+    "pytest-benchmark>=5.3.1",
     "pytest-cov>=7",
     "gcovr>=8.3",
 ]
@@ -120,7 +122,10 @@ branch = true
 source = ["vfhe"]
 
 [tool.pytest.ini_options]
-testpaths = ["modules/*/python/test"]
-addopts = "--import-mode=importlib --strict-markers"
+testpaths = ["modules/*/python/test", "modules/*/python/bench"]
+# A benchmark file is named after its topic.
+python_files = ["test_*.py", "bench/*.py"]
+# Benchmarks run once, as tests; `make benchmark` turns timing on.
+addopts = "--import-mode=importlib --strict-markers --benchmark-disable -p vfhe.util.benchmark"
 markers = ["complete"]
 cache_dir = ".cache/pytest"

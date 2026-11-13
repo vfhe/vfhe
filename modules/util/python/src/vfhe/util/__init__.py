@@ -8,6 +8,9 @@
 - `io` serializes vfhe objects.
 - `parallel` sets how many threads vfhe uses.
 - `memory_pool` controls the pool that keeps the buffers vfhe releases.
+- `benchmark` is the pytest plugin the benchmarks run under.
+- `gpu` loads the CUDA extension, when the install has one.
+- `info` prints a report of the install, for bug reports.
 
 Importing `vfhe.util` imports none of them; import the one you use:
 

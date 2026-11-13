@@ -274,16 +274,16 @@ ArithStatus arith_mul_by_monomial(ArithRing ring, ArithElement *out, const Arith
     return status;
 }
 
-ArithStatus arith_sample_uniform(ArithRing ring, ArithElement *out)
+ArithStatus arith_sample_uniform(ArithRing ring, ArithElement *out, Random source)
 {
-    ArithStatus status = ARITH_DISPATCH(ring, sample_uniform, ring, out);
+    ArithStatus status = ARITH_DISPATCH(ring, sample_uniform, ring, out, source);
     out->domain = ARITH_DOMAIN_CANONICAL;
     return status;
 }
 
-ArithStatus arith_sample_gaussian(ArithRing ring, ArithElement *out, double sigma)
+ArithStatus arith_sample_gaussian(ArithRing ring, ArithElement *out, double sigma, Random source)
 {
-    ArithStatus status = ARITH_DISPATCH(ring, sample_gaussian, ring, out, sigma);
+    ArithStatus status = ARITH_DISPATCH(ring, sample_gaussian, ring, out, sigma, source);
     out->domain = ARITH_DOMAIN_CANONICAL;
     return status;
 }

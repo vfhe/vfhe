@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 def exceptional_set_size(domain) -> int | None:
-    """|A| for the domain's exceptional set; None if the domain has no size.
+    """``|A|`` for the domain's exceptional set; None if the domain has no size.
 
     Each arithmetic domain computes its own: the size depends on the
     representation, and a domain that is not an `ArithParent` (an int, a

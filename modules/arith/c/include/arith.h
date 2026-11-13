@@ -7,6 +7,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include <random.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -909,14 +911,16 @@ extern "C"
     RNS_Polynomial *polynomial_new_array_of_RNS_polynomials(uint64_t N, uint64_t rns_mask,
                                                             uint64_t size, RNS_Base base);
     void polynomial_to_RNS(RNS_Polynomial out, IntPolynomial in);
-    void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out);
+    /* Uniform residues from `source` (NULL: the entropy stream). */
+    void polynomial_gen_random_RNSc_polynomial(RNSc_Polynomial out, Random source);
     void polynomial_mul_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2);
     void polynomial_sub_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, RNS_Polynomial in2);
     void polynomial_sub_RNSc_polynomial(RNSc_Polynomial out, RNSc_Polynomial in1,
                                         RNSc_Polynomial in2);
     void polynomial_RNSc_to_RNS(RNS_Polynomial out, RNSc_Polynomial in);
     void polynomial_RNS_to_RNSc(RNSc_Polynomial out, RNS_Polynomial in);
-    void polynomial_RNSc_add_noise(RNSc_Polynomial out, RNSc_Polynomial in, double sigma);
+    void polynomial_RNSc_add_noise(RNSc_Polynomial out, RNSc_Polynomial in, double sigma,
+                                   Random source);
     void polynomial_floor_division_RNSc(RNSc_Polynomial out);
     void polynomial_round_division_RNSc(RNSc_Polynomial out);
     void polynomial_floor_division_RNSc_wo_free(RNSc_Polynomial out, uint64_t divide_mask);
@@ -1023,15 +1027,15 @@ extern "C"
     void polynomial_RNS_get_hash(uint64_t *out, RNS_Polynomial p);
 
     /* Feeds the bytes polynomial_RNS_get_hash hashes -- the active rows, as
-       stored -- into `state`, a hasher started with crypto.h's
-       hash_stream_init, and leaves it open, so that several elements can go
+       stored -- into `state`, a hasher started with hash.h's
+       hash_blake3_stream_init, and leaves it open, so that several elements can go
        into one digest. As for polynomial_RNS_get_hash, the caller pins the
        domain. */
     void polynomial_RNS_hash_update(void *state, RNS_Polynomial p);
 
     /* A uniform polynomial from a public seed, in the mul domain: the row of
-       prime q is values [0, N) of prng_expand_below, under the key
-       prng_expand_key derives from `seed` and the label (stream, q). Keyed by
+       prime q is values [0, N) of expand_below, under the key
+       expand_key derives from `seed` and the label (stream, q). Keyed by
        prime value rather than base index, a row is the same in every process
        and in every ring holding its prime. `stream` separates polynomials
        drawn from one seed. */
@@ -1061,6 +1065,12 @@ extern "C"
        the arithmetic on it is undefined. */
     int64_t polynomial_RNS_read_rows(RNS_Polynomial p, const uint8_t *in, const uint64_t *rows,
                                      uint64_t count, bool tight, bool validate);
+    /* The active rows as 64-bit words, row-major in ascending base index,
+       `ell * N` of them: the layout a device holds. A narrow row is widened on
+       the way out and narrowed on the way in; the values fit either way. */
+    void polynomial_RNS_export_u64(uint64_t *out, RNS_Polynomial p);
+    void polynomial_RNS_import_u64(RNS_Polynomial p, const uint64_t *in);
+
     uint64_t *polynomial_RNS_get_hash_p(RNS_Polynomial p);
     RNS_Polynomial *polynomial_new_RNS_polynomial_array(uint64_t size, uint64_t N,
                                                         uint64_t rns_mask, RNS_Base base);
@@ -1239,15 +1249,16 @@ extern "C"
        integers at every prime. Two such elements differ by an element whose
        components are all beta - beta', which is nonzero in every residue
        field, so the difference is invertible: the set is exceptional, of
-       size p_min^d. The a_j are drawn from `seed` (prng_sample_below,
+       size p_min^d. The a_j are drawn from `seed` (seeded_below,
        context "exceptional") or, when `seed` is NULL, from fresh entropy.
        Each row is written in the mul domain by
        polynomial_RNS_from_crt_components from k copies of beta; maps[i] is
        rns_crt_maps_new(base, i, false) for every row i of `out`'s mask
        (the other entries are not read). */
     void polynomial_RNS_sample_exceptional(RNS_Polynomial out, const uint8_t *seed,
-                                           uint64_t seed_len, RNS_CrtMaps const *maps);
-    void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma);
+                                           uint64_t seed_len, RNS_CrtMaps const *maps,
+                                           Random source);
+    void polynomial_gen_gaussian_RNSc_polynomial(RNSc_Polynomial out, double sigma, Random source);
     void int_array_to_RNS(RNS_Polynomial out, uint64_t *in);
     void polynomial_RNSc_add_integer(RNSc_Polynomial out, RNSc_Polynomial in1, uint64_t in2);
     void polynomial_scale_RNS_polynomial(RNS_Polynomial out, RNS_Polynomial in1, uint64_t scale);
@@ -1286,7 +1297,7 @@ extern "C"
     void mp_polynomial_negate(MPPolynomial out, MPPolynomial in);
     void mp_polynomial_add(MPPolynomial out, MPPolynomial a, MPPolynomial b);
     void mp_polynomial_drop_digits(MPPolynomial p, uint64_t num_digits);
-    void mp_polynomial_rnd(MPPolynomial poly);
+    void mp_polynomial_rnd(MPPolynomial poly, Random source);
     void mp_polynomial_scale(MPPolynomial out, MPPolynomial in, uint64_t scale);
     void mp_polynomial_sp_scale_mp(MPPolynomial out, MPPolynomial in, mp_vector_t *scale);
     void mp_polynomial_scale_addto(MPPolynomial out, MPPolynomial in, uint64_t scale);

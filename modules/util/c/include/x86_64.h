@@ -12,7 +12,7 @@
  * true for all of them. The build passes `-Wundef`, so a misspelt name is a
  * warning.
  *
- * @see x86_64_crypto.h for the instructions the crypto module uses.
+ * @see crypto's kernels/gates.h for the instructions its kernels use.
  */
 #ifndef VFHE_X86_64_H
 #define VFHE_X86_64_H

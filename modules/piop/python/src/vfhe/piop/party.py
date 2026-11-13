@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from vfhe.crypto import entropy
+from vfhe.crypto.random import Random
 
 from .and_composition import current_subprotocol
 from .oracle import oracle_closure
@@ -130,6 +130,11 @@ class Verifier(Party):
     """Sends challenges and is restricted to oracle queries (by convention
     in-process; a commitment compiler can enforce it cryptographically)."""
 
+    def __init__(self, iop: IOP, random: Random | None = None):
+        super().__init__(iop)
+        #: The source of the challenges; the entropy stream when None.
+        self.random = random or Random()
+
     async def challenge(self, label: str, domain=None):
         """The challenge `label`: on first call, sample from the exceptional
         set of `domain` (the IOP's domain by default) and write it to the
@@ -220,11 +225,11 @@ class Verifier(Party):
         """Where a domain challenge's value comes from: fresh randomness
         here; the transcript chain in the Fiat-Shamir subtype (fs.py).
         `domain` is the IOP's when None."""
-        return self._challenge_domain(domain).random_exceptional()
+        return self._challenge_domain(domain).random_exceptional(random=self.random)
 
     def _draw_bits(self, label: str, nbytes: int) -> bytes:
         """Where a bit-string challenge's value comes from (see above)."""
-        return entropy.bytes(nbytes)
+        return self.random.bytes(nbytes)
 
     async def verify(self, statement: Statement) -> bool:
         """Follow the registered reductions, then decide every terminal

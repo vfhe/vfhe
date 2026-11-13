@@ -236,6 +236,9 @@ class MGSW_Scheme:
 
 
 class MGSW:
+    """An MGSW ciphertext of an `MGSW_Scheme`: ``obj`` holds its
+    ``(r + 1) * ell`` MLWE samples, one per gadget row."""
+
     def __init__(self, scheme: MGSW_Scheme, obj: list[MLWE] | None = None):
         self.scheme = scheme
         self.obj = (
@@ -370,6 +373,8 @@ class MGSW:
 
 
 def CMUX(in1: MLWE, in2: MLWE, selector: MGSW) -> MLWE:
+    """The controlled multiplexer: ``in1 + selector * (in2 - in1)`` by external
+    product, so an encryption of 0 selects ``in1`` and of 1 selects ``in2``."""
     selector.check_level(in1)
     res = in1.new_like(lvl=in1.lvl)
     in1.to_coeff()
@@ -428,6 +433,9 @@ def CMUX_batch(
 def NCMUX(
     in1: MLWE, in2: MLWE, selector: MGSW, aut_minus1: MLWE_Set | list[MLWE_Set]
 ) -> MLWE:
+    """`CMUX` for a selector encrypting a bit through its negation: the gate
+    the bootstraps evaluate with the key-switch key of the automorphism
+    ``X -> X^-1``, ``aut_minus1``, at ``in1``'s level."""
     aut_minus1 = aut_minus1 if isinstance(aut_minus1, MLWE_Set) else aut_minus1[in1.lvl]
     selector.check_level(in1)
     res = in1.new_like(lvl=in1.lvl)

@@ -5,7 +5,7 @@
 #include "arith.h"
 #include <alloc.h>
 #include <parallel.h>
-#include <crypto.h>
+#include <expand.h>
 #include <string.h>
 
 #include "arith_internal.h"
@@ -27,7 +27,7 @@ static void row_key(uint8_t key[16], const uint8_t *seed, uint64_t seed_len, uin
                     uint64_t q)
 {
     const uint64_t label[2] = {stream, q};
-    prng_expand_key(key, SEED_CONTEXT, seed, seed_len, label, 2);
+    expand_key(key, SEED_CONTEXT, seed, seed_len, label, 2);
 }
 
 typedef struct
@@ -47,9 +47,9 @@ static void expand_row(void *ctx, uint64_t r)
     uint8_t key[16];
     row_key(key, job->seed, job->seed_len, job->stream, q);
     if (rns_row_is_narrow(out->base, i))
-        prng_expand_below32(rns_row32(out, i), out->base->N, 0, q, key);
+        expand_below32(rns_row32(out, i), out->base->N, 0, q, key);
     else
-        prng_expand_below(rns_row64(out, i), out->base->N, 0, q, key);
+        expand_below(rns_row64(out, i), out->base->N, 0, q, key);
 }
 
 // The active base indices of `p`, ascending; returns how many.
@@ -85,7 +85,7 @@ bool polynomial_RNS_matches_seeded(RNS_Polynomial p, bool canonical, uint64_t in
     if (rns_row_is_narrow(base, index))
     {
         uint32_t *row = (uint32_t *)safe_aligned_malloc(N * sizeof(uint32_t));
-        prng_expand_below32(row, N, 0, q, key);
+        expand_below32(row, N, 0, q, key);
         if (canonical)
             for (uint64_t k = 0; k < base->split_degree; k++)
                 ntt_reverse_w32(&row[k * poly_size], &row[k * poly_size], base->plans[index]);
@@ -95,7 +95,7 @@ bool polynomial_RNS_matches_seeded(RNS_Polynomial p, bool canonical, uint64_t in
     else
     {
         uint64_t *row = (uint64_t *)safe_aligned_malloc(N * sizeof(uint64_t));
-        prng_expand_below(row, N, 0, q, key);
+        expand_below(row, N, 0, q, key);
         if (canonical)
             for (uint64_t k = 0; k < base->split_degree; k++)
                 ntt_reverse(&row[k * poly_size], &row[k * poly_size], base->plans[index]);
@@ -285,4 +285,44 @@ int64_t polynomial_RNS_read_rows(RNS_Polynomial p, const uint8_t *in, const uint
     RowsJob job = {p, (uint8_t *)in, rows, offsets, tight, validate, &bad};
     vfhe_parallel_for(count, threads, read_row, &job);
     return bad;
+}
+
+// --- Rows as 64-bit words, for a device ----------------------------------
+
+void polynomial_RNS_export_u64(uint64_t *out, RNS_Polynomial p)
+{
+    const uint64_t N = p->base->N;
+    for (size_t i = 0; i < 64; i++)
+    {
+        if (!((p->rns_mask >> i) & 1ULL))
+            continue;
+        if (rns_row_is_narrow(p->base, i))
+        {
+            const uint32_t *row = rns_row32(p, i);
+            for (uint64_t j = 0; j < N; j++)
+                out[j] = row[j];
+        }
+        else
+            memcpy(out, rns_row64(p, i), N * sizeof(uint64_t));
+        out += N;
+    }
+}
+
+void polynomial_RNS_import_u64(RNS_Polynomial p, const uint64_t *in)
+{
+    const uint64_t N = p->base->N;
+    for (size_t i = 0; i < 64; i++)
+    {
+        if (!((p->rns_mask >> i) & 1ULL))
+            continue;
+        if (rns_row_is_narrow(p->base, i))
+        {
+            uint32_t *row = rns_row32(p, i);
+            for (uint64_t j = 0; j < N; j++)
+                row[j] = (uint32_t)in[j];
+        }
+        else
+            memcpy(rns_row64(p, i), in, N * sizeof(uint64_t));
+        in += N;
+    }
 }
