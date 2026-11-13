@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The execution tape over CKKS: a product's tensor slots, digits and
 rescales are on it, and what it recorded last is what the ciphertext holds."""

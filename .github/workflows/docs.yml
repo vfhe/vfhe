@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 # `make docs` - the site from docs/, the docstrings and the Doxygen blocks,
 # warnings as errors; uploaded for GitHub Pages when asked, which the

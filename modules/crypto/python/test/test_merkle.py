@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for vfhe.crypto.merkle: the C-backed BLAKE3 Merkle tree, its openings,
 and the leaf-hashing contract (`.hash()` or an explicit `hash=` callable).

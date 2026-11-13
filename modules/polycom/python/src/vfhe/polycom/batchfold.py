@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """BatchFold [CCCFGS26, §7]: evaluation claims on multilinear polynomials
 over R_q, proved by basefold runs over the residue fields of R_q.

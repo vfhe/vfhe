@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The Python front on the execution tape: the operations `Polynomial` makes
 through the generic interface are recorded, and each equals its event."""

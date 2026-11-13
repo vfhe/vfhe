@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Defined oracles: virtual oracles in a sumcheck and their free reduction
 (VirtualEval), the oracle kinds, and Fiat-Shamir over statements carrying

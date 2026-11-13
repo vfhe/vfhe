@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the Merkle tree (crypto/c/src/merkle.c, prototyped in
 // crypto/c/include/merkle.h). The tree handle is passed as `void *`; digests are

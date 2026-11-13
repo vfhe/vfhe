@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """GKR [GKR15; Tha22, §4.6] as a composition (piop.md section 4,
 `composer.py`): the *output test*, a headless statement

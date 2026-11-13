@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 # How vfhe.util.kernels builds an engine: vfhe's C and your kernels, the way the
 # root meson.build builds the shipped engines. vfhe.util.kernels._meson fills in

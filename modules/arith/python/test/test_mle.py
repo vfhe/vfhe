@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Characterization tests for vfhe.arith.mle: MLE in both bases and over
 both coefficient types - pure-Python tables (no ring) and the C-backed

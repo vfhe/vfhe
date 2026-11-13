@@ -1,6 +1,6 @@
 # Architecture
 
-vFHE is one Python package, `vfhe`, assembled from the modules under
+vfhe is one Python package, `vfhe`, assembled from the modules under
 `modules/`. Each module is a Python package, `vfhe.<module>`, with the C it
 needs beside it; every module's C compiles into one extension per engine.
 

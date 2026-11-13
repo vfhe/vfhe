@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 /**
  * @file parallel.h
  * @brief The library-wide thread limit, and the loop that respects it.
  *
  * The limit is `VFHE_NUM_THREADS` when that is set to a positive number,
- * otherwise 1. Every parallel operation in vFHE stays within it. Below it, a
+ * otherwise 1. Every parallel operation in vfhe stays within it. Below it, a
  * thread may hold a local number of threads, which caps the parallel calls
  * that thread makes; inside a vfhe_parallel_for() body it is the body's share
  * of the loop's threads, so nested loops never multiply threads past the

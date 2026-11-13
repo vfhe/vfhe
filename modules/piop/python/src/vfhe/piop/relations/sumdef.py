@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Sum definitions (piop.md section 4): an oracle defined as a hypercube sum
 of a virtual oracle, the head of a statement in a layered reduction."""

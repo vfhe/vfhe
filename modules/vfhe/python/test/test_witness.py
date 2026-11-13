@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The witness of the use case under [CCCFGS26]: the entries by name and
 role, every relation holding on the recorded values and failing on a

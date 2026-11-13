@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Lists the engines known to this build and selects which one to load."""
 
@@ -13,7 +13,7 @@ from vfhe.util import _cpu as cpu
 
 
 class Engine(enum.StrEnum):
-    """Represents all of vFHE's C, compiled into one extension for one instruction set.
+    """Represents all of vfhe's C, compiled into one extension for one instruction set.
 
     Members are in order of preference, fastest first; `select` relies on that
     order. Each value is the engine's name, as accepted by ``VFHE_ENGINE``.

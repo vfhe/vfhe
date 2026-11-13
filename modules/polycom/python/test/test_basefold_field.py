@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the basefold PCS over a field: the same scheme and Eval protocol
 as over R_q, run on FieldVector-backed tables and the field RS code. Honest

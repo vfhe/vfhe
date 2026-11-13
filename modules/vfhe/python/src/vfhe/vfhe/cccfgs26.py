@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The arithmetization of [CCCFGS26, Sec. 5 and App. A.5]: a proof-friendly
 CKKS multiplication as an arithmetic circuit over R_q plus range checks,

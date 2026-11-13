@@ -1,10 +1,10 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 # Doxygen over the C headers, run from the repository root: `doxygen docs/site/api/Doxyfile`.
 # It emits XML only, which Breathe renders into the Sphinx site. A declaration
 # without a documentation block, or a parameter without a line, is an error.
 
-PROJECT_NAME = vFHE
+PROJECT_NAME = vfhe
 INPUT = modules/util/c/include
 RECURSIVE = YES
 OUTPUT_DIRECTORY = build/docs/doxygen

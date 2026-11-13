@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Exports `is_arm`, `is_x86_64`, `has_flag` and `last_level_cache_bytes`, which
 report this machine's instruction set and cache.

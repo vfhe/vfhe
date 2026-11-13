@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Sphinx configuration: the guides in this directory, the Python API from docstrings, the C API from Doxygen's XML."""
 
@@ -18,8 +18,8 @@ sys.path[:0] = [
 ]
 os.environ.setdefault("VFHE_ENGINE", "portable")
 
-project = "vFHE"
-project_copyright = "2026, The vFHE Authors"
+project = "vfhe"
+project_copyright = "2026, The vfhe authors"
 extensions = ["sphinx.ext.autodoc", "breathe", "myst_parser", "sphinxcontrib.mermaid"]
 
 # `name` in a docstring is a cross-reference; ``literal`` stays literal.
@@ -35,4 +35,4 @@ breathe_projects = {"vfhe": str(ROOT / "build" / "docs" / "doxygen" / "xml")}
 breathe_default_project = "vfhe"
 
 html_theme = "furo"
-html_title = "vFHE"
+html_title = "vfhe"

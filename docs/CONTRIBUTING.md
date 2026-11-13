@@ -1,6 +1,6 @@
-# Contributing to vFHE
+# Contributing to vfhe
 
-For anyone opening an issue or a pull request against vFHE.
+For anyone opening an issue or a pull request against vfhe.
 
 The [development
 guide](https://github.com/vfhe/vfhe/blob/main/docs/DEVELOPMENT.md) covers how

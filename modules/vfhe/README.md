@@ -1,8 +1,8 @@
-<!-- SPDX-FileCopyrightText: 2026 The vFHE Authors -->
+<!-- SPDX-FileCopyrightText: 2026 The vfhe authors -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # vfhe.vfhe
 
-Top-level assembly that ties the modules into vFHE (the package root).
+Top-level assembly that ties the modules into vfhe (the package root).
 
 - `computation`: the computation a trace recorded, read into its steps
   in vfhe's own terms (multiplications, each a tensor product, a key

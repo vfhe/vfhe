@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for vfhe.crypto.digest: the chain h_i = H(h_{i-1} | part_i) from the
 seed H("vfhe.chain"), part by part and over packed runs.

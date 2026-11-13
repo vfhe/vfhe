@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // alloc.h's contract: 64-byte alignment, what realloc keeps, and a refused
 // allocation exiting with the call named.

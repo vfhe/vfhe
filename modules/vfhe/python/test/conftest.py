@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The use case the tests of this module read: ``(a * b) * (a * b)`` under
 a CKKS scheme with or without special primes, recorded on the tape."""

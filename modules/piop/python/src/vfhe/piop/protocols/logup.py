@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The logarithmic-derivative lookup argument [Hab22], with its two
 fractional sums proven by GKR on trees of fractions [PH23]: a protocol for

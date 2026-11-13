@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Relations and statements (piop.md section 3): the indexed relation, the
 statement of a claim, reductions between statements, and the hypercube

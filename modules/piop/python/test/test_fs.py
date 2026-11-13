@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the Fiat-Shamir layer: the transcript's chained prefix hash and
 its caches, the element-digest walker, deterministic challenge derivation

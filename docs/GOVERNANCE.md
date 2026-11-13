@@ -1,6 +1,6 @@
 # Governance
 
-vFHE is an open-source library built by an academic collaboration. This
+vfhe is an open-source library built by an academic collaboration. This
 document records who holds authority over what: the authors over the
 cryptography, the maintainers over everything around it.
 
@@ -42,7 +42,7 @@ The steering committee sets strategic direction and takes the final call on
 decisions escalated to it. A report concerning a maintainer, or an appeal
 against a moderation decision, goes to the steering committee.
 
-The steering comitee will be established at the first release.
+The steering committee will be established at the first release.
 
 ## Decisions
 

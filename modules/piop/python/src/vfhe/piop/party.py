@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The two parties (piop.md section 5): the worklist driver both run, the
 parking rule, the prover's witnesses and the verifier's two samplers."""

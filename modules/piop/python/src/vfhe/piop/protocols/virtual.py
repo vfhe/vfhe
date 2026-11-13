@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The protocols over defined oracles (piop.md section 4): the evaluation
 reduction on a virtual oracle, and the composable protocol of a sum

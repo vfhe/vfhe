@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect in vFHE.
+description: Report a defect in vfhe.
 labels: [bug]
 body:
   - type: markdown

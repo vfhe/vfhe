@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """`RNSRing.lift_mod_2_128`: the coefficients as integers in [0, q), modulo
 2^128, against the Python CRT of `get_polynomial`."""

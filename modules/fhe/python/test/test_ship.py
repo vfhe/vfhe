@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The SHIP bootstrap [CHKS25]: Lemma 1's masks in the clear, the windowed
 input keys, the blind rotations against direct evaluation, and the half and
