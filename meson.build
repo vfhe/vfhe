@@ -119,6 +119,9 @@ engines += {
     'portable': [
         # x86_64.h reads VFHE_HAVE_X86_64 as 0 under it, on x86 too
         '-DPORTABLE_BUILD',
+        # Without SIMD, BLAKE3's blake3.c reads a variable in an assertion
+        # alone; every other engine compiles the same sources with the warning on.
+        '-Wno-unused-variable',
     ] + common_c_args + blake3_no_simd_flags,
 }
 

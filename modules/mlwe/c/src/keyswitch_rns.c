@@ -81,7 +81,7 @@ void mlwe_full_packing_keyswitch(RNS_MLWE out, LWE *in, uint64_t size, RNS_MLWE_
     ArithElement column = {tmp_poly, ARITH_DOMAIN_CANONICAL};
 
     // out -= sum_i (sum_k a_k[i] X^k) (x) KS(s_i)
-    for (size_t i = 0; i < in_n; i++)
+    for (uint64_t i = 0; i < in_n; i++)
     {
         spread_lwe_values(tmp_poly, target_mask, in, size, row, lwe_l, &i);
         gadget_mul_subto_polynomial(out, key->s[i], &column, &key->gadget_params);

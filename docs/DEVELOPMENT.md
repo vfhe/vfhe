@@ -349,8 +349,8 @@ python -m vfhe.benchmark -k ntt --benchmark-save=before
 python -m vfhe.benchmark -k ntt --benchmark-compare
 ```
 
-Every benchmark runs seeded, after arith's caches are emptied, so every run
-times the same data; the pytest plugin `vfhe.util.benchmark` does that, loaded
+Every benchmark runs after arith's caches are emptied, so every run starts
+from the same state; the pytest plugin `vfhe.util.benchmark` does that, loaded
 by `addopts` in the checkout and by `python -m vfhe.benchmark` on an install. Only the call handed to `benchmark` is timed, and its
 result is dropped inside the timed window, so freeing it counts: prefer
 in-place operations where the API has them. A benchmark is `complete`, so

@@ -182,6 +182,7 @@ void pmf_ref_reduce_wide(uint64_t *out, uint64_t *T, PMFParams params)
         passes++;
         assert(passes <= 4);
     } while (carry);
+    (void)passes; // the assertion alone reads it
     // T is now "normal": every limb below 2^52, value below 2^(52L).
 
     // 3. Reduce the bits at or above 2^n. They are exactly the top s bits of
