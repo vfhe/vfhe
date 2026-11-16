@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // AES-128 on AES-NI, sixteen blocks in flight on VAES: the same round keys
 // and bytes as portable/aes128.c, in time independent of the key.

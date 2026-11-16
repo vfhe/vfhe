@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Reads a numeric setting from the environment: decimal digits and nothing
 // else, within 64 bits. strtoull alone takes a sign, blanks and overflow.

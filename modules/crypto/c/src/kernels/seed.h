@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // The seed source of the entropy stream: 32 bytes of hardware entropy, from
 // RDRAND (x86_64/seed.c) where the engine has it and getentropy

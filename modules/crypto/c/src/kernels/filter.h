@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // The filter of the seed expander: a run of keystream words masked and kept
 // when below `bound`, the rest replaced by what `retry` gives for their index.

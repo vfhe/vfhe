@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of arith's CUDA kernels (arith/c/src/cuda/arith_gpu.cu,
 // prototyped in arith/c/include/arith_gpu.h). An element is passed as `void *`.

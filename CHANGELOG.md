@@ -242,7 +242,7 @@ versions may contain breaking changes.
   configured in their own files; `setuptools` is no longer a runtime
   dependency; every copyright header reads `The vfhe authors`.
 - The library is written `vfhe` everywhere, in prose as in code, as its
-  authors voted; `vFHE` is gone from the documentation, the metadata and
+  authors voted; `vfhe` is gone from the documentation, the metadata and
   the copyright line.
 
 ### Removed

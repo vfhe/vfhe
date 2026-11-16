@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """`seeded_below_many`, the sampler whose contract callers depend on in detail:
 `count` values uniform in [0, bound), a pure function of (context, seed) and

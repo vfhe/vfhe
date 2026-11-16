@@ -266,8 +266,7 @@ class Basefold:
 
     @property
     def domain(self):
-        """The ring or field of the committed tables' coefficients: the
-        code's."""
+        """The code's ring or field, where the committed tables' coefficients live."""
         code = self.code
         return code.ring if isinstance(code, FoldableRS) else code.field
 

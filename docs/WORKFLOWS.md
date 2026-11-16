@@ -28,7 +28,13 @@ have the shape they have; the workflow files state what runs.
 - Every required check runs on hosted runners or a deterministic emulator,
   so anyone can reproduce it without this repository's hardware.
 - A reduced set of fuzzing, sanitizing, testing, and packaging runs on the
-  pull request; the complete set is deferred to main. This keeps
+  pull request; the complete set is deferred to main.
+- The Python suites run on four pytest workers, the hosted runners' cores.
+  The interpreter sweep runs on one OS, since the binding and the Python
+  are the same on every OS; every engine and OS runs on the newest
+  interpreter. Under the emulator only the fast depth runs; the complete
+  depth on avx512ifma is the hardware runner's, natively. Sanitizers run
+  one engine per architecture, plus Apple's clang once. This keeps
   pull-request time short, and with no continuous delivery or deployment a
   red main is acceptable, blocking the next manual release.
 - `docs.yml` builds the documentation site with warnings as errors, so an
@@ -82,11 +88,13 @@ Only the release and post-submit workflows depend on it.
 
 ### The self-hosted CUDA runner
 
-`hardware-gpu.yml` names a second label, `self-hosted, Linux, X64, cuda`, for
-a runner with an NVIDIA device and the NVIDIA container toolkit, and runs on
-`workflow_dispatch` alone until one exists: a job on a label no runner carries
-queues forever. The job builds with `-Dcuda=enabled` in the toolkit's own
-image and runs the fast Python suites, whose GPU tests skip everywhere else.
+`hardware-test.yml`'s second job, **Test GPU (cuda)**, names a second
+label, `self-hosted, Linux, X64, cuda`, for a runner with an NVIDIA device and
+the NVIDIA container toolkit. It builds with `-Dcuda=enabled` in
+`vfhe-hardware-cuda`, the toolkit's image with the libraries the other
+image carries, and runs the complete Python suites, whose GPU tests skip everywhere
+else. A job on a label no runner carries queues until one appears, so the
+workflow's alert fires only once the runner has answered.
 
 ## Conventions
 
@@ -157,6 +165,9 @@ that is not the one declared there.
 
 - **After a release**, open the next cycle: set the version to `0.0.5.dev0`
   and commit.
+- Before tagging, check that **Test Hardware (avx512ifma)** ran green on
+  the commit: the complete Python depth on that engine runs only there,
+  natively, and the release waits for it only when the runner was online.
 - Read `make release-notes CHANGELOG_VERSION=x.y.z` before tagging: the
   publish job feeds that text to the GitHub Release, and a version the
   changelog never documents fails loudly.

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the seeded sampler (crypto/c/src/seeded.c, prototyped
 // in crypto/c/include/seeded.h); cffi accepts a `bytes` for a `const uint8_t *`.

@@ -95,14 +95,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [portable]
-        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm]
-        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
-        exclude:
-          - { os: ubuntu-24.04, python: "3.15" }
         include:
+          - { engine: portable, os: ubuntu-24.04, python: "3.11" }
+          - { engine: portable, os: ubuntu-24.04, python: "3.12" }
+          - { engine: portable, os: ubuntu-24.04, python: "3.13" }
+          - { engine: portable, os: ubuntu-24.04, python: "3.14" }
           - { engine: portable, os: ubuntu-24.04, python: "3.15", coverage: "true" }
-          - { engine: avx512ifma, os: ubuntu-24.04, python: "3.15", coverage: "true", emulate: "1" }
+          - { engine: portable, os: ubuntu-24.04-arm, python: "3.15" }
+          - { engine: portable, os: macos-26, python: "3.15" }
+          - { engine: avx512ifma, os: ubuntu-24.04, python: "3.15", coverage: "true", emulate: "1", suites: fast }
           - { engine: neon, os: macos-26, python: "3.15" }
           - { engine: neon, os: ubuntu-24.04-arm, python: "3.15", coverage: "true" }
     steps:
@@ -118,7 +119,7 @@ jobs:
           emulate: ${{ matrix.emulate || '0' }}
           engine: ${{ matrix.engine }}
           python-version: ${{ matrix.python }}
-          suites: complete
+          suites: ${{ matrix.suites || 'complete' }}
 
   test-sanitized:
     name: Test Sanitized (${{ matrix.engine }}, ${{ matrix.os }}, ${{ matrix.sanitize }})
@@ -128,17 +129,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # No avx512ifma: a sanitized run under SDE is too slow to be worth it.
-          # One sanitizer per leg: together they cost over 170x on aarch64,
-          # where address alone costs 6x and undefined alone 1.4x.
-          - { engine: portable, os: macos-26, sanitize: address }
           - { engine: portable, os: macos-26, sanitize: undefined }
           - { engine: portable, os: ubuntu-24.04, sanitize: address }
           - { engine: portable, os: ubuntu-24.04, sanitize: undefined }
-          - { engine: portable, os: ubuntu-24.04-arm, sanitize: address }
-          - { engine: portable, os: ubuntu-24.04-arm, sanitize: undefined }
-          - { engine: neon, os: macos-26, sanitize: address }
-          - { engine: neon, os: macos-26, sanitize: undefined }
           - { engine: neon, os: ubuntu-24.04-arm, sanitize: address }
           - { engine: neon, os: ubuntu-24.04-arm, sanitize: undefined }
     steps:

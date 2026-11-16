@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // The entropy stream's expander: `amount` bytes from one fresh 32-byte seed.
 // x86_64/stream.c keys AES-128 in counter mode with the seed and takes the

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The randomness: `Random`, the source a scheme's samplers draw from, and `seeded_below_many`, values another party recomputes.
 

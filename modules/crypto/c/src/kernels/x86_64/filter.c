@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // The filter on AVX-512: a vector of words masked, stored and compared at
 // once; the rejected lanes, rare, go to `retry` one by one.

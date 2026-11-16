@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """`Random`: the entropy stream, unpredictable by construction, so what can be
 checked is its shape, its unbiased rejection loop, and that threads and forks

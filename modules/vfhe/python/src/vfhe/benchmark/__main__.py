@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """Times every module's benchmarks and prints the table: ``python -m vfhe.benchmark [PYTEST OPTIONS]``.
 

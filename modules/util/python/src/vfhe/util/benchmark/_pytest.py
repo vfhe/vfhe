@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The pytest plugin for the files under a ``bench`` directory: every public function of theirs is a benchmark, run with arith's caches emptied and marked `complete`."""
 
