@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
-# Publishes the image the self-hosted jobs run in, when its definition changes.
+# Publishes the images the self-hosted jobs run in, when their definition changes.
 name: Hardware Container
 
 on:
@@ -19,9 +19,15 @@ jobs:
   # ------------------------------------------------------------------ build ---
 
   hardware-container:
-    name: Hardware Container
+    name: Hardware Container (${{ matrix.tag }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { tag: hardware, base: "ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea" }
+          - { tag: hardware-cuda, base: "nvidia/cuda:12.6.3-devel-ubuntu24.04" }
     permissions:
       contents: read # checkout
       packages: write # push to this repository's registry
@@ -41,8 +47,9 @@ jobs:
         with:
           context: .github
           file: .github/hardware.Dockerfile
+          build-args: BASE=${{ matrix.base }}
           push: true
-          tags: ghcr.io/${{ github.repository }}-hardware:latest
+          tags: ghcr.io/${{ github.repository }}-${{ matrix.tag }}:latest
 
   # ----------------------------------------------------------------- alert ---
 

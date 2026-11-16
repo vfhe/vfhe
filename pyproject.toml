@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [project]
 name = "vfhe"
-version = "0.0.4"
+version = "0.0.5.dev0"
 description = "A library for Zero-Knowledge Proofs, (verifiable) Fully Homomorphic Encryption, and related techniques."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -69,6 +69,7 @@ test = [
     "pytest>=9.1.1",
     "pytest-benchmark>=5.3.1",
     "pytest-cov>=7",
+    "pytest-xdist>=3.8",
     "gcovr>=8.3",
 ]
 docs = [

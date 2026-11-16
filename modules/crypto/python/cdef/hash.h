@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the hashing (crypto/c/src/hash.c, prototyped in
 // crypto/c/include/hash.h). A hasher state is a caller-allocated buffer of

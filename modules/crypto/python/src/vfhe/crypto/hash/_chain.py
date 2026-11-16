@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """`DigestChain`: the chain ``h_i = H(h_{i-1} | part_i)``, accumulated in native memory."""
 

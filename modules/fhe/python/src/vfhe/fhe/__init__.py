@@ -4,7 +4,7 @@
 
 A scheme is constructed over `vfhe.arith.Ring` levels and holds the keys its
 operations need, such as ``scheme.rlk`` for multiplication; a ciphertext is a
-`vfhe.mlwe.MLWE` sample, so ``+``, ``-`` and ``*`` work on it. vFHE is
+`vfhe.mlwe.MLWE` sample, so ``+``, ``-`` and ``*`` work on it. vfhe is
 pre-release and unaudited: take parameters from the literature and keep it out
 of production.
 

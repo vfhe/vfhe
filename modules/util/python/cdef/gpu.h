@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // Python-facing ABI of the CUDA extension's runtime (util/c/src/cuda/gpu.cu,
 // prototyped in util/c/include/gpu.h).

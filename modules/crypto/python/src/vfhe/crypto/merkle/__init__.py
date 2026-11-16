@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 The vFHE Authors
+# SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 """The vector commitment: `Merkle`, a binary tree over packed BLAKE3 leaf digests, and `join_digests`.
 

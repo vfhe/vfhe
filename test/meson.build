@@ -140,7 +140,8 @@ foreach engine_name : engines.keys()
         test(
             test_name,
             py,
-            args: ['-m', 'pytest', '-q'] + spec['args'] + cov_args,
+            # Four workers: the hosted runners' cores, and what emulation needs most.
+            args: ['-m', 'pytest', '-q', '-n', '4'] + spec['args'] + cov_args,
             env: pytest_env,
             workdir: meson.project_source_root(),
             timeout: timeout,

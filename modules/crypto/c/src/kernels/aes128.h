@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 The vFHE Authors
+// SPDX-FileCopyrightText: 2026 The vfhe authors
 // SPDX-License-Identifier: Apache-2.0
 // AES-128 in counter mode, the kernel behind expand.c and the x86 entropy
 // stream. portable/aes128.c is a table AES and x86_64/aes128.c AES-NI, with
