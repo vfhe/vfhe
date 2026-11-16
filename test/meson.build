@@ -148,3 +148,33 @@ foreach engine_name : engines.keys()
         )
     endforeach
 endforeach
+
+# --- Fuzzing ------------------------------------------------------------------
+
+if get_option('fuzz') == ''
+    subdir_done()
+endif
+
+# $LIB_FUZZING_ENGINE is C++ and supplies main().
+add_languages('cpp', native: false)
+
+wanted = get_option('fuzz')
+if not engines.has_key(wanted)
+    error('this build has no engine "' + wanted + '"')
+endif
+
+fuzzers = []
+foreach fuzzer : vfhe_c_fuzz_tests
+    fuzzers += executable(
+        fs.stem(fuzzer),
+        fuzzer,
+        include_directories: vfhe_c_include_dirs,
+        c_args: engines[wanted],
+        link_with: static_libs[wanted],
+        link_args: get_option('fuzz_link_args').split(),
+        link_language: 'cpp',
+    )
+endforeach
+
+# build.sh asks for this name alone, so only the fuzzers build.
+alias_target('fuzzers', fuzzers)

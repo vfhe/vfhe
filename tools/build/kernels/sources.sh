@@ -11,8 +11,11 @@ out=$2
 shift 2
 
 {
+    # The CUDA extension's headers and cdefs stay out: its symbols are in
+    # _vfhe_cuda, and a cdef naming them would leave a kernel build unloadable.
     cd "$root" && find modules external/blake3/blake3/c \
         \( -name '*.h' -o -name '*.inc' \) \
-        ! -name '._*' ! -path '*/c/test/*' | sort
+        ! -name '._*' ! -path '*/c/test/*' ! -path '*/c/src/cuda/*' \
+        ! -name 'gpu.h' ! -name 'arith_gpu.h' | sort
     printf '%s\n' "$@"
 } | COPYFILE_DISABLE=1 tar czf "$out" -C "$root" -T -
