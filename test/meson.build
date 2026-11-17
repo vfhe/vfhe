@@ -32,7 +32,8 @@ if host_machine.cpu_family() == 'x86_64' and sde.found()
         'avx512ifma_emulated',
         exe_wrapper: [sde, '-icl', '-no-follow-child', '--'],
         timeout_multiplier: 20,
-        env: {'VFHE_SDE_FLAGS': '-icl'},
+        # SDE traces the launcher alone, so pytest runs its tests in-process.
+        env: {'VFHE_SDE_FLAGS': '-icl', 'PYTEST_XDIST_AUTO_NUM_WORKERS': '0'},
     )
 endif
 
@@ -140,8 +141,8 @@ foreach engine_name : engines.keys()
         test(
             test_name,
             py,
-            # Four workers: the hosted runners' cores, and what emulation needs most.
-            args: ['-m', 'pytest', '-q', '-n', '4'] + spec['args'] + cov_args,
+            # Up to four workers, the hosted runners' cores.
+            args: ['-m', 'pytest', '-q', '-n', 'auto', '--maxprocesses', '4'] + spec['args'] + cov_args,
             env: pytest_env,
             workdir: meson.project_source_root(),
             timeout: timeout,

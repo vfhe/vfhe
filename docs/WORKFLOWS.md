@@ -29,7 +29,8 @@ have the shape they have; the workflow files state what runs.
   so anyone can reproduce it without this repository's hardware.
 - A reduced set of fuzzing, sanitizing, testing, and packaging runs on the
   pull request; the complete set is deferred to main.
-- The Python suites run on four pytest workers, the hosted runners' cores.
+- The Python suites run on up to four pytest workers, the hosted runners'
+  cores, and in-process under the emulator, which traces one process.
   The interpreter sweep runs on one OS, since the binding and the Python
   are the same on every OS; every engine and OS runs on the newest
   interpreter. Under the emulator only the fast depth runs; the complete
