@@ -224,7 +224,7 @@ have no toolkit; shipping one is an open decision between a build image with
 the toolkit and a package of its own. An install from the sdist on a machine
 with `nvcc` gets it: `pip install --no-binary vfhe vfhe`. CI runs the complete
 suites with the extension on every push to `main`, the `Test GPU (cuda)`
-job of `hardware-test.yml`, on a self-hosted runner labelled `cuda`.
+job of `gpu-test.yml`, on a self-hosted runner labelled `cuda`.
 
 ## Testing
 

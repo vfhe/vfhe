@@ -1,33 +1,33 @@
 # SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
 # Publishes the images the self-hosted jobs run in, when their definition changes.
-name: Hardware Container
+name: Runner Container
 
 on:
   push:
     branches: [main]
-    paths: [.github/hardware.Dockerfile]
+    paths: [.github/runner.Dockerfile]
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: hardware-container
+  group: runner-container
   cancel-in-progress: false
 
 jobs:
   # ------------------------------------------------------------------ build ---
 
-  hardware-container:
-    name: Hardware Container (${{ matrix.tag }})
+  runner-container:
+    name: Runner Container (${{ matrix.tag }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { tag: hardware, base: "ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea" }
-          - { tag: hardware-cuda, base: "nvidia/cuda:12.6.3-devel-ubuntu24.04" }
+          - { tag: cpu, base: "ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea" }
+          - { tag: gpu, base: "nvidia/cuda:12.6.3-devel-ubuntu24.04" }
     permissions:
       contents: read # checkout
       packages: write # push to this repository's registry
@@ -48,7 +48,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .github
-          file: .github/hardware.Dockerfile
+          file: .github/runner.Dockerfile
           build-args: BASE=${{ matrix.base }}
           push: true
           tags: ghcr.io/${{ github.repository }}-${{ matrix.tag }}:latest
@@ -59,7 +59,7 @@ jobs:
     name: Alert
     if: failure() && github.event_name != 'workflow_dispatch'
     needs:
-      - hardware-container
+      - runner-container
     uses: ./.github/workflows/alert.yml
     permissions: {}
     secrets:

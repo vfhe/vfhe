@@ -42,11 +42,11 @@ jobs:
           allowed-conclusions: success # a skipped check is not a passed one
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 30
-      - name: Wait for hardware tests on main
+      - name: Wait for the CPU tests on main
         uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
           ref: ${{ github.sha }}
-          check-regexp: ^Test Hardware
+          check-regexp: ^Test CPU
           allowed-conclusions: success
           fail-on-no-checks: false
           repo-token: ${{ secrets.GITHUB_TOKEN }}
