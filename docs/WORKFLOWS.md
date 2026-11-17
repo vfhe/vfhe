@@ -9,10 +9,10 @@ have the shape they have; the workflow files state what runs.
   a step sequence shared inside jobs is an **action** with two or more call
   sites.
 - Separate jobs of related workflows into two files only when they must not
-  share the same lifetime. `hardware-test.yml` is separate from
+  share the same lifetime. `cpu-test.yml` and `gpu-test.yml` are separate from
   `ci-postsubmit.yml` because silicon takes one job at a time: inside the
-  pipeline it would hold every push's `CI Postsubmit OK` behind the silicon
-  queue, while separate the release waits only for hardware runs that exist.
+  pipeline they would hold every push's `CI Postsubmit OK` behind the silicon
+  queue, while separate the release waits only for CPU runs that exist.
   This is to prevent blocking the release due to an offline runner.
 - A `*-ok` job exists only where a status check is needed:
   `CI Presubmit OK` for the branch ruleset, `CI Postsubmit OK` for the
@@ -40,10 +40,10 @@ have the shape they have; the workflow files state what runs.
 - `docs.yml` builds the documentation site with warnings as errors, so an
   undocumented C declaration or a malformed docstring fails the gate.
 
-### Push to main — `ci-postsubmit.yml`, `hardware-test.yml`
+### Push to main — `ci-postsubmit.yml`, `cpu-test.yml`, `gpu-test.yml`
 
 - `release-build` runs on every commit on `main`, stamped `0+g<commit>`
-- `hardware-test.yml` skips documentation-only pushes
+- `cpu-test.yml` and `gpu-test.yml` skip documentation-only pushes
 - `ci-postsubmit.yml` deploys the documentation site `docs.yml` built to GitHub Pages
 
 ### Release — `release-pypi.yml`, `release-testpypi.yml`
@@ -88,11 +88,11 @@ Only the release and post-submit workflows depend on it.
 
 ### The self-hosted CUDA runner
 
-`hardware-test.yml`'s second job, **Test GPU (cuda)**, names a second
+`gpu-test.yml`'s job, **Test GPU (cuda)**, names a second
 label, `self-hosted, Linux, X64, cuda`, for a runner with an NVIDIA device and
 the NVIDIA container toolkit. It builds with `-Dcuda=enabled` in
-`vfhe-hardware-cuda`, the toolkit's image with the libraries the other
-image carries, and runs the complete Python suites, whose GPU tests skip everywhere
+`vfhe-gpu`, the toolkit's image with the libraries `vfhe-cpu`
+carries, and runs the complete Python suites, whose GPU tests skip everywhere
 else. A job on a label no runner carries queues until one appears, so the
 workflow's alert fires only once the runner has answered.
 
@@ -124,7 +124,7 @@ Renaming one of these introduces breaking changes unless synchronized.
 | `CI Presubmit OK` job name | the branch ruleset |
 | `DCO` (the [DCO app](https://github.com/apps/dco)'s check) | the branch ruleset |
 | `CI Postsubmit OK` job name | both release workflows |
-| `Test Hardware` job-name prefix | both release workflows wait on the prefix; renamed, the wait matches nothing and passes silently |
+| `Test CPU` job-name prefix | both release workflows wait on the prefix; renamed, the wait matches nothing and passes silently |
 | `ci-postsubmit.yml` | the README badge |
 | every workflow `name:` | the Zulip topic — a rename recreated an append-only thread |
 | `release-pypi.yml`, `release-testpypi.yml` | the Trusted Publisher registrations and every published attestation |
@@ -165,7 +165,7 @@ that is not the one declared there.
 
 - **After a release**, open the next cycle: set the version to `0.0.5.dev0`
   and commit.
-- Before tagging, check that **Test Hardware (avx512ifma)** ran green on
+- Before tagging, check that **Test CPU (avx512ifma)** ran green on
   the commit: the complete Python depth on that engine runs only there,
   natively, and the release waits for it only when the runner was online.
 - Read `make release-notes CHANGELOG_VERSION=x.y.z` before tagging: the

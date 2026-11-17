@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 The vfhe authors
 # SPDX-License-Identifier: Apache-2.0
-# Hardware tests on the self-hosted runner; hosted runners can lack ISA undeterministically.
-name: Hardware Test
+# The avx512ifma suites on the self-hosted CPU runner; hosted runners can lack the ISA.
+name: CPU Test
 
 on:
   push:
@@ -19,11 +19,11 @@ concurrency:
 jobs:
   # ------------------------------------------------------------------- cpu ---
 
-  test-hardware:
-    name: Test Hardware (avx512ifma)
+  test-cpu:
+    name: Test CPU (avx512ifma)
     runs-on: [self-hosted, Linux, X64, avx512ifma]
     container:
-      image: ghcr.io/vfhe/vfhe-hardware:latest # zizmor: ignore[unpinned-images]
+      image: ghcr.io/vfhe/vfhe-cpu:latest # zizmor: ignore[unpinned-images]
       options: --privileged
     timeout-minutes: 120
     permissions:
@@ -74,46 +74,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: make smoke
 
-  # ------------------------------------------------------------------- gpu ---
-
-  test-gpu:
-    name: Test GPU (cuda)
-
-    runs-on: [self-hosted, Linux, X64, cuda]
-    container:
-      image: ghcr.io/vfhe/vfhe-hardware-cuda:latest # zizmor: ignore[unpinned-images]
-      options: --gpus all
-    timeout-minutes: 120
-    permissions:
-      contents: read # checkout
-      packages: read # pull the job container from this registry
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-          submodules: recursive
-      - name: Trust the checkout
-        # The container runs as root over a workspace owned by the runner user.
-        run: git config --global --add safe.directory '*'
-      - name: Set up dev environment
-        uses: ./.github/actions/setup-dev
-        with:
-          groups: test
-          pip-cache: false
-      - name: Build with the CUDA extension
-        run: meson setup build -Dcuda=enabled
-      - name: Run the Python suites
-        run: make test ENGINE=portable SUITES=complete
-
   # ----------------------------------------------------------------- alert ---
 
   alert:
     name: Alert
     if: failure() && github.event_name != 'workflow_dispatch'
     needs:
-      - test-hardware
-      - test-gpu
+      - test-cpu
     uses: ./.github/workflows/alert.yml
     permissions: {}
     secrets:
